@@ -28,6 +28,8 @@ export interface ArtifactEvent {
   data_payload?: unknown
   source_info?: Record<string, unknown>
   artifact_id?: string
+  /** AI 触发报表下载时后端直接返回的下载 URL（report-download widget 专用） */
+  download_url?: string
 }
 
 export interface ErrorEvent {

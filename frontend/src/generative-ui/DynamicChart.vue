@@ -9,7 +9,7 @@
 
     <!-- 骨架屏（数据加载中） -->
     <div v-if="!chartReady" class="skeleton">
-      <div class="skeleton-bar" v-for="i in 7" :key="i" :style="{ height: `${30 + Math.random() * 60}%` }"></div>
+      <div class="skeleton-bar" v-for="i in 7" :key="i" :style="{ height: `${20 + i * 10}%` }"></div>
     </div>
 
     <!-- ECharts 图表 -->
@@ -115,11 +115,8 @@ async function initChart() {
 }
 
 onMounted(async () => {
-  // 短暂延迟模拟骨架屏过渡效果
-  setTimeout(async () => {
-    chartReady.value = true
-    await initChart()
-  }, 400)
+  chartReady.value = true
+  await initChart()
 })
 </script>
 

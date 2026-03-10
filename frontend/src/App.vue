@@ -16,19 +16,23 @@
         </li>
       </ul>
 
-      <!-- 建筑选择器 -->
+      <!-- 建筑选择器（动态从 API 加载） -->
       <div class="building-selector">
         <p class="selector-label">当前建筑</p>
-        <button
-          v-for="b in buildings"
-          :key="b.id"
-          class="building-btn"
-          :class="{ active: selectedBuilding === b.id }"
-          @click="selectedBuilding = b.id"
-        >
-          <span>{{ b.icon }}</span>
-          <span>{{ b.label }}</span>
-        </button>
+        <div v-if="buildingStore.loading" class="selector-loading">加载中...</div>
+        <template v-else>
+          <button
+            v-for="b in buildingStore.buildings"
+            :key="b.building_type"
+            class="building-btn"
+            :class="{ active: buildingStore.selectedType === b.building_type }"
+            @click="buildingStore.select(b.building_type)"
+          >
+            <span>{{ b.icon }}</span>
+            <span>{{ b.display_name }}</span>
+          </button>
+          <p v-if="buildingStore.error" class="selector-error">{{ buildingStore.error }}</p>
+        </template>
       </div>
     </nav>
 
@@ -45,22 +49,22 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { onMounted } from 'vue'
 import { RouterView, RouterLink } from 'vue-router'
 import AgentConsole from '@/components/AgentConsole.vue'
+import { useBuildingStore } from '@/stores/buildingStore'
 
-const selectedBuilding = ref('Office')
+const buildingStore = useBuildingStore()
+
+onMounted(() => {
+  buildingStore.fetchBuildings()
+})
 
 const navItems = [
   { path: '/dashboard',  icon: '🏠', label: '驾驶舱' },
   { path: '/analysis',   icon: '📊', label: '能源透视' },
   { path: '/operations', icon: '🔧', label: '智慧运维' },
-]
-
-const buildings = [
-  { id: 'Education', icon: '🏫', label: '图书馆' },
-  { id: 'Office',    icon: '🏢', label: '办公楼' },
-  { id: 'Public',    icon: '🏛️', label: '公共区域' },
+  { path: '/workorders', icon: '🛠️', label: '工单管理' },
 ]
 </script>
 
@@ -145,6 +149,19 @@ const buildings = [
 }
 .building-btn:hover { background: var(--bg-hover); }
 .building-btn.active { background: var(--accent-glow); border-color: var(--accent); color: var(--accent); }
+
+.selector-loading {
+  font-size: 12px;
+  color: var(--text-muted);
+  padding: 8px 0;
+}
+
+.selector-error {
+  font-size: 11px;
+  color: var(--danger);
+  margin-top: 6px;
+  line-height: 1.4;
+}
 
 /* ── 中间主区 ── */
 .canvas {

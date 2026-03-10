@@ -1,0 +1,26 @@
+# 核心 Web 框架
+fastapi>=0.100.0
+uvicorn[standard]>=0.22.0
+python-dotenv>=1.0.0
+
+# 多智能体
+langgraph>=0.2.0
+langchain-core>=0.3.0
+langchain-openai>=0.2.0
+
+# 数据库
+sqlalchemy>=2.0.0
+asyncpg>=0.29.0           # 异步 PostgreSQL 驱动
+psycopg2-binary>=2.9.0    # 同步驱动（测试 / 迁移脚本用）
+
+# 配置与类型
+pydantic>=2.0.0
+pydantic-settings>=2.0.0  # BaseSettings 独立包（Pydantic v2）
+
+# 测试
+pytest>=7.0.0
+pytest-asyncio>=0.23.0    # 异步测试支持
+pytest-mock>=3.12.0       # mock 注入
+
+# HTTP 客户端（RAGFlow API 调用）
+httpx>=0.27.0

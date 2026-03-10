@@ -1,0 +1,220 @@
+"""
+Diagnose Agent（故障诊断专家）节点。
+
+职责：
+- 混合 RAG 检索运维手册（rag_hybrid_search）
+- 基于规则的异常检测（detect_energy_anomalies）
+- 综合数据 + 知识库进行归因分析
+- 生成工单草稿（create_work_order_draft）—— 必须 Human-in-the-loop 审批
+- 渲染诊断报告 / 工单卡片（render_ui_component）
+
+边界：
+- 不自行下结论，必须引用知识库依据
+- 所有工单操作必须通过 HITL 授权，不直接写入数据库
+- 不查询纯数据（那是 Data Agent 的职责）
+"""
+from __future__ import annotations
+
+import json
+import logging
+from typing import Any
+
+from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.tools import StructuredTool
+from langchain_openai import ChatOpenAI
+from langgraph.prebuilt import create_react_agent
+
+from app.core.config import get_settings
+from app.db.session import AsyncSessionLocal
+from app.graph.state import AgentState
+from app.mcp.server import call_tool
+from app.schemas.mcp_schemas import (
+    CreateWorkOrderDraftInput,
+    DetectEnergyAnomaliesInput,
+    RAGHybridSearchInput,
+    RenderUIComponentInput,
+)
+
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# System Prompt — 故障诊断专家
+# ---------------------------------------------------------------------------
+DIAGNOSE_AGENT_SYSTEM_PROMPT = """你是一个楼宇能耗管理系统的故障诊断专家（Diagnose Agent）。
+你是一位 20 年经验的运维老专家，熟悉所有楼控设备的运行规律。
+
+## 你的专属工具
+1. rag_hybrid_search — 检索运维手册，必须传入 device_id 进行精准过滤
+2. detect_energy_anomalies — 基于规则检测能耗异常时间点
+3. render_ui_component — 渲染诊断报告卡片或工单卡片
+4. create_work_order_draft — 生成维修工单草稿（仅创建草稿，须人工确认才能提交）
+
+## 诊断流程（Chain of Thought）
+1. 【事实核查】基于 Data Agent 传入的异常数据，确认异常的具体特征
+2. 【知识检索】调用 rag_hybrid_search，用设备 ID 过滤 + 异常特征描述进行检索
+3. 【归因分析】结合规则异常点 + 手册条文进行推理
+4. 【结论输出】给出：异常原因 + 置信度 + 建议操作 + 引用来源
+5. 【工单生成】若需维修，调用 create_work_order_draft 并等待人工确认
+
+## 可解释性要求（必须遵守）
+每条诊断结论的格式：
+> **诊断结论**：[X]
+> **依据**：数据显示 [具体数值]，《[手册名称]》第 [X] 页指出 [原文引用]
+> **置信度**：[百分比]
+> **建议操作**：[具体步骤]
+
+## 禁止事项
+- 禁止在没有 RAG 检索依据的情况下做出故障诊断
+- 禁止直接提交工单（必须先调用 create_work_order_draft 返回 pending_approval 状态）
+- 禁止对不在管辖范围的设备（非 Education/Office/Public）进行诊断
+- 如果 RAG 检索结果相关性不足（similarity < 0.5），必须诚实告知"手册中未找到匹配条目"
+
+## 工单生成规范
+调用 create_work_order_draft 后，必须渲染 WorkOrderCard 让用户确认：
+```
+render_ui_component(
+    component_type="WorkOrderCard",
+    title="维修工单待确认",
+    data_payload={"ticket_id": ..., "device": ..., "issue": ..., "priority": ...},
+    source_info={"tool": "create_work_order_draft", "status": "pending_approval"}
+)
+```"""
+
+
+# ---------------------------------------------------------------------------
+# 工具包装（与 data_agent 保持一致：注入 DB session + 解包 kwargs）
+# ---------------------------------------------------------------------------
+def _make_mcp_tool(
+    tool_name: str,
+    description: str,
+    args_schema=None,
+) -> StructuredTool:
+    async def _invoke(**kwargs: Any) -> str:
+        # 兼容 LangChain 将参数包在 'kwargs' 键的情况
+        if set(kwargs.keys()) == {"kwargs"} and isinstance(kwargs.get("kwargs"), dict):
+            kwargs = kwargs["kwargs"]
+        async with AsyncSessionLocal() as session:
+            result = await call_tool(tool_name, kwargs, session=session)
+        if isinstance(result, dict):
+            return json.dumps(result, ensure_ascii=False, default=str)
+        if hasattr(result, "model_dump"):
+            return json.dumps(result.model_dump(), ensure_ascii=False, default=str)
+        return str(result)
+
+    return StructuredTool.from_function(
+        coroutine=_invoke,
+        name=tool_name,
+        description=description,
+        args_schema=args_schema,
+    )
+
+
+DIAGNOSE_AGENT_TOOLS = [
+    _make_mcp_tool(
+        "rag_hybrid_search",
+        "混合检索运维手册，RAGFlow 未配置时自动降级到本地知识库。"
+        "device_id 传入可精准过滤到设备相关文档。",
+        args_schema=RAGHybridSearchInput,
+    ),
+    _make_mcp_tool(
+        "detect_energy_anomalies",
+        "基于规则检测能耗异常（夜间高功率/零人高耗/传感器尖刺）。默认时间范围：2016-04-01 ~ 2016-05-02。",
+        args_schema=DetectEnergyAnomaliesInput,
+    ),
+    _make_mcp_tool(
+        "render_ui_component",
+        "生成诊断报告卡片或工单卡片（WorkOrderCard）的前端渲染指令。",
+        args_schema=RenderUIComponentInput,
+    ),
+    _make_mcp_tool(
+        "create_work_order_draft",
+        "生成维修工单草稿（status=pending_approval，须人工确认后才正式派单）。",
+        args_schema=CreateWorkOrderDraftInput,
+    ),
+]
+
+
+def _build_diagnose_agent():
+    """构建 Diagnose Agent（LangGraph 内置 ReAct）。"""
+    settings = get_settings()
+    llm = ChatOpenAI(
+        model=settings.LLM_MODEL,
+        api_key=settings.LLM_API_KEY or "placeholder",
+        base_url=settings.LLM_BASE_URL,
+        temperature=0.2,  # 诊断需要稳定推理，轻微创意用于组织语言
+        max_tokens=3072,
+    )
+    return create_react_agent(
+        llm,
+        tools=DIAGNOSE_AGENT_TOOLS,
+        prompt=DIAGNOSE_AGENT_SYSTEM_PROMPT,
+    )
+
+
+async def diagnose_agent_node(state: AgentState) -> dict[str, Any]:
+    """
+    LangGraph 节点函数：Diagnose Agent。
+
+    执行故障诊断 ReAct 循环，结果合并回全局状态。
+    如发现工单草稿，将其写入 pending_action 供 HITL 处理。
+    """
+    hop_count = state.get("hop_count", 0) + 1
+    agent = _build_diagnose_agent()
+
+    sub_state = {"messages": state.get("messages", [])}
+
+    try:
+        result = await agent.ainvoke(sub_state)
+    except Exception as exc:
+        logger.error("Diagnose Agent 执行失败: %s", exc)
+        error_msg = AIMessage(
+            content=f"故障诊断专家遇到了问题：{exc}。请稍后重试或联系人工运维。"
+        )
+        return {
+            "messages": [error_msg],
+            "current_agent": "end",
+            "hop_count": hop_count,
+            "error": str(exc),
+        }
+
+    all_messages = result.get("messages", [])
+    existing_count = len(state.get("messages", []))
+    new_messages = all_messages[existing_count:]
+
+    # 收集 artifacts
+    artifacts = list(state.get("artifacts", []))
+    # 检测工单草稿（HITL）
+    pending_action = state.get("pending_action")
+
+    for msg in new_messages:
+        if not isinstance(msg, ToolMessage):
+            continue
+        content = msg.content or ""
+        try:
+            data = json.loads(content)
+        except (json.JSONDecodeError, TypeError):
+            continue
+
+        # render_ui_component 产出
+        if "component_type" in data:
+            artifacts.append(data)
+
+        # create_work_order_draft 产出 → 写入 pending_action
+        if data.get("status") == "pending_approval":
+            pending_action = {
+                "type": "work_order",
+                "ticket_id": data.get("ticket_id"),
+                "device_id": data.get("device_id"),
+                "building_id": data.get("building_id"),
+                "issue_description": data.get("issue_description"),
+                "priority": data.get("priority"),
+                "suggested_action": data.get("suggested_action"),
+            }
+
+    return {
+        "messages": new_messages,
+        "current_agent": "end",
+        "hop_count": hop_count,
+        "artifacts": artifacts,
+        "pending_action": pending_action,
+    }

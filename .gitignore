@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+venv/
+.env
+.env.local
+
+# Node / Frontend
+node_modules/
+dist/
+.npm
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Data & outputs
+dataset/output/*.csv
+dataset/output/knowledge_vectors/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db

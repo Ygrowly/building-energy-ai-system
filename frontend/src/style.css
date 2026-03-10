@@ -1,0 +1,32 @@
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg-dark: #0f1117;
+  --bg-panel: #1a1d27;
+  --bg-card: #22253a;
+  --bg-hover: #2a2d3e;
+  --border: #2e3148;
+  --accent: #6c8ef5;
+  --accent-glow: rgba(108,142,245,0.15);
+  --success: #4ade80;
+  --warning: #fbbf24;
+  --danger: #f87171;
+  --text-primary: #e8eaf6;
+  --text-secondary: #9399b8;
+  --text-muted: #555a7a;
+  --thinking-color: #a78bfa;
+}
+
+html, body, #app {
+  height: 100%;
+  font-family: 'Inter', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  background: var(--bg-dark);
+  color: var(--text-primary);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: var(--accent); }

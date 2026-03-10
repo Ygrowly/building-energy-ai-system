@@ -31,6 +31,8 @@ from app.mcp.server import call_tool
 from app.schemas.mcp_schemas import (
     CreateWorkOrderDraftInput,
     DetectEnergyAnomaliesInput,
+    GetDeviceLiveStatusInput,
+    QueryEnergyMetricsInput,
     RAGHybridSearchInput,
     RenderUIComponentInput,
 )
@@ -44,13 +46,15 @@ DIAGNOSE_AGENT_SYSTEM_PROMPT = """你是一个楼宇能耗管理系统的故障�
 你是一位 20 年经验的运维老专家，熟悉所有楼控设备的运行规律。
 
 ## 你的专属工具
-1. rag_hybrid_search — 检索运维手册，必须传入 device_id 进行精准过滤
-2. detect_energy_anomalies — 基于规则检测能耗异常时间点
-3. render_ui_component — 渲染诊断报告卡片或工单卡片
-4. create_work_order_draft — 生成维修工单草稿（仅创建草稿，须人工确认才能提交）
+1. query_energy_metrics — 查询指定建筑、时间段的能耗时序原始数据（事实核查用）
+2. get_device_live_status — 获取设备最新实时状态快照
+3. rag_hybrid_search — 检索运维手册，必须传入 device_id 进行精准过滤
+4. detect_energy_anomalies — 基于规则检测能耗异常时间点
+5. render_ui_component — 渲染诊断报告卡片或工单卡片
+6. create_work_order_draft — 生成维修工单草稿（仅创建草稿，须人工确认才能提交）
 
 ## 诊断流程（Chain of Thought）
-1. 【事实核查】基于 Data Agent 传入的异常数据，确认异常的具体特征
+1. 【事实核查】调用 query_energy_metrics 或 get_device_live_status 获取异常时段的原始数据，确认异常的具体特征
 2. 【知识检索】调用 rag_hybrid_search，用设备 ID 过滤 + 异常特征描述进行检索
 3. 【归因分析】结合规则异常点 + 手册条文进行推理
 4. 【结论输出】给出：异常原因 + 置信度 + 建议操作 + 引用来源
@@ -111,6 +115,17 @@ def _make_mcp_tool(
 
 DIAGNOSE_AGENT_TOOLS = [
     _make_mcp_tool(
+        "query_energy_metrics",
+        "查询指定建筑在时间范围内的能耗指标时序数据（事实核查用）。"
+        "默认时间范围：2016-04-01 ~ 2016-05-02。",
+        args_schema=QueryEnergyMetricsInput,
+    ),
+    _make_mcp_tool(
+        "get_device_live_status",
+        "获取设备最新实时状态（operation_status, ambient_temp_c 等）。",
+        args_schema=GetDeviceLiveStatusInput,
+    ),
+    _make_mcp_tool(
         "rag_hybrid_search",
         "混合检索运维手册，RAGFlow 未配置时自动降级到本地知识库。"
         "device_id 传入可精准过滤到设备相关文档。",
@@ -134,21 +149,27 @@ DIAGNOSE_AGENT_TOOLS = [
 ]
 
 
-def _build_diagnose_agent():
-    """构建 Diagnose Agent（LangGraph 内置 ReAct）。"""
-    settings = get_settings()
-    llm = ChatOpenAI(
-        model=settings.LLM_MODEL,
-        api_key=settings.LLM_API_KEY or "placeholder",
-        base_url=settings.LLM_BASE_URL,
-        temperature=0.2,  # 诊断需要稳定推理，轻微创意用于组织语言
-        max_tokens=3072,
-    )
-    return create_react_agent(
-        llm,
-        tools=DIAGNOSE_AGENT_TOOLS,
-        prompt=DIAGNOSE_AGENT_SYSTEM_PROMPT,
-    )
+_cached_diagnose_agent = None
+
+
+def _get_diagnose_agent():
+    """获取 Diagnose Agent 单例（首次调用时构建，后续复用）。"""
+    global _cached_diagnose_agent
+    if _cached_diagnose_agent is None:
+        settings = get_settings()
+        llm = ChatOpenAI(
+            model=settings.LLM_MODEL,
+            api_key=settings.LLM_API_KEY or "placeholder",
+            base_url=settings.LLM_BASE_URL,
+            temperature=0.2,
+            max_tokens=3072,
+        )
+        _cached_diagnose_agent = create_react_agent(
+            llm,
+            tools=DIAGNOSE_AGENT_TOOLS,
+            prompt=DIAGNOSE_AGENT_SYSTEM_PROMPT,
+        )
+    return _cached_diagnose_agent
 
 
 async def diagnose_agent_node(state: AgentState) -> dict[str, Any]:
@@ -159,7 +180,7 @@ async def diagnose_agent_node(state: AgentState) -> dict[str, Any]:
     如发现工单草稿，将其写入 pending_action 供 HITL 处理。
     """
     hop_count = state.get("hop_count", 0) + 1
-    agent = _build_diagnose_agent()
+    agent = _get_diagnose_agent()
 
     sub_state = {"messages": state.get("messages", [])}
 

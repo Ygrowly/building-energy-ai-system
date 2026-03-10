@@ -344,7 +344,7 @@ class RenderUIComponentInput(BaseModel):
     Action Agent 调用此工具，生成结构化 JSON 指令推送给前端。
     前端收到后，拦截 JSON 并渲染对应 Vue 组件，而非显示纯文本。
     """
-    component_type: Literal["LineChart", "BarChart", "Gauge", "WorkOrderCard"]
+    component_type: Literal["LineChart", "BarChart", "Gauge", "WorkOrderCard", "ReportDownload"]
     title: str
     data_payload: dict[str, Any] = Field(description="组件所需的结构化数据")
     source_info: Optional[dict[str, Any]] = Field(
@@ -356,6 +356,13 @@ class RenderUIComponentInput(BaseModel):
 class RenderUIComponentOutput(BaseModel):
     artifact_id: str = Field(description="唯一标识，前端用于绑定审批回调")
     widget: str
+    component_type: str = Field(description="原始组件类型，如 'LineChart'")
+    title: str = Field(description="图表/卡片标题")
+    data_payload: dict[str, Any] = Field(description="组件所需的结构化数据")
+    source_info: Optional[dict[str, Any]] = Field(
+        default=None,
+        description="审计溯源信息，用于数据来源浮层"
+    )
     status: Literal["rendered"] = "rendered"
 
 
@@ -508,3 +515,32 @@ class CompareTimePeriodsOutput(BaseModel):
     data_points_a: int
     data_points_b: int
     source_table: Literal["energy_data"] = "energy_data"
+
+
+# ===========================================================================
+# Tool 12：generate_report — 生成统计报表（AI 对话触发）
+# ===========================================================================
+
+class GenerateReportInput(BaseModel):
+    """
+    AI 对话中生成统计报表。
+    生成后返回下载链接作为 artifact 供前端渲染下载按钮。
+    """
+    building_id: str = Field(min_length=1, description="建筑类型名称")
+    start_date: str = Field(description="开始日期 YYYY-MM-DD")
+    end_date: str = Field(description="结束日期 YYYY-MM-DD")
+    report_type: Literal["daily_summary", "energy_detail"] = Field(
+        default="daily_summary",
+        description="报表类型：daily_summary / energy_detail"
+    )
+
+
+class GenerateReportOutput(BaseModel):
+    """报表生成结果，含下载 URL。"""
+    component_type: Literal["ReportDownload"] = "ReportDownload"
+    widget: Literal["report-download"] = "report-download"
+    title: str
+    download_url: str = Field(description="报表 CSV 下载地址")
+    building_id: str
+    report_type: str
+    period: str

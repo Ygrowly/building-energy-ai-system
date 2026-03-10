@@ -13,6 +13,8 @@ from datetime import datetime, timezone
 from app.schemas.mcp_schemas import (
     CreateWorkOrderDraftInput,
     CreateWorkOrderDraftOutput,
+    GenerateReportInput,
+    GenerateReportOutput,
     MCPError,
     RenderUIComponentInput,
     RenderUIComponentOutput,
@@ -35,10 +37,11 @@ def render_ui_component(
     """
     # 组件类型 → 前端 widget 标识符映射
     _widget_map = {
-        "LineChart":     "line-chart",
-        "BarChart":      "bar-chart",
-        "Gauge":         "gauge",
-        "WorkOrderCard": "work-order-card",
+        "LineChart":       "line-chart",
+        "BarChart":        "bar-chart",
+        "Gauge":           "gauge",
+        "WorkOrderCard":   "work-order-card",
+        "ReportDownload":  "report-download",
     }
     widget = _widget_map.get(inp.component_type)
     if widget is None:
@@ -52,6 +55,10 @@ def render_ui_component(
     return RenderUIComponentOutput(
         artifact_id=artifact_id,
         widget=widget,
+        component_type=inp.component_type,
+        title=inp.title,
+        data_payload=inp.data_payload,
+        source_info=inp.source_info,
     )
 
 
@@ -80,4 +87,37 @@ def create_work_order_draft(
         issue_description=inp.issue_description,
         suggested_action=inp.suggested_action,
         created_at=now_utc,
+    )
+
+
+# ===========================================================================
+# Tool 12：generate_report
+# ===========================================================================
+
+def generate_report(
+    inp: GenerateReportInput,
+) -> GenerateReportOutput | MCPError:
+    """
+    生成统计报表下载链接，返回 artifact 供前端渲染下载按钮。
+    实际 CSV 生成由 /api/reports/export 接口处理。
+    """
+    download_url = (
+        f"/api/reports/export"
+        f"?building_type={inp.building_id}"
+        f"&start_date={inp.start_date}"
+        f"&end_date={inp.end_date}"
+        f"&report_type={inp.report_type}"
+    )
+    report_names = {
+        "daily_summary": "每日能耗汇总报表",
+        "energy_detail": "能耗明细报表",
+    }
+    title = f"{inp.building_id} {report_names.get(inp.report_type, '报表')} ({inp.start_date} ~ {inp.end_date})"
+
+    return GenerateReportOutput(
+        title=title,
+        download_url=download_url,
+        building_id=inp.building_id,
+        report_type=inp.report_type,
+        period=f"{inp.start_date} ~ {inp.end_date}",
     )

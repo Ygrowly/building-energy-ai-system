@@ -47,6 +47,7 @@ class WidgetType(str, Enum):
     GAUGE = "gauge"
     WORK_ORDER_CARD = "work-order-card"
     DATA_SOURCE_PANEL = "data-source-panel"
+    REPORT_DOWNLOAD = "report-download"
 
 
 # ---------------------------------------------------------------------------

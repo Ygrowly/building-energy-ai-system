@@ -215,11 +215,15 @@ async def _stream_graph(
 
     # 更新会话状态（用流中捕获的最终状态，无需二次 ainvoke）
     if final_state_holder:
-        # 将新增消息合并回原始 state
         merged = dict(state)
         merged.update(final_state_holder)
         _sessions[session_id] = merged
         hop = merged.get("hop_count", 0)
+        # 自动注册待审批工单到工单存储
+        pa = merged.get("pending_action")
+        if pa and pa.get("ticket_id"):
+            from app.api.routes_workorder import register_pending_order
+            register_pending_order(pa)
     else:
         # 极少数情况下未捕获到顶层事件，降级到 ainvoke（只会发生一次）
         try:
@@ -265,42 +269,17 @@ async def chat(req: ChatRequest):
     )
 
 
-@router.post("/chat/approve", summary="人机协同：审批工单")
-async def approve_work_order(req: ApproveRequest):
-    """
-    用户在前端确认/驳回工单卡片后调用此接口。
-
-    - approved=True  → 工单正式提交（本演示中打印日志，实际可写 DB）
-    - approved=False → 工单取消，清除 pending_action
-    """
-    state = _sessions.get(req.session_id)
-    if not state:
-        raise HTTPException(status_code=404, detail="会话不存在或已过期")
-
-    pending = state.get("pending_action")
-    if not pending or pending.get("ticket_id") != req.ticket_id:
-        raise HTTPException(status_code=400, detail="工单 ID 不匹配")
-
-    if req.approved:
-        # 实际项目中在此写入数据库
-        logger.info(
-            "工单已批准 [%s]: 设备=%s, 优先级=%s",
-            req.ticket_id, pending.get("device_id"), pending.get("priority"),
-        )
-        _sessions[req.session_id]["pending_action"] = None
-        return {
-            "status": "approved",
-            "ticket_id": req.ticket_id,
-            "message": f"工单 {req.ticket_id} 已批准，已推送至运维班组。",
-        }
-    else:
-        _sessions[req.session_id]["pending_action"] = None
-        return {
-            "status": "rejected",
-            "ticket_id": req.ticket_id,
-            "message": f"工单 {req.ticket_id} 已驳回。",
-            "reason": req.reason,
-        }
+@router.post("/chat/approve", summary="人机协同：审批工单（兼容旧路径，推荐使用 /api/work-orders/approve）")
+async def approve_work_order_compat(req: ApproveRequest):
+    """兼容旧接口路径，内部转发到工单模块。"""
+    from app.api.routes_workorder import ApproveRequest as WOApproveReq, approve_work_order
+    wo_req = WOApproveReq(
+        session_id=req.session_id,
+        ticket_id=req.ticket_id,
+        approved=req.approved,
+        reason=req.reason,
+    )
+    return await approve_work_order(wo_req)
 
 
 @router.get("/chat/sessions/{session_id}", summary="获取会话摘要")
@@ -319,6 +298,33 @@ async def get_session(session_id: str):
         "has_pending_action": state.get("pending_action") is not None,
         "message_count": len(state.get("messages", [])),
         "artifact_count": len(state.get("artifacts", [])),
+    }
+
+
+@router.get("/chat/sessions/{session_id}/messages", summary="获取对话消息历史")
+async def get_session_messages(session_id: str):
+    """
+    返回指定会话的消息列表（role + content），供前端恢复对话上下文。
+    仅返回 HumanMessage 和 AIMessage，过滤掉 ToolMessage 等内部消息。
+    """
+    state = _sessions.get(session_id)
+    if not state:
+        raise HTTPException(status_code=404, detail="会话不存在")
+
+    messages = state.get("messages", [])
+    result = []
+    for msg in messages:
+        if isinstance(msg, HumanMessage):
+            result.append({"role": "user", "content": msg.content})
+        elif isinstance(msg, AIMessage) and msg.content:
+            if "[Router]" in msg.content:
+                continue
+            result.append({"role": "assistant", "content": msg.content})
+
+    return {
+        "session_id": session_id,
+        "messages": result,
+        "total": len(result),
     }
 
 

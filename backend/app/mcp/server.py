@@ -32,6 +32,7 @@ from app.mcp.tools.physics_calc import (
 )
 from app.mcp.tools.ui_render import (
     create_work_order_draft,
+    generate_report,
     render_ui_component,
 )
 from app.mcp.tools.rag_search import rag_hybrid_search
@@ -43,6 +44,7 @@ from app.schemas.mcp_schemas import (
     CompareTimePeriodsInput,
     CreateWorkOrderDraftInput,
     DetectEnergyAnomaliesInput,
+    GenerateReportInput,
     GetDeviceLiveStatusInput,
     QueryDailyEnergySummaryInput,
     QueryEnergyMetricsInput,
@@ -163,6 +165,15 @@ _register(ToolDefinition(
     input_schema=CompareTimePeriodsInput,
     requires_db=True,
     func=compare_time_periods,
+))
+
+_register(ToolDefinition(
+    name="generate_report",
+    description="生成统计报表（CSV 下载链接），支持 daily_summary（每日汇总）和 energy_detail（原始明细）。"
+                "当用户要求'生成报表'、'导出数据'时调用此工具，返回下载链接供前端渲染下载按钮。",
+    input_schema=GenerateReportInput,
+    requires_db=False,
+    func=generate_report,
 ))
 
 

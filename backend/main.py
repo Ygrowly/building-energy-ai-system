@@ -11,6 +11,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes_chat import router as chat_router
 from app.api.routes_data import router as data_router
+from app.api.routes_report import router as report_router
+from app.api.routes_workorder import router as workorder_router
 from app.core.config import get_settings
 
 settings = get_settings()
@@ -56,6 +58,8 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 app.include_router(chat_router, prefix="/api")
 app.include_router(data_router, prefix="/api")
+app.include_router(workorder_router, prefix="/api")
+app.include_router(report_router, prefix="/api")
 
 
 # ---------------------------------------------------------------------------

@@ -33,6 +33,7 @@ from app.schemas.mcp_schemas import (
     CompareMetricAcrossBuildingsInput,
     CompareTimePeriodsInput,
     DetectEnergyAnomaliesInput,
+    GenerateReportInput,
     GetDeviceLiveStatusInput,
     QueryDailyEnergySummaryInput,
     QueryEnergyMetricsInput,
@@ -57,6 +58,7 @@ DATA_AGENT_SYSTEM_PROMPT = """你是一个楼宇能耗管理系统的数据分�
 7. compare_metric_across_buildings — 多栋楼同一指标横向对比（含能耗强度 kWh/㎡），building_ids 传空则对比全部楼宇
 8. compare_time_periods — 同环比分析：period_a（当期）vs period_b（基期），返回变化量和变化率
 9. render_ui_component — 生成图表/卡片的前端渲染指令（当数据需要可视化时必须调用）
+10. generate_report — 生成统计报表（CSV 下载链接），用户要求"生成报表"、"导出数据"时调用
 
 ## 建筑 ID 说明
 - building_id 使用 building_type 值，如 'Education'、'Office'、'Public'
@@ -167,27 +169,39 @@ DATA_AGENT_TOOLS = [
     ),
     _make_mcp_tool(
         "render_ui_component",
-        "生成前端图表/卡片渲染指令（LineChart/BarChart/Gauge/WorkOrderCard）。",
+        "生成前端图表/卡片渲染指令（LineChart/BarChart/Gauge/WorkOrderCard/ReportDownload）。",
         args_schema=RenderUIComponentInput,
+    ),
+    _make_mcp_tool(
+        "generate_report",
+        "生成统计报表 CSV 下载链接。用户说'生成报表'/'导出数据'时调用。"
+        "返回下载 URL，前端渲染为下载按钮。默认时间范围：2016-04-01 ~ 2016-05-02。",
+        args_schema=GenerateReportInput,
     ),
 ]
 
 
-def _build_data_agent():
-    """构建 Data Agent（LangGraph 内置 ReAct）。"""
-    settings = get_settings()
-    llm = ChatOpenAI(
-        model=settings.LLM_MODEL,
-        api_key=settings.LLM_API_KEY or "placeholder",
-        base_url=settings.LLM_BASE_URL,
-        temperature=0.1,
-        max_tokens=2048,
-    )
-    return create_react_agent(
-        llm,
-        tools=DATA_AGENT_TOOLS,
-        prompt=DATA_AGENT_SYSTEM_PROMPT,
-    )
+_cached_data_agent = None
+
+
+def _get_data_agent():
+    """获取 Data Agent 单例（首次调用时构建，后续复用）。"""
+    global _cached_data_agent
+    if _cached_data_agent is None:
+        settings = get_settings()
+        llm = ChatOpenAI(
+            model=settings.LLM_MODEL,
+            api_key=settings.LLM_API_KEY or "placeholder",
+            base_url=settings.LLM_BASE_URL,
+            temperature=0.1,
+            max_tokens=2048,
+        )
+        _cached_data_agent = create_react_agent(
+            llm,
+            tools=DATA_AGENT_TOOLS,
+            prompt=DATA_AGENT_SYSTEM_PROMPT,
+        )
+    return _cached_data_agent
 
 
 async def data_agent_node(state: AgentState) -> dict[str, Any]:
@@ -198,7 +212,7 @@ async def data_agent_node(state: AgentState) -> dict[str, Any]:
     将结果合并回全局状态。
     """
     hop_count = state.get("hop_count", 0) + 1
-    agent = _build_data_agent()
+    agent = _get_data_agent()
 
     # 传入当前完整消息历史
     sub_state = {"messages": state.get("messages", [])}

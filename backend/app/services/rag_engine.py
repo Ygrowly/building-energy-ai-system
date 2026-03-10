@@ -158,7 +158,7 @@ def local_search(query: str, top_k: int = 3) -> list[RAGSearchResult]:
             ),
             parent_section="通用提示",
             source_doc="本地知识库",
-            page=0,
+            page=1,
             similarity=0.0,
             rerank_score=None,
         ))

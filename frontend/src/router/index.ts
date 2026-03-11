@@ -14,12 +14,6 @@ const router = createRouter({
       meta: { title: '驾驶舱' },
     },
     {
-      path: '/analysis',
-      name: 'Analysis',
-      component: () => import('@/views/Analysis.vue'),
-      meta: { title: '能源透视' },
-    },
-    {
       path: '/operations',
       name: 'Operations',
       component: () => import('@/views/Operations.vue'),

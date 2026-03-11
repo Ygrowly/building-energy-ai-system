@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(uvicorn main:app --reload --host 0.0.0.0 --port 8000)",
+      "Bash(pnpm run:*)",
+      "Bash(cmd.exe /c \"cd /d E:\\\\27_fwwb_A08\\\\project\\\\frontend && pnpm run dev\")",
+      "Bash(powershell.exe -Command \"$env:PATH += '';C:\\\\nvm4w\\\\nodejs''; Set-Location ''E:\\\\27_fwwb_A08\\\\project\\\\frontend''; pnpm run dev\")",
+      "Bash(powershell.exe -Command '$env:PATH += \"\";C:\\\\nvm4w\\\\nodejs\"\"; Set-Location \"\"E:\\\\27_fwwb_A08\\\\project\\\\frontend\"\"; pnpm run dev')",
+      "Bash(powershell.exe -Command \"Get-ChildItem ''C:\\\\nvm4w'' -Recurse -Filter ''node.exe'' -ErrorAction SilentlyContinue | Select-Object -First 5 FullName\")",
+      "Bash(powershell.exe -Command \"Get-ChildItem ''C:\\\\Users\\\\王恒飞\\\\AppData\\\\Local\\\\nvm'' -Recurse -Filter ''node.exe'' -ErrorAction SilentlyContinue | Select-Object -First 5 FullName\")",
+      "Bash(powershell.exe -Command \"Get-ChildItem ''C:\\\\'' -Recurse -Filter ''node.exe'' -ErrorAction SilentlyContinue -Depth 5 | Select-Object -First 5 FullName\")",
+      "Bash(powershell.exe -Command \"where.exe node 2>&1\")",
+      "Bash(powershell.exe -Command \"Get-Item ''C:\\\\nvm4w\\\\nodejs'' | Select-Object Target, LinkType, FullName\")",
+      "Bash(powershell.exe -Command \"& ''C:\\\\Users\\\\王恒飞\\\\AppData\\\\Local\\\\nvm\\\\nvm.exe'' list 2>&1\")",
+      "Bash(export PATH=\"$PATH:/d/node-v20.17.0-win-x64/node-v20.17.0-win-x64\")",
+      "Bash(pnpm install:*)",
+      "Bash(uipro init:*)",
+      "Bash(npm install:*)"
+    ]
+  }
+}

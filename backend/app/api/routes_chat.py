@@ -196,8 +196,18 @@ async def _stream_graph(
                 elapsed = time.time() - _t.pop(tool_key, time.time())
                 _tool_count += 1
                 logger.info("工具调用完成: %s, 用时=%.2fs", name, elapsed)
-                output = data.get("output", "")
-                if isinstance(output, str):
+                raw_output = data.get("output", "")
+                # 兼容 LangGraph 不同版本：output 可能是字符串、ToolMessage 或 dict
+                if hasattr(raw_output, "content"):
+                    output = raw_output.content  # ToolMessage 对象
+                elif isinstance(raw_output, dict):
+                    try:
+                        output = json.dumps(raw_output, ensure_ascii=False, default=str)
+                    except Exception:
+                        output = ""
+                else:
+                    output = str(raw_output) if raw_output else ""
+                if output:
                     try:
                         parsed = json.loads(output)
                         if "component_type" in parsed or "widget" in parsed:

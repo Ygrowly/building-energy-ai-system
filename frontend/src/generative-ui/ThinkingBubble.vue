@@ -102,12 +102,7 @@ watch(() => props.steps.length, async () => {
   }
 })
 
-// 思考完成后延迟自动折叠
-watch(() => props.isFinished, (done) => {
-  if (done) {
-    setTimeout(() => { collapsed.value = true }, 900)
-  }
-})
+// 思考完成后保持展开，让用户可自行决定是否折叠
 
 function stepIcon(agent: string): string {
   const map: Record<string, string> = {
@@ -144,6 +139,8 @@ function agentLabel(agent: string): string {
   font-size: 12px;
   background: rgba(108, 142, 245, 0.04);
   margin-bottom: 6px;
+  /* 防止在 flex-column 容器中因 overflow:hidden 导致 min-height=0 被压缩到 2px */
+  flex-shrink: 0;
 }
 
 /* ─── 头部 ───────────────────────────────────────── */

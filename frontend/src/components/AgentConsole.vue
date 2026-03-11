@@ -197,11 +197,34 @@ function isReportDownload(artifact?: ArtifactEvent): boolean {
   return ['ReportDownload', 'report-download'].includes(t)
 }
 
-// ── Markdown 简单渲染 ──────────────────────────────
+// ── Markdown 渲染 ─────────────────────────────────
 function formatMarkdown(text: string): string {
   return text
+    // 分割线（优先处理，避免被其他规则误匹配）
+    .replace(/^---+$/gm, '<hr style="border:none;border-top:1px solid var(--border);margin:10px 0"/>')
+    // 三级标题 ###
+    .replace(/^### (.+)$/gm,
+      '<span style="display:block;font-size:12px;font-weight:700;color:var(--accent);margin:10px 0 3px">$1</span>')
+    // 二级标题 ##
+    .replace(/^## (.+)$/gm,
+      '<span style="display:block;font-size:13px;font-weight:700;color:var(--text-primary);margin:12px 0 5px;border-bottom:1px solid var(--border);padding-bottom:3px">$1</span>')
+    // 一级标题 #
+    .replace(/^# (.+)$/gm,
+      '<span style="display:block;font-size:14px;font-weight:700;color:var(--text-primary);margin:14px 0 6px">$1</span>')
+    // 加粗 **text**
     .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-    .replace(/`([^`]+)`/g, '<code style="background:rgba(108,142,245,0.15);padding:1px 5px;border-radius:3px;font-family:monospace;font-size:0.9em">$1</code>')
+    // 斜体 *text* / _text_（避免误匹配加粗残留的单 *）
+    .replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, '<em>$1</em>')
+    // 行内代码 `code`
+    .replace(/`([^`]+)`/g,
+      '<code style="background:rgba(108,142,245,0.15);padding:1px 5px;border-radius:3px;font-family:monospace;font-size:0.9em">$1</code>')
+    // 无序列表 - / *（行首）
+    .replace(/^[ \t]*[-*] (.+)$/gm,
+      '<span style="display:block;padding-left:14px;margin:2px 0;position:relative"><span style="position:absolute;left:4px;color:var(--accent)">•</span>$1</span>')
+    // 有序列表 1. 2. ...
+    .replace(/^[ \t]*(\d+)\. (.+)$/gm,
+      '<span style="display:block;padding-left:20px;margin:2px 0;position:relative"><span style="position:absolute;left:4px;color:var(--text-secondary)">$1.</span>$2</span>')
+    // 换行
     .replace(/\n/g, '<br/>')
 }
 </script>

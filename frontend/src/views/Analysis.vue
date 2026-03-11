@@ -1,21 +1,21 @@
 <template>
   <div class="analysis">
     <header class="page-header">
-      <h1>📊 能源透视</h1>
+      <h1><Icon icon="mdi:chart-bar" width="22" class="page-icon" /> 能源透视</h1>
       <span class="subtitle">能耗趋势 · 报表导出 · 数据血缘</span>
     </header>
 
     <!-- AI 引导 -->
     <div class="hint-card">
       <div>
-        <p class="hint-title">💬 在右侧控制台输入分析指令，AI 将自动生成图表</p>
+        <p class="hint-title"><Icon icon="mdi:message-text" width="16" class="inline-icon" /> 在右侧控制台输入分析指令，AI 将自动生成图表</p>
         <p class="hint-examples">例如：「对比教学楼和办公楼 2016 年 4 月每天的用电量」</p>
       </div>
     </div>
 
     <!-- ── 能耗趋势查询 ── -->
     <section class="section">
-      <h2 class="section-title">📈 能耗趋势查询</h2>
+      <h2 class="section-title"><Icon icon="mdi:trending-up" width="16" class="title-icon" /> 能耗趋势查询</h2>
 
       <!-- 查询表单 -->
       <div class="query-form">
@@ -53,7 +53,8 @@
             <input type="checkbox" v-model="trendForm.includeWater" class="form-check" />
           </div>
           <button class="query-btn" @click="fetchTrend" :disabled="trendLoading">
-            {{ trendLoading ? '查询中...' : '🔍 查询' }}
+            <Icon icon="mdi:magnify" width="14" class="btn-icon" />
+            {{ trendLoading ? '查询中...' : '查询' }}
           </button>
         </div>
         <p class="form-hint">数据库有效范围：2016-04-01 ~ 2016-05-02</p>
@@ -61,7 +62,7 @@
 
       <!-- 加载 / 错误 -->
       <div v-if="trendLoading" class="loading-bar">正在加载能耗数据...</div>
-      <div v-if="trendError" class="error-bar">⚠️ {{ trendError }}</div>
+      <div v-if="trendError" class="error-bar"><Icon icon="mdi:alert" width="14" class="bar-icon" /> {{ trendError }}</div>
 
       <!-- 图表区域 -->
       <div class="chart-container" v-if="trendData.length > 0">
@@ -100,7 +101,7 @@
 
       <!-- 未查询时的空状态 -->
       <div class="empty-chart" v-else-if="!trendLoading && !trendError">
-        <div class="empty-icon">📈</div>
+        <div class="empty-icon"><Icon icon="mdi:trending-up" width="44" /></div>
         <p>选择楼宇和日期范围后点击查询</p>
         <p class="empty-sub">将显示该楼宇的每日能耗趋势折线图</p>
       </div>
@@ -108,7 +109,7 @@
 
     <!-- ── 报表导出 ── -->
     <section class="section">
-      <h2 class="section-title">📥 报表导出</h2>
+      <h2 class="section-title"><Icon icon="mdi:download" width="16" class="title-icon" /> 报表导出</h2>
 
       <div class="export-form">
         <div class="form-row">
@@ -148,7 +149,7 @@
             </select>
           </div>
           <button class="download-btn" @click="triggerDownload">
-            ⬇️ 下载 CSV
+            <Icon icon="mdi:download" width="14" class="btn-icon" /> 下载 CSV
           </button>
         </div>
 
@@ -165,34 +166,34 @@
 
     <!-- ── 数据血缘视图 ── -->
     <section class="section">
-      <h2 class="section-title">🔗 数据流向（血缘视图）</h2>
+      <h2 class="section-title"><Icon icon="mdi:source-branch" width="16" class="title-icon" /> 数据流向（血缘视图）</h2>
       <div class="lineage-flow">
         <div class="lineage-node source">
-          <div class="node-icon">📂</div>
+          <div class="node-icon"><Icon icon="mdi:folder-open" width="22" /></div>
           <div class="node-label">CSV 原始数据</div>
           <div class="node-sub">传感器读数</div>
         </div>
         <div class="lineage-arrow">→</div>
         <div class="lineage-node table">
-          <div class="node-icon">🗄️</div>
+          <div class="node-icon"><Icon icon="mdi:database" width="22" /></div>
           <div class="node-label">energy_data</div>
           <div class="node-sub">时序表 · PostgreSQL</div>
         </div>
         <div class="lineage-arrow">→</div>
         <div class="lineage-node view">
-          <div class="node-icon">⚡</div>
+          <div class="node-icon"><Icon icon="mdi:lightning-bolt" width="22" /></div>
           <div class="node-label">daily_energy_summary</div>
           <div class="node-sub">物化视图 · 预聚合</div>
         </div>
         <div class="lineage-arrow">→</div>
         <div class="lineage-node api">
-          <div class="node-icon">🔌</div>
+          <div class="node-icon"><Icon icon="mdi:api" width="22" /></div>
           <div class="node-label">REST API</div>
           <div class="node-sub">/api/buildings/{type}/energy</div>
         </div>
         <div class="lineage-arrow">→</div>
         <div class="lineage-node ai">
-          <div class="node-icon">🤖</div>
+          <div class="node-icon"><Icon icon="mdi:robot" width="22" /></div>
           <div class="node-label">AI 分析结论</div>
           <div class="node-sub">LangGraph Agent</div>
         </div>
@@ -203,6 +204,7 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onMounted } from 'vue'
+import { Icon } from '@iconify/vue'
 import * as echarts from 'echarts'
 import { apiFetch } from '@/api/http'
 import { useBuildingStore } from '@/stores/buildingStore'
@@ -609,7 +611,7 @@ onMounted(() => {
   font-size: 14px;
   margin-top: 12px;
 }
-.empty-icon { font-size: 44px; margin-bottom: 6px; }
+.empty-icon { display: flex; justify-content: center; color: var(--text-muted); margin-bottom: 6px; }
 .empty-sub  { font-size: 12px; color: var(--text-muted); }
 
 /* ── 数据血缘 ── */
@@ -641,7 +643,7 @@ onMounted(() => {
 .lineage-node.api    { background: rgba(34,211,238,0.08);  border: 1px solid rgba(34,211,238,0.3); }
 .lineage-node.ai     { background: rgba(167,139,250,0.08); border: 1px solid rgba(167,139,250,0.3); }
 
-.node-icon  { font-size: 22px; }
+.node-icon  { display: flex; align-items: center; justify-content: center; }
 .node-label { font-size: 12px; font-weight: 700; color: var(--text-primary); }
 .node-sub   { font-size: 10px; color: var(--text-muted); }
 
@@ -650,5 +652,17 @@ onMounted(() => {
   color: var(--text-muted);
   padding: 0 10px;
   flex-shrink: 0;
+}
+
+.page-icon  { vertical-align: middle; margin-right: 6px; }
+.title-icon { vertical-align: middle; margin-right: 4px; }
+.inline-icon { vertical-align: middle; margin-right: 4px; }
+.bar-icon   { vertical-align: middle; flex-shrink: 0; }
+.btn-icon   { vertical-align: middle; }
+
+.query-btn, .download-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
 }
 </style>

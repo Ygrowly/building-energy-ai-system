@@ -17,16 +17,17 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from typing import Any
 
-from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import StructuredTool
 from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
 
 from app.core.config import get_settings
 from app.db.session import AsyncSessionLocal
-from app.graph.state import AgentState
+from app.graph.state import AgentState, update_context_summary
 from app.mcp.server import call_tool
 from app.schemas.mcp_schemas import (
     CreateWorkOrderDraftInput,
@@ -151,6 +152,9 @@ DIAGNOSE_AGENT_TOOLS = [
 
 _cached_diagnose_agent = None
 
+# 历史消息最大条数（与 data_agent 保持一致）
+_MAX_HISTORY_MESSAGES = 8
+
 
 def _get_diagnose_agent():
     """获取 Diagnose Agent 单例（首次调用时构建，后续复用）。"""
@@ -162,7 +166,7 @@ def _get_diagnose_agent():
             api_key=settings.LLM_API_KEY or "placeholder",
             base_url=settings.LLM_BASE_URL,
             temperature=0.2,
-            max_tokens=3072,
+            max_tokens=2048,   # 诊断报告允许稍长，但不超过 2048
         )
         _cached_diagnose_agent = create_react_agent(
             llm,
@@ -176,13 +180,50 @@ async def diagnose_agent_node(state: AgentState) -> dict[str, Any]:
     """
     LangGraph 节点函数：Diagnose Agent。
 
-    执行故障诊断 ReAct 循环，结果合并回全局状态。
-    如发现工单草稿，将其写入 pending_action 供 HITL 处理。
+    优化要点（与 data_agent 对齐）：
+    1. 注入路由提取的上下文 + 历史摘要，避免 Agent 重复查询已知实体。
+    2. 限制历史消息传入数量。
+    3. 只将最终文字回复写回全局 state，ToolMessage 不入全局历史。
+    4. 更新 context_summary 供下轮使用。
     """
+    t0 = time.time()
     hop_count = state.get("hop_count", 0) + 1
     agent = _get_diagnose_agent()
 
-    sub_state = {"messages": state.get("messages", [])}
+    # ── 构建上下文注入消息 ─────────────────────────────────────────────
+    context_parts: list[str] = []
+
+    existing_summary = state.get("context_summary", "")
+    if existing_summary:
+        context_parts.append(f"【历史对话摘要（仅供参考）】\n{existing_summary}")
+
+    available = state.get("available_buildings")
+    if available:
+        context_parts.append(f"【可用楼宇】: {', '.join(available)}")
+    if state.get("building_id"):
+        context_parts.append(f"【目标楼宇】: {state['building_id']}")
+    if state.get("device_id"):
+        context_parts.append(f"【目标设备】: {state['device_id']}")
+    tc = state.get("time_context")
+    if isinstance(tc, dict):
+        start = tc.get("start") or "2016-04-01"
+        end   = tc.get("end")   or "2016-05-02"
+        context_parts.append(f"【诊断时间范围】: {start} ~ {end}")
+
+    history = state.get("messages", [])
+    recent  = history[-_MAX_HISTORY_MESSAGES:] if len(history) > _MAX_HISTORY_MESSAGES else history
+
+    if context_parts:
+        ctx_msg = SystemMessage(
+            content="路由层提取的上下文（直接使用，无需重复查询）：\n"
+                    + "\n".join(context_parts)
+        )
+        sub_messages = [ctx_msg] + list(recent)
+    else:
+        sub_messages = list(recent)
+
+    injected_count = len(sub_messages)
+    sub_state = {"messages": sub_messages}
 
     try:
         result = await agent.ainvoke(sub_state)
@@ -199,12 +240,19 @@ async def diagnose_agent_node(state: AgentState) -> dict[str, Any]:
         }
 
     all_messages = result.get("messages", [])
-    existing_count = len(state.get("messages", []))
-    new_messages = all_messages[existing_count:]
+    new_messages  = all_messages[injected_count:]
 
-    # 收集 artifacts
+    # ── 只将最终纯文字 AIMessage 写回全局 state ───────────────────────
+    final_ai_msgs = [
+        m for m in new_messages
+        if isinstance(m, AIMessage)
+        and m.content
+        and not getattr(m, "tool_calls", [])
+    ]
+    global_msg = [final_ai_msgs[-1]] if final_ai_msgs else []
+
+    # 收集 artifacts + 检测工单草稿（HITL）
     artifacts = list(state.get("artifacts", []))
-    # 检测工单草稿（HITL）
     pending_action = state.get("pending_action")
 
     for msg in new_messages:
@@ -216,11 +264,9 @@ async def diagnose_agent_node(state: AgentState) -> dict[str, Any]:
         except (json.JSONDecodeError, TypeError):
             continue
 
-        # render_ui_component 产出
         if "component_type" in data:
             artifacts.append(data)
 
-        # create_work_order_draft 产出 → 写入 pending_action
         if data.get("status") == "pending_approval":
             pending_action = {
                 "type": "work_order",
@@ -232,10 +278,26 @@ async def diagnose_agent_node(state: AgentState) -> dict[str, Any]:
                 "suggested_action": data.get("suggested_action"),
             }
 
+    tool_count = sum(1 for m in new_messages if isinstance(m, ToolMessage))
+    logger.info(
+        "Diagnose Agent 完成: 工具调用=%d 用时=%.1fs", tool_count, time.time() - t0,
+    )
+
+    # ── 滚动更新 context_summary ──────────────────────────────────────
+    user_q = next(
+        (str(m.content) for m in reversed(list(history)) if isinstance(m, HumanMessage)),
+        "",
+    )
+    answer_text = str(global_msg[0].content) if global_msg else "（已生成诊断报告/工单）"
+    new_summary = update_context_summary(
+        existing_summary, state.get("intent"), user_q, answer_text
+    )
+
     return {
-        "messages": new_messages,
+        "messages": global_msg,          # ★ 只含最终回答
         "current_agent": "end",
         "hop_count": hop_count,
         "artifacts": artifacts,
         "pending_action": pending_action,
+        "context_summary": new_summary,  # ★ 更新滚动摘要
     }

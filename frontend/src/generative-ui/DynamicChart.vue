@@ -3,7 +3,7 @@
     <div class="chart-header">
       <span class="chart-title">{{ title }}</span>
       <button class="source-btn" @click="showSource = !showSource" title="数据溯源">
-        🔍 数据来源
+        <Icon icon="mdi:magnify" width="12" /> 数据来源
       </button>
     </div>
 
@@ -18,15 +18,15 @@
     <!-- 数据溯源面板 -->
     <div class="source-panel" v-if="showSource">
       <div class="source-row">
-        <span class="source-key">📦 数据来源</span>
+        <span class="source-key"><Icon icon="mdi:package-variant" width="12" /> 数据来源</span>
         <span class="source-val">{{ sourceInfo?.source_table ?? 'energy_data' }}</span>
       </div>
       <div class="source-row" v-if="sourceInfo?.meter_device_id">
-        <span class="source-key">📡 设备 ID</span>
+        <span class="source-key"><Icon icon="mdi:antenna" width="12" /> 设备 ID</span>
         <span class="source-val">{{ sourceInfo.meter_device_id }}</span>
       </div>
       <div class="source-row" v-if="sourceInfo?.query_time_ms">
-        <span class="source-key">⚡ 查询耗时</span>
+        <span class="source-key"><Icon icon="mdi:timer-outline" width="12" /> 查询耗时</span>
         <span class="source-val success">{{ sourceInfo.query_time_ms }} ms</span>
       </div>
     </div>
@@ -35,6 +35,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, watch, nextTick } from 'vue'
+import { Icon } from '@iconify/vue'
 import * as echarts from 'echarts'
 import type { ArtifactEvent } from '@/api/stream_client'
 
@@ -143,6 +144,9 @@ onMounted(async () => {
 }
 
 .source-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   background: none;
   border: 1px solid var(--border);
   border-radius: 4px;
@@ -153,6 +157,12 @@ onMounted(async () => {
   transition: all 0.2s;
 }
 .source-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+.source-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
 
 .skeleton {
   height: 200px;

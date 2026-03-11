@@ -1,7 +1,7 @@
 <template>
   <div class="wo-card" :class="statusClass">
     <div class="wo-header">
-      <span class="wo-icon">🛠️</span>
+      <span class="wo-icon"><Icon icon="mdi:tools" width="16" /></span>
       <span class="wo-title">维修工单</span>
       <span class="wo-badge" :class="priorityClass">{{ priority }}</span>
       <span class="wo-status-badge">{{ statusLabel }}</span>
@@ -33,10 +33,10 @@
     <!-- 操作按钮（仅 pending 状态显示） -->
     <div class="wo-actions" v-if="isPending">
       <button class="btn-approve" @click="emit('approve')" :disabled="isProcessing">
-        ✅ 批准派单
+        <Icon icon="mdi:check-circle" width="14" /> 批准派单
       </button>
       <button class="btn-reject" @click="showRejectInput = !showRejectInput" :disabled="isProcessing">
-        ❌ 驳回
+        <Icon icon="mdi:close-circle" width="14" /> 驳回
       </button>
     </div>
 
@@ -53,6 +53,7 @@
 
 <script setup lang="ts">
 import { ref, computed } from 'vue'
+import { Icon } from '@iconify/vue'
 import type { ArtifactEvent } from '@/api/stream_client'
 
 const props = defineProps<{
@@ -120,7 +121,7 @@ function doReject() {
   background: var(--bg-panel);
 }
 
-.wo-icon { font-size: 16px; }
+.wo-icon { display: flex; align-items: center; color: var(--warning); }
 .wo-title { font-weight: 700; font-size: 14px; }
 
 .wo-badge {
@@ -166,6 +167,9 @@ function doReject() {
 }
 
 .btn-approve, .btn-reject {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   padding: 8px 20px;
   border-radius: 6px;
   font-size: 13px;

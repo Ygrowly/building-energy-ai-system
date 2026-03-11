@@ -1,7 +1,7 @@
 <template>
   <div class="evidence" v-if="hasInfo">
     <button class="evidence-toggle" @click="open = !open">
-      <span class="evidence-icon">🔍</span>
+      <span class="evidence-icon"><Icon icon="mdi:magnify" width="13" /></span>
       <span class="evidence-label">数据来源</span>
       <span class="evidence-arrow">{{ open ? '▲' : '▼' }}</span>
     </button>
@@ -9,7 +9,7 @@
     <Transition name="slide">
       <div class="evidence-panel" v-if="open">
         <div class="ev-row" v-for="row in infoRows" :key="row.key">
-          <span class="ev-icon">{{ row.icon }}</span>
+          <span class="ev-icon"><Icon :icon="row.icon" width="12" /></span>
           <span class="ev-key">{{ row.label }}</span>
           <span class="ev-val" :class="row.cls">{{ row.value }}</span>
         </div>
@@ -20,6 +20,7 @@
 
 <script setup lang="ts">
 import { ref, computed } from 'vue'
+import { Icon } from '@iconify/vue'
 
 const props = defineProps<{
   sourceInfo?: Record<string, unknown>
@@ -32,16 +33,16 @@ const hasInfo = computed(() =>
 )
 
 const LABELS: Record<string, { label: string; icon: string; cls?: string }> = {
-  source_table:          { label: '数据来源',   icon: '📦' },
-  meter_device_id:       { label: '设备 ID',    icon: '📡', cls: 'mono' },
-  building_type:         { label: '楼宇',       icon: '🏢' },
-  query_time_ms:         { label: '查询耗时',   icon: '⚡', cls: 'success' },
-  record_count:          { label: '数据条数',   icon: '📊' },
-  start_date:            { label: '开始日期',   icon: '📅' },
-  end_date:              { label: '结束日期',   icon: '📅' },
-  tool_name:             { label: '工具名称',   icon: '⚙️', cls: 'mono' },
-  confidence:            { label: '置信度',     icon: '📈', cls: 'accent' },
-  rag_doc_id:            { label: '知识库片段', icon: '📖', cls: 'mono' },
+  source_table:    { label: '数据来源',   icon: 'mdi:package-variant' },
+  meter_device_id: { label: '设备 ID',    icon: 'mdi:antenna',        cls: 'mono' },
+  building_type:   { label: '楼宇',       icon: 'mdi:office-building' },
+  query_time_ms:   { label: '查询耗时',   icon: 'mdi:timer-outline',  cls: 'success' },
+  record_count:    { label: '数据条数',   icon: 'mdi:counter' },
+  start_date:      { label: '开始日期',   icon: 'mdi:calendar-start' },
+  end_date:        { label: '结束日期',   icon: 'mdi:calendar-end' },
+  tool_name:       { label: '工具名称',   icon: 'mdi:tools',          cls: 'mono' },
+  confidence:      { label: '置信度',     icon: 'mdi:trending-up',    cls: 'accent' },
+  rag_doc_id:      { label: '知识库片段', icon: 'mdi:book-open-page-variant', cls: 'mono' },
 }
 
 const infoRows = computed(() => {
@@ -49,7 +50,7 @@ const infoRows = computed(() => {
   return Object.entries(info)
     .filter(([, v]) => v != null && v !== '')
     .map(([key, value]) => {
-      const meta = LABELS[key] ?? { label: key, icon: '•' }
+      const meta = LABELS[key] ?? { label: key, icon: 'mdi:circle-small' }
       let displayVal = String(value)
       if (key === 'query_time_ms') displayVal = `${value} ms`
       if (key === 'confidence')    displayVal = `${(Number(value) * 100).toFixed(0)}%`
@@ -82,7 +83,7 @@ const infoRows = computed(() => {
 }
 .evidence-toggle:hover { color: var(--accent); }
 
-.evidence-icon  { font-size: 13px; }
+.evidence-icon  { display: flex; align-items: center; }
 .evidence-label { flex: 1; font-weight: 600; }
 .evidence-arrow { font-size: 10px; }
 
@@ -101,7 +102,7 @@ const infoRows = computed(() => {
 }
 .ev-row:last-child { border-bottom: none; }
 
-.ev-icon  { font-size: 12px; width: 16px; flex-shrink: 0; }
+.ev-icon  { display: flex; align-items: center; width: 16px; flex-shrink: 0; color: var(--text-muted); }
 .ev-key   { color: var(--text-muted); width: 70px; flex-shrink: 0; }
 .ev-val   { color: var(--text-secondary); flex: 1; word-break: break-all; }
 .ev-val.mono    { font-family: monospace; color: var(--accent); }

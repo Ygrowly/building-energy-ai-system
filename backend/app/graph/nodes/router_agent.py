@@ -103,16 +103,22 @@ CONFIDENCE_THRESHOLD = 0.7
 MAX_HOPS = 5
 
 
-def _build_llm() -> ChatOpenAI:
-    """构建 LLM 实例（DeepSeek / OpenAI 兼容）。"""
-    settings = get_settings()
-    return ChatOpenAI(
-        model=settings.LLM_MODEL,
-        api_key=settings.LLM_API_KEY or "placeholder",
-        base_url=settings.LLM_BASE_URL,
-        temperature=0.0,  # 路由不需要创意，确定性优先
-        max_tokens=512,
-    )
+_cached_router_llm: ChatOpenAI | None = None
+
+
+def _get_router_llm() -> ChatOpenAI:
+    """获取路由 LLM 单例（首次调用时初始化，后续复用，避免重复创建对象）。"""
+    global _cached_router_llm
+    if _cached_router_llm is None:
+        settings = get_settings()
+        _cached_router_llm = ChatOpenAI(
+            model=settings.LLM_MODEL,
+            api_key=settings.LLM_API_KEY or "placeholder",
+            base_url=settings.LLM_BASE_URL,
+            temperature=0.0,   # 路由不需要创意，确定性优先
+            max_tokens=512,
+        )
+    return _cached_router_llm
 
 
 def _parse_router_output(raw: str) -> dict[str, Any]:
@@ -163,29 +169,36 @@ async def router_node(state: AgentState) -> dict[str, Any]:
 
     # ── 准备历史消息 ──
     history = state.get("messages", [])
-    # 只取最近 10 条消息防止 context overflow
-    recent_history = history[-10:] if len(history) > 10 else history
+    # 全局 messages 已只含 Human + 最终 AI，取最近 6 条（3 轮）即可
+    recent_history = history[-6:] if len(history) > 6 else history
 
-    # 附加上下文摘要（继承的实体信息）
+    # ── 上下文提示（结构化实体 + 历史摘要 → 替代冗长原始消息）──────────
     ctx_parts: list[str] = []
+
+    # 历史摘要（比原始消息更紧凑）
+    context_summary = state.get("context_summary", "")
+    if context_summary:
+        ctx_parts.append(f"历史对话摘要:\n{context_summary}")
+
     if state.get("building_id"):
         ctx_parts.append(f"已知建筑: {state['building_id']}")
     if state.get("time_context"):
         ctx_parts.append(f"已知时间范围: {state['time_context']}")
     if state.get("device_id"):
         ctx_parts.append(f"已知设备: {state['device_id']}")
-    context_hint = "（" + "，".join(ctx_parts) + "）" if ctx_parts else ""
+
+    context_hint = "\n".join(ctx_parts)
 
     # 动态注入楼宇列表（优先取 state 中缓存的列表，减少 DB 查询）
     building_types: list[str] | None = state.get("available_buildings")
     system_content = build_router_system_prompt(building_types)
     if context_hint:
-        system_content += f"\n\n## 当前上下文继承\n{context_hint}"
+        system_content += f"\n\n## 当前上下文\n{context_hint}"
 
     llm_messages = [SystemMessage(content=system_content)] + list(recent_history)
 
     # ── 调用 LLM ──
-    llm = _build_llm()
+    llm = _get_router_llm()
     try:
         response = await llm.ainvoke(llm_messages)
         raw_output = response.content

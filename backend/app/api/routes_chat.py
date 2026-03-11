@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 import uuid
 from typing import Any, AsyncGenerator
 
@@ -148,6 +149,11 @@ async def _stream_graph(
     # 用于从流事件中收集最终状态（避免二次 ainvoke）
     final_state_holder: dict[str, Any] = {}
 
+    # 性能计时器
+    _t: dict[str, float] = {}
+    _t["request"] = time.time()
+    _tool_count = 0
+
     try:
         # astream_events 逐节点推流，同时从顶层 on_chain_end 捕获最终状态
         async for event in graph.astream_events(state, version="v2"):
@@ -162,21 +168,34 @@ async def _stream_graph(
                     "data_agent": "数据分析师",
                     "diagnose_agent": "故障诊断专家",
                 }.get(name, name)
+                _t[f"node_{name}"] = time.time()
                 yield _thinking_event(name, f"{agent_label} 正在工作...", hop_count=state.get("hop_count", 0))
 
             # LLM 开始推理
             elif kind == "on_chat_model_start":
                 agent_name = event.get("metadata", {}).get("langgraph_node", "")
+                _t[f"llm_{agent_name}"] = time.time()
                 if agent_name:
                     yield _thinking_event(agent_name, "正在推理...", hop_count=0)
+
+            # LLM 推理完成（记录耗时）
+            elif kind == "on_chat_model_end":
+                agent_name = event.get("metadata", {}).get("langgraph_node", "")
+                elapsed = time.time() - _t.pop(f"llm_{agent_name}", time.time())
+                logger.info("LLM 推理完成: node=%s, 用时=%.2fs", agent_name, elapsed)
 
             # 工具调用开始
             elif kind == "on_tool_start":
                 tool_name = name or data.get("name", "tool")
+                _t[f"tool_{tool_name}_{_tool_count}"] = time.time()
                 yield _thinking_event("tool", f"调用工具：{tool_name}", hop_count=0)
 
-            # 工具调用结束 — 提取 artifact
+            # 工具调用结束 — 提取 artifact + 记录耗时
             elif kind == "on_tool_end":
+                tool_key = f"tool_{name}_{_tool_count}"
+                elapsed = time.time() - _t.pop(tool_key, time.time())
+                _tool_count += 1
+                logger.info("工具调用完成: %s, 用时=%.2fs", name, elapsed)
                 output = data.get("output", "")
                 if isinstance(output, str):
                     try:
@@ -194,14 +213,36 @@ async def _stream_graph(
                     except (json.JSONDecodeError, TypeError):
                         pass
 
-            # 节点完成 — 提取最终 AI 消息
+            # 节点完成 — 只提取最后一条无工具调用的 AI 文本（避免中间推理污染最终答案）
             elif kind == "on_chain_end" and name in ("data_agent", "diagnose_agent", "router"):
+                node_elapsed = time.time() - _t.pop(f"node_{name}", time.time())
+                logger.info("节点完成: %s, 工具调用=%d, 用时=%.1fs", name, _tool_count, node_elapsed)
                 output_messages = data.get("output", {}).get("messages", [])
-                for msg in output_messages:
-                    if isinstance(msg, AIMessage) and msg.content:
-                        if name == "router" and "[Router]" in msg.content:
-                            continue
-                        yield _text_event(msg.content, is_final=True)
+                final_text: str | None = None
+                for msg in reversed(output_messages):
+                    if not isinstance(msg, AIMessage):
+                        continue
+                    # 兼容 content 为字符串或列表两种格式
+                    if isinstance(msg.content, str):
+                        content = msg.content
+                    elif isinstance(msg.content, list):
+                        content = "".join(
+                            c.get("text", "") for c in msg.content if isinstance(c, dict)
+                        )
+                    else:
+                        content = ""
+                    if not content.strip():
+                        continue
+                    # 跳过带工具调用的中间消息
+                    if getattr(msg, "tool_calls", None):
+                        continue
+                    # 跳过路由内部标记消息
+                    if name == "router" and "[Router]" in content:
+                        continue
+                    final_text = content
+                    break
+                if final_text:
+                    yield _text_event(final_text, is_final=True)
 
             # 顶层图完成 — 捕获最终状态（name == "LangGraph" 或空字符串）
             elif kind == "on_chain_end" and name in ("LangGraph", ""):
@@ -234,6 +275,8 @@ async def _stream_graph(
             logger.error("fallback ainvoke 失败: %s", exc)
             hop = state.get("hop_count", 0)
 
+    total_elapsed = time.time() - _t.get("request", time.time())
+    logger.info("请求完成: session=%s, 总工具调用=%d, 总用时=%.1fs", session_id, _tool_count, total_elapsed)
     yield _done_event(session_id, hop_count=hop)
 
 

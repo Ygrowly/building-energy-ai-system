@@ -1,7 +1,7 @@
 <template>
   <div class="dashboard">
     <header class="page-header">
-      <h1>🏠 驾驶舱</h1>
+      <h1><Icon icon="mdi:view-dashboard" width="22" class="page-icon" /> 驾驶舱</h1>
       <span class="subtitle">
         实时能耗总览
         <span v-if="dataDate" class="data-date">（数据日期：{{ dataDate }}）</span>
@@ -10,12 +10,12 @@
 
     <!-- 加载状态 -->
     <div v-if="loading" class="loading-bar">正在加载数据...</div>
-    <div v-if="error" class="error-bar">⚠️ {{ error }}</div>
+    <div v-if="error" class="error-bar"><Icon icon="mdi:alert" width="14" class="bar-icon" /> {{ error }}</div>
 
     <!-- KPI 卡片 -->
     <div class="kpi-grid">
       <div class="kpi-card" v-for="kpi in kpis" :key="kpi.label">
-        <div class="kpi-icon">{{ kpi.icon }}</div>
+        <div class="kpi-icon"><Icon :icon="kpi.icon" width="28" /></div>
         <div class="kpi-body">
           <div class="kpi-value">{{ kpi.value }}</div>
           <div class="kpi-label">{{ kpi.label }}</div>
@@ -38,7 +38,7 @@
           :class="b.statusClass"
         >
           <div class="building-header">
-            <span class="building-icon">{{ b.icon }}</span>
+            <span class="building-icon"><Icon :icon="getBuildingIcon(b.building_type)" width="18" /></span>
             <span class="building-name">{{ b.display_name }}</span>
             <span class="status-chip" :class="b.statusClass">{{ b.statusLabel }}</span>
           </div>
@@ -55,9 +55,10 @@
     <!-- 异常告警区块 -->
     <section class="section">
       <div class="section-header">
-        <h2 class="section-title">🚨 异常告警</h2>
+        <h2 class="section-title"><Icon icon="mdi:alert-circle" width="16" class="title-icon" /> 异常告警</h2>
         <button class="refresh-btn" @click="fetchAnomalies" :disabled="anomalyLoading">
-          {{ anomalyLoading ? '刷新中...' : '🔄 刷新' }}
+          <Icon :icon="anomalyLoading ? 'mdi:loading' : 'mdi:refresh'" width="14" class="btn-icon" />
+          {{ anomalyLoading ? '刷新中...' : '刷新' }}
         </button>
       </div>
 
@@ -96,23 +97,25 @@
         v-if="!anomalyLoading && anomalyBuildings.length === 0 && recentAnomalies.length === 0"
         class="no-anomaly"
       >
-        ✅ 所有楼宇当前运行正常，暂无告警记录
+        <Icon icon="mdi:check-circle" width="16" class="bar-icon" /> 所有楼宇当前运行正常，暂无告警记录
       </div>
 
       <div v-if="anomalyError" class="error-bar" style="margin-top: 8px;">
-        ⚠️ 告警加载失败：{{ anomalyError }}
+        <Icon icon="mdi:alert" width="14" class="bar-icon" /> 告警加载失败：{{ anomalyError }}
       </div>
     </section>
 
     <!-- 提示用户使用 AI -->
     <div class="ai-hint">
-      <span>💡 提示：在右侧控制台询问 AI 进行深度分析，例如「办公楼今天有没有能耗异常？」</span>
+      <Icon icon="mdi:lightbulb" width="16" class="bar-icon" />
+      <span>提示：在右侧控制台询问 AI 进行深度分析，例如「办公楼今天有没有能耗异常？」</span>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
+import { Icon } from '@iconify/vue'
 import { apiFetch } from '@/api/http'
 
 // ── 状态 ─────────────────────────────────────────────
@@ -164,10 +167,10 @@ onMounted(() => {
 const kpis = computed(() => {
   if (!overviewData.value) {
     return [
-      { icon: '⚡', label: '日总用电 (kWh)', value: '—', trend: null },
-      { icon: '💧', label: '当前用水 (m³)', value: '—', trend: null },
-      { icon: '📐', label: '综合能耗强度 (kWh/㎡)', value: '—', trend: null },
-      { icon: '⚠️', label: '异常楼宇数', value: '—', trend: null },
+      { icon: 'mdi:lightning-bolt',  label: '日总用电 (kWh)',       value: '—', trend: null },
+      { icon: 'mdi:water',           label: '当前用水 (m³)',         value: '—', trend: null },
+      { icon: 'mdi:ruler-square',    label: '综合能耗强度 (kWh/㎡)', value: '—', trend: null },
+      { icon: 'mdi:alert',           label: '异常楼宇数',            value: '—', trend: null },
     ]
   }
   const k = overviewData.value.kpis
@@ -178,10 +181,10 @@ const kpis = computed(() => {
     : 0
 
   return [
-    { icon: '⚡', label: '日总用电 (kWh)', value: Number(k.total_electricity_kwh).toFixed(1), trend: null },
-    { icon: '💧', label: '当前用水 (m³)', value: Number(k.total_water_m3).toFixed(1), trend: null },
-    { icon: '📐', label: '综合能耗强度 (kWh/㎡)', value: intensity.toFixed(3), trend: null },
-    { icon: '🚨', label: '异常楼宇数', value: String(k.anomaly_count), trend: null },
+    { icon: 'mdi:lightning-bolt', label: '日总用电 (kWh)',       value: Number(k.total_electricity_kwh).toFixed(1), trend: null },
+    { icon: 'mdi:water',          label: '当前用水 (m³)',         value: Number(k.total_water_m3).toFixed(1),        trend: null },
+    { icon: 'mdi:ruler-square',   label: '综合能耗强度 (kWh/㎡)', value: intensity.toFixed(3),                       trend: null },
+    { icon: 'mdi:alert-circle',   label: '异常楼宇数',            value: String(k.anomaly_count),                    trend: null },
   ]
 })
 
@@ -195,7 +198,7 @@ const buildingStatus = computed(() => {
       icon: b.icon,
       display_name: b.display_name,
       statusClass: isAbnormal ? 'anomaly' : 'normal',
-      statusLabel: isAbnormal ? `⚠️ ${b.operation_status}` : '✅ 正常',
+      statusLabel: isAbnormal ? b.operation_status : '正常',
       metrics: [
         { key: 'e', label: '日用电 (kWh)', value: (b.total_electricity_kwh ?? 0).toFixed(1) },
         { key: 't', label: '平均温度', value: `${(b.avg_ambient_temp ?? 0).toFixed(1)}°C` },
@@ -213,6 +216,19 @@ const anomalyBuildings = computed(() => {
 })
 
 // ── 工具函数 ─────────────────────────────────────────
+const BUILDING_ICONS: Record<string, string> = {
+  Office:    'mdi:office-building',
+  Teaching:  'mdi:school',
+  Lab:       'mdi:flask',
+  Library:   'mdi:library',
+  Dormitory: 'mdi:bed',
+  Gym:       'mdi:dumbbell',
+}
+
+function getBuildingIcon(type: string): string {
+  return BUILDING_ICONS[type] ?? 'mdi:office-building-outline'
+}
+
 function formatTime(iso: string): string {
   try {
     return new Date(iso).toLocaleString('zh-CN', {
@@ -242,6 +258,9 @@ function formatTime(iso: string): string {
 .section-header .section-title { margin-bottom: 0; }
 
 .refresh-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   background: none;
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -337,7 +356,7 @@ function formatTime(iso: string): string {
   gap: 12px;
 }
 
-.kpi-icon { font-size: 28px; }
+.kpi-icon { display: flex; align-items: center; color: var(--accent); }
 .kpi-body { flex: 1; }
 .kpi-value { font-size: 22px; font-weight: 700; color: var(--text-primary); }
 .kpi-label { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
@@ -368,7 +387,7 @@ function formatTime(iso: string): string {
   background: var(--bg-card);
   border-bottom: 1px solid var(--border);
 }
-.building-icon { font-size: 18px; }
+.building-icon { display: flex; align-items: center; color: var(--accent); }
 .building-name { font-weight: 600; font-size: 13px; flex: 1; }
 
 .status-chip {
@@ -391,6 +410,9 @@ function formatTime(iso: string): string {
 .metric-value { color: var(--text-primary); font-weight: 500; }
 
 .ai-hint {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   background: var(--accent-glow);
   border: 1px solid rgba(108,142,245,0.3);
   border-radius: 8px;
@@ -398,4 +420,9 @@ function formatTime(iso: string): string {
   color: var(--accent);
   font-size: 13px;
 }
+
+.page-icon { vertical-align: middle; margin-right: 6px; }
+.title-icon { vertical-align: middle; margin-right: 4px; }
+.bar-icon   { vertical-align: middle; flex-shrink: 0; }
+.btn-icon   { vertical-align: middle; }
 </style>

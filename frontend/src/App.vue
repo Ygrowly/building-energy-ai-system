@@ -3,14 +3,14 @@
     <!-- 左侧导航栏 -->
     <nav class="sidebar">
       <div class="sidebar-logo">
-        <span class="logo-icon">⚡</span>
+        <span class="logo-icon"><Icon icon="mdi:lightning-bolt" width="22" /></span>
         <span class="logo-text">能耗管理</span>
       </div>
 
       <ul class="nav-list">
         <li v-for="item in navItems" :key="item.path">
           <RouterLink :to="item.path" class="nav-item" :class="{ active: $route.path === item.path }">
-            <span class="nav-icon">{{ item.icon }}</span>
+            <span class="nav-icon"><Icon :icon="item.icon" width="16" /></span>
             <span class="nav-label">{{ item.label }}</span>
           </RouterLink>
         </li>
@@ -28,7 +28,7 @@
             :class="{ active: buildingStore.selectedType === b.building_type }"
             @click="buildingStore.select(b.building_type)"
           >
-            <span>{{ b.icon }}</span>
+            <Icon :icon="getBuildingIcon(b.building_type)" width="14" />
             <span>{{ b.display_name }}</span>
           </button>
           <p v-if="buildingStore.error" class="selector-error">{{ buildingStore.error }}</p>
@@ -41,6 +41,14 @@
       <RouterView />
     </main>
 
+    <!-- 可拖拽分隔条 -->
+    <div
+      class="resize-handle"
+      @mousedown="startResize"
+      :class="{ resizing }"
+      title="拖拽调整宽度"
+    ></div>
+
     <!-- 右侧 Agent 控制台 -->
     <aside class="agent-panel">
       <AgentConsole />
@@ -49,8 +57,9 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted } from 'vue'
+import { ref, onMounted } from 'vue'
 import { RouterView, RouterLink } from 'vue-router'
+import { Icon } from '@iconify/vue'
 import AgentConsole from '@/components/AgentConsole.vue'
 import { useBuildingStore } from '@/stores/buildingStore'
 
@@ -60,24 +69,70 @@ onMounted(() => {
   buildingStore.fetchBuildings()
 })
 
+// ── 右侧面板宽度拖拽调整 ──────────────────────────
+const PANEL_MIN = 240
+const PANEL_MAX = 600
+const panelWidth = ref(320)
+const resizing = ref(false)
+
+function startResize(e: MouseEvent) {
+  e.preventDefault()
+  resizing.value = true
+  const startX = e.clientX
+  const startW = panelWidth.value
+
+  function onMove(ev: MouseEvent) {
+    // 向左拖 → delta 为正 → 面板变宽
+    const delta = startX - ev.clientX
+    panelWidth.value = Math.max(PANEL_MIN, Math.min(PANEL_MAX, startW + delta))
+  }
+
+  function onUp() {
+    resizing.value = false
+    document.removeEventListener('mousemove', onMove)
+    document.removeEventListener('mouseup', onUp)
+    document.body.style.cursor = ''
+    document.body.style.userSelect = ''
+  }
+
+  document.body.style.cursor = 'col-resize'
+  document.body.style.userSelect = 'none'
+  document.addEventListener('mousemove', onMove)
+  document.addEventListener('mouseup', onUp)
+}
+
 const navItems = [
-  { path: '/dashboard',  icon: '🏠', label: '驾驶舱' },
-  { path: '/analysis',   icon: '📊', label: '能源透视' },
-  { path: '/operations', icon: '🔧', label: '智慧运维' },
-  { path: '/workorders', icon: '🛠️', label: '工单管理' },
+  { path: '/dashboard',  icon: 'mdi:view-dashboard', label: '驾驶舱' },
+  { path: '/analysis',   icon: 'mdi:chart-bar',      label: '能源透视' },
+  { path: '/operations', icon: 'mdi:wrench',          label: '智慧运维' },
+  { path: '/workorders', icon: 'mdi:clipboard-list',  label: '工单管理' },
 ]
+
+const BUILDING_ICONS: Record<string, string> = {
+  Office:    'mdi:office-building',
+  Teaching:  'mdi:school',
+  Lab:       'mdi:flask',
+  Library:   'mdi:library',
+  Dormitory: 'mdi:bed',
+  Gym:       'mdi:dumbbell',
+}
+
+function getBuildingIcon(type: string): string {
+  return BUILDING_ICONS[type] ?? 'mdi:office-building-outline'
+}
 </script>
 
 <style scoped>
 .app-layout {
-  display: grid;
-  grid-template-columns: 180px 1fr 320px;
+  display: flex;
   height: 100vh;
   overflow: hidden;
 }
 
 /* ── 左侧导航 ── */
 .sidebar {
+  width: 180px;
+  flex-shrink: 0;
   background: var(--bg-panel);
   border-right: 1px solid var(--border);
   display: flex;
@@ -93,7 +148,7 @@ const navItems = [
   padding: 20px 16px 16px;
   border-bottom: 1px solid var(--border);
 }
-.logo-icon { font-size: 22px; }
+.logo-icon { display: flex; align-items: center; }
 .logo-text { font-weight: 700; font-size: 14px; color: var(--text-primary); }
 
 .nav-list {
@@ -117,7 +172,7 @@ const navItems = [
 .nav-item:hover { background: var(--bg-hover); color: var(--text-primary); }
 .nav-item.active { background: var(--accent-glow); color: var(--accent); border-left-color: var(--accent); }
 
-.nav-icon { font-size: 16px; }
+.nav-icon { display: flex; align-items: center; }
 
 .building-selector {
   padding: 16px;
@@ -165,13 +220,38 @@ const navItems = [
 
 /* ── 中间主区 ── */
 .canvas {
+  flex: 1;
+  min-width: 0;
   overflow-y: auto;
   background: var(--bg-dark);
 }
 
+/* ── 拖拽分隔条 ── */
+.resize-handle {
+  width: 4px;
+  flex-shrink: 0;
+  cursor: col-resize;
+  background: var(--border);
+  position: relative;
+  transition: background 0.15s;
+  z-index: 10;
+}
+.resize-handle:hover,
+.resize-handle.resizing {
+  background: var(--accent);
+}
+/* 扩大可点击区域，用伪元素在两侧各扩展 4px */
+.resize-handle::before {
+  content: '';
+  position: absolute;
+  inset: 0 -4px;
+}
+
 /* ── 右侧控制台 ── */
 .agent-panel {
-  border-left: 1px solid var(--border);
+  flex-shrink: 0;
+  width: v-bind(panelWidth + 'px');
+  border-left: none;
   overflow: hidden;
 }
 </style>

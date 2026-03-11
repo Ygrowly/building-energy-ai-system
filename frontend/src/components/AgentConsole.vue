@@ -2,8 +2,8 @@
   <div class="console">
     <!-- 顶部工具栏 -->
     <div class="console-toolbar">
-      <span class="console-title">🤖 多智能体控制台</span>
-      <button class="clear-btn" @click="store.clearSession()" title="清除对话">🗑️</button>
+      <span class="console-title"><Icon icon="mdi:robot" width="16" class="inline-icon" /> 多智能体控制台</span>
+      <button class="clear-btn" @click="store.clearSession()" title="清除对话"><Icon icon="mdi:trash-can" width="16" /></button>
     </div>
 
     <!-- Agent 状态条 -->
@@ -18,24 +18,24 @@
     <!-- 消息列表 -->
     <div class="messages" ref="messagesEl">
       <div v-if="!store.hasMessages" class="empty-hint">
-        <p class="hint-greeting">👋 你好！我是楼宇能耗管理智能助手。</p>
+        <p class="hint-greeting"><Icon icon="mdi:hand-wave" width="16" class="inline-icon" /> 你好！我是楼宇能耗管理智能助手。</p>
         <p class="hint-sub">可以用自然语言提问，支持数据查询、故障诊断与工单生成。</p>
         <div class="hint-examples">
-          <p class="hint-group-label">📊 数据查询</p>
+          <p class="hint-group-label"><Icon icon="mdi:chart-bar" width="12" class="inline-icon" /> 数据查询</p>
           <button class="hint-chip" @click="quickSend('教学楼 2016 年 4 月 15 日的用电量是多少？')">
             教学楼 2016-04-15 用电量
           </button>
           <button class="hint-chip" @click="quickSend('对比三栋楼 2016 年 4 月的每日用电趋势')">
             多楼宇趋势对比
           </button>
-          <p class="hint-group-label">🔬 故障诊断</p>
+          <p class="hint-group-label"><Icon icon="mdi:microscope" width="12" class="inline-icon" /> 故障诊断</p>
           <button class="hint-chip" @click="quickSend('办公楼 2016-04-15 凌晨 3 点的能耗有没有问题？帮我处理一下')">
             凌晨异常能耗诊断
           </button>
           <button class="hint-chip" @click="quickSend('计算教学楼 2016 年 4 月的制冷能效比 COP')">
             COP 计算
           </button>
-          <p class="hint-group-label">📥 报表生成</p>
+          <p class="hint-group-label"><Icon icon="mdi:file-chart" width="12" class="inline-icon" /> 报表生成</p>
           <button class="hint-chip" @click="quickSend('帮我导出办公楼 2016-04-01 到 2016-05-01 的每日能耗报表')">
             导出能耗报表 CSV
           </button>
@@ -48,24 +48,34 @@
           <div class="bubble user-bubble">{{ msg.content }}</div>
         </div>
 
-        <!-- AI 文字回复 + 可选数据血缘 -->
-        <div class="msg msg-ai" v-else-if="msg.role === 'ai'">
-          <div class="ai-avatar">🤖</div>
-          <div class="ai-content">
-            <div class="bubble ai-bubble" v-html="formatMarkdown(msg.content)"></div>
-            <EvidenceLink
-              v-if="msg.artifact?.source_info"
-              :source-info="msg.artifact.source_info as Record<string, unknown>"
-            />
+        <!-- AI 文字回复（含思考气泡 + 数据血缘） -->
+        <template v-else-if="msg.role === 'ai'">
+          <!-- 思考过程面板：有步骤时才渲染 -->
+          <ThinkingBubble
+            v-if="msg.thinkingSteps && msg.thinkingSteps.length > 0"
+            :steps="msg.thinkingSteps"
+            :is-finished="msg.thinkingFinished ?? false"
+          />
+          <!-- 最终回答气泡：有内容 或 思考完成仍在加载时（内容即将流入）显示 -->
+          <div
+            class="msg msg-ai"
+            v-if="msg.content || (msg.thinkingFinished && store.isLoading)"
+          >
+            <div class="ai-avatar"><Icon icon="mdi:robot" width="14" /></div>
+            <div class="ai-content">
+              <div class="bubble ai-bubble">
+                <!-- 内容流中 -->
+                <span v-if="msg.content" v-html="formatMarkdown(msg.content)"></span>
+                <!-- 等待第一个字符：显示闪烁光标 -->
+                <span v-else class="stream-cursor"></span>
+              </div>
+              <EvidenceLink
+                v-if="msg.artifact?.source_info"
+                :source-info="msg.artifact.source_info as Record<string, unknown>"
+              />
+            </div>
           </div>
-        </div>
-
-        <!-- Thinking 气泡 -->
-        <ThinkingBubble
-          v-else-if="msg.role === 'thinking'"
-          :agent="msg.agent ?? 'router'"
-          :message="msg.content"
-        />
+        </template>
 
         <!-- Artifact：图表 -->
         <DynamicChart
@@ -90,7 +100,7 @@
 
         <!-- 错误消息 -->
         <div class="msg msg-error" v-else-if="msg.role === 'error'">
-          <div class="bubble error-bubble">⚠️ {{ msg.content }}</div>
+          <div class="bubble error-bubble"><Icon icon="mdi:alert" width="14" class="inline-icon" /> {{ msg.content }}</div>
         </div>
       </template>
 
@@ -111,7 +121,8 @@
         :disabled="store.isLoading"
       ></textarea>
       <button class="send-btn" @click="handleSend" :disabled="store.isLoading || !inputText.trim()">
-        {{ store.isLoading ? '⏳' : '发送' }}
+        <Icon v-if="store.isLoading" icon="mdi:timer-sand" width="16" />
+        <span v-else>发送</span>
       </button>
     </div>
   </div>
@@ -119,6 +130,7 @@
 
 <script setup lang="ts">
 import { ref, watch, nextTick } from 'vue'
+import { Icon } from '@iconify/vue'
 import { useChatStore } from '@/stores/chatStore'
 import ThinkingBubble from '@/generative-ui/ThinkingBubble.vue'
 import DynamicChart from '@/generative-ui/DynamicChart.vue'
@@ -144,13 +156,27 @@ function quickSend(text: string) {
   inputText.value = ''
 }
 
-// 自动滚动到底部
-watch(() => store.messages.length, async () => {
-  await nextTick()
-  if (messagesEl.value) {
-    messagesEl.value.scrollTop = messagesEl.value.scrollHeight
-  }
-})
+// 自动滚动到底部（新消息、新思考步骤、内容流入时均触发）
+watch(
+  [
+    () => store.messages.length,
+    () => {
+      const last = store.messages[store.messages.length - 1]
+      return last?.thinkingSteps?.length ?? 0
+    },
+    () => {
+      // 追踪最后一条 AI 消息的内容长度，文字流入时保持滚动到底
+      const last = store.messages[store.messages.length - 1]
+      return last?.content?.length ?? 0
+    },
+  ],
+  async () => {
+    await nextTick()
+    if (messagesEl.value) {
+      messagesEl.value.scrollTop = messagesEl.value.scrollHeight
+    }
+  },
+)
 
 // ── Artifact 类型判断 ──────────────────────────────
 function isChart(artifact?: ArtifactEvent): boolean {
@@ -198,6 +224,9 @@ function formatMarkdown(text: string): string {
 }
 
 .console-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-weight: 700;
   font-size: 14px;
   color: var(--text-primary);
@@ -207,12 +236,22 @@ function formatMarkdown(text: string): string {
   background: none;
   border: none;
   cursor: pointer;
-  font-size: 16px;
+  display: flex;
+  align-items: center;
   padding: 2px;
   opacity: 0.6;
+  color: var(--text-secondary);
   transition: opacity 0.2s;
 }
 .clear-btn:hover { opacity: 1; }
+
+.inline-icon { vertical-align: middle; margin-right: 4px; }
+
+.hint-group-label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
 
 .agent-status-bar {
   display: flex;
@@ -310,7 +349,7 @@ function formatMarkdown(text: string): string {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 14px;
+  color: var(--accent);
   flex-shrink: 0;
 }
 
@@ -333,6 +372,21 @@ function formatMarkdown(text: string): string {
   background: rgba(248,113,113,0.1);
   color: var(--danger);
   border: 1px solid rgba(248,113,113,0.3);
+}
+
+/* 等待第一个字符时的流式光标 */
+.stream-cursor {
+  display: inline-block;
+  width: 2px;
+  height: 14px;
+  background: var(--accent);
+  vertical-align: middle;
+  border-radius: 1px;
+  animation: blink-cursor 0.9s infinite;
+}
+@keyframes blink-cursor {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
 }
 
 .typing-indicator {

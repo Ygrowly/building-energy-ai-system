@@ -1,13 +1,13 @@
 <template>
   <div class="operations">
     <header class="page-header">
-      <h1>🔧 智慧运维</h1>
+      <h1><Icon icon="mdi:wrench" width="22" class="page-icon" /> 智慧运维</h1>
       <span class="subtitle">故障诊断 · 工单管理 · 可解释性分析</span>
     </header>
 
     <!-- AI 操作引导 -->
     <div class="hint-card">
-      <div class="hint-icon">💬</div>
+      <div class="hint-icon"><Icon icon="mdi:message-text" width="24" /></div>
       <div>
         <p class="hint-title">在右侧控制台输入故障场景，AI 将自动诊断并生成工单</p>
         <p class="hint-examples">
@@ -19,7 +19,7 @@
     <!-- 异常告警列表 -->
     <section class="section">
       <div class="section-header">
-        <h2 class="section-title">🚨 近期异常记录</h2>
+        <h2 class="section-title"><Icon icon="mdi:alert-circle" width="16" class="title-icon" /> 近期异常记录</h2>
         <div class="header-actions">
           <select v-model="filterHours" @change="fetchAnomalies" class="hours-select">
             <option value="24">最近 24 小时</option>
@@ -27,13 +27,14 @@
             <option value="168">最近 7 天</option>
           </select>
           <button class="refresh-btn" @click="fetchAnomalies" :disabled="loading">
-            {{ loading ? '加载中...' : '🔄 刷新' }}
+            <Icon :icon="loading ? 'mdi:loading' : 'mdi:refresh'" width="14" class="btn-icon" />
+            {{ loading ? '加载中...' : '刷新' }}
           </button>
         </div>
       </div>
 
       <div v-if="loading" class="loading-bar">正在查询异常记录...</div>
-      <div v-if="fetchError" class="error-bar">⚠️ {{ fetchError }}</div>
+      <div v-if="fetchError" class="error-bar"><Icon icon="mdi:alert" width="14" class="bar-icon" /> {{ fetchError }}</div>
 
       <div v-if="!loading && anomalies.length > 0" class="anomaly-list">
         <div class="anomaly-item" v-for="(a, idx) in anomalies" :key="idx">
@@ -57,7 +58,7 @@
 
       <!-- 无数据时的说明 -->
       <div v-if="!loading && anomalies.length === 0 && !fetchError" class="empty-state">
-        <p class="empty-icon">✅</p>
+        <p class="empty-icon"><Icon icon="mdi:check-circle" width="32" /></p>
         <p>当前时间窗口内未检测到规则触发异常</p>
         <p class="empty-sub">
           提示：演示数据库的有效数据范围为 2016-04-01 ~ 2016-05-02，
@@ -69,7 +70,7 @@
     <!-- 工单快速入口 -->
     <section class="section">
       <div class="section-header">
-        <h2 class="section-title">🛠️ 工单管理</h2>
+        <h2 class="section-title"><Icon icon="mdi:clipboard-list" width="16" class="title-icon" /> 工单管理</h2>
         <RouterLink to="/workorders" class="view-all-link">查看全部 →</RouterLink>
       </div>
       <div v-if="workOrderLoading" class="loading-bar">加载工单...</div>
@@ -94,14 +95,14 @@
 
     <!-- 可解释性说明 -->
     <section class="section">
-      <h2 class="section-title">🛡️ 可解释性说明</h2>
+      <h2 class="section-title"><Icon icon="mdi:shield-check" width="16" class="title-icon" /> 可解释性说明</h2>
       <div class="explainability-card">
         <p>当 AI 给出诊断结论时，右侧控制台会显示：</p>
         <ul>
-          <li>📊 <strong>原始数据快照</strong>：触发异常的真实传感器数值</li>
-          <li>📖 <strong>知识库依据</strong>：从运维手册中检索到的相关条文</li>
-          <li>📈 <strong>置信度评分</strong>：AI 推理的可信程度</li>
-          <li>🛠️ <strong>工单草稿</strong>：需要人工审批才能正式派单（HITL）</li>
+          <li><Icon icon="mdi:chart-bar" width="14" class="list-icon" /> <strong>原始数据快照</strong>：触发异常的真实传感器数值</li>
+          <li><Icon icon="mdi:book-open-variant" width="14" class="list-icon" /> <strong>知识库依据</strong>：从运维手册中检索到的相关条文</li>
+          <li><Icon icon="mdi:trending-up" width="14" class="list-icon" /> <strong>置信度评分</strong>：AI 推理的可信程度</li>
+          <li><Icon icon="mdi:tools" width="14" class="list-icon" /> <strong>工单草稿</strong>：需要人工审批才能正式派单（HITL）</li>
         </ul>
       </div>
     </section>
@@ -110,6 +111,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
+import { Icon } from '@iconify/vue'
 import { RouterLink } from 'vue-router'
 import { apiFetch } from '@/api/http'
 import { useBuildingStore } from '@/stores/buildingStore'
@@ -194,7 +196,7 @@ function formatTime(iso: string): string {
   padding: 16px;
   margin-bottom: 24px;
 }
-.hint-icon { font-size: 24px; }
+.hint-icon { display: flex; align-items: flex-start; color: var(--accent); flex-shrink: 0; }
 .hint-title { font-weight: 600; font-size: 14px; color: var(--accent); margin-bottom: 4px; }
 .hint-examples { font-size: 12px; color: var(--text-secondary); }
 
@@ -302,7 +304,7 @@ function formatTime(iso: string): string {
   color: var(--text-secondary);
   font-size: 13px;
 }
-.empty-state .empty-icon { font-size: 32px; margin-bottom: 8px; }
+.empty-state .empty-icon { display: flex; justify-content: center; color: var(--success); margin-bottom: 8px; }
 .empty-sub { font-size: 12px; color: var(--text-muted); margin-top: 8px; line-height: 1.7; max-width: 440px; margin-left: auto; margin-right: auto; }
 
 .empty-state-small {
@@ -359,5 +361,18 @@ function formatTime(iso: string): string {
   line-height: 2;
 }
 .explainability-card ul { list-style: none; margin-top: 8px; padding: 0; }
+.explainability-card li { display: flex; align-items: center; gap: 8px; }
 .explainability-card strong { color: var(--text-primary); }
+
+.page-icon  { vertical-align: middle; margin-right: 6px; }
+.title-icon { vertical-align: middle; margin-right: 4px; }
+.bar-icon   { vertical-align: middle; flex-shrink: 0; }
+.btn-icon   { vertical-align: middle; }
+.list-icon  { flex-shrink: 0; color: var(--accent); }
+
+.refresh-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
 </style>

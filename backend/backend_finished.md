@@ -1,3 +1,9 @@
+cd backend
+
+uvicorn main:app --reload --host 0.0.0.0 --port 8000
+
+
+
 后端完整 API 路由总览
 方法	路径	说明
 GET	/health	健康检查

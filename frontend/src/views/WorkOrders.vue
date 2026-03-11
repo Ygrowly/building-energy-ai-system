@@ -1,13 +1,13 @@
 <template>
   <div class="workorders">
     <header class="page-header">
-      <h1>🛠️ 工单管理</h1>
+      <h1><Icon icon="mdi:clipboard-list" width="22" class="page-icon" /> 工单管理</h1>
       <span class="subtitle">人机协同 · 审批派单 · HITL 闭环</span>
     </header>
 
     <!-- 无 Session 警告：审批需要 AI 会话 -->
     <div class="session-warn" v-if="!chatStore.sessionId">
-      <span class="warn-icon">⚠️</span>
+      <span class="warn-icon"><Icon icon="mdi:alert" width="18" /></span>
       <div>
         <p class="warn-title">审批功能需要先建立 AI 会话</p>
         <p class="warn-sub">请在右侧控制台向 AI 发送任意消息，建立会话后即可在此页面审批工单。</p>
@@ -29,13 +29,14 @@
         </button>
       </div>
       <button class="refresh-btn" @click="fetchOrders" :disabled="loading">
-        {{ loading ? '刷新中...' : '🔄 刷新' }}
+        <Icon :icon="loading ? 'mdi:loading' : 'mdi:refresh'" width="14" class="btn-icon" />
+        {{ loading ? '刷新中...' : '刷新' }}
       </button>
     </div>
 
     <!-- 加载 / 错误 -->
     <div v-if="loading" class="loading-bar">加载工单列表...</div>
-    <div v-if="fetchError" class="error-bar">⚠️ {{ fetchError }}</div>
+    <div v-if="fetchError" class="error-bar"><Icon icon="mdi:alert" width="14" class="bar-icon" /> {{ fetchError }}</div>
 
     <!-- 工单列表 -->
     <div v-if="!loading && filteredOrders.length > 0" class="order-list">
@@ -80,7 +81,7 @@
             <!-- 审批操作（仅 pending_approval 状态显示） -->
             <div class="action-bar" v-if="wo.status === 'pending_approval'">
               <div v-if="!chatStore.sessionId" class="action-no-session">
-                ⚠️ 需先在 AI 控制台建立会话才能审批
+                <Icon icon="mdi:alert" width="14" class="bar-icon" /> 需先在 AI 控制台建立会话才能审批
               </div>
               <template v-else>
                 <button
@@ -88,14 +89,15 @@
                   @click="approve(wo.ticket_id, true)"
                   :disabled="approving === wo.ticket_id"
                 >
-                  {{ approving === wo.ticket_id ? '处理中...' : '✅ 批准派单' }}
+                  <Icon icon="mdi:check-circle" width="14" class="btn-icon" />
+                  {{ approving === wo.ticket_id ? '处理中...' : '批准派单' }}
                 </button>
                 <button
                   class="btn-reject"
                   @click="startReject(wo.ticket_id)"
                   :disabled="approving === wo.ticket_id"
                 >
-                  ❌ 驳回
+                  <Icon icon="mdi:close-circle" width="14" class="btn-icon" /> 驳回
                 </button>
               </template>
             </div>
@@ -118,10 +120,10 @@
 
             <!-- 操作结果提示 -->
             <div class="action-result success" v-if="actionResult[wo.ticket_id]?.type === 'success'">
-              ✅ {{ actionResult[wo.ticket_id].message }}
+              <Icon icon="mdi:check-circle" width="14" class="bar-icon" /> {{ actionResult[wo.ticket_id].message }}
             </div>
             <div class="action-result error" v-if="actionResult[wo.ticket_id]?.type === 'error'">
-              ⚠️ {{ actionResult[wo.ticket_id].message }}
+              <Icon icon="mdi:alert" width="14" class="bar-icon" /> {{ actionResult[wo.ticket_id].message }}
             </div>
           </div>
         </Transition>
@@ -130,7 +132,7 @@
 
     <!-- 空状态 -->
     <div v-if="!loading && filteredOrders.length === 0 && !fetchError" class="empty-state">
-      <p class="empty-icon">📋</p>
+      <p class="empty-icon"><Icon icon="mdi:clipboard-list" width="40" /></p>
       <p>{{ emptyMessage }}</p>
       <p class="empty-sub">可通过右侧 AI 控制台触发故障诊断，AI 将自动生成工单待审批。</p>
     </div>
@@ -139,6 +141,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { Icon } from '@iconify/vue'
 import { apiFetch } from '@/api/http'
 import { useChatStore } from '@/stores/chatStore'
 import { useBuildingStore } from '@/stores/buildingStore'
@@ -332,7 +335,7 @@ function detailRows(wo: any) {
   margin-bottom: 20px;
   font-size: 13px;
 }
-.warn-icon { font-size: 18px; flex-shrink: 0; }
+.warn-icon { display: flex; align-items: center; color: var(--warning); flex-shrink: 0; }
 .warn-title { font-weight: 600; color: var(--warning); margin-bottom: 4px; }
 .warn-sub { font-size: 12px; color: var(--text-secondary); }
 
@@ -603,11 +606,23 @@ function detailRows(wo: any) {
   color: var(--text-secondary);
   font-size: 14px;
 }
-.empty-icon { font-size: 40px; margin-bottom: 12px; }
+.empty-icon { display: flex; justify-content: center; color: var(--text-muted); margin-bottom: 12px; }
 .empty-sub  { font-size: 12px; color: var(--text-muted); margin-top: 8px; line-height: 1.7; }
 
 /* 展开动画 */
 .slide-enter-active, .slide-leave-active { transition: all 0.25s ease; overflow: hidden; }
 .slide-enter-from, .slide-leave-to { opacity: 0; max-height: 0; }
 .slide-enter-to, .slide-leave-from { opacity: 1; max-height: 600px; }
+
+.page-icon { vertical-align: middle; margin-right: 6px; }
+.bar-icon  { vertical-align: middle; flex-shrink: 0; }
+.btn-icon  { vertical-align: middle; }
+
+.refresh-btn, .btn-approve, .btn-reject {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.action-result { display: flex; align-items: center; gap: 6px; }
 </style>

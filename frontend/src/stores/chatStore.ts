@@ -2,7 +2,7 @@
  * 对话状态管理 (Pinia)。
  *
  * 管理：
- * - 消息列表（用户 + AI + thinking + artifact）
+ * - 消息列表（用户 + AI + artifact）
  * - 当前会话 ID
  * - Agent 状态（用于 Thinking Stream 可视化）
  * - 待审批工单
@@ -12,15 +12,22 @@ import { ref, computed } from 'vue'
 import { sendChatMessage, approveWorkOrder } from '@/api/stream_client'
 import type { ArtifactEvent } from '@/api/stream_client'
 
-export type MessageRole = 'user' | 'ai' | 'thinking' | 'artifact' | 'error'
+export type MessageRole = 'user' | 'ai' | 'artifact' | 'error'
+
+export interface ThinkingStep {
+  id: string
+  agent: string
+  message: string
+}
 
 export interface ChatMessage {
   id: string
   role: MessageRole
   content: string
-  agent?: string      // thinking 消息的 agent 名
   artifact?: ArtifactEvent
   timestamp: Date
+  thinkingSteps?: ThinkingStep[]
+  thinkingFinished?: boolean
 }
 
 export interface AgentStatus {
@@ -60,9 +67,18 @@ export const useChatStore = defineStore('chat', () => {
     _addMsg('user', userText)
     isLoading.value = true
 
-    // 占位 AI 消息（流式追加内容）
+    // 占位 AI 消息（流式追加内容），带思考步骤数组
     const aiMsgId = crypto.randomUUID()
-    messages.value.push({ id: aiMsgId, role: 'ai', content: '', timestamp: new Date() })
+    messages.value.push({
+      id: aiMsgId,
+      role: 'ai',
+      content: '',
+      timestamp: new Date(),
+      thinkingSteps: [],
+      thinkingFinished: false,
+    })
+
+    let textStarted = false
 
     try {
       sessionId.value = await sendChatMessage(userText, sessionId.value, {
@@ -74,13 +90,26 @@ export const useChatStore = defineStore('chat', () => {
             status: 'thinking',
             message: e.message,
           }
-          // 在消息流中插入 thinking 气泡
-          _addMsg('thinking', e.message, { agent: e.agent })
+          // 将思考步骤追加到当前 AI 消息中，而非创建独立消息
+          const aiMsg = messages.value.find(m => m.id === aiMsgId)
+          if (aiMsg) {
+            if (!aiMsg.thinkingSteps) aiMsg.thinkingSteps = []
+            aiMsg.thinkingSteps.push({
+              id: crypto.randomUUID(),
+              agent: e.agent,
+              message: e.message,
+            })
+          }
         },
         onText(e) {
           const aiMsg = messages.value.find(m => m.id === aiMsgId)
           if (aiMsg) {
             aiMsg.content += e.content
+            // 首次收到文字说明思考已完成，标记结束使气泡可折叠
+            if (!textStarted) {
+              textStarted = true
+              aiMsg.thinkingFinished = true
+            }
           }
           if (e.is_final) {
             currentAgentStatus.value = null
@@ -100,6 +129,11 @@ export const useChatStore = defineStore('chat', () => {
         onDone() {
           isLoading.value = false
           currentAgentStatus.value = null
+          // 确保即使没有文字输出，思考步骤也标记为完成
+          const aiMsg = messages.value.find(m => m.id === aiMsgId)
+          if (aiMsg && !aiMsg.thinkingFinished) {
+            aiMsg.thinkingFinished = true
+          }
         },
         onNetworkError(err) {
           _addMsg('error', `网络错误：${err.message}`)

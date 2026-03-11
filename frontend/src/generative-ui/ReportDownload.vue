@@ -1,7 +1,7 @@
 <template>
   <div class="rd-card">
     <div class="rd-header">
-      <span class="rd-icon">📥</span>
+      <span class="rd-icon"><Icon icon="mdi:file-download" width="18" /></span>
       <div class="rd-title-block">
         <span class="rd-title">{{ title }}</span>
         <span class="rd-subtitle">CSV 报表 · AI 自动生成</span>
@@ -32,15 +32,17 @@
     <!-- 操作 -->
     <div class="rd-footer">
       <button class="btn-download" @click="triggerDownload" :disabled="downloading">
-        {{ downloading ? '下载中...' : '⬇️ 立即下载 CSV' }}
+        <Icon v-if="!downloading" icon="mdi:download" width="14" />
+        {{ downloading ? '下载中...' : '立即下载 CSV' }}
       </button>
-      <span class="dl-hint" v-if="downloaded">✅ 已开始下载</span>
+      <span class="dl-hint" v-if="downloaded"><Icon icon="mdi:check-circle" width="14" /> 已开始下载</span>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed } from 'vue'
+import { Icon } from '@iconify/vue'
 import type { ArtifactEvent } from '@/api/stream_client'
 import { useBuildingStore } from '@/stores/buildingStore'
 
@@ -129,7 +131,7 @@ function triggerDownload() {
   border-bottom: 1px solid var(--border);
 }
 
-.rd-icon { font-size: 18px; }
+.rd-icon { display: flex; align-items: center; color: var(--success); }
 
 .rd-title-block { flex: 1; min-width: 0; }
 .rd-title    { display: block; font-size: 13px; font-weight: 700; color: var(--text-primary); }
@@ -171,6 +173,9 @@ function triggerDownload() {
 }
 
 .btn-download {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   background: var(--success);
   border: none;
   border-radius: 6px;
@@ -185,6 +190,9 @@ function triggerDownload() {
 .btn-download:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .dl-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   font-size: 12px;
   color: var(--success);
   animation: fadein 0.3s ease;

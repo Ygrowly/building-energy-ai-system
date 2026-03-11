@@ -3,6 +3,9 @@ LangGraph 全局状态定义。
 
 所有节点共享同一份 AgentState，通过 Annotated 指定合并策略：
 - messages: 追加合并（LangGraph 内置 add_messages 减少器）
+  ★ 约定：只存放 HumanMessage 和最终 AIMessage，ToolMessage 和中间推理不入全局 state，
+    避免消息列表随工具调用数量膨胀。
+- context_summary: 直接覆盖（每轮滚动更新）
 - 其他字段: 直接覆盖（最新值获胜）
 """
 from __future__ import annotations
@@ -118,6 +121,22 @@ class AgentState(TypedDict):
     为 None 时 RouterAgent 使用默认白名单降级。
     """
 
+    # -----------------------------------------------------------------------
+    # 对话历史摘要（替代冗长的全量消息列表传递）
+    # -----------------------------------------------------------------------
+    context_summary: str
+    """
+    过去对话轮次的滚动摘要（自动维护，无需 LLM 额外调用）。
+
+    每轮结束后由 Agent 节点更新，格式示例：
+        第1轮[数据查询]: 三栋楼2016年4月每日用电趋势对比，Education最高
+        第2轮[故障诊断]: 办公楼凌晨异常，HVAC故障，已生成待审批工单
+
+    传递给各 Agent 时作为 SystemMessage 注入，让 LLM 了解历史上下文
+    而无需读取全部原始消息（尤其是大量 ToolMessage）。
+    最多保留最近 5 轮摘要，超出时舍弃最早的。
+    """
+
 
 def initial_state(available_buildings: list[str] | None = None) -> AgentState:
     """创建空白初始状态，用于新会话。"""
@@ -135,4 +154,47 @@ def initial_state(available_buildings: list[str] | None = None) -> AgentState:
         pending_action=None,
         error=None,
         available_buildings=available_buildings,
+        context_summary="",
     )
+
+
+# ---------------------------------------------------------------------------
+# 辅助：构建滚动摘要（无需 LLM，从结构化信息拼装）
+# ---------------------------------------------------------------------------
+_INTENT_ZH: dict[str, str] = {
+    "data_query":      "数据查询",
+    "cop_analysis":    "COP分析",
+    "fault_diagnosis": "故障诊断",
+    "work_order":      "工单",
+    "clarify":         "澄清",
+    "unknown":         "未知",
+}
+_MAX_SUMMARY_TURNS = 5
+_MAX_ANSWER_CHARS  = 120
+
+
+def update_context_summary(
+    existing_summary: str,
+    intent: str | None,
+    user_question: str,
+    agent_answer: str,
+) -> str:
+    """
+    将本轮摘要追加到 existing_summary，超出 _MAX_SUMMARY_TURNS 轮时舍弃最早的。
+
+    Args:
+        existing_summary: 之前积累的摘要字符串（可为空）
+        intent:           本轮意图标签
+        user_question:    用户问题（截取前 80 字符）
+        agent_answer:     Agent 最终回答（截取前 _MAX_ANSWER_CHARS 字符）
+    """
+    intent_label = _INTENT_ZH.get(intent or "", intent or "任务")
+    q = user_question[:80].replace("\n", " ")
+    a = agent_answer[:_MAX_ANSWER_CHARS].replace("\n", " ")
+    new_line = f"[{intent_label}] 问: {q} → 摘: {a}"
+
+    lines = [l for l in existing_summary.splitlines() if l.strip()]
+    lines.append(new_line)
+    # 只保留最近 N 轮
+    lines = lines[-_MAX_SUMMARY_TURNS:]
+    return "\n".join(lines)

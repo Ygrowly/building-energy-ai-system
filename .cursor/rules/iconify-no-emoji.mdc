@@ -1,0 +1,53 @@
+---
+description: 前端图标规范：使用 Iconify 专业图标，禁止使用 emoji 表情作为图标
+globs: frontend/**/*.vue,frontend/**/*.ts,frontend/**/*.tsx
+alwaysApply: false
+---
+
+# 图标规范：使用 Iconify，禁止 Emoji
+
+## 规则
+
+**严禁**在 UI 界面中使用 emoji 表情（如 🏠 📊 🔧 ⚠️ ✅ 等）作为图标或视觉元素。
+
+**必须**使用 `@iconify/vue` 的 `<Icon>` 组件加载专业图标。
+
+## 使用方式
+
+```vue
+<script setup>
+import { Icon } from '@iconify/vue'
+</script>
+
+<template>
+  <!-- ✅ 正确 -->
+  <Icon icon="mdi:home" />
+  <Icon icon="mdi:chart-bar" width="20" />
+
+  <!-- ❌ 错误 -->
+  <span>🏠</span>
+  <span>📊</span>
+</template>
+```
+
+## 常用图标映射（MDI 图标集）
+
+| 场景 | 图标名 |
+|------|--------|
+| 首页/驾驶舱 | `mdi:view-dashboard` |
+| 图表/分析 | `mdi:chart-bar` |
+| 运维/工具 | `mdi:wrench` |
+| 工单 | `mdi:clipboard-list` |
+| 警告 | `mdi:alert` |
+| 成功/确认 | `mdi:check-circle` |
+| 关闭/驳回 | `mdi:close-circle` |
+| 刷新 | `mdi:refresh` |
+| 下载 | `mdi:download` |
+| 搜索 | `mdi:magnify` |
+| AI/机器人 | `mdi:robot` |
+| 电力/能耗 | `mdi:lightning-bolt` |
+| 数据库 | `mdi:database` |
+| 趋势图 | `mdi:trending-up` |
+| 楼宇 | `mdi:office-building` |
+
+图标浏览：https://icon-sets.iconify.design/mdi/

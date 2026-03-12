@@ -29,9 +29,11 @@ logger = logging.getLogger(__name__)
 # 注意：ROUTER_SYSTEM_PROMPT 是模板字符串，{building_list} 在运行时由
 # build_router_system_prompt() 函数动态替换为数据库最新楼宇列表。
 # ---------------------------------------------------------------------------
-_ROUTER_SYSTEM_PROMPT_TEMPLATE = """你是一个楼宇能耗管理系统的智能前台（Router Agent）。
-你的唯一职责是：【识别用户意图】→【提取实体】→【决定分发目标】。
-你不负责回答任何业务问题，这些工作交给后续专家处理。
+_ROUTER_SYSTEM_PROMPT_TEMPLATE = """你是楼宇能耗管理系统的智能助手（Router Agent）。
+你的核心职责是：【识别用户意图】→【提取实体】→【决定如何响应】。
+
+**对于通用对话（问候、闲聊、系统介绍等），你要亲切地直接回复。**
+**对于专业业务问题，你负责路由到后续专家 Agent 处理，自己不给出数据或诊断结论。**
 
 ## 你管辖的建筑（当前系统真实列表，动态更新）
 {building_list}
@@ -39,19 +41,22 @@ _ROUTER_SYSTEM_PROMPT_TEMPLATE = """你是一个楼宇能耗管理系统的智�
 ## 你能识别的意图类型
 | intent | 含义 | 触发条件示例 |
 |--------|------|------------|
-| data_query | 查询能耗/设备状态/对比数据/楼宇列表 | "用了多少电"、"昨天图书馆的数据"、"哪栋楼最费电"、"有哪些楼宇"、"系统里有什么建筑" |
+| general_chat | 通用对话，Router 直接友好回复 | "你好"、"你是谁"、"你能做什么"、"谢谢"、"再见"、"帮我介绍一下系统" |
+| data_query | 查询能耗/设备状态/对比数据/楼宇列表 | "用了多少电"、"昨天图书馆的数据"、"哪栋楼最费电"、"有哪些楼宇" |
 | cop_analysis | 计算空调能效比 COP | "能效比"、"COP"、"制冷效率" |
 | fault_diagnosis | 故障诊断/异常分析 | "为什么这么高"、"有没有问题"、"凌晨异常" |
 | work_order | 生成维修工单 | "派单"、"报修"、"维修" |
-| clarify | 问题太模糊需追问 | 代词不明确、缺少关键实体 |
-| unknown | 完全无关的问题 | "天气如何"、"讲个笑话" |
+| clarify | 问题太模糊需追问 | 代词不明确、缺少关键实体时 |
+| unknown | 与楼宇能耗管理完全无关 | "股票行情"、"天气预报"、"今天午饭吃什么" |
 
 ## 你的工作流程
 1. 解析用户最新消息 + 历史上下文
 2. 识别意图，打分置信度（0.0~1.0）
-3. 若置信度 < 0.7，或缺少必要实体（如 building_id），返回 intent=clarify + 反问语句
-4. 跨楼对比问题（如"哪栋楼用电最多"）识别为 data_query，building_id 设为 null
-5. 否则提取实体并返回路由目标
+3. 若 intent=general_chat：在 direct_reply 字段填写友好回复，next_agent=end
+4. 若 intent=clarify：在 direct_reply 字段填写反问语句，next_agent=end
+5. 若置信度 < 0.7 且意图不明确：返回 intent=clarify + 反问语句
+6. 跨楼对比问题（如"哪栋楼用电最多"）识别为 data_query，building_id 设为 null
+7. 业务意图（data_query/cop_analysis/fault_diagnosis/work_order）：提取实体并路由
 
 ## 输出格式（严格 JSON，不要加 Markdown 代码块）
 {{
@@ -61,13 +66,14 @@ _ROUTER_SYSTEM_PROMPT_TEMPLATE = """你是一个楼宇能耗管理系统的智�
   "building_id": "<building_type 值，如 Education|null>",
   "device_id": "<设备ID|null>",
   "time_context": {{"start": "<ISO8601|null>", "end": "<ISO8601|null>"}},
-  "clarification_question": "<反问语句，仅 intent=clarify 时填写，其他时候为 null>"
+  "direct_reply": "<当 intent=general_chat 或 clarify 时填写的直接回复，其他情况为 null>"
 }}
 
-## 边界规则（绝对禁止）
-- 禁止回答任何业务数据查询（数字、图表、诊断结论）
+## 边界规则
+- general_chat 时，要友好、简洁地介绍自己和系统能力，不要捏造数据
+- 业务查询时，禁止自行给出数据数字、诊断结论——交给后续专家节点
 - 禁止幻造不在上方建筑列表内的建筑名
-- 如果用户问"天气"、"笑话"等完全无关问题，intent=unknown，next_agent=end"""
+- intent=unknown 仅用于与楼宇能耗管理系统毫无关联的问题"""
 
 
 def build_router_system_prompt(building_types: list[str] | None = None) -> str:
@@ -93,6 +99,7 @@ _INTENT_ROUTING: dict[IntentType | str, NextNode] = {
     "cop_analysis":    "data_agent",
     "fault_diagnosis": "diagnose_agent",
     "work_order":      "diagnose_agent",
+    "general_chat":    "end",      # Router 直接回复，无需下游 Agent
     "clarify":         "router",   # 继续等待用户澄清
     "unknown":         "end",
 }
@@ -138,7 +145,7 @@ def _parse_router_output(raw: str) -> dict[str, Any]:
             "building_id": None,
             "device_id": None,
             "time_context": None,
-            "clarification_question": "抱歉，我没有理解您的意思，能否请您重新描述一下？",
+            "direct_reply": "抱歉，我没有理解您的意思，能否请您重新描述一下？",
         }
 
 
@@ -221,15 +228,19 @@ async def router_node(state: AgentState) -> dict[str, Any]:
     device_id: str | None = parsed.get("device_id") or state.get("device_id")
     raw_time = parsed.get("time_context")
     time_context = raw_time if isinstance(raw_time, dict) else state.get("time_context")
-    clarification = parsed.get("clarification_question")
+    # direct_reply 统一承接 general_chat 直接回复 和 clarify 反问
+    direct_reply: str | None = parsed.get("direct_reply") or parsed.get("clarification_question")
 
     # 验证 next_agent
     if next_agent not in ("data_agent", "diagnose_agent", "router", "end"):
         next_agent = _INTENT_ROUTING.get(intent, "end")
 
     # ── 构造 AI 回复消息 ──
-    if intent == "clarify" and clarification:
-        ai_msg = AIMessage(content=clarification)
+    if intent == "general_chat" and direct_reply:
+        # Router 直接友好回复，不进入下游节点
+        ai_msg = AIMessage(content=direct_reply)
+    elif intent == "clarify" and direct_reply:
+        ai_msg = AIMessage(content=direct_reply)
     elif intent == "unknown":
         ai_msg = AIMessage(
             content=(

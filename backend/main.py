@@ -21,6 +21,9 @@ settings = get_settings()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期：启动时预热图编译，关闭时清理连接池。"""
+    # 注册会话管理 ORM 模型（触发 SQLAlchemy metadata 注册，供 session_store 使用）
+    import app.db.chat_models  # noqa: F401
+
     # 预编译 LangGraph 图（避免首次请求延迟）
     from app.graph.workflow import get_graph
     get_graph()

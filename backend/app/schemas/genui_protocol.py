@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from enum import Enum
 from typing import Annotated, Any, Literal, Optional, Union
 from pydantic import BaseModel, Field
@@ -181,3 +182,57 @@ class DoneEvent(BaseModel):
 # ---------------------------------------------------------------------------
 
 SSEEvent = Union[ThinkingEvent, TextEvent, ArtifactEvent, ErrorEvent, DoneEvent]
+
+
+# ---------------------------------------------------------------------------
+# 会话管理 Schema（对应 Cursor 对话侧边栏功能）
+# ---------------------------------------------------------------------------
+
+class SessionInfo(BaseModel):
+    """
+    单个会话的元数据摘要，用于侧边栏列表展示及会话切换。
+    """
+    session_id: str
+    title: str
+    created_at: datetime
+    updated_at: datetime
+    message_count: int
+    last_message: Optional[str] = Field(
+        default=None,
+        description="最近一条用户消息的前 200 字，用于列表预览",
+    )
+    building_id: Optional[str] = Field(
+        default=None,
+        description="会话绑定的楼宇类型（如 'Office'），为 None 表示未绑定",
+    )
+    is_archived: bool = False
+    has_pending_action: bool = Field(
+        default=False,
+        description="当前会话是否有待审批的 HITL 工单",
+    )
+
+
+class SessionListResponse(BaseModel):
+    """GET /api/chat/sessions 的响应体。"""
+    sessions: list[SessionInfo]
+    total: int
+
+
+class SessionCreateRequest(BaseModel):
+    """POST /api/chat/sessions 的请求体（预建命名会话）。"""
+    title: Optional[str] = Field(
+        default=None,
+        description='会话标题，不传则使用默认值"新对话"，发送第一条消息后自动更新为消息摘要',
+    )
+
+
+class SessionUpdateRequest(BaseModel):
+    """PATCH /api/chat/sessions/{id} 的请求体（重命名或更换绑定楼宇）。"""
+    title: Optional[str] = Field(
+        default=None,
+        description="新标题，不传则不修改",
+    )
+    building_id: Optional[str] = Field(
+        default=None,
+        description="绑定楼宇类型，不传则不修改，传 '' 空字符串表示清除绑定",
+    )

@@ -243,8 +243,8 @@ onMounted(async () => {
   border-radius: 10px;
   overflow: hidden;
   margin: 8px 0;
-  /* 防止在 flex-column 容器中因 overflow:hidden 导致 min-height=0 被压缩到 2px */
   flex-shrink: 0;
+  box-shadow: var(--card-shadow);
 }
 
 .chart-header {

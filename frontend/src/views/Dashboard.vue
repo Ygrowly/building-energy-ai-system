@@ -1,13 +1,5 @@
 <template>
   <div class="dashboard">
-    <header class="page-header">
-      <h1><Icon icon="mdi:view-dashboard" width="22" class="page-icon" /> 驾驶舱</h1>
-      <span class="subtitle">
-        实时能耗总览
-        <span v-if="dataDate" class="data-date">（数据日期：{{ dataDate }}）</span>
-      </span>
-    </header>
-
     <!-- 加载状态 -->
     <div v-if="loading" class="loading-bar">正在加载数据...</div>
     <div v-if="error" class="error-bar"><Icon icon="mdi:alert" width="14" class="bar-icon" /> {{ error }}</div>
@@ -27,19 +19,20 @@
       </div>
     </div>
 
-    <!-- 建筑选择器（居中） -->
+    <!-- 建筑选择器（胶囊滑动样式） -->
     <div class="building-selector-wrap">
       <div class="building-selector">
+        <!-- 滑动指示器 -->
+        <div class="selector-indicator"></div>
+        <!-- 选项 -->
         <button
           v-for="b in buildingStore.buildings"
           :key="b.building_type"
-          class="building-tab"
+          class="selector-option"
           :class="{ active: selectedBuildingType === b.building_type }"
           @click="selectBuilding(b.building_type)"
         >
-          <span class="tab-icon"><Icon :icon="getBuildingIcon(b.building_type)" width="22" /></span>
-          <span class="tab-name">{{ b.display_name }}</span>
-          <span class="tab-area">{{ b.sqm ? b.sqm.toLocaleString() + ' ㎡' : '' }}</span>
+          {{ b.display_name }}
         </button>
       </div>
     </div>
@@ -399,6 +392,12 @@ const recentAnomalies = ref<any[]>([])
 // ── 选中建筑 ─────────────────────────────────────────
 const selectedBuildingType = ref('Office')
 
+// 胶囊选择器：滑动指示器定位用
+const selectedBuildingIndex = computed(() =>
+  buildingStore.buildings.findIndex(b => b.building_type === selectedBuildingType.value)
+)
+const numBuildings = computed(() => buildingStore.buildings.length || 1)
+
 function selectBuilding(type: string) {
   selectedBuildingType.value = type
   // 同步到趋势查询表单
@@ -566,17 +565,17 @@ function renderChart() {
       yAxisIndex: 0,
       data: elec,
       smooth: true,
-      lineStyle: { color: '#6c8ef5', width: 2 },
+      lineStyle: { color: '#60a5fa', width: 2 },
       areaStyle: chartType !== 'bar' ? {
         color: {
           type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
           colorStops: [
-            { offset: 0, color: 'rgba(108,142,245,0.35)' },
-            { offset: 1, color: 'rgba(108,142,245,0.02)' },
+            { offset: 0, color: 'rgba(96,165,250,0.30)' },
+            { offset: 1, color: 'rgba(96,165,250,0.02)' },
           ],
         },
       } : undefined,
-      itemStyle: { color: '#6c8ef5', borderRadius: chartType === 'bar' ? [3, 3, 0, 0] : undefined },
+      itemStyle: { color: '#60a5fa', borderRadius: chartType === 'bar' ? [3, 3, 0, 0] : undefined },
       barMaxWidth: 18,
     })
   }
@@ -612,33 +611,33 @@ function renderChart() {
     grid: { top: 40, right: 64, bottom: 40, left: 64 },
     legend: {
       top: 6,
-      textStyle: { color: '#9399b8', fontSize: 12 },
+      textStyle: { color: '#6b7a9a', fontSize: 12 },
     },
     tooltip: {
       trigger: 'axis',
-      backgroundColor: '#22253a',
-      borderColor: '#2e3148',
-      textStyle: { color: '#e8eaf6', fontSize: 12 },
+      backgroundColor: '#101118',
+      borderColor: '#1a1c28',
+      textStyle: { color: '#dde3f0', fontSize: 12 },
     },
     xAxis: {
       type: 'category',
       data: days,
-      axisLabel: { color: '#9399b8', fontSize: 11, rotate: days.length > 20 ? 30 : 0 },
-      axisLine: { lineStyle: { color: '#2e3148' } },
+      axisLabel: { color: '#6b7a9a', fontSize: 11, rotate: days.length > 20 ? 30 : 0 },
+      axisLine: { lineStyle: { color: '#1a1c28' } },
     },
     yAxis: [
       {
         type: 'value',
         name: 'kWh / m³',
-        nameTextStyle: { color: '#555a7a', fontSize: 11 },
-        axisLabel: { color: '#9399b8', fontSize: 11 },
-        splitLine: { lineStyle: { color: '#2e3148', type: 'dashed' } },
+        nameTextStyle: { color: '#3d445c', fontSize: 11 },
+        axisLabel: { color: '#6b7a9a', fontSize: 11 },
+        splitLine: { lineStyle: { color: '#1a1c28', type: 'dashed' } },
       },
       {
         type: 'value',
         name: '°C',
-        nameTextStyle: { color: '#555a7a', fontSize: 11 },
-        axisLabel: { color: '#9399b8', fontSize: 11 },
+        nameTextStyle: { color: '#3d445c', fontSize: 11 },
+        axisLabel: { color: '#6b7a9a', fontSize: 11 },
         splitLine: { show: false },
       },
     ],
@@ -804,34 +803,45 @@ function formatDay(iso: string): string {
 </script>
 
 <style scoped>
-.dashboard { padding: 24px; }
-
-.page-header { margin-bottom: 24px; }
-.page-header h1 { font-size: 22px; font-weight: 700; margin-bottom: 4px; }
-.subtitle { color: var(--text-secondary); font-size: 13px; }
-.data-date { color: var(--text-muted); font-size: 12px; margin-left: 6px; }
+.dashboard { padding: 48px 24px 24px; }
 
 /* ── KPI ── */
 .kpi-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  gap: 12px;
-  margin-bottom: 28px;
+  gap: 8px;
+  margin-bottom: 20px;
 }
 .kpi-card {
   background: var(--bg-panel);
   border: 1px solid var(--border);
   border-radius: 10px;
-  padding: 16px;
+  padding: 10px 14px;
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
+  box-shadow: var(--card-shadow);
+  transition: box-shadow 0.2s, border-color 0.2s;
 }
-.kpi-icon { display: flex; align-items: center; color: var(--accent); }
-.kpi-body { flex: 1; }
-.kpi-value { font-size: 22px; font-weight: 700; color: var(--text-primary); }
-.kpi-label { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
-.kpi-trend { font-size: 12px; font-weight: 600; }
+.kpi-card:hover {
+  box-shadow: var(--card-shadow-hover);
+  border-color: var(--border-accent);
+}
+.kpi-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  background: var(--accent-glow);
+  color: var(--accent);
+  flex-shrink: 0;
+}
+.kpi-body { flex: 1; min-width: 0; }
+.kpi-value { font-size: 18px; font-weight: 700; color: var(--text-primary); line-height: 1.2; }
+.kpi-label { font-size: 10px; color: var(--text-muted); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.kpi-trend { font-size: 11px; font-weight: 600; flex-shrink: 0; }
 .kpi-trend.up { color: var(--danger); }
 .kpi-trend.down { color: var(--success); }
 .kpi-trend.neutral { color: var(--text-muted); }
@@ -842,41 +852,55 @@ function formatDay(iso: string): string {
   justify-content: center;
   margin-bottom: 24px;
 }
+
+/* 胶囊外壳 */
 .building-selector {
+  position: relative;
   display: flex;
-  gap: 8px;
   background: var(--bg-panel);
   border: 1px solid var(--border);
-  border-radius: 14px;
-  padding: 6px;
+  border-radius: 999px;
+  padding: 4px;
 }
-.building-tab {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-  padding: 12px 28px;
-  border-radius: 10px;
-  border: 1px solid transparent;
+
+/* 滑动指示器：宽度 = 外壳内宽 / 建筑数量 */
+.selector-indicator {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  left: 4px;
+  width: calc((100% - 8px) / v-bind(numBuildings));
+  border-radius: 999px;
+  background: var(--bg-card);
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.25), 0 0 0 1px var(--border-accent);
+  transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  transform: translateX(calc(v-bind(selectedBuildingIndex) * 100%));
+  pointer-events: none;
+}
+
+/* 各选项 */
+.selector-option {
+  flex: 1;
+  position: relative;
+  z-index: 1;
+  padding: 8px 28px;
+  border: none;
   background: transparent;
   cursor: pointer;
-  transition: all 0.2s;
+  font-size: 13px;
+  font-weight: 500;
   color: var(--text-secondary);
-  min-width: 110px;
+  white-space: nowrap;
+  border-radius: 999px;
+  transition: color 0.2s;
 }
-.building-tab:hover {
-  background: rgba(108,142,245,0.08);
+.selector-option:hover {
+  color: var(--text-primary);
+}
+.selector-option.active {
   color: var(--accent);
+  font-weight: 600;
 }
-.building-tab.active {
-  background: rgba(108,142,245,0.15);
-  color: var(--accent);
-  border-color: rgba(108,142,245,0.4);
-}
-.tab-icon { display: flex; align-items: center; }
-.tab-name { font-size: 13px; font-weight: 600; }
-.tab-area { font-size: 11px; color: var(--text-muted); }
-.building-tab.active .tab-area { color: rgba(108,142,245,0.7); }
 
 /* ── 建筑详情卡 ── */
 .building-detail {
@@ -884,6 +908,7 @@ function formatDay(iso: string): string {
   border: 1px solid var(--border);
   border-radius: 12px;
   overflow: hidden;
+  box-shadow: var(--card-shadow);
 }
 .building-detail.anomaly {
   border-color: rgba(248,113,113,0.45);
@@ -933,7 +958,6 @@ function formatDay(iso: string): string {
 .dm-icon.intensity   { background: rgba(167,139,250,0.12); color: #a78bfa; }
 .dm-icon.people      { background: rgba(74,222,128,0.12);  color: var(--success); }
 
-.dm-body {}
 .dm-value { font-size: 20px; font-weight: 700; color: var(--text-primary); }
 .dm-label { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
 
@@ -1097,8 +1121,15 @@ function formatDay(iso: string): string {
 .chart-container {
   background: var(--bg-panel);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 12px;
   overflow: hidden;
+  box-shadow: var(--card-shadow);
+}
+.data-table-section {
+  box-shadow: var(--card-shadow);
+}
+.report-card {
+  box-shadow: var(--card-shadow);
 }
 .chart-header {
   display: flex;
@@ -1150,11 +1181,11 @@ function formatDay(iso: string): string {
 }
 .data-table td {
   padding: 8px 14px;
-  border-bottom: 1px solid rgba(255,255,255,0.04);
+  border-bottom: 1px solid var(--border);
   color: var(--text-secondary);
 }
 .data-table tr:last-child td { border-bottom: none; }
-.data-table tr:hover td { background: rgba(108,142,245,0.04); }
+.data-table tr:hover td { background: var(--bg-hover); }
 .num-cell { text-align: right; font-variant-numeric: tabular-nums; color: var(--text-primary); }
 
 /* ── 统计报表卡 ── */
@@ -1195,7 +1226,7 @@ function formatDay(iso: string): string {
   white-space: nowrap;
 }
 .csv-btn  { background: var(--success); color: #000; }
-.json-btn { background: rgba(108,142,245,0.15); color: var(--accent); border: 1px solid rgba(108,142,245,0.3); }
+.json-btn { background: var(--accent-glow); color: var(--accent); border: 1px solid var(--border-accent); }
 .export-btn:hover { opacity: 0.8; }
 
 .stats-grid {
@@ -1258,8 +1289,8 @@ function formatDay(iso: string): string {
 
 /* ── 状态栏 ── */
 .loading-bar {
-  background: rgba(108,142,245,0.1);
-  border: 1px solid rgba(108,142,245,0.3);
+  background: var(--accent-glow);
+  border: 1px solid var(--border-accent);
   border-radius: 8px;
   padding: 10px 16px;
   color: var(--accent);
@@ -1267,8 +1298,8 @@ function formatDay(iso: string): string {
   margin-bottom: 16px;
 }
 .error-bar {
-  background: rgba(248,113,113,0.1);
-  border: 1px solid rgba(248,113,113,0.3);
+  background: rgba(248,113,113,0.08);
+  border: 1px solid rgba(248,113,113,0.25);
   border-radius: 8px;
   padding: 10px 16px;
   color: var(--danger);
@@ -1298,7 +1329,7 @@ function formatDay(iso: string): string {
   align-items: center;
   gap: 8px;
   background: var(--accent-glow);
-  border: 1px solid rgba(108,142,245,0.3);
+  border: 1px solid var(--border-accent);
   border-radius: 8px;
   padding: 12px 16px;
   color: var(--accent);

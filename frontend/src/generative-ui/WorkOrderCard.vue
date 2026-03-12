@@ -107,7 +107,11 @@ function doReject() {
   border-radius: 10px;
   margin: 8px 0;
   overflow: hidden;
-  transition: border-color 0.3s;
+  transition: box-shadow 0.2s, border-color 0.2s;
+  box-shadow: var(--card-shadow);
+}
+.wo-card:hover {
+  box-shadow: var(--card-shadow-hover);
 }
 .status-pending { border-left: 4px solid var(--warning); }
 .status-approved { border-left: 4px solid var(--success); }

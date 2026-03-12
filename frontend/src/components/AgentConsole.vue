@@ -2,7 +2,7 @@
   <div class="console">
     <!-- 顶部工具栏 -->
     <div class="console-toolbar">
-      <span class="console-title"><Icon icon="mdi:robot" width="16" class="inline-icon" /> 多智能体控制台</span>
+      <span class="console-title"><Icon icon="mdi:robot" width="16" class="inline-icon" /> 智能运维助手</span>
       <button class="clear-btn" @click="store.clearSession()" title="清除对话"><Icon icon="mdi:trash-can" width="16" /></button>
     </div>
 
@@ -18,7 +18,7 @@
     <!-- 消息列表 -->
     <div class="messages" ref="messagesEl">
       <div v-if="!store.hasMessages" class="empty-hint">
-        <p class="hint-greeting"><Icon icon="mdi:hand-wave" width="16" class="inline-icon" /> 你好！我是楼宇能耗管理智能助手。</p>
+        <p class="hint-greeting"><Icon icon="mdi:hand-wave" width="16" class="inline-icon" /> 你好！我是你的建筑能源智能运维助手</p>
         <p class="hint-sub">可以用自然语言提问，支持数据查询、故障诊断与工单生成。</p>
         <div class="hint-examples">
           <p class="hint-group-label"><Icon icon="mdi:chart-bar" width="12" class="inline-icon" /> 数据查询</p>
@@ -235,6 +235,7 @@ function formatMarkdown(text: string): string {
   flex-direction: column;
   height: 100%;
   background: var(--bg-panel);
+  border-left: 1px solid var(--border);
 }
 
 .console-toolbar {
@@ -281,8 +282,8 @@ function formatMarkdown(text: string): string {
   align-items: center;
   gap: 8px;
   padding: 8px 16px;
-  background: rgba(108,142,245,0.08);
-  border-bottom: 1px solid rgba(108,142,245,0.2);
+  background: var(--accent-glow);
+  border-bottom: 1px solid var(--border-accent);
   font-size: 12px;
 }
 
@@ -340,11 +341,13 @@ function formatMarkdown(text: string): string {
   cursor: pointer;
   transition: all 0.2s;
   line-height: 1.4;
+  box-shadow: var(--card-shadow);
 }
 .hint-chip:hover {
   background: var(--accent-glow);
-  border-color: var(--accent);
+  border-color: var(--border-accent);
   color: var(--accent);
+  box-shadow: var(--card-shadow-hover);
 }
 
 .msg { display: flex; align-items: flex-start; gap: 8px; }

@@ -15,7 +15,9 @@
       "Bash(export PATH=\"$PATH:/d/node-v20.17.0-win-x64/node-v20.17.0-win-x64\")",
       "Bash(pnpm install:*)",
       "Bash(uipro init:*)",
-      "Bash(npm install:*)"
+      "Bash(npm install:*)",
+      "Bash(grep -n \"rgba\\\\|#[0-9a-fA-F]\\\\{3,6\\\\}\" e:/27_fwwb_A08/project/frontend/src/generative-ui/DynamicChart.vue)",
+      "Bash(grep -v \"//\")"
     ]
   }
 }

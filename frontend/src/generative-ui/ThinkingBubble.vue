@@ -133,14 +133,14 @@ function agentLabel(agent: string): string {
 /* ─── 容器 ───────────────────────────────────────── */
 .thinking-block {
   border: 1px solid var(--border);
-  border-left: 2px solid var(--thinking-color);
+  border-left: 3px solid var(--thinking-color);
   border-radius: 8px;
   overflow: hidden;
   font-size: 12px;
-  background: rgba(108, 142, 245, 0.04);
+  background: var(--accent-glow);
   margin-bottom: 6px;
-  /* 防止在 flex-column 容器中因 overflow:hidden 导致 min-height=0 被压缩到 2px */
   flex-shrink: 0;
+  box-shadow: var(--card-shadow);
 }
 
 /* ─── 头部 ───────────────────────────────────────── */

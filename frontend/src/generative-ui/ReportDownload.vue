@@ -120,6 +120,7 @@ function triggerDownload() {
   border-radius: 10px;
   margin: 8px 0;
   overflow: hidden;
+  box-shadow: var(--card-shadow);
 }
 
 .rd-header {
@@ -140,7 +141,7 @@ function triggerDownload() {
 .rd-badge {
   font-size: 11px;
   font-weight: 600;
-  background: rgba(74,222,128,0.15);
+  background: rgba(52,211,153,0.12);
   color: var(--success);
   padding: 3px 10px;
   border-radius: 10px;

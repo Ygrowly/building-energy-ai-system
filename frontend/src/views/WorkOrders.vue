@@ -365,7 +365,7 @@ function detailRows(wo: any) {
 .tab-btn:hover { background: var(--bg-hover); }
 .tab-btn.active {
   background: var(--accent-glow);
-  border-color: var(--accent);
+  border-color: var(--border-accent);
   color: var(--accent);
   font-weight: 600;
 }
@@ -396,8 +396,8 @@ function detailRows(wo: any) {
 
 /* 状态条 */
 .loading-bar {
-  background: rgba(108,142,245,0.08);
-  border: 1px solid rgba(108,142,245,0.25);
+  background: var(--accent-glow);
+  border: 1px solid var(--border-accent);
   border-radius: 8px;
   padding: 10px 16px;
   color: var(--accent);
@@ -406,7 +406,7 @@ function detailRows(wo: any) {
 }
 .error-bar {
   background: rgba(248,113,113,0.08);
-  border: 1px solid rgba(248,113,113,0.25);
+  border: 1px solid rgba(248,113,113,0.22);
   border-radius: 8px;
   padding: 10px 16px;
   color: var(--danger);
@@ -422,7 +422,11 @@ function detailRows(wo: any) {
   border: 1px solid var(--border);
   border-radius: 10px;
   overflow: hidden;
-  transition: border-color 0.2s;
+  transition: box-shadow 0.2s, border-color 0.2s;
+  box-shadow: var(--card-shadow);
+}
+.order-card:hover {
+  box-shadow: var(--card-shadow-hover);
 }
 .order-card.status-pending  { border-left: 4px solid var(--warning); }
 .order-card.status-approved { border-left: 4px solid var(--success); }

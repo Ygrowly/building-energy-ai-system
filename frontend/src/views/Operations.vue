@@ -191,10 +191,11 @@ function formatTime(iso: string): string {
   gap: 14px;
   align-items: flex-start;
   background: var(--accent-glow);
-  border: 1px solid rgba(108,142,245,0.3);
+  border: 1px solid var(--border-accent);
   border-radius: 10px;
   padding: 16px;
   margin-bottom: 24px;
+  box-shadow: var(--card-shadow);
 }
 .hint-icon { display: flex; align-items: flex-start; color: var(--accent); flex-shrink: 0; }
 .hint-title { font-weight: 600; font-size: 14px; color: var(--accent); margin-bottom: 4px; }
@@ -244,8 +245,8 @@ function formatTime(iso: string): string {
 .view-all-link:hover { opacity: 0.75; }
 
 .loading-bar {
-  background: rgba(108,142,245,0.08);
-  border: 1px solid rgba(108,142,245,0.25);
+  background: var(--accent-glow);
+  border: 1px solid var(--border-accent);
   border-radius: 8px;
   padding: 10px 16px;
   color: var(--accent);
@@ -254,7 +255,7 @@ function formatTime(iso: string): string {
 }
 .error-bar {
   background: rgba(248,113,113,0.08);
-  border: 1px solid rgba(248,113,113,0.25);
+  border: 1px solid rgba(248,113,113,0.22);
   border-radius: 8px;
   padding: 10px 16px;
   color: var(--danger);
@@ -273,6 +274,12 @@ function formatTime(iso: string): string {
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 12px 16px;
+  box-shadow: var(--card-shadow);
+  transition: box-shadow 0.2s, border-color 0.2s;
+}
+.anomaly-item:hover {
+  box-shadow: var(--card-shadow-hover);
+  border-color: var(--border-accent);
 }
 
 .anomaly-left { display: flex; align-items: center; gap: 12px; flex: 1; min-width: 0; }
@@ -359,6 +366,7 @@ function formatTime(iso: string): string {
   font-size: 13px;
   color: var(--text-secondary);
   line-height: 2;
+  box-shadow: var(--card-shadow);
 }
 .explainability-card ul { list-style: none; margin-top: 8px; padding: 0; }
 .explainability-card li { display: flex; align-items: center; gap: 8px; }

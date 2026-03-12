@@ -1,16 +1,20 @@
 """
-SQLAlchemy ORM 表定义（只读映射，与数据库 DDL 严格对齐）。
-Data Agent 数据库账号仅拥有 SELECT 权限，无 INSERT/UPDATE/DELETE。
+SQLAlchemy ORM 表定义（与数据库 DDL 严格对齐）。
+energy_data / buildings / daily_energy_summary：Data Agent 只读账号（SELECT only）。
+anomaly_events：后台检测服务拥有完整读写权限。
 """
 import enum
+import uuid
 
 from sqlalchemy import (
+    Boolean,
     Column,
     Enum,
     Float,
     Index,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy import TIMESTAMP
 from sqlalchemy.orm import DeclarativeBase
@@ -119,4 +123,43 @@ class DailyEnergySummary(Base):
             unique=True,
         ),
         {"info": {"is_view": True}},  # 标记为视图，防止 alembic 生成 CREATE TABLE
+    )
+
+
+# ---------------------------------------------------------------------------
+# anomaly_events — 异常事件持久化表（后台检测服务写入，所有接口统一从此读）
+# ---------------------------------------------------------------------------
+
+class AnomalyEvent(Base):
+    """
+    异常事件记录表。
+    由 anomaly_detector 后台服务扫描 energy_data 后写入，是所有异常展示的唯一来源。
+
+    rule_triggered 取值：
+      night_high_power         → 夜间（本地 0-6 点）electricity_kwh > 50
+      zero_occupancy_high_hvac → 人员密度=0 且 hvac_energy_kwh > 30
+      sensor_spike             → electricity_kwh 超当日均值 3 倍
+      db_flagged               → energy_data.operation_status = 'Anomaly'（存量标注兜底）
+    """
+    __tablename__ = "anomaly_events"
+
+    id: str = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    detected_at = Column(TIMESTAMP(timezone=True), nullable=False)
+    data_timestamp = Column(TIMESTAMP(timezone=True), nullable=False)
+    building_id: str = Column(String, nullable=False)
+    building_type: str = Column(String, nullable=False)
+    meter_device_id: str = Column(String, nullable=False)
+    rule_triggered: str = Column(String, nullable=False)
+    actual_value: float = Column(Float, nullable=True)
+    threshold_value: float = Column(Float, nullable=True)
+    message: str = Column(String, nullable=True)
+    is_resolved: bool = Column(Boolean, nullable=False, default=False)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "data_timestamp", "building_id", "rule_triggered",
+            name="uq_anomaly_event",
+        ),
+        Index("idx_anomaly_events_data_timestamp", "data_timestamp"),
+        Index("idx_anomaly_events_building_ts", "building_id", "data_timestamp"),
     )

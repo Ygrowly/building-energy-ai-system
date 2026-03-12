@@ -172,13 +172,23 @@ async def search_ragflow(
     top_k: int = 3,
 ) -> RAGHybridSearchOutput | MCPError:
     """
-    调用 RAGFlow API 进行混合检索。
+    调用 RAGFlow POST /api/v1/retrieval 接口进行混合检索。
 
-    若 RAGFlow 未配置，自动降级到本地知识库。
+    参数对照（RAGFlow API v1）：
+      - question          : 用户查询文本
+      - dataset_ids       : 知识库 ID 列表（来自 RAGFLOW_DATASET_ID）
+      - top_k             : 参与向量余弦计算的候选切片数（默认 1024），
+                            这里设置为 top_k * 10 保证召回充足
+      - page_size         : 最终返回切片数（对应业务层 top_k）
+      - similarity_threshold : 最低相似度阈值，低于此值的切片不返回
+      - keyword           : 启用关键词检索，结合向量检索实现混合搜索
+      - rerank_id         : 重排模型 ID（仅当配置了 RAGFLOW_RERANK_ID 才传入）
+
+    若 RAGFlow 未配置（API_KEY 为空），自动降级到本地关键词知识库。
     """
     settings = get_settings()
 
-    if not settings.RAGFLOW_API_URL or not settings.RAGFLOW_API_KEY:
+    if not settings.RAGFLOW_API_KEY or not settings.RAGFLOW_DATASET_ID:
         results = local_search(query, top_k=top_k)
         return RAGHybridSearchOutput(
             results=results,
@@ -187,21 +197,25 @@ async def search_ragflow(
             reranked=False,
         )
 
-    payload = {
+    # 构造请求体，严格对照 /api/v1/retrieval 文档
+    payload: dict = {
         "question": query,
         "dataset_ids": [settings.RAGFLOW_DATASET_ID],
-        "rerank": enable_rerank,
-        "top_k": top_k * 6,
+        "top_k": top_k * 10,          # 向量召回池大小
+        "page": 1,
+        "page_size": top_k,            # 最终返回条数
+        "similarity_threshold": 0.2,   # 低于此分数的切片过滤掉
+        "vector_similarity_weight": 0.3,
+        "keyword": True,               # 启用关键词混合检索
         "highlight": False,
     }
 
-    if metadata_filter:
-        filters = {k: v for k, v in metadata_filter.items() if v}
-        if filters:
-            payload["filters"] = filters
+    # 有重排模型时才注入 rerank_id
+    if enable_rerank and settings.RAGFLOW_RERANK_ID:
+        payload["rerank_id"] = settings.RAGFLOW_RERANK_ID
 
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        async with httpx.AsyncClient(timeout=20.0) as client:
             resp = await client.post(
                 f"{settings.RAGFLOW_API_URL}/api/v1/retrieval",
                 headers={"Authorization": f"Bearer {settings.RAGFLOW_API_KEY}"},
@@ -216,22 +230,47 @@ async def search_ragflow(
             tool_name="rag_hybrid_search",
         )
 
-    chunks = data.get("data", {}).get("chunks", [])[:top_k]
-    results = [
-        RAGSearchResult(
-            content=c.get("content_with_weight", c.get("content", "")),
-            parent_section=c.get("document_keyword", "未知章节"),
-            source_doc=c.get("doc_name", "unknown.pdf"),
-            page=int(c.get("positions", [[1]])[0][0]) if c.get("positions") else 1,
-            similarity=float(c.get("similarity", 0.0)),
-            rerank_score=float(c.get("score", 0.0)) if enable_rerank else None,
+    response_data: dict = data.get("data", {})
+    raw_chunks: list[dict] = response_data.get("chunks", [])
+    total_retrieved: int = response_data.get("total", len(raw_chunks))
+    actually_reranked = enable_rerank and bool(settings.RAGFLOW_RERANK_ID)
+
+    # 用 doc_aggs 构建 document_id → doc_name 的快速查找表
+    # （chunks 本身只有 document_keyword，doc_aggs 提供更完整的文件名）
+    doc_id_to_name: dict[str, str] = {
+        agg["doc_id"]: agg["doc_name"]
+        for agg in response_data.get("doc_aggs", [])
+        if "doc_id" in agg and "doc_name" in agg
+    }
+
+    results = []
+    for c in raw_chunks:
+        doc_id = c.get("document_id", "")
+        # document_keyword 和 doc_aggs.doc_name 实际上是同一个文件名
+        doc_name = doc_id_to_name.get(doc_id) or c.get("document_keyword") or c.get("document_name", "unknown.pdf")
+
+        # similarity：RAGFlow 返回的综合相似度（向量 + 关键词加权，或已经过重排）
+        similarity_val = min(float(c.get("similarity", 0.0)), 1.0)
+        # vector_similarity：纯向量余弦相似度，用于 rerank_score 以供对比展示
+        vector_sim = c.get("vector_similarity")
+        rerank_score_val = (
+            min(float(vector_sim), 1.0)
+            if (actually_reranked and vector_sim is not None)
+            else None
         )
-        for c in chunks
-    ]
+
+        results.append(RAGSearchResult(
+            content=c.get("content") or "",
+            parent_section=doc_name,   # RAGFlow 不返回章节信息，以文档名代替
+            source_doc=doc_name,
+            page=1,                    # positions 字段为字符偏移量，非页码，统一置 1
+            similarity=similarity_val,
+            rerank_score=rerank_score_val,
+        ))
 
     return RAGHybridSearchOutput(
         results=results,
         query=query,
-        total_retrieved=len(data.get("data", {}).get("chunks", [])),
-        reranked=enable_rerank,
+        total_retrieved=total_retrieved,
+        reranked=actually_reranked,
     )

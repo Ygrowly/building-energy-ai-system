@@ -12,6 +12,10 @@ from .genui_protocol import (
     ErrorEvent,
     DoneEvent,
     SSEEvent,
+    SessionInfo,
+    SessionListResponse,
+    SessionCreateRequest,
+    SessionUpdateRequest,
 )
 from .mcp_schemas import (
     BuildingID,
@@ -38,11 +42,13 @@ from .mcp_schemas import (
 )
 
 __all__ = [
-    # GenUI Protocol
+    # GenUI Protocol — SSE 事件
     "SSEEventType", "AgentName",
     "ThinkingEvent", "TextEvent", "ArtifactEvent", "ErrorEvent", "DoneEvent",
     "SSEEvent",
     "WidgetType", "ChartSeries", "ChartPayload", "WorkOrderPayload", "DataSourcePayload",
+    # GenUI Protocol — 会话管理
+    "SessionInfo", "SessionListResponse", "SessionCreateRequest", "SessionUpdateRequest",
     # MCP Schemas — shared
     "BuildingID", "MetricType", "OperationStatus", "TimeRange", "MCPError",
     # MCP Tool 1

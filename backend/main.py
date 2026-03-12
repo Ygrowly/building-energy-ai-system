@@ -4,6 +4,7 @@ FastAPI 应用入口。
 启动命令：
     uvicorn main:app --reload --host 0.0.0.0 --port 8000
 """
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -20,12 +21,29 @@ settings = get_settings()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """应用生命周期：启动时预热图编译，关闭时清理连接池。"""
+    """应用生命周期：启动时预热 + 启动异常检测后台任务，关闭时清理。"""
+    # 注册会话管理 ORM 模型（触发 SQLAlchemy metadata 注册，供 session_store 使用）
+    import app.db.chat_models  # noqa: F401
+
     # 预编译 LangGraph 图（避免首次请求延迟）
     from app.graph.workflow import get_graph
     get_graph()
 
+    # 启动异常检测服务：
+    #   - initial_scan：首次全量扫描历史数据（或增量补齐），写入 anomaly_events
+    #   - start_periodic_scan：此后每小时增量扫描一次
+    from app.services.anomaly_detector import initial_scan, start_periodic_scan
+    asyncio.create_task(initial_scan())
+    periodic_task = asyncio.create_task(start_periodic_scan(interval_seconds=3600))
+
     yield
+
+    # 关闭时取消定期扫描任务
+    periodic_task.cancel()
+    try:
+        await periodic_task
+    except asyncio.CancelledError:
+        pass
 
     # 关闭数据库连接池
     from app.db.session import engine

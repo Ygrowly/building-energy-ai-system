@@ -17,7 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import Building, DailyEnergySummary, EnergyData
+from app.db.models import AnomalyEvent, Building, DailyEnergySummary, EnergyData
 from app.db.session import get_db_session
 from app.mcp.server import list_tools
 
@@ -250,9 +250,31 @@ async def get_overview(db: AsyncSession = Depends(get_db_session)):
     live_rows = latest_records_result.fetchall()
 
     total_water = sum(float(r[2] or 0) for r in live_rows)
-    anomaly_count = sum(1 for r in live_rows if r[1] == "Anomaly")
-
     status_map: dict[str, tuple] = {r[0]: r for r in live_rows}
+
+    # 从 anomaly_events 查询有未解决异常的楼宇集合
+    # 时间窗口：数据最大时间戳往前 24h（兼容历史数据集，不依赖 NOW()）
+    # 若表尚未创建（迁移未执行），回退为 energy_data.operation_status 字段
+    anomaly_building_types: set[str] = set()
+    try:
+        recent_anomaly_result = await db.execute(
+            text("""
+                SELECT DISTINCT building_type
+                FROM anomaly_events
+                WHERE data_timestamp >= (
+                    SELECT MAX(data_timestamp) FROM anomaly_events
+                ) - INTERVAL '24 hours'
+                  AND is_resolved = false
+            """)
+        )
+        anomaly_building_types = {r[0] for r in recent_anomaly_result.fetchall()}
+    except Exception:
+        # 迁移未执行时的降级策略：使用 energy_data 中的 operation_status 字段
+        for r in live_rows:
+            if r[1] == "Anomaly":
+                anomaly_building_types.add(r[0])
+
+    anomaly_count = len(anomaly_building_types)
 
     enriched_buildings = []
     for bld in buildings_detail:
@@ -260,7 +282,7 @@ async def get_overview(db: AsyncSession = Depends(get_db_session)):
         live = status_map.get(bt)
         enriched_buildings.append({
             **bld,
-            "operation_status": live[1] if live else "Normal",
+            "operation_status": "Anomaly" if bt in anomaly_building_types else "Normal",
             "latest_water_m3": float(live[2] or 0) if live else 0.0,
         })
 
@@ -276,22 +298,96 @@ async def get_overview(db: AsyncSession = Depends(get_db_session)):
 
 
 # ---------------------------------------------------------------------------
-# 近期异常告警（Dashboard 主动提示）
+# 近期异常告警（Dashboard / 运维页 统一数据源）
 # ---------------------------------------------------------------------------
 @router.get("/anomalies/recent", summary="获取近期异常告警")
 async def get_recent_anomalies(
-    hours: int = Query(24, ge=1, le=168, description="查询最近 N 小时内的异常"),
+    hours: int = Query(168, ge=1, le=8760, description="查询最近 N 小时内的异常（默认 7 天，最大 1 年）"),
     building_type: str | None = Query(None, description="按建筑类型过滤"),
     db: AsyncSession = Depends(get_db_session),
 ):
     """
-    检测近期能耗异常，供 Dashboard 主动提示。
-    规则：夜间高功率（0-6 点 > 50kWh）/ 无人高空调（occupancy=0 且 hvac > 30kWh）。
+    从 anomaly_events 表读取近期异常告警，供 Dashboard 和运维页展示。
+    数据由后台 anomaly_detector 服务持续写入，不再在请求时实时计算规则。
+
+    若 anomaly_events 表尚未创建（迁移 002 未执行），自动降级为实时规则计算模式。
     """
     from datetime import datetime, timedelta, timezone
 
     now_utc = datetime.now(timezone.utc)
     start_time = now_utc - timedelta(hours=hours)
+
+    try:
+        # ── 主路径：读 anomaly_events 表 ──────────────────────────────────
+        # 时间窗口以数据自身最大时间戳为基准（兼容历史数据集，不依赖 NOW()）
+        max_ts_row = await db.execute(
+            text("SELECT MAX(data_timestamp) FROM anomaly_events WHERE is_resolved = false")
+        )
+        max_data_ts = max_ts_row.scalar()
+
+        if max_data_ts is None:
+            return {
+                "anomalies": [],
+                "total": 0,
+                "check_period": {"start": None, "end": None, "hours": hours},
+                "source": "anomaly_events",
+            }
+
+        from datetime import timedelta
+        window_start = max_data_ts - timedelta(hours=hours)
+
+        stmt = (
+            select(AnomalyEvent)
+            .where(AnomalyEvent.data_timestamp >= window_start)
+            .where(AnomalyEvent.is_resolved.is_(False))
+            .order_by(AnomalyEvent.data_timestamp.desc())
+        )
+        if building_type:
+            stmt = stmt.where(AnomalyEvent.building_type == building_type)
+
+        result = await db.execute(stmt)
+        events = result.scalars().all()
+
+        anomalies = [
+            {
+                "timestamp": ev.data_timestamp.isoformat(),
+                "building_type": ev.building_type,
+                "meter_device_id": ev.meter_device_id,
+                "rule": ev.rule_triggered,
+                "message": ev.message,
+                "actual_value": ev.actual_value,
+                "threshold": ev.threshold_value,
+                "operation_status": "Anomaly",
+            }
+            for ev in events[:100]
+        ]
+
+        return {
+            "anomalies": anomalies,
+            "total": len(events),
+            "check_period": {
+                "start": window_start.isoformat(),
+                "end": max_data_ts.isoformat(),
+                "hours": hours,
+            },
+            "source": "anomaly_events",
+        }
+
+    except Exception:
+        # ── 降级路径：迁移未执行时实时计算（兼容旧版）────────────────────
+        logger.warning("anomaly_events 表不可用，降级为实时规则计算（请执行迁移 002_create_anomaly_events.sql）")
+        return await _fallback_realtime_anomalies(start_time, now_utc, hours, building_type, db)
+
+
+async def _fallback_realtime_anomalies(
+    start_time,
+    now_utc,
+    hours: int,
+    building_type: str | None,
+    db: AsyncSession,
+) -> dict:
+    """降级：实时扫描 energy_data 计算异常（修复了时区 Bug）。"""
+    from datetime import timezone
 
     query = (
         select(EnergyData, Building.building_type, Building.meter_device_id)
@@ -310,10 +406,11 @@ async def get_recent_anomalies(
         ed, btype, meter_id = row
         ts = ed.timestamp
         hour_utc = ts.hour if ts.tzinfo else ts.replace(tzinfo=timezone.utc).hour
+        hour_local = (hour_utc + 8) % 24  # 转换为 CST（UTC+8）
 
         if (
             ed.electricity_kwh is not None
-            and 0 <= hour_utc < 6
+            and 0 <= hour_local < 6
             and ed.electricity_kwh > 50
         ):
             anomalies.append({
@@ -324,7 +421,7 @@ async def get_recent_anomalies(
                 "message": f"{_BUILDING_NAMES.get(btype, btype)}夜间能耗异常：{ed.electricity_kwh:.1f} kWh",
                 "actual_value": ed.electricity_kwh,
                 "threshold": 50.0,
-                "operation_status": ed.operation_status,
+                "operation_status": "Anomaly",
             })
 
         if (
@@ -341,17 +438,18 @@ async def get_recent_anomalies(
                 "message": f"{_BUILDING_NAMES.get(btype, btype)}无人时空调高耗：{ed.hvac_energy_kwh:.1f} kWh",
                 "actual_value": ed.hvac_energy_kwh,
                 "threshold": 30.0,
-                "operation_status": ed.operation_status,
+                "operation_status": "Anomaly",
             })
 
     return {
-        "anomalies": anomalies[:50],
+        "anomalies": anomalies[:100],
         "total": len(anomalies),
         "check_period": {
             "start": start_time.isoformat(),
             "end": now_utc.isoformat(),
             "hours": hours,
         },
+        "source": "realtime_fallback",
     }
 
 

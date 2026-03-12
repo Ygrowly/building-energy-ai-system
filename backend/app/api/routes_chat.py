@@ -1,10 +1,16 @@
 """
-SSE 流式对话接口。
+SSE 流式对话接口 + 会话生命周期管理。
 
-端点：
-  POST /api/chat          — 发起新对话轮次，返回 SSE 流
-  POST /api/chat/approve  — 人机协同：审批/驳回工单
-  GET  /api/chat/history  — 获取对话历史（简化版，无持久化）
+端点总览：
+  POST   /api/chat                          — 发起新对话轮次，返回 SSE 流
+  POST   /api/chat/approve                  — 人机协同：审批/驳回工单
+  GET    /api/chat/sessions                 — 列出所有会话（支持归档过滤）
+  POST   /api/chat/sessions                 — 预建命名会话
+  GET    /api/chat/sessions/{id}            — 获取会话摘要（内存优先，DB 兜底）
+  PATCH  /api/chat/sessions/{id}            — 重命名或更新绑定楼宇
+  POST   /api/chat/sessions/{id}/archive    — 归档会话（软删除）
+  DELETE /api/chat/sessions/{id}            — 物理删除会话
+  GET    /api/chat/sessions/{id}/messages   — 获取消息历史
 
 SSE 事件格式遵循 genui_protocol.py 规范：
   data: {"type": "thinking", ...}
@@ -22,22 +28,29 @@ import time
 import uuid
 from typing import Any, AsyncGenerator
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from pydantic import BaseModel, Field
 
 from app.db.session import AsyncSessionLocal
+from app.db.session_store import session_store
 from app.graph.state import initial_state
 from app.graph.workflow import get_graph
 from app.mcp.tools.data_query import list_available_buildings
+from app.schemas.genui_protocol import (
+    SessionInfo,
+    SessionListResponse,
+    SessionCreateRequest,
+    SessionUpdateRequest,
+)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["对话"])
 
 # ---------------------------------------------------------------------------
-# 简易内存会话存储（生产环境换 Redis）
+# 简易内存会话缓存（热路径用，DB 作为持久化后端）
 # ---------------------------------------------------------------------------
 _sessions: dict[str, dict[str, Any]] = {}
 
@@ -45,6 +58,7 @@ _sessions: dict[str, dict[str, Any]] = {}
 # ---------------------------------------------------------------------------
 # 请求/响应模型
 # ---------------------------------------------------------------------------
+
 class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=2000, description="用户消息")
     session_id: str | None = Field(None, description="会话 ID，为空则新建")
@@ -65,8 +79,8 @@ class ChatResponse(BaseModel):
 # ---------------------------------------------------------------------------
 # SSE 事件构建工具
 # ---------------------------------------------------------------------------
+
 def _sse(data: dict[str, Any]) -> str:
-    """格式化为 SSE 行。"""
     return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
@@ -112,56 +126,98 @@ def _done_event(session_id: str, hop_count: int = 0) -> str:
 
 
 # ---------------------------------------------------------------------------
+# 内部：从内存/DB 加载或新建会话
+# ---------------------------------------------------------------------------
+
+async def _get_or_create_state(session_id: str) -> dict[str, Any]:
+    """
+    缓存优先策略：
+      1. 内存命中 → 直接返回
+      2. 内存未命中 → 尝试从 DB 恢复
+      3. DB 无记录 → 新建初始状态并写入缓存
+    """
+    if session_id in _sessions:
+        return _sessions[session_id]
+
+    # 尝试从 DB 恢复
+    recovered = await session_store.load_state(session_id)
+    if recovered is not None:
+        _sessions[session_id] = recovered
+        logger.info("会话已从 DB 恢复: %s", session_id)
+        return recovered
+
+    # 全新会话：从 DB 查楼宇列表动态注入白名单
+    available_buildings: list[str] | None = None
+    try:
+        async with AsyncSessionLocal() as _db:
+            result = await list_available_buildings(_db)
+            available_buildings = [b.building_type for b in result.buildings]
+    except Exception:
+        pass
+
+    state = initial_state(available_buildings=available_buildings)
+    _sessions[session_id] = state
+    return state
+
+
+def _build_session_info(row: Any, in_memory_state: dict[str, Any] | None = None) -> SessionInfo:
+    """将 ChatSession ORM 行 + 可选内存状态组合为 SessionInfo。"""
+    has_pending = False
+    if in_memory_state:
+        pa = in_memory_state.get("pending_action")
+        has_pending = pa is not None and bool(pa.get("ticket_id"))
+
+    return SessionInfo(
+        session_id=row.id,
+        title=row.title,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+        message_count=row.message_count,
+        last_message=row.last_message,
+        building_id=row.building_id,
+        is_archived=row.is_archived,
+        has_pending_action=has_pending,
+    )
+
+
+# ---------------------------------------------------------------------------
 # LangGraph 流式执行器
 # ---------------------------------------------------------------------------
+
 async def _stream_graph(
     session_id: str,
     user_message: str,
 ) -> AsyncGenerator[str, None]:
     """
     执行 LangGraph 图并将过程以 SSE 事件流方式推出。
-
-    推送策略：
-    - 图开始执行 → thinking 事件
-    - 每个节点完成 → 对应 thinking/text 事件
-    - ToolMessage → 解析 artifact，推 artifact 事件
-    - AIMessage → 推 text 事件
-    - 图执行完毕 → done 事件
+    每轮结束后异步持久化会话状态到 PostgreSQL。
     """
-    # 取或新建会话状态（新会话时从 DB 查楼宇列表动态注入）
-    if session_id not in _sessions:
-        available_buildings: list[str] | None = None
-        try:
-            async with AsyncSessionLocal() as _db:
-                result = await list_available_buildings(_db)
-                available_buildings = [b.building_type for b in result.buildings]
-        except Exception:
-            pass  # DB 不可用时降级，RouterAgent 使用内置默认白名单
-        _sessions[session_id] = initial_state(available_buildings=available_buildings)
+    state = await _get_or_create_state(session_id)
 
-    state = _sessions[session_id]
+    # 确保 DB 中存在该会话记录（首次发送消息时自动创建）
+    db_row = await session_store.get(session_id)
+    if db_row is None:
+        await session_store.create(session_id)
+
+    is_first_message = len(state.get("messages", [])) == 0
+
     state["messages"] = list(state["messages"]) + [HumanMessage(content=user_message)]
 
     yield _thinking_event("router", "正在分析您的请求...", hop_count=state.get("hop_count", 0))
 
     graph = get_graph()
 
-    # 用于从流事件中收集最终状态（避免二次 ainvoke）
     final_state_holder: dict[str, Any] = {}
-
-    # 性能计时器
     _t: dict[str, float] = {}
     _t["request"] = time.time()
     _tool_count = 0
 
     try:
-        # astream_events 逐节点推流，同时从顶层 on_chain_end 捕获最终状态
         async for event in graph.astream_events(state, version="v2"):
             kind = event.get("event", "")
             name = event.get("name", "")
             data = event.get("data", {})
 
-            # 节点开始
             if kind == "on_chain_start" and name in ("router", "data_agent", "diagnose_agent"):
                 agent_label = {
                     "router": "路由分析",
@@ -171,35 +227,30 @@ async def _stream_graph(
                 _t[f"node_{name}"] = time.time()
                 yield _thinking_event(name, f"{agent_label} 正在工作...", hop_count=state.get("hop_count", 0))
 
-            # LLM 开始推理
             elif kind == "on_chat_model_start":
                 agent_name = event.get("metadata", {}).get("langgraph_node", "")
                 _t[f"llm_{agent_name}"] = time.time()
                 if agent_name:
                     yield _thinking_event(agent_name, "正在推理...", hop_count=0)
 
-            # LLM 推理完成（记录耗时）
             elif kind == "on_chat_model_end":
                 agent_name = event.get("metadata", {}).get("langgraph_node", "")
                 elapsed = time.time() - _t.pop(f"llm_{agent_name}", time.time())
                 logger.info("LLM 推理完成: node=%s, 用时=%.2fs", agent_name, elapsed)
 
-            # 工具调用开始
             elif kind == "on_tool_start":
                 tool_name = name or data.get("name", "tool")
                 _t[f"tool_{tool_name}_{_tool_count}"] = time.time()
                 yield _thinking_event("tool", f"调用工具：{tool_name}", hop_count=0)
 
-            # 工具调用结束 — 提取 artifact + 记录耗时
             elif kind == "on_tool_end":
                 tool_key = f"tool_{name}_{_tool_count}"
                 elapsed = time.time() - _t.pop(tool_key, time.time())
                 _tool_count += 1
                 logger.info("工具调用完成: %s, 用时=%.2fs", name, elapsed)
                 raw_output = data.get("output", "")
-                # 兼容 LangGraph 不同版本：output 可能是字符串、ToolMessage 或 dict
                 if hasattr(raw_output, "content"):
-                    output = raw_output.content  # ToolMessage 对象
+                    output = raw_output.content
                 elif isinstance(raw_output, dict):
                     try:
                         output = json.dumps(raw_output, ensure_ascii=False, default=str)
@@ -223,7 +274,6 @@ async def _stream_graph(
                     except (json.JSONDecodeError, TypeError):
                         pass
 
-            # 节点完成 — 只提取最后一条无工具调用的 AI 文本（避免中间推理污染最终答案）
             elif kind == "on_chain_end" and name in ("data_agent", "diagnose_agent", "router"):
                 node_elapsed = time.time() - _t.pop(f"node_{name}", time.time())
                 logger.info("节点完成: %s, 工具调用=%d, 用时=%.1fs", name, _tool_count, node_elapsed)
@@ -232,7 +282,6 @@ async def _stream_graph(
                 for msg in reversed(output_messages):
                     if not isinstance(msg, AIMessage):
                         continue
-                    # 兼容 content 为字符串或列表两种格式
                     if isinstance(msg.content, str):
                         content = msg.content
                     elif isinstance(msg.content, list):
@@ -243,10 +292,8 @@ async def _stream_graph(
                         content = ""
                     if not content.strip():
                         continue
-                    # 跳过带工具调用的中间消息
                     if getattr(msg, "tool_calls", None):
                         continue
-                    # 跳过路由内部标记消息
                     if name == "router" and "[Router]" in content:
                         continue
                     final_text = content
@@ -254,7 +301,6 @@ async def _stream_graph(
                 if final_text:
                     yield _text_event(final_text, is_final=True)
 
-            # 顶层图完成 — 捕获最终状态（name == "LangGraph" 或空字符串）
             elif kind == "on_chain_end" and name in ("LangGraph", ""):
                 output = data.get("output")
                 if isinstance(output, dict) and "messages" in output:
@@ -264,50 +310,76 @@ async def _stream_graph(
         logger.exception("图执行异常: %s", exc)
         yield _error_event(f"系统处理异常：{exc}")
 
-    # 更新会话状态（用流中捕获的最终状态，无需二次 ainvoke）
+    # 更新内存会话状态
     if final_state_holder:
         merged = dict(state)
         merged.update(final_state_holder)
         _sessions[session_id] = merged
         hop = merged.get("hop_count", 0)
-        # 自动注册待审批工单到工单存储
         pa = merged.get("pending_action")
         if pa and pa.get("ticket_id"):
             from app.api.routes_workorder import register_pending_order
             register_pending_order(pa)
     else:
-        # 极少数情况下未捕获到顶层事件，降级到 ainvoke（只会发生一次）
         try:
             fallback_state = await graph.ainvoke(state)
             _sessions[session_id] = fallback_state
+            merged = fallback_state
             hop = fallback_state.get("hop_count", 0)
         except Exception as exc:
             logger.error("fallback ainvoke 失败: %s", exc)
+            merged = state
             hop = state.get("hop_count", 0)
 
     total_elapsed = time.time() - _t.get("request", time.time())
     logger.info("请求完成: session=%s, 总工具调用=%d, 总用时=%.1fs", session_id, _tool_count, total_elapsed)
+
+    # 异步持久化（不阻塞 SSE 流）
+    asyncio.create_task(_persist_session(
+        session_id=session_id,
+        state=merged,
+        user_message=user_message,
+        is_first_message=is_first_message,
+    ))
+
     yield _done_event(session_id, hop_count=hop)
 
 
+async def _persist_session(
+    session_id: str,
+    state: dict[str, Any],
+    user_message: str,
+    is_first_message: bool,
+) -> None:
+    """
+    将会话状态持久化到 DB，并在首条消息时自动生成标题。
+    作为后台任务执行，不影响 SSE 推流延迟。
+    """
+    try:
+        await session_store.save_state(
+            session_id=session_id,
+            state=state,
+            last_message=user_message,
+        )
+        # 首条消息：自动用消息摘要作为会话标题
+        if is_first_message:
+            auto_title = user_message[:30] + ("…" if len(user_message) > 30 else "")
+            await session_store.update(session_id, title=auto_title)
+            logger.debug("会话标题自动更新: %s → %s", session_id, auto_title)
+    except Exception as exc:
+        logger.error("会话持久化任务失败 %s: %s", session_id, exc)
+
+
 # ---------------------------------------------------------------------------
-# 路由
+# 路由：对话核心
 # ---------------------------------------------------------------------------
+
 @router.post("/chat", response_class=StreamingResponse, summary="SSE 流式对话")
 async def chat(req: ChatRequest):
     """
     接收用户消息，启动 LangGraph 并以 SSE 推流返回。
-
-    前端读取示例（JavaScript）：
-    ```js
-    const es = new EventSource('/api/chat');
-    es.onmessage = (e) => {
-      const event = JSON.parse(e.data);
-      if (event.type === 'text') appendMessage(event.content);
-      if (event.type === 'artifact') renderComponent(event);
-      if (event.type === 'done') es.close();
-    };
-    ```
+    - session_id 为空时自动生成新 UUID
+    - 每轮对话完成后异步持久化到 PostgreSQL
     """
     session_id = req.session_id or str(uuid.uuid4())
 
@@ -316,13 +388,13 @@ async def chat(req: ChatRequest):
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",   # 禁用 Nginx 缓冲，确保实时推流
+            "X-Accel-Buffering": "no",
             "X-Session-Id": session_id,
         },
     )
 
 
-@router.post("/chat/approve", summary="人机协同：审批工单（兼容旧路径，推荐使用 /api/work-orders/approve）")
+@router.post("/chat/approve", summary="人机协同：审批工单（兼容旧路径）")
 async def approve_work_order_compat(req: ApproveRequest):
     """兼容旧接口路径，内部转发到工单模块。"""
     from app.api.routes_workorder import ApproveRequest as WOApproveReq, approve_work_order
@@ -335,33 +407,133 @@ async def approve_work_order_compat(req: ApproveRequest):
     return await approve_work_order(wo_req)
 
 
+# ---------------------------------------------------------------------------
+# 路由：会话列表与管理
+# ---------------------------------------------------------------------------
+
+@router.get("/chat/sessions", response_model=SessionListResponse, summary="列出所有会话")
+async def list_sessions(
+    include_archived: bool = Query(False, description="是否包含已归档的会话"),
+):
+    """
+    返回所有会话的元数据列表，按最近更新时间倒序排列。
+    前端侧边栏历史列表使用此接口。
+    """
+    rows = await session_store.list_all(include_archived=include_archived)
+    sessions = [
+        _build_session_info(row, _sessions.get(row.id))
+        for row in rows
+    ]
+    return SessionListResponse(sessions=sessions, total=len(sessions))
+
+
+@router.post("/chat/sessions", response_model=SessionInfo, summary="预建命名会话")
+async def create_session(req: SessionCreateRequest):
+    """
+    预先创建一个命名会话（对应 Cursor "New Chat"）。
+    返回的 session_id 可在后续 POST /api/chat 时直接使用。
+    """
+    session_id = str(uuid.uuid4())
+    title = req.title or "新对话"
+    row = await session_store.create(session_id, title=title)
+    if row is None:
+        raise HTTPException(status_code=500, detail="会话创建失败，请检查数据库连接")
+    return _build_session_info(row)
+
+
 @router.get("/chat/sessions/{session_id}", summary="获取会话摘要")
 async def get_session(session_id: str):
-    """返回指定会话的当前状态摘要（用于前端恢复上下文）。"""
-    state = _sessions.get(session_id)
-    if not state:
+    """
+    返回指定会话的元数据摘要。
+    优先从内存读取活跃状态，再从 DB 补充持久化字段。
+    """
+    row = await session_store.get(session_id)
+    in_memory = _sessions.get(session_id)
+
+    if row is None and in_memory is None:
         raise HTTPException(status_code=404, detail="会话不存在")
 
+    if row is not None:
+        return _build_session_info(row, in_memory)
+
+    # 仅在内存中（还未持久化的极短会话），降级返回内存摘要
     return {
         "session_id": session_id,
-        "hop_count": state.get("hop_count", 0),
-        "intent": state.get("intent"),
-        "building_id": state.get("building_id"),
-        "device_id": state.get("device_id"),
-        "has_pending_action": state.get("pending_action") is not None,
-        "message_count": len(state.get("messages", [])),
-        "artifact_count": len(state.get("artifacts", [])),
+        "title": "新对话",
+        "hop_count": in_memory.get("hop_count", 0),
+        "intent": in_memory.get("intent"),
+        "building_id": in_memory.get("building_id"),
+        "has_pending_action": in_memory.get("pending_action") is not None,
+        "message_count": len(in_memory.get("messages", [])),
+        "artifact_count": len(in_memory.get("artifacts", [])),
+        "is_archived": False,
     }
+
+
+@router.patch("/chat/sessions/{session_id}", response_model=SessionInfo, summary="重命名或更新会话")
+async def update_session(session_id: str, req: SessionUpdateRequest):
+    """
+    更新会话元数据（对应 Cursor 右键重命名 / Configure Chat）。
+    - title: 新标题
+    - building_id: 绑定楼宇类型，传空字符串可清除绑定
+    """
+    # 处理 building_id 空字符串（表示清除绑定）
+    building_id = req.building_id
+    if building_id == "":
+        building_id = None
+
+    row = await session_store.update(
+        session_id,
+        title=req.title,
+        building_id=building_id,
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="会话不存在")
+
+    # 若内存中存在且传入了 building_id，同步更新内存状态
+    if req.building_id is not None and session_id in _sessions:
+        _sessions[session_id]["building_id"] = building_id or _sessions[session_id].get("building_id")
+
+    return _build_session_info(row, _sessions.get(session_id))
+
+
+@router.post("/chat/sessions/{session_id}/archive", response_model=SessionInfo, summary="归档会话")
+async def archive_session(session_id: str):
+    """
+    软删除会话（对应 Cursor More > Archive Chat）。
+    归档后不在默认列表显示，可通过 ?include_archived=true 查询。
+    """
+    row = await session_store.archive(session_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="会话不存在")
+
+    # 从内存缓存移除，释放资源
+    _sessions.pop(session_id, None)
+
+    return _build_session_info(row)
+
+
+@router.delete("/chat/sessions/{session_id}", summary="物理删除会话")
+async def clear_session(session_id: str):
+    """
+    物理删除会话，同时清除内存缓存和 DB 记录（对应 Cursor 右键删除）。
+    """
+    _sessions.pop(session_id, None)
+    await session_store.delete(session_id)
+    return {"status": "deleted", "session_id": session_id}
 
 
 @router.get("/chat/sessions/{session_id}/messages", summary="获取对话消息历史")
 async def get_session_messages(session_id: str):
     """
-    返回指定会话的消息列表（role + content），供前端恢复对话上下文。
-    仅返回 HumanMessage 和 AIMessage，过滤掉 ToolMessage 等内部消息。
+    返回指定会话的消息列表（role + content）。
+    优先从内存读取，内存无则尝试从 DB 恢复后返回。
+    仅返回 HumanMessage 和 AIMessage，过滤内部 ToolMessage。
     """
     state = _sessions.get(session_id)
-    if not state:
+    if state is None:
+        state = await session_store.load_state(session_id)
+    if state is None:
         raise HTTPException(status_code=404, detail="会话不存在")
 
     messages = state.get("messages", [])
@@ -370,7 +542,7 @@ async def get_session_messages(session_id: str):
         if isinstance(msg, HumanMessage):
             result.append({"role": "user", "content": msg.content})
         elif isinstance(msg, AIMessage) and msg.content:
-            if "[Router]" in msg.content:
+            if "[Router]" in str(msg.content):
                 continue
             result.append({"role": "assistant", "content": msg.content})
 
@@ -379,10 +551,3 @@ async def get_session_messages(session_id: str):
         "messages": result,
         "total": len(result),
     }
-
-
-@router.delete("/chat/sessions/{session_id}", summary="清除会话")
-async def clear_session(session_id: str):
-    """清除会话状态，用于重新开始对话。"""
-    _sessions.pop(session_id, None)
-    return {"status": "cleared", "session_id": session_id}

@@ -30,6 +30,8 @@ class Settings(BaseSettings):
     RAGFLOW_API_URL: str = "http://localhost:9380"
     RAGFLOW_API_KEY: str = ""
     RAGFLOW_DATASET_ID: str = ""
+    # 重排模型 ID（留空则不在请求中传 rerank_id，RAGFlow 跳过精排）
+    RAGFLOW_RERANK_ID: str = ""
 
     # -----------------------------------------------------------------------
     # 安全

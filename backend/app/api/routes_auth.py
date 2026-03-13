@@ -68,6 +68,8 @@ async def register(
     user = User(
         username=body.username,
         hashed_password=hash_password(body.password),
+        email=body.email or None,
+        phone=body.phone or None,
     )
     db.add(user)
     try:

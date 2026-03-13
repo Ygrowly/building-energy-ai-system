@@ -5,8 +5,9 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
+from typing import Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
 
 # ---------------------------------------------------------------------------
@@ -16,6 +17,8 @@ from pydantic import BaseModel, Field, field_validator
 class RegisterRequest(BaseModel):
     username: str = Field(..., min_length=3, max_length=50, pattern=r"^\w+$")
     password: str = Field(..., min_length=8, max_length=128)
+    email: Optional[str] = Field(None, max_length=254)
+    phone: Optional[str] = Field(None, max_length=20)
 
     @field_validator("username")
     @classmethod
@@ -25,16 +28,24 @@ class RegisterRequest(BaseModel):
     @field_validator("password")
     @classmethod
     def password_strength(cls, v: str) -> str:
-        """
-        密码复杂度要求（生产最低标准）：
-          - 至少 8 位（Field min_length 已保证）
-          - 至少包含一个字母
-          - 至少包含一个数字
-        """
         if not re.search(r"[A-Za-z]", v):
             raise ValueError("密码必须包含至少一个字母")
         if not re.search(r"\d", v):
             raise ValueError("密码必须包含至少一个数字")
+        return v
+
+    @field_validator("email")
+    @classmethod
+    def email_format(cls, v: Optional[str]) -> Optional[str]:
+        if v and not re.match(r"^[^@]+@[^@]+\.[^@]+$", v):
+            raise ValueError("邮箱格式不正确")
+        return v
+
+    @field_validator("phone")
+    @classmethod
+    def phone_format(cls, v: Optional[str]) -> Optional[str]:
+        if v and not re.match(r"^[\d\+\-\(\)\s]{5,20}$", v):
+            raise ValueError("手机号格式不正确")
         return v
 
 
@@ -49,7 +60,6 @@ class LoginRequest(BaseModel):
 
 
 class RefreshRequest(BaseModel):
-    # 限制最大长度，防止攻击者发送超大字符串触发 CPU 密集的 JWT 解析（DoS）
     refresh_token: str = Field(..., min_length=1, max_length=2048)
 
 
@@ -67,6 +77,8 @@ class TokenResponse(BaseModel):
 class UserResponse(BaseModel):
     id: str
     username: str
+    email: Optional[str] = None
+    phone: Optional[str] = None
     is_active: bool
     created_at: datetime
 

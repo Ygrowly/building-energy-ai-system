@@ -1,143 +1,222 @@
 <template>
-  <div class="auth-page">
-    <!-- 背景装饰 -->
-    <div class="bg-glow bg-glow-1" />
-    <div class="bg-glow bg-glow-2" />
-
-    <div class="auth-card">
-      <!-- 顶部 Logo -->
-      <div class="auth-logo">
-        <div class="logo-icon">
-          <Icon icon="mdi:lightning-bolt" width="22" />
-        </div>
-        <div class="logo-text">
-          <span class="logo-title">楼宇能耗</span>
-          <span class="logo-sub">智能管理系统</span>
+  <div class="page">
+    <!-- ════════════════ 登录模式：左图 + 右表单 ════════════════ -->
+    <div v-if="mode === 'login'" class="card card-login">
+      <!-- 左侧封面图 -->
+      <div class="cover">
+        <img src="@/assets/building.jpg" alt="楼宇" class="cover-img" />
+        <div class="cover-overlay">
+          <div class="cover-brand">
+            <div class="cover-icon">
+              <Icon icon="mdi:lightning-bolt" width="22" />
+            </div>
+            <span class="cover-title">楼宇能耗管理系统</span>
+          </div>
+          <p class="cover-sub">智能化能源监控 · 高效节能管理</p>
         </div>
       </div>
 
-      <!-- 模式切换 Tab -->
-      <div class="auth-tabs">
-        <button
-          class="tab-btn"
-          :class="{ active: mode === 'login' }"
-          @click="switchMode('login')"
-        >
-          登录
-        </button>
-        <button
-          class="tab-btn"
-          :class="{ active: mode === 'register' }"
-          @click="switchMode('register')"
-        >
-          注册账号
-        </button>
-        <div class="tab-indicator" :class="{ right: mode === 'register' }" />
-      </div>
+      <!-- 右侧登录表单 -->
+      <div class="panel">
+        <div class="panel-inner">
+          <h2 class="form-title">欢迎回来</h2>
+          <p class="form-sub">登录您的账号以继续</p>
 
-      <!-- 表单 -->
-      <form class="auth-form" @submit.prevent="handleSubmit">
-        <!-- 错误提示 -->
-        <Transition name="err-fade">
-          <div v-if="errorMsg" class="error-banner">
+          <Transition name="banner">
+            <div v-if="registerSuccessMsg" class="banner banner-success">
+              <Icon icon="mdi:check-circle-outline" width="15" />
+              <span>{{ registerSuccessMsg }}</span>
+            </div>
+          </Transition>
+
+          <Transition name="banner">
+            <div v-if="errorMsg" class="banner banner-error">
+              <Icon icon="mdi:alert-circle-outline" width="15" />
+              <span>{{ errorMsg }}</span>
+            </div>
+          </Transition>
+
+          <form class="form" @submit.prevent="handleSubmit" novalidate>
+            <!-- 用户名 -->
+            <div class="field">
+              <label class="label">用户名</label>
+              <div class="iw" :class="{ focus: f.username, err: e.username }">
+                <Icon icon="mdi:account-outline" width="16" class="ii" />
+                <input
+                  v-model="username"
+                  type="text"
+                  placeholder="请输入用户名"
+                  autocomplete="username"
+                  spellcheck="false"
+                  @focus="f.username = true"
+                  @blur="f.username = false"
+                />
+              </div>
+              <span v-if="e.username" class="ferr">{{ e.username }}</span>
+            </div>
+
+            <!-- 密码 -->
+            <div class="field">
+              <label class="label">密码</label>
+              <div class="iw" :class="{ focus: f.password, err: e.password }">
+                <Icon icon="mdi:lock-outline" width="16" class="ii" />
+                <input
+                  v-model="password"
+                  :type="showPw ? 'text' : 'password'"
+                  placeholder="请输入密码"
+                  autocomplete="current-password"
+                  @focus="f.password = true"
+                  @blur="f.password = false"
+                />
+                <button type="button" class="eye" @click="showPw = !showPw" tabindex="-1">
+                  <Icon :icon="showPw ? 'mdi:eye-off-outline' : 'mdi:eye-outline'" width="16" />
+                </button>
+              </div>
+              <span v-if="e.password" class="ferr">{{ e.password }}</span>
+            </div>
+
+            <button type="submit" class="btn-primary" :disabled="loading">
+              <Icon v-if="loading" icon="mdi:loading" width="16" class="spin" />
+              <Icon v-else icon="mdi:login" width="16" />
+              {{ loading ? '登录中...' : '登录' }}
+            </button>
+          </form>
+
+          <p class="switch-hint">
+            还没有账号？
+            <button class="link" @click="switchMode('register')">立即注册</button>
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <!-- ════════════════ 注册模式：全宽表单 ════════════════ -->
+    <div v-else class="card card-register">
+      <div class="reg-inner">
+        <!-- 头部品牌 -->
+        <div class="reg-header">
+          <div class="reg-brand">
+            <div class="reg-icon">
+              <Icon icon="mdi:lightning-bolt" width="20" />
+            </div>
+            <span class="reg-name">楼宇能耗管理系统</span>
+          </div>
+          <div class="reg-titles">
+            <h2 class="form-title">创建账号</h2>
+            <p class="form-sub">填写以下信息完成注册</p>
+          </div>
+        </div>
+
+        <Transition name="banner">
+          <div v-if="errorMsg" class="banner banner-error">
             <Icon icon="mdi:alert-circle-outline" width="15" />
             <span>{{ errorMsg }}</span>
           </div>
         </Transition>
 
-        <!-- 注册成功提示 -->
-        <Transition name="err-fade">
-          <div v-if="successMsg" class="success-banner">
-            <Icon icon="mdi:check-circle-outline" width="15" />
-            <span>{{ successMsg }}</span>
-          </div>
-        </Transition>
+        <form class="form reg-form" @submit.prevent="handleSubmit" novalidate>
+          <!-- 第一行：用户名 + 邮箱 -->
+          <div class="reg-row">
+            <div class="field">
+              <label class="label">用户名 <span class="required">*</span></label>
+              <div class="iw" :class="{ focus: f.username, err: e.username }">
+                <Icon icon="mdi:account-outline" width="16" class="ii" />
+                <input
+                  v-model="username"
+                  type="text"
+                  placeholder="3~50 字符，字母/数字/下划线"
+                  autocomplete="username"
+                  spellcheck="false"
+                  @focus="f.username = true"
+                  @blur="f.username = false; validateUsername()"
+                />
+              </div>
+              <span v-if="e.username" class="ferr">{{ e.username }}</span>
+            </div>
 
-        <!-- 用户名 -->
-        <div class="field">
-          <label class="field-label">用户名</label>
-          <div class="input-wrap" :class="{ focused: usernameFocused, error: fieldErrors.username }">
-            <Icon icon="mdi:account-outline" width="16" class="input-icon" />
-            <input
-              v-model="username"
-              type="text"
-              placeholder="3~50 个字符，字母/数字/下划线"
-              autocomplete="username"
-              spellcheck="false"
-              @focus="usernameFocused = true"
-              @blur="usernameFocused = false; validateUsername()"
-            />
+            <div class="field">
+              <label class="label">邮箱</label>
+              <div class="iw" :class="{ focus: f.email, err: e.email }">
+                <Icon icon="mdi:email-outline" width="16" class="ii" />
+                <input
+                  v-model="email"
+                  type="email"
+                  placeholder="example@company.com"
+                  autocomplete="email"
+                  @focus="f.email = true"
+                  @blur="f.email = false; validateEmail()"
+                />
+              </div>
+              <span v-if="e.email" class="ferr">{{ e.email }}</span>
+            </div>
           </div>
-          <span v-if="fieldErrors.username" class="field-error">{{ fieldErrors.username }}</span>
-        </div>
 
-        <!-- 密码 -->
-        <div class="field">
-          <label class="field-label">密码</label>
-          <div class="input-wrap" :class="{ focused: passwordFocused, error: fieldErrors.password }">
-            <Icon icon="mdi:lock-outline" width="16" class="input-icon" />
-            <input
-              v-model="password"
-              :type="showPassword ? 'text' : 'password'"
-              :placeholder="mode === 'register' ? '至少 8 位，包含字母和数字' : '请输入密码'"
-              autocomplete="current-password"
-              @focus="passwordFocused = true"
-              @blur="passwordFocused = false; validatePassword()"
-            />
-            <button
-              type="button"
-              class="toggle-pw"
-              @click="showPassword = !showPassword"
-              tabindex="-1"
-            >
-              <Icon :icon="showPassword ? 'mdi:eye-off-outline' : 'mdi:eye-outline'" width="16" />
-            </button>
-          </div>
-          <span v-if="fieldErrors.password" class="field-error">{{ fieldErrors.password }}</span>
-        </div>
-
-        <!-- 注册模式：确认密码 -->
-        <Transition name="field-slide">
-          <div v-if="mode === 'register'" class="field">
-            <label class="field-label">确认密码</label>
-            <div class="input-wrap" :class="{ focused: confirmFocused, error: fieldErrors.confirm }">
-              <Icon icon="mdi:lock-check-outline" width="16" class="input-icon" />
+          <!-- 第二行：手机号（单独一行） -->
+          <div class="field">
+            <label class="label">手机号</label>
+            <div class="iw" :class="{ focus: f.phone, err: e.phone }">
+              <Icon icon="mdi:phone-outline" width="16" class="ii" />
               <input
-                v-model="confirmPassword"
-                :type="showPassword ? 'text' : 'password'"
-                placeholder="再次输入密码"
-                autocomplete="new-password"
-                @focus="confirmFocused = true"
-                @blur="confirmFocused = false; validateConfirm()"
+                v-model="phone"
+                type="tel"
+                placeholder="请输入手机号"
+                autocomplete="tel"
+                @focus="f.phone = true"
+                @blur="f.phone = false; validatePhone()"
               />
             </div>
-            <span v-if="fieldErrors.confirm" class="field-error">{{ fieldErrors.confirm }}</span>
+            <span v-if="e.phone" class="ferr">{{ e.phone }}</span>
           </div>
-        </Transition>
 
-        <!-- 提交按钮 -->
-        <button type="submit" class="submit-btn" :disabled="loading">
-          <Transition name="btn-content" mode="out-in">
-            <span v-if="loading" key="loading" class="btn-loading">
-              <Icon icon="mdi:loading" width="17" class="spin" />
-              {{ mode === 'login' ? '登录中...' : '注册中...' }}
-            </span>
-            <span v-else key="idle" class="btn-idle">
-              <Icon :icon="mode === 'login' ? 'mdi:login' : 'mdi:account-plus-outline'" width="17" />
-              {{ mode === 'login' ? '登录' : '创建账号' }}
-            </span>
-          </Transition>
-        </button>
-      </form>
+          <!-- 第三行：密码 + 确认密码 -->
+          <div class="reg-row">
+            <div class="field">
+              <label class="label">密码 <span class="required">*</span></label>
+              <div class="iw" :class="{ focus: f.password, err: e.password }">
+                <Icon icon="mdi:lock-outline" width="16" class="ii" />
+                <input
+                  v-model="password"
+                  :type="showPw ? 'text' : 'password'"
+                  placeholder="至少 8 位，含字母和数字"
+                  autocomplete="new-password"
+                  @focus="f.password = true"
+                  @blur="f.password = false; validatePassword()"
+                />
+                <button type="button" class="eye" @click="showPw = !showPw" tabindex="-1">
+                  <Icon :icon="showPw ? 'mdi:eye-off-outline' : 'mdi:eye-outline'" width="16" />
+                </button>
+              </div>
+              <span v-if="e.password" class="ferr">{{ e.password }}</span>
+            </div>
 
-      <!-- 底部分割线 + 切换提示 -->
-      <div class="auth-footer">
-        <span class="footer-hint">
-          {{ mode === 'login' ? '还没有账号？' : '已有账号？' }}
-          <button class="switch-link" @click="switchMode(mode === 'login' ? 'register' : 'login')">
-            {{ mode === 'login' ? '立即注册' : '去登录' }}
+            <div class="field">
+              <label class="label">确认密码 <span class="required">*</span></label>
+              <div class="iw" :class="{ focus: f.confirm, err: e.confirm }">
+                <Icon icon="mdi:lock-check-outline" width="16" class="ii" />
+                <input
+                  v-model="confirmPassword"
+                  :type="showPw ? 'text' : 'password'"
+                  placeholder="再次输入密码"
+                  autocomplete="new-password"
+                  @focus="f.confirm = true"
+                  @blur="f.confirm = false; validateConfirm()"
+                />
+              </div>
+              <span v-if="e.confirm" class="ferr">{{ e.confirm }}</span>
+            </div>
+          </div>
+
+          <button type="submit" class="btn-primary" :disabled="loading">
+            <Icon v-if="loading" icon="mdi:loading" width="16" class="spin" />
+            <Icon v-else icon="mdi:account-plus-outline" width="16" />
+            {{ loading ? '注册中...' : '创建账号' }}
           </button>
-        </span>
+        </form>
+
+        <p class="switch-hint">
+          已有账号？
+          <button class="link" @click="switchMode('login')">去登录</button>
+        </p>
       </div>
     </div>
   </div>
@@ -145,119 +224,113 @@
 
 <script setup lang="ts">
 import { ref, reactive } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import { Icon } from '@iconify/vue'
 import { useAuthStore } from '@/stores/authStore'
 
 type Mode = 'login' | 'register'
 
 const router = useRouter()
+const route  = useRoute()
 const authStore = useAuthStore()
 
-const mode = ref<Mode>('login')
-const username = ref('')
-const password = ref('')
+const mode            = ref<Mode>('login')
+const username        = ref('')
+const password        = ref('')
 const confirmPassword = ref('')
-const showPassword = ref(false)
-const loading = ref(false)
-const errorMsg = ref('')
-const successMsg = ref('')
+const email           = ref('')
+const phone           = ref('')
+const showPw          = ref(false)
+const loading              = ref(false)
+const errorMsg             = ref('')
+const registerSuccessMsg   = ref('')
 
-const usernameFocused = ref(false)
-const passwordFocused = ref(false)
-const confirmFocused = ref(false)
-
-const fieldErrors = reactive({ username: '', password: '', confirm: '' })
+// focus 状态
+const f = reactive({ username: false, password: false, confirm: false, email: false, phone: false })
+// 字段错误
+const e = reactive({ username: '', password: '', confirm: '', email: '', phone: '' })
 
 function switchMode(m: Mode) {
-  mode.value = m
-  errorMsg.value = ''
-  successMsg.value = ''
-  fieldErrors.username = ''
-  fieldErrors.password = ''
-  fieldErrors.confirm = ''
-  password.value = ''
+  mode.value             = m
+  errorMsg.value         = ''
+  registerSuccessMsg.value = ''
+  Object.keys(e).forEach(k => (e as Record<string, string>)[k] = '')
+  password.value        = ''
   confirmPassword.value = ''
 }
 
-// ── 字段校验 ─────────────────────────────────────────────
+// ── 校验 ─────────────────────────────────────────────────
 function validateUsername(): boolean {
-  if (!username.value) {
-    fieldErrors.username = '请输入用户名'
-    return false
-  }
+  if (!username.value) { e.username = '请输入用户名'; return false }
   if (mode.value === 'register') {
-    if (username.value.length < 3) {
-      fieldErrors.username = '用户名至少 3 个字符'
-      return false
-    }
-    if (!/^\w+$/.test(username.value)) {
-      fieldErrors.username = '只允许字母、数字和下划线'
-      return false
-    }
+    if (username.value.length < 3) { e.username = '用户名至少 3 个字符'; return false }
+    if (!/^\w+$/.test(username.value)) { e.username = '只允许字母、数字和下划线'; return false }
   }
-  fieldErrors.username = ''
-  return true
+  e.username = ''; return true
 }
 
 function validatePassword(): boolean {
-  if (!password.value) {
-    fieldErrors.password = '请输入密码'
-    return false
-  }
+  if (!password.value) { e.password = '请输入密码'; return false }
   if (mode.value === 'register') {
-    if (password.value.length < 8) {
-      fieldErrors.password = '密码至少 8 个字符'
-      return false
-    }
-    if (!/[A-Za-z]/.test(password.value)) {
-      fieldErrors.password = '密码必须包含至少一个字母'
-      return false
-    }
-    if (!/\d/.test(password.value)) {
-      fieldErrors.password = '密码必须包含至少一个数字'
-      return false
-    }
+    if (password.value.length < 8) { e.password = '密码至少 8 个字符'; return false }
+    if (!/[A-Za-z]/.test(password.value)) { e.password = '必须包含至少一个字母'; return false }
+    if (!/\d/.test(password.value)) { e.password = '必须包含至少一个数字'; return false }
   }
-  fieldErrors.password = ''
-  return true
+  e.password = ''; return true
 }
 
 function validateConfirm(): boolean {
   if (mode.value !== 'register') return true
-  if (!confirmPassword.value) {
-    fieldErrors.confirm = '请确认密码'
-    return false
+  if (!confirmPassword.value) { e.confirm = '请确认密码'; return false }
+  if (confirmPassword.value !== password.value) { e.confirm = '两次密码不一致'; return false }
+  e.confirm = ''; return true
+}
+
+function validateEmail(): boolean {
+  if (email.value && !/^[^@]+@[^@]+\.[^@]+$/.test(email.value)) {
+    e.email = '邮箱格式不正确'; return false
   }
-  if (confirmPassword.value !== password.value) {
-    fieldErrors.confirm = '两次输入的密码不一致'
-    return false
+  e.email = ''; return true
+}
+
+function validatePhone(): boolean {
+  if (phone.value && !/^[\d\+\-\(\)\s]{5,20}$/.test(phone.value)) {
+    e.phone = '手机号格式不正确'; return false
   }
-  fieldErrors.confirm = ''
-  return true
+  e.phone = ''; return true
 }
 
 // ── 提交 ─────────────────────────────────────────────────
 async function handleSubmit() {
   errorMsg.value = ''
-  successMsg.value = ''
-
-  const usernameOk = validateUsername()
-  const passwordOk = validatePassword()
-  const confirmOk = validateConfirm()
-  if (!usernameOk || !passwordOk || !confirmOk) return
+  const ok =
+    validateUsername() &
+    validatePassword() &
+    (mode.value === 'login' ? 1 : (validateConfirm() ? 1 : 0) & (validateEmail() ? 1 : 0) & (validatePhone() ? 1 : 0))
+  if (!ok) return
 
   loading.value = true
   try {
     if (mode.value === 'login') {
       await authStore.login(username.value, password.value)
+      const redirect = (route.query.redirect as string) || '/dashboard'
+      router.replace(redirect)
     } else {
-      await authStore.register(username.value, password.value)
+      // 注册成功：保留用户名，跳回登录页让用户主动点击登录
+      const registeredUsername = username.value
+      await authStore.register(
+        username.value, password.value,
+        email.value || undefined, phone.value || undefined,
+      )
+      // 注册完立即登出内存中的 token，强制用户重新登录
+      authStore._clearTokens()
+      // 切换到登录模式，回填用户名
+      switchMode('login')
+      username.value = registeredUsername
+      registerSuccessMsg.value = '注册成功！请使用账号密码登录'
     }
-    router.replace('/dashboard')
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : '操作失败，请稍后重试'
-    errorMsg.value = msg
+    errorMsg.value = err instanceof Error ? err.message : '操作失败，请稍后重试'
   } finally {
     loading.value = false
   }
@@ -265,329 +338,344 @@ async function handleSubmit() {
 </script>
 
 <style scoped>
-/* ── 全屏背景 ── */
-.auth-page {
+/* ══════════════════════════════════════
+   全屏背景
+══════════════════════════════════════ */
+.page {
   min-height: 100vh;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--bg-dark);
-  padding: 20px;
-  position: relative;
+  background: #f0f2f5;
+  padding: 24px;
+}
+
+/* ══════════════════════════════════════
+   共用卡片
+══════════════════════════════════════ */
+.card {
+  background: #ffffff;
+  border-radius: 20px;
+  box-shadow:
+    0 4px 6px rgba(0,0,0,0.04),
+    0 12px 40px rgba(0,0,0,0.10),
+    0 0 0 1px rgba(0,0,0,0.04);
   overflow: hidden;
 }
 
-/* 背景光晕装饰 */
-.bg-glow {
-  position: absolute;
-  border-radius: 50%;
-  filter: blur(80px);
-  pointer-events: none;
-}
-.bg-glow-1 {
-  width: 480px;
-  height: 480px;
-  background: radial-gradient(circle, rgba(96, 165, 250, 0.08) 0%, transparent 70%);
-  top: -100px;
-  left: -100px;
-}
-.bg-glow-2 {
-  width: 360px;
-  height: 360px;
-  background: radial-gradient(circle, rgba(34, 211, 238, 0.06) 0%, transparent 70%);
-  bottom: -80px;
-  right: -60px;
+/* ══════════════════════════════════════
+   登录卡：左图 + 右表单
+══════════════════════════════════════ */
+.card-login {
+  display: flex;
+  width: 900px;
+  max-width: 100%;
+  min-height: 540px;
 }
 
-/* ── 卡片 ── */
-.auth-card {
-  width: 100%;
-  max-width: 400px;
-  background: var(--bg-panel);
-  border: 1px solid var(--border);
-  border-radius: 16px;
-  padding: 32px;
-  box-shadow: var(--panel-shadow), 0 0 0 1px rgba(96, 165, 250, 0.04);
+/* 左侧封面图 */
+.cover {
+  width: 65%;
+  flex-shrink: 0;
   position: relative;
-  z-index: 1;
+  overflow: hidden;
 }
-
-/* ── Logo ── */
-.auth-logo {
+.cover-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.cover-overlay {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    160deg,
+    rgba(10, 20, 50, 0.45) 0%,
+    rgba(15, 30, 80, 0.62) 100%
+  );
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  padding: 36px 32px;
+}
+.cover-brand {
   display: flex;
   align-items: center;
   gap: 12px;
-  margin-bottom: 28px;
+  margin-bottom: 10px;
 }
-.logo-icon {
-  width: 40px;
-  height: 40px;
-  background: var(--accent);
-  border-radius: 12px;
+.cover-icon {
+  width: 38px;
+  height: 38px;
+  background: #3b7cf4;
+  border-radius: 10px;
   display: flex;
   align-items: center;
   justify-content: center;
   color: #fff;
   flex-shrink: 0;
-  box-shadow: 0 4px 16px rgba(96, 165, 250, 0.35);
+  box-shadow: 0 4px 14px rgba(59,124,244,0.45);
 }
-.logo-text {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-}
-.logo-title {
-  font-size: 15px;
+.cover-title {
+  font-size: 18px;
   font-weight: 700;
-  color: var(--text-primary);
+  color: #fff;
+  letter-spacing: 0.03em;
+  text-shadow: 0 1px 4px rgba(0,0,0,0.3);
+}
+.cover-sub {
+  font-size: 12px;
+  color: rgba(255,255,255,0.7);
+  letter-spacing: 0.04em;
+}
+
+/* 右侧表单区 */
+.panel {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 44px;
+}
+.panel-inner {
+  width: 100%;
+  max-width: 320px;
+}
+
+/* ══════════════════════════════════════
+   注册卡：全宽
+══════════════════════════════════════ */
+.card-register {
+  width: 760px;
+  max-width: 100%;
+}
+.reg-inner {
+  padding: 44px 48px;
+}
+.reg-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 28px;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.reg-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.reg-icon {
+  width: 36px;
+  height: 36px;
+  background: #3b7cf4;
+  border-radius: 9px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  flex-shrink: 0;
+  box-shadow: 0 3px 10px rgba(59,124,244,0.35);
+}
+.reg-name {
+  font-size: 14px;
+  font-weight: 700;
+  color: #1a202c;
   letter-spacing: 0.02em;
 }
-.logo-sub {
-  font-size: 11px;
-  color: var(--text-secondary);
-  letter-spacing: 0.03em;
+.reg-titles {
+  text-align: right;
+}
+.reg-form {
+  gap: 18px;
+}
+.reg-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
 }
 
-/* ── 模式 Tab ── */
-.auth-tabs {
-  display: flex;
-  position: relative;
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 3px;
-  margin-bottom: 24px;
+/* ══════════════════════════════════════
+   通用表单元素
+══════════════════════════════════════ */
+.form-title {
+  font-size: 22px;
+  font-weight: 700;
+  color: #1a202c;
+  margin: 0 0 4px;
+  letter-spacing: -0.01em;
 }
-.tab-btn {
-  flex: 1;
-  padding: 8px 0;
-  background: none;
-  border: none;
-  border-radius: 8px;
+.form-sub {
   font-size: 13px;
-  font-weight: 500;
-  color: var(--text-secondary);
-  cursor: pointer;
-  position: relative;
-  z-index: 1;
-  transition: color 0.2s;
+  color: #718096;
+  margin: 0 0 24px;
 }
-.tab-btn.active {
-  color: var(--accent);
-}
-.tab-indicator {
-  position: absolute;
-  top: 3px;
-  left: 3px;
-  width: calc(50% - 3px);
-  bottom: 3px;
-  background: var(--bg-hover);
-  border: 1px solid var(--border-accent);
-  border-radius: 8px;
-  transition: transform 0.22s cubic-bezier(0.4, 0, 0.2, 1);
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
-}
-.tab-indicator.right {
-  transform: translateX(100%);
-}
-
-/* ── 表单 ── */
-.auth-form {
+.form {
   display: flex;
   flex-direction: column;
   gap: 16px;
 }
 
-/* 错误 / 成功 Banner */
-.error-banner,
-.success-banner {
+/* Banner */
+.banner {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 10px 12px;
+  padding: 10px 14px;
   border-radius: 8px;
   font-size: 13px;
+  margin-bottom: 4px;
 }
-.error-banner {
-  background: rgba(248, 113, 113, 0.1);
-  border: 1px solid rgba(248, 113, 113, 0.25);
-  color: var(--danger);
+.banner-error {
+  background: #fff5f5;
+  border: 1px solid #feb2b2;
+  color: #c53030;
 }
-.success-banner {
-  background: rgba(74, 222, 128, 0.1);
-  border: 1px solid rgba(74, 222, 128, 0.25);
-  color: var(--success);
+.banner-success {
+  background: #f0fff4;
+  border: 1px solid #9ae6b4;
+  color: #276749;
 }
+.banner-enter-active,
+.banner-leave-active { transition: opacity 0.2s, transform 0.2s; }
+.banner-enter-from,
+.banner-leave-to { opacity: 0; transform: translateY(-6px); }
 
-/* 字段 */
+/* Field */
 .field {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 5px;
 }
-.field-label {
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--text-secondary);
-  letter-spacing: 0.03em;
+.label {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #4a5568;
+  letter-spacing: 0.02em;
 }
-.input-wrap {
+.required {
+  color: #e53e3e;
+  margin-left: 2px;
+}
+
+/* Input wrap */
+.iw {
   display: flex;
   align-items: center;
   gap: 8px;
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: 9px;
-  padding: 10px 12px;
-  transition: all 0.2s;
+  background: #f7fafc;
+  border: 1.5px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 10px 14px;
+  transition: all 0.18s;
 }
-.input-wrap.focused {
-  border-color: var(--accent);
-  background: var(--bg-hover);
-  box-shadow: 0 0 0 3px var(--accent-glow);
+.iw.focus {
+  border-color: #3b7cf4;
+  background: #fff;
+  box-shadow: 0 0 0 3px rgba(59,124,244,0.12);
 }
-.input-wrap.error {
-  border-color: var(--danger);
-  box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.1);
+.iw.err {
+  border-color: #fc8181;
+  box-shadow: 0 0 0 3px rgba(252,129,129,0.12);
+  background: #fff;
 }
-.input-icon {
-  color: var(--text-muted);
+.ii {
+  color: #a0aec0;
   flex-shrink: 0;
-  transition: color 0.2s;
+  transition: color 0.18s;
 }
-.input-wrap.focused .input-icon {
-  color: var(--accent);
-}
-.input-wrap input {
+.iw.focus .ii { color: #3b7cf4; }
+.iw input {
   flex: 1;
   background: none;
   border: none;
   outline: none;
-  font-size: 13px;
-  color: var(--text-primary);
+  font-size: 13.5px;
+  color: #2d3748;
   font-family: inherit;
+  min-width: 0;
 }
-.input-wrap input::placeholder {
-  color: var(--text-muted);
-}
-.toggle-pw {
+.iw input::placeholder { color: #b9c4d4; }
+.eye {
   background: none;
   border: none;
   padding: 0;
-  color: var(--text-muted);
+  color: #a0aec0;
   cursor: pointer;
   display: flex;
   align-items: center;
-  transition: color 0.2s;
   flex-shrink: 0;
+  transition: color 0.18s;
 }
-.toggle-pw:hover {
-  color: var(--text-secondary);
-}
-.field-error {
-  font-size: 11px;
-  color: var(--danger);
+.eye:hover { color: #4a5568; }
+.ferr {
+  font-size: 11.5px;
+  color: #e53e3e;
   padding-left: 2px;
 }
 
 /* 提交按钮 */
-.submit-btn {
+.btn-primary {
   width: 100%;
   padding: 12px;
-  background: var(--accent);
+  background: #3b7cf4;
   border: none;
-  border-radius: 9px;
+  border-radius: 10px;
   color: #fff;
   font-size: 14px;
   font-weight: 600;
   cursor: pointer;
-  transition: all 0.2s;
-  margin-top: 4px;
-  letter-spacing: 0.02em;
-  box-shadow: 0 4px 16px rgba(96, 165, 250, 0.25);
-}
-.submit-btn:hover:not(:disabled) {
-  filter: brightness(1.1);
-  transform: translateY(-1px);
-  box-shadow: 0 6px 24px rgba(96, 165, 250, 0.35);
-}
-.submit-btn:active:not(:disabled) {
-  transform: translateY(0);
-}
-.submit-btn:disabled {
-  opacity: 0.65;
-  cursor: not-allowed;
-}
-.btn-loading,
-.btn-idle {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 7px;
+  gap: 8px;
+  transition: all 0.18s;
+  margin-top: 4px;
+  letter-spacing: 0.02em;
+  box-shadow: 0 4px 16px rgba(59,124,244,0.28);
 }
+.btn-primary:hover:not(:disabled) {
+  background: #2b6de3;
+  transform: translateY(-1px);
+  box-shadow: 0 6px 24px rgba(59,124,244,0.38);
+}
+.btn-primary:active:not(:disabled) { transform: translateY(0); }
+.btn-primary:disabled { opacity: 0.6; cursor: not-allowed; }
 
-/* ── 底部 ── */
-.auth-footer {
+/* 切换提示 */
+.switch-hint {
   margin-top: 20px;
   text-align: center;
+  font-size: 13px;
+  color: #718096;
 }
-.footer-hint {
-  font-size: 12px;
-  color: var(--text-secondary);
-}
-.switch-link {
+.link {
   background: none;
   border: none;
-  color: var(--accent);
-  font-size: 12px;
-  font-weight: 500;
+  color: #3b7cf4;
+  font-size: 13px;
+  font-weight: 600;
   cursor: pointer;
   padding: 0;
   margin-left: 4px;
-  transition: opacity 0.2s;
+  transition: opacity 0.18s;
 }
-.switch-link:hover {
-  opacity: 0.8;
-  text-decoration: underline;
-}
+.link:hover { opacity: 0.75; text-decoration: underline; }
 
-/* ── 动画 ── */
-.err-fade-enter-active,
-.err-fade-leave-active {
-  transition: opacity 0.2s, transform 0.2s;
-}
-.err-fade-enter-from,
-.err-fade-leave-to {
-  opacity: 0;
-  transform: translateY(-6px);
-}
+/* loading spin */
+@keyframes spin { to { transform: rotate(360deg); } }
+.spin { animation: spin 0.8s linear infinite; }
 
-.field-slide-enter-active,
-.field-slide-leave-active {
-  transition: opacity 0.22s, transform 0.22s, max-height 0.22s;
-  max-height: 80px;
-  overflow: hidden;
-}
-.field-slide-enter-from,
-.field-slide-leave-to {
-  opacity: 0;
-  transform: translateY(-4px);
-  max-height: 0;
-}
-
-.btn-content-enter-active,
-.btn-content-leave-active {
-  transition: opacity 0.15s;
-}
-.btn-content-enter-from,
-.btn-content-leave-to {
-  opacity: 0;
-}
-
-@keyframes spin {
-  to { transform: rotate(360deg); }
-}
-.spin {
-  animation: spin 0.8s linear infinite;
+/* ── 响应式 ── */
+@media (max-width: 700px) {
+  .card-login { flex-direction: column; width: 100%; }
+  .cover { width: 100%; height: 200px; }
+  .panel { padding: 32px 24px; }
+  .card-register { width: 100%; }
+  .reg-inner { padding: 32px 24px; }
+  .reg-row { grid-template-columns: 1fr; }
+  .reg-header { flex-direction: column; }
+  .reg-titles { text-align: left; }
 }
 </style>

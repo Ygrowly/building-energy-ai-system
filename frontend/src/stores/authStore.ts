@@ -48,11 +48,11 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   // ── 注册 ─────────────────────────────────────────────────
-  async function register(username: string, password: string) {
-    const data = await apiRegister(username, password)
+  async function register(username: string, password: string, email?: string, phone?: string) {
+    const data = await apiRegister(username, password, email, phone)
     accessToken.value = data.access_token
     _saveRT(data.refresh_token)
-    user.value = data.user   // RegisterResponse 直接包含 user 信息
+    user.value = data.user
   }
 
   // ── 拉取当前用户信息 ─────────────────────────────────────

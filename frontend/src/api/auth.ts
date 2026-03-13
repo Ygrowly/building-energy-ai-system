@@ -42,8 +42,18 @@ export function apiLogin(username: string, password: string): Promise<TokenRespo
   return authFetch('/api/auth/login', { username, password })
 }
 
-export function apiRegister(username: string, password: string): Promise<RegisterResponse> {
-  return authFetch('/api/auth/register', { username, password })
+export function apiRegister(
+  username: string,
+  password: string,
+  email?: string,
+  phone?: string,
+): Promise<RegisterResponse> {
+  return authFetch('/api/auth/register', {
+    username,
+    password,
+    ...(email ? { email } : {}),
+    ...(phone ? { phone } : {}),
+  })
 }
 
 export function apiRefreshToken(refresh_token: string): Promise<TokenResponse> {

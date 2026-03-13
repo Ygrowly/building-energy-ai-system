@@ -184,6 +184,8 @@ class User(Base):
     )
     username: str = Column(String(50), unique=True, nullable=False, index=True)
     hashed_password: str = Column(String, nullable=False)
+    email: str = Column(String(254), unique=True, nullable=True)
+    phone: str = Column(String(20), nullable=True)
     is_active: bool = Column(Boolean, nullable=False, default=True)
     created_at = Column(
         TIMESTAMP(timezone=True), server_default=func.now(), nullable=False

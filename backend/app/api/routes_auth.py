@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 from datetime import timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
@@ -231,17 +231,16 @@ async def refresh_token(
 
 @router.post(
     "/logout",
-    status_code=status.HTTP_204_NO_CONTENT,
     summary="登出（吊销 refresh token）",
 )
 async def logout(
     body: RefreshRequest,
     db: AsyncSession = Depends(get_db_session),
-) -> None:
+) -> Response:
     try:
         _, jti = decode_refresh_token(body.refresh_token)
     except HTTPException:
-        return  # token 无效时静默处理，避免信息泄露
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     result = await db.execute(
         select(RefreshToken).where(RefreshToken.jti == jti)
@@ -250,6 +249,7 @@ async def logout(
     if token_record and not token_record.revoked:
         token_record.revoked = True
         await db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 # ---------------------------------------------------------------------------

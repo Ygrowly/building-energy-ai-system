@@ -7,7 +7,7 @@ const router = createRouter({
       path: '/login',
       name: 'Login',
       component: () => import('@/views/Login.vue'),
-      meta: { title: '登录', requiresAuth: false },
+      meta: { title: '登录', requiresAuth: false, standaloneAuth: true },
     },
     {
       path: '/',

@@ -158,7 +158,7 @@ async def client():
 # ===========================================================================
 
 class TestPasswordHashing:
-    """测试 passlib bcrypt 哈希和验证逻辑。"""
+    """测试 bcrypt 哈希和验证逻辑。"""
 
     def test_hash_is_not_plaintext(self):
         """哈希结果不应包含原始密码。"""

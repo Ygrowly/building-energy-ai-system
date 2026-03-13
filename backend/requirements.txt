@@ -1,35 +1,35 @@
-# 核心 Web 框架
+# Web
 fastapi>=0.100.0
 uvicorn[standard]>=0.22.0
 python-dotenv>=1.0.0
 
-# 多智能体
+# LLM / agents
 langgraph>=0.2.0
 langchain-core>=0.3.0
 langchain-openai>=0.2.0
 
-# 数据库
+# DB
 sqlalchemy>=2.0.0
-asyncpg>=0.29.0           # 异步 PostgreSQL 驱动
-psycopg2-binary>=2.9.0    # 同步驱动（测试 / 迁移脚本用）
+asyncpg>=0.29.0
+psycopg2-binary>=2.9.0
 
-# 配置与类型
+# Config
 pydantic>=2.0.0
-pydantic-settings>=2.0.0  # BaseSettings 独立包（Pydantic v2）
+pydantic-settings>=2.0.0
 
-# 测试
+# Test
 pytest>=7.0.0
-pytest-asyncio>=0.23.0    # 异步测试支持
-pytest-mock>=3.12.0       # mock 注入
+pytest-asyncio>=0.23.0
+pytest-mock>=3.12.0
 
-# HTTP 客户端（RAGFlow API 调用）
+# HTTP client
 httpx>=0.27.0
 
-# 认证与安全
-passlib[bcrypt]>=1.7.4    # 密码哈希（bcrypt 算法）
-PyJWT>=2.8.0              # JWT 生成与校验
-python-multipart>=0.0.9   # OAuth2 表单解析支持
+# Auth：密码用原生 bcrypt（与 3.x/4.x 均兼容）；不再依赖 passlib，避免 Windows 上 passlib+bcrypt4 崩溃
+bcrypt>=4.0.0
+PyJWT>=2.8.0
+python-multipart>=0.0.9
 
-# 数据分析（数据中心模块）
+# Data center: CSV/Excel
 pandas>=2.0.0
-openpyxl>=3.1.0           # Excel 读写支持（pandas 后端）
+openpyxl>=3.1.0

@@ -21,7 +21,7 @@ CREATE INDEX IF NOT EXISTS idx_users_username ON users (username);
 COMMENT ON TABLE  users                   IS '系统用户表，密码以 bcrypt 哈希存储';
 COMMENT ON COLUMN users.id                IS 'UUID 主键';
 COMMENT ON COLUMN users.username          IS '登录用户名，3~50 字符，全小写，唯一';
-COMMENT ON COLUMN users.hashed_password   IS 'passlib bcrypt 哈希值';
+COMMENT ON COLUMN users.hashed_password   IS 'bcrypt 哈希值（$2b$...）';
 COMMENT ON COLUMN users.is_active         IS '账户是否启用，false 时拒绝登录';
 COMMENT ON COLUMN users.created_at        IS '注册时间';
 

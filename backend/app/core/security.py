@@ -1,7 +1,7 @@
 """
 安全工具集合：
   1. API Key 校验（旧机制，保留兼容）
-  2. 密码哈希 / 校验（passlib bcrypt）
+  2. 密码哈希 / 校验（原生 bcrypt，避免 passlib 与 bcrypt 4.x 不兼容）
   3. JWT 生成 / 解码（PyJWT）
   4. FastAPI 依赖：get_current_user
 """
@@ -11,10 +11,10 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
+import bcrypt
 import jwt
 from fastapi import Depends, HTTPException, Security, status
 from fastapi.security import APIKeyHeader, OAuth2PasswordBearer
-from passlib.context import CryptContext
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
@@ -50,20 +50,30 @@ async def verify_api_key(
 
 
 # ---------------------------------------------------------------------------
-# 密码哈希（bcrypt）
+# 密码哈希（bcrypt，与 bcrypt 3.x / 4.x 均兼容）
 # ---------------------------------------------------------------------------
 
-_pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+_BCRYPT_ROUNDS = 12
 
 
 def hash_password(plain_password: str) -> str:
-    """将明文密码哈希为 bcrypt 字符串。"""
-    return _pwd_context.hash(plain_password)
+    """将明文密码哈希为 bcrypt 字符串（$2b$...）。"""
+    pw = plain_password.encode("utf-8")
+    if len(pw) > 72:
+        pw = pw[:72]
+    salt = bcrypt.gensalt(rounds=_BCRYPT_ROUNDS)
+    return bcrypt.hashpw(pw, salt).decode("ascii")
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """校验明文密码是否与哈希值匹配。"""
-    return _pwd_context.verify(plain_password, hashed_password)
+    try:
+        pw = plain_password.encode("utf-8")
+        if len(pw) > 72:
+            pw = pw[:72]
+        return bcrypt.checkpw(pw, hashed_password.encode("ascii"))
+    except (ValueError, TypeError):
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -179,6 +189,7 @@ def decode_refresh_token(token: str) -> tuple[str, str]:
 # ---------------------------------------------------------------------------
 # FastAPI 依赖：获取当前登录用户
 # ---------------------------------------------------------------------------
+
 
 async def get_current_user(
     token: str | None = Depends(_oauth2_scheme),

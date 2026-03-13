@@ -1,5 +1,10 @@
 <template>
-  <div class="app-layout">
+  <!-- 登录/注册：全屏独立页，无侧栏、无 Agent 面板 -->
+  <div v-if="isStandaloneAuth" class="auth-shell">
+    <RouterView />
+  </div>
+
+  <div v-else class="app-layout">
     <!-- 左侧导航栏 -->
     <nav
       class="sidebar"
@@ -91,8 +96,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
-import { RouterView, RouterLink, useRouter } from 'vue-router'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { RouterView, RouterLink, useRouter, useRoute } from 'vue-router'
 import { Icon } from '@iconify/vue'
 import AgentConsole from '@/components/AgentConsole.vue'
 import { useBuildingStore } from '@/stores/buildingStore'
@@ -101,6 +106,10 @@ import { useAuthStore } from '@/stores/authStore'
 const buildingStore = useBuildingStore()
 const authStore = useAuthStore()
 const router = useRouter()
+const route = useRoute()
+
+/** 认证页单独全屏，不套主布局（避免侧栏 + 对话面板） */
+const isStandaloneAuth = computed(() => route.meta.standaloneAuth === true)
 
 async function handleLogout() {
   await authStore.logout()
@@ -161,8 +170,16 @@ function onSidebarLeave() {
   sidebarHovered.value = false
 }
 
+// 进入主布局时再拉楼宇（纯登录首屏不请求，登录后进仪表盘会触发）
+watch(
+  () => route.meta.standaloneAuth,
+  (standalone) => {
+    if (standalone !== true) buildingStore.fetchBuildings()
+  },
+  { immediate: true },
+)
+
 onMounted(() => {
-  buildingStore.fetchBuildings()
   document.addEventListener('click', onDocClick)
 })
 
@@ -224,6 +241,16 @@ function getBuildingIcon(type: string): string {
 </script>
 
 <style scoped>
+/* 登录/注册全屏壳层 */
+.auth-shell {
+  min-height: 100vh;
+  height: 100%;
+  width: 100%;
+  overflow: auto;
+  background: var(--bg-dark);
+  display: block;
+}
+
 .app-layout {
   display: flex;
   height: 100vh;

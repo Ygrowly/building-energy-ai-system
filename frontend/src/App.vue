@@ -7,21 +7,21 @@
       @mouseenter="onSidebarEnter"
       @mouseleave="onSidebarLeave"
     >
-      <!-- 顶部 Logo 徽章 -->
-      <div class="sidebar-logo">
-        <button
-          class="logo-badge"
-          :class="{ pinned: sidebarPinned }"
-          @click="togglePin"
-          :title="sidebarPinned ? '已钉住，点击取消固定' : '点击钉住导航栏'"
-        >
-          <Icon icon="mdi:lightning-bolt" width="18" />
-        </button>
-        <span class="logo-text">能耗管理</span>
-      </div>
-
-      <!-- 导航菜单 -->
+      <!-- 导航菜单（含 Logo） -->
       <ul class="nav-list">
+        <!-- Logo 作为第一个列表项，与导航图标共享同一 flex 布局 -->
+        <li class="logo-li">
+          <button
+            class="logo-badge"
+            :class="{ pinned: sidebarPinned }"
+            @click="togglePin"
+            :title="sidebarPinned ? '已钉住，点击取消固定' : '点击钉住导航栏'"
+          >
+            <Icon icon="mdi:lightning-bolt" width="16" />
+          </button>
+          <span class="logo-text">能耗管理</span>
+        </li>
+
         <li v-for="item in navItems" :key="item.path">
           <RouterLink
             :to="item.path"
@@ -37,34 +37,13 @@
 
       <!-- 底部功能区 -->
       <div class="sidebar-bottom">
-        <!-- 数据中心 -->
-        <RouterLink to="/datacenter" class="bottom-item" :title="!sidebarExpanded ? '数据中心' : ''">
-          <span class="bottom-icon"><Icon icon="mdi:database-outline" width="16" /></span>
-          <span class="bottom-label">数据中心</span>
-        </RouterLink>
-
-        <!-- 主题选择 -->
-        <div ref="themeItemRef" class="bottom-item theme-item" :title="!sidebarExpanded ? '主题' : ''" @click.stop="toggleThemePicker">
-          <span class="bottom-icon"><Icon icon="mdi:palette-outline" width="16" /></span>
-          <span class="bottom-label">主题</span>
-        </div>
-
-        <!-- 用户信息 / 退出 -->
-        <div class="bottom-item user-item" :title="!sidebarExpanded ? (authStore.user?.username ?? '已登录') : ''">
-          <span class="bottom-icon">
-            <Icon icon="mdi:account-circle-outline" width="16" />
-          </span>
-          <span class="bottom-label user-label">
-            <span class="user-name">{{ authStore.user?.username ?? '用户' }}</span>
-          </span>
-          <button
-            v-if="sidebarExpanded"
-            class="logout-btn"
-            title="退出登录"
-            @click.stop="handleLogout"
-          >
-            <Icon icon="mdi:logout" width="14" />
-          </button>
+        <!-- 我的 -->
+        <button class="bottom-about" title="我的">
+          <Icon icon="mdi:account-circle-outline" width="16" />
+        </button>
+        <!-- 主题选择（仅展开时显示） -->
+        <div ref="themeItemRef" class="bottom-theme" title="主题" @click.stop="toggleThemePicker">
+          <Icon icon="mdi:palette-outline" width="16" />
         </div>
       </div>
     </nav>
@@ -97,11 +76,11 @@
           @click.stop
         >
           <p class="picker-title">选择主题</p>
-          <button class="picker-opt" :class="{ active: !isDark }" @click="setTheme('light')">
-            <Icon icon="mdi:weather-sunny" width="15" />
-            <span>浅色</span>
+          <button class="picker-opt" :class="{ active: currentTheme === 'light' }" @click="setTheme('light')">
+            <Icon icon="mdi:leaf" width="15" />
+            <span>绿色</span>
           </button>
-          <button class="picker-opt" :class="{ active: isDark }" @click="setTheme('dark')">
+          <button class="picker-opt" :class="{ active: currentTheme === 'dark' }" @click="setTheme('dark')">
             <Icon icon="mdi:weather-night" width="15" />
             <span>深色</span>
           </button>
@@ -131,10 +110,10 @@ async function handleLogout() {
 // ── 主题切换 ──────────────────────────────────────────
 const savedTheme = localStorage.getItem('theme') ?? 'dark'
 document.documentElement.dataset.theme = savedTheme
-const isDark = ref(savedTheme === 'dark')
+const currentTheme = ref(savedTheme)
 
 function setTheme(t: 'dark' | 'light') {
-  isDark.value = t === 'dark'
+  currentTheme.value = t
   document.documentElement.dataset.theme = t
   localStorage.setItem('theme', t)
   showThemePicker.value = false
@@ -142,7 +121,6 @@ function setTheme(t: 'dark' | 'light') {
 
 // ── 主题选择弹窗 ──────────────────────────────────────
 const showThemePicker = ref(false)
-const showAbout = ref(false)
 const themeItemRef = ref<HTMLElement | null>(null)
 const pickerStyle = ref({ top: '0px', left: '0px' })
 
@@ -155,13 +133,11 @@ function toggleThemePicker() {
     }
   }
   showThemePicker.value = !showThemePicker.value
-  showAbout.value = false
 }
 
 // 点击外部关闭弹窗
 function onDocClick() {
   showThemePicker.value = false
-  showAbout.value = false
 }
 
 // ── 导航栏展开逻辑 ────────────────────────────────────
@@ -196,7 +172,7 @@ onUnmounted(() => {
 
 // ── 右侧面板宽度拖拽调整 ──────────────────────────
 const PANEL_MIN = 240
-const PANEL_MAX = 600
+const PANEL_MAX = 1000
 const panelWidth = ref(320)
 const agentPanelWidth = computed(() => `${panelWidth.value}px`)
 const resizing = ref(false)
@@ -227,9 +203,10 @@ function startResize(e: MouseEvent) {
 }
 
 const navItems = [
-  { path: '/dashboard',  icon: 'mdi:view-dashboard', label: '驾驶舱' },
-  { path: '/operations', icon: 'mdi:wrench',          label: '智慧运维' },
-  { path: '/workorders', icon: 'mdi:clipboard-list',  label: '工单管理' },
+  { path: '/dashboard',  icon: 'mdi:view-dashboard',  label: '驾驶舱' },
+  { path: '/operations', icon: 'mdi:wrench',           label: '智慧运维' },
+  { path: '/workorders', icon: 'mdi:clipboard-list',   label: '工单管理' },
+  { path: '/datacenter', icon: 'mdi:database-outline', label: '数据中心' },
 ]
 
 const BUILDING_ICONS: Record<string, string> = {
@@ -251,20 +228,25 @@ function getBuildingIcon(type: string): string {
   display: flex;
   height: 100vh;
   overflow: hidden;
+  padding: 0 0 0 14px;
+  gap: 0;
+  box-sizing: border-box;
 }
 
 /* ── 左侧导航 ── */
 .sidebar {
   /* 默认收起：仅显示图标 */
-  width: 54px;
+  width: 60px;
   flex-shrink: 0;
   background: var(--bg-panel);
-  border-right: 1px solid var(--border);
+  border-right: none;
+  border-radius: 16px;
   display: flex;
   flex-direction: column;
   padding: 0;
-  overflow: hidden;
-  box-shadow: var(--panel-shadow);
+  margin: 8px 0;
+  overflow: visible;
+  box-shadow: none;
   position: relative;
   z-index: 20;
   transition: width 0.22s cubic-bezier(0.4, 0, 0.2, 1);
@@ -275,18 +257,23 @@ function getBuildingIcon(type: string): string {
   width: 176px;
 }
 
-/* ── 顶部 Logo 区域 ── */
-.sidebar-logo {
+/* ── Logo 列表项（与导航项共享 nav-list 布局） ── */
+.logo-li {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 10px;
-  padding: 14px 11px 12px;
+  justify-content: center;
+  width: 36px;
   flex-shrink: 0;
-  overflow: hidden;
-  min-width: 0;
+  gap: 6px;
+  overflow: visible;
+  margin-bottom: 20px;
+}
+.sidebar.expanded .logo-li {
+  width: 100%;
 }
 
-/* Logo 徽章按钮（仿图片圆角方形图标） */
+/* Logo 徽章按钮 */
 .logo-badge {
   display: flex;
   align-items: center;
@@ -296,36 +283,39 @@ function getBuildingIcon(type: string): string {
   flex-shrink: 0;
   background: var(--accent);
   border: none;
-  border-radius: 9px;
+  border-radius: 50%;
   color: #fff;
   cursor: pointer;
   transition: all 0.2s;
-  box-shadow: 0 2px 8px rgba(96, 165, 250, 0.35);
+  box-shadow: 0 2px 8px var(--accent-glow-md);
 }
 .logo-badge:hover {
   transform: scale(1.06);
-  box-shadow: 0 4px 14px rgba(96, 165, 250, 0.5);
+  box-shadow: 0 4px 14px var(--accent-glow-md);
 }
 /* 钉住状态：加一圈高亮轮廓 */
 .logo-badge.pinned {
-  box-shadow: 0 0 0 2px var(--bg-panel), 0 0 0 4px var(--accent), 0 2px 8px rgba(96, 165, 250, 0.4);
+  box-shadow: 0 0 0 2px var(--bg-panel), 0 0 0 3px var(--accent), 0 2px 8px var(--accent-glow-md);
 }
 
 .logo-text {
   font-weight: 700;
-  font-size: 14px;
+  font-size: 13px;
   color: var(--text-primary);
-  flex: 1;
-  letter-spacing: 0.02em;
+  letter-spacing: 0.04em;
   white-space: nowrap;
   overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: center;
+  max-width: 0;
+  height: 0;
   opacity: 0;
-  transition: opacity 0.18s 0.04s;
-  pointer-events: none;
+  transition: max-width 0.22s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.18s, height 0.18s;
 }
 .sidebar.expanded .logo-text {
+  max-width: 140px;
+  height: auto;
   opacity: 1;
-  pointer-events: auto;
 }
 
 .theme-toggle {
@@ -358,51 +348,59 @@ function getBuildingIcon(type: string): string {
 /* ── 导航菜单 ── */
 .nav-list {
   list-style: none;
-  padding: 10px 7px;
+  padding: 24px 9px 6px;
   flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.nav-list li {
+  display: flex;
+  width: 36px;
+  flex-shrink: 0;
+}
+.sidebar.expanded .nav-list li {
+  width: 100%;
 }
 
 .nav-item {
   display: flex;
   align-items: center;
-  gap: 9px;
-  padding: 9px 8px;
-  color: var(--text-secondary);
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  color: #fff;
   text-decoration: none;
-  font-size: 13px;
+  font-size: 11px;
   font-weight: 500;
-  border-radius: 8px;
-  transition: all 0.2s;
-  border-left: 2px solid transparent;
-  margin-bottom: 2px;
+  border-radius: 50%;
+  transition: background 0.2s, color 0.2s, border-radius 0.2s;
+  border-left: none;
   white-space: nowrap;
   overflow: hidden;
-  /* 收起时居中图标 */
-  justify-content: center;
+  flex-shrink: 0;
 }
 .sidebar.expanded .nav-item {
+  width: 100%;
+  border-radius: 10px;
   justify-content: flex-start;
   padding: 9px 12px;
+  gap: 9px;
 }
 .nav-item:hover {
   background: var(--bg-hover);
   color: var(--text-primary);
 }
-.sidebar.expanded .nav-item:hover {
-  border-left-color: var(--border-accent);
-}
 .nav-item.active {
   background: var(--accent-glow);
   color: var(--accent);
+  border-radius: 50%;
 }
 .sidebar.expanded .nav-item.active {
-  border-left-color: var(--accent);
   box-shadow: inset 0 0 0 1px var(--accent-glow-md);
-}
-/* 收起时 active 用圆圈边框代替左边框 */
-.sidebar:not(.expanded) .nav-item.active {
-  border-left-color: transparent;
-  box-shadow: 0 0 0 1px var(--border-accent);
 }
 
 .nav-icon {
@@ -429,38 +427,44 @@ function getBuildingIcon(type: string): string {
 .sidebar-bottom {
   margin-top: auto;
   flex-shrink: 0;
-  padding: 8px 7px 12px;
-  border-top: 1px solid var(--border);
-}
-
-/* 底部通用功能项 */
-.bottom-item {
+  padding: 6px 9px 12px;
   display: flex;
   align-items: center;
-  gap: 9px;
-  width: 100%;
-  padding: 9px 8px;
+  justify-content: center;
+  gap: 4px;
+}
+.sidebar.expanded .sidebar-bottom {
+  justify-content: space-between;
+}
+
+/* 关于我的 */
+.bottom-about {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
   background: none;
   border: none;
-  border-radius: 8px;
-  color: var(--text-secondary);
+  border-radius: 50%;
+  color: #fff;
   font-size: 13px;
   font-weight: 500;
   cursor: pointer;
-  text-decoration: none;
-  transition: all 0.2s;
-  margin-bottom: 2px;
+  transition: color 0.2s;
   overflow: hidden;
   white-space: nowrap;
-  justify-content: center;
-  position: relative;
+  flex-shrink: 0;
 }
-.sidebar.expanded .bottom-item {
+.sidebar.expanded .bottom-about {
+  width: auto;
+  border-radius: 10px;
   justify-content: flex-start;
   padding: 9px 12px;
+  gap: 9px;
 }
-.bottom-item:hover {
-  background: var(--bg-hover);
+.bottom-about:hover {
   color: var(--text-primary);
 }
 
@@ -484,46 +488,28 @@ function getBuildingIcon(type: string): string {
   pointer-events: auto;
 }
 
-/* 主题选择项 */
-.theme-item {
-  user-select: none;
-}
-
-/* 用户信息项 */
-.user-item {
-  cursor: default;
-}
-.user-label {
-  flex: 1;
-  min-width: 0;
-}
-.user-name {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 12px;
-  color: var(--text-secondary);
-}
-.logout-btn {
-  display: flex;
+/* 主题图标（收起时隐藏，展开时显示） */
+.bottom-theme {
+  display: none;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
-  background: none;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  color: var(--text-muted);
-  cursor: pointer;
-  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
   padding: 0;
-  transition: all 0.2s;
+  background: none;
+  border: none;
+  border-radius: 50%;
+  color: #fff;
+  cursor: pointer;
+  transition: color 0.2s;
+  flex-shrink: 0;
+  user-select: none;
 }
-.logout-btn:hover {
-  background: rgba(248, 113, 113, 0.1);
-  border-color: rgba(248, 113, 113, 0.3);
-  color: var(--danger);
+.sidebar.expanded .bottom-theme {
+  display: flex;
+}
+.bottom-theme:hover {
+  color: var(--text-primary);
 }
 
 /* 弹出动画（scoped 内的 Transition name 仍然有效） */
@@ -558,7 +544,7 @@ function getBuildingIcon(type: string): string {
   width: 4px;
   flex-shrink: 0;
   cursor: col-resize;
-  background: var(--border);
+  background: transparent;
   position: relative;
   transition: background 0.2s;
   z-index: 10;

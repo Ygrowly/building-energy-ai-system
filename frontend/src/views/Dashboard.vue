@@ -1342,4 +1342,98 @@ function formatDay(iso: string): string {
 .title-icon { vertical-align: middle; margin-right: 4px; }
 .bar-icon   { vertical-align: middle; flex-shrink: 0; }
 .btn-icon   { vertical-align: middle; }
+
+/* ══════════════════════════════════════════════
+   Green (Light) Theme — white surface cards
+   KPI cards stay dark green via --bg-panel ✓
+   Sidebar stays dark green via --bg-panel ✓
+   Content cards below need white override
+   ══════════════════════════════════════════════ */
+
+/* --- Surface containers → white --- */
+html[data-theme="light"] .building-selector,
+html[data-theme="light"] .building-detail,
+html[data-theme="light"] .chart-container,
+html[data-theme="light"] .data-table-section,
+html[data-theme="light"] .report-card,
+html[data-theme="light"] .query-form,
+html[data-theme="light"] .anomaly-item,
+html[data-theme="light"] .empty-chart {
+  background: #ffffff;
+  border-color: #d0e8d8;
+}
+
+/* --- Sub-headers inside white cards → off-white --- */
+html[data-theme="light"] .detail-header,
+html[data-theme="light"] .table-header,
+html[data-theme="light"] .report-header,
+html[data-theme="light"] .data-table th {
+  background: #f2f9f4;
+  border-color: #d0e8d8;
+}
+
+/* --- Table row hover --- */
+html[data-theme="light"] .data-table tr:hover td { background: #f0f7f2; }
+
+/* --- Building selector pill --- */
+html[data-theme="light"] .selector-indicator {
+  background: #e8f5ec;
+  box-shadow: 0 1px 6px rgba(0,0,0,0.08), 0 0 0 1px rgba(34,197,94,0.3);
+}
+html[data-theme="light"] .selector-option        { color: #3d6b4a; }
+html[data-theme="light"] .selector-option.active { color: #22c55e; }
+html[data-theme="light"] .selector-option:hover  { color: #0f2818; }
+
+/* --- Section titles on light canvas --- */
+html[data-theme="light"] .section-title { color: #2d5c3a; }
+
+/* --- Building detail card text --- */
+html[data-theme="light"] .detail-name  { color: #0f2818; }
+html[data-theme="light"] .detail-meta  { color: #6a8c72; }
+html[data-theme="light"] .dm-value     { color: #0f2818; }
+html[data-theme="light"] .dm-label     { color: #6a8c72; }
+
+/* --- Chart text --- */
+html[data-theme="light"] .chart-title                          { color: #0f2818; }
+html[data-theme="light"] .chart-range,
+html[data-theme="light"] .chart-source                        { color: #6a8c72; }
+
+/* --- Table text --- */
+html[data-theme="light"] .table-title   { color: #2d5c3a; }
+html[data-theme="light"] .table-count   { color: #6a8c72; }
+html[data-theme="light"] .data-table td { color: #2d5c3a; }
+html[data-theme="light"] .data-table th { color: #6a8c72; }
+html[data-theme="light"] .num-cell      { color: #0f2818; }
+
+/* --- Report card text --- */
+html[data-theme="light"] .report-title     { color: #2d5c3a; }
+html[data-theme="light"] .report-meta      { color: #6a8c72; }
+html[data-theme="light"] .stat-group       { border-right-color: #d0e8d8; }
+html[data-theme="light"] .stat-group-title { color: #6a8c72; }
+html[data-theme="light"] .stat-label       { color: #6a8c72; }
+
+/* --- Form elements inside white cards --- */
+html[data-theme="light"] .form-label  { color: #6a8c72; }
+html[data-theme="light"] .form-hint   { color: #6a8c72; }
+html[data-theme="light"] .form-select,
+html[data-theme="light"] .form-input  {
+  background: #f2f9f4;
+  border-color: #c8dfc8;
+  color: #0f2818;
+}
+html[data-theme="light"] .param-check        { color: #3d6b4a; }
+html[data-theme="light"] .param-check:hover  { color: #22c55e; }
+
+/* --- Anomaly items --- */
+html[data-theme="light"] .anomaly-title { color: #0f2818; }
+html[data-theme="light"] .anomaly-meta  { color: #6a8c72; }
+html[data-theme="light"] .no-anomaly {
+  background: rgba(34,197,94,0.08);
+  border-color: rgba(34,197,94,0.25);
+}
+
+/* --- Empty/loading state on canvas --- */
+html[data-theme="light"] .empty-chart { color: #3d6b4a; border-color: #c8dfc8; }
+html[data-theme="light"] .empty-icon  { color: #7ab89a; }
+html[data-theme="light"] .empty-sub   { color: #6a8c72; }
 </style>

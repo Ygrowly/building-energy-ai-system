@@ -5,6 +5,8 @@ import httpx
 RAGFLOW_API_URL = "http://localhost:9380"
 RAGFLOW_API_KEY = "ragflow-jnCVt29S_excBlC1UPvpilfIhOzmp_B06fU36M2Iv6M"
 RAGFLOW_DATASET_ID = "b7f9fd9a1d1411f19580178d9b889381"
+# 从 RAGFlow 后台 → 头像 → Model providers 确认实际 ID，常见格式：gte-rerank@Tongyi-Qianwen
+RAGFLOW_RERANK_ID = "gte-rerank@Tongyi-Qianwen"
 
 
 async def main():
@@ -18,6 +20,7 @@ async def main():
         "vector_similarity_weight": 0.3,
         "keyword": True,
         "highlight": False,
+        "rerank_id": RAGFLOW_RERANK_ID,   # 启用重排，注释掉此行可测试无重排版本
     }
     headers = {"Authorization": f"Bearer {RAGFLOW_API_KEY}"}
     print(f">>> POST {RAGFLOW_API_URL}/api/v1/retrieval")

@@ -49,11 +49,23 @@
           <span class="bottom-label">主题</span>
         </div>
 
-        <!-- 关于我的 -->
-        <button class="bottom-item" :title="!sidebarExpanded ? '关于我的' : ''" @click.stop="showAbout = !showAbout">
-          <span class="bottom-icon"><Icon icon="mdi:account-circle-outline" width="16" /></span>
-          <span class="bottom-label">关于我的</span>
-        </button>
+        <!-- 用户信息 / 退出 -->
+        <div class="bottom-item user-item" :title="!sidebarExpanded ? (authStore.user?.username ?? '已登录') : ''">
+          <span class="bottom-icon">
+            <Icon icon="mdi:account-circle-outline" width="16" />
+          </span>
+          <span class="bottom-label user-label">
+            <span class="user-name">{{ authStore.user?.username ?? '用户' }}</span>
+          </span>
+          <button
+            v-if="sidebarExpanded"
+            class="logout-btn"
+            title="退出登录"
+            @click.stop="handleLogout"
+          >
+            <Icon icon="mdi:logout" width="14" />
+          </button>
+        </div>
       </div>
     </nav>
 
@@ -101,12 +113,20 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
-import { RouterView, RouterLink } from 'vue-router'
+import { RouterView, RouterLink, useRouter } from 'vue-router'
 import { Icon } from '@iconify/vue'
 import AgentConsole from '@/components/AgentConsole.vue'
 import { useBuildingStore } from '@/stores/buildingStore'
+import { useAuthStore } from '@/stores/authStore'
 
 const buildingStore = useBuildingStore()
+const authStore = useAuthStore()
+const router = useRouter()
+
+async function handleLogout() {
+  await authStore.logout()
+  router.push('/login')
+}
 
 // ── 主题切换 ──────────────────────────────────────────
 const savedTheme = localStorage.getItem('theme') ?? 'dark'
@@ -467,6 +487,43 @@ function getBuildingIcon(type: string): string {
 /* 主题选择项 */
 .theme-item {
   user-select: none;
+}
+
+/* 用户信息项 */
+.user-item {
+  cursor: default;
+}
+.user-label {
+  flex: 1;
+  min-width: 0;
+}
+.user-name {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.logout-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--text-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+  padding: 0;
+  transition: all 0.2s;
+}
+.logout-btn:hover {
+  background: rgba(248, 113, 113, 0.1);
+  border-color: rgba(248, 113, 113, 0.3);
+  color: var(--danger);
 }
 
 /* 弹出动画（scoped 内的 Transition name 仍然有效） */

@@ -60,14 +60,24 @@ export interface StreamHandlers {
  * 发起对话请求，解析 SSE 流，按事件类型分发回调。
  * 返回 sessionId（从响应头读取）。
  */
+// 由 main.ts 注入，和 http.ts 共用同一个 auth provider
+let _getToken: () => string | null = () => null
+export function setStreamAuthProvider(getToken: () => string | null) {
+  _getToken = getToken
+}
+
 export async function sendChatMessage(
   message: string,
   sessionId: string | null,
   handlers: StreamHandlers,
 ): Promise<string> {
+  const token = _getToken()
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  if (token) headers['Authorization'] = `Bearer ${token}`
+
   const response = await fetch('/api/chat', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     body: JSON.stringify({ message, session_id: sessionId }),
   })
 
@@ -125,9 +135,13 @@ export async function approveWorkOrder(
   approved: boolean,
   reason?: string,
 ) {
+  const token = _getToken()
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  if (token) headers['Authorization'] = `Bearer ${token}`
+
   const res = await fetch('/api/chat/approve', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     body: JSON.stringify({ session_id: sessionId, ticket_id: ticketId, approved, reason }),
   })
   return res.json()

@@ -10,8 +10,10 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.routes_auth import router as auth_router
 from app.api.routes_chat import router as chat_router
 from app.api.routes_data import router as data_router
+from app.api.routes_datacenter import router as datacenter_router
 from app.api.routes_report import router as report_router
 from app.api.routes_workorder import router as workorder_router
 from app.core.config import get_settings
@@ -19,11 +21,22 @@ from app.core.config import get_settings
 settings = get_settings()
 
 
+_DEFAULT_JWT_KEY = "change-this-to-a-random-secret-in-production"
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期：启动时预热 + 启动异常检测后台任务，关闭时清理。"""
+    # 生产环境安全检查：禁止使用默认 JWT 密钥
+    if settings.APP_ENV == "production" and settings.JWT_SECRET_KEY == _DEFAULT_JWT_KEY:
+        raise RuntimeError(
+            "生产环境必须在 .env 中设置随机的 JWT_SECRET_KEY，"
+            "请运行: python -c \"import secrets; print(secrets.token_hex(32))\""
+        )
+
     # 注册会话管理 ORM 模型（触发 SQLAlchemy metadata 注册，供 session_store 使用）
     import app.db.chat_models  # noqa: F401
+    import app.db.models  # noqa: F401  — 触发 User/RefreshToken metadata 注册
 
     # 预编译 LangGraph 图（避免首次请求延迟）
     from app.graph.workflow import get_graph
@@ -36,18 +49,53 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(initial_scan())
     periodic_task = asyncio.create_task(start_periodic_scan(interval_seconds=3600))
 
+    # 定期清理过期/已吊销的 refresh token（每 24 小时一次）
+    token_cleanup_task = asyncio.create_task(_cleanup_refresh_tokens(interval_seconds=86400))
+
     yield
 
-    # 关闭时取消定期扫描任务
+    # 关闭时取消定期任务
     periodic_task.cancel()
-    try:
-        await periodic_task
-    except asyncio.CancelledError:
-        pass
+    token_cleanup_task.cancel()
+    for task in (periodic_task, token_cleanup_task):
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
 
     # 关闭数据库连接池
     from app.db.session import engine
     await engine.dispose()
+
+
+async def _cleanup_refresh_tokens(interval_seconds: int = 86400) -> None:
+    """定期删除已过期或已吊销的 refresh token，防止表无限膨胀。"""
+    import logging
+    from datetime import datetime, timezone
+
+    from sqlalchemy import delete
+    from sqlalchemy.future import select as sa_select
+
+    from app.db.models import RefreshToken
+    from app.db.session import AsyncSessionLocal
+
+    log = logging.getLogger(__name__)
+
+    while True:
+        await asyncio.sleep(interval_seconds)
+        try:
+            async with AsyncSessionLocal() as db:
+                now = datetime.now(timezone.utc)
+                result = await db.execute(
+                    delete(RefreshToken).where(
+                        (RefreshToken.revoked == True)  # noqa: E712
+                        | (RefreshToken.expires_at < now)
+                    )
+                )
+                await db.commit()
+                log.info("refresh_tokens 清理完成，删除 %d 条记录", result.rowcount)
+        except Exception:
+            log.exception("refresh_tokens 清理任务异常")
 
 
 app = FastAPI(
@@ -74,8 +122,10 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 # 注册路由
 # ---------------------------------------------------------------------------
+app.include_router(auth_router, prefix="/api")
 app.include_router(chat_router, prefix="/api")
 app.include_router(data_router, prefix="/api")
+app.include_router(datacenter_router, prefix="/api")
 app.include_router(workorder_router, prefix="/api")
 app.include_router(report_router, prefix="/api")
 

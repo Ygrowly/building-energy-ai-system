@@ -11,13 +11,16 @@ from sqlalchemy import (
     Column,
     Enum,
     Float,
+    ForeignKey,
     Index,
+    Integer,
     String,
     Text,
     UniqueConstraint,
 )
 from sqlalchemy import TIMESTAMP
-from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy.sql import func
+from sqlalchemy.orm import DeclarativeBase, relationship
 
 
 class Base(DeclarativeBase):
@@ -162,4 +165,98 @@ class AnomalyEvent(Base):
         ),
         Index("idx_anomaly_events_data_timestamp", "data_timestamp"),
         Index("idx_anomaly_events_building_ts", "building_id", "data_timestamp"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# users — 系统用户（登录注册）
+# ---------------------------------------------------------------------------
+
+class User(Base):
+    """
+    系统用户表。
+    密码以 bcrypt 哈希形式存储，原始密码从不持久化。
+    """
+    __tablename__ = "users"
+
+    id: str = Column(
+        String, primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    username: str = Column(String(50), unique=True, nullable=False, index=True)
+    hashed_password: str = Column(String, nullable=False)
+    is_active: bool = Column(Boolean, nullable=False, default=True)
+    created_at = Column(
+        TIMESTAMP(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    refresh_tokens = relationship(
+        "RefreshToken", back_populates="user", cascade="all, delete-orphan"
+    )
+
+
+# ---------------------------------------------------------------------------
+# refresh_tokens — Refresh Token 存储（支持主动吊销）
+# ---------------------------------------------------------------------------
+
+class RefreshToken(Base):
+    """
+    Refresh Token 持久化表。
+    存储 JWT 中的 jti（JWT ID），用于校验和吊销，不存储原始 token 字符串。
+    每次 /auth/refresh 调用都执行 token rotation：旧 token 标记 revoked，
+    同时颁发新的 access token + refresh token。
+    """
+    __tablename__ = "refresh_tokens"
+
+    id: str = Column(
+        String, primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    jti: str = Column(String, unique=True, nullable=False, index=True)
+    user_id: str = Column(
+        String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    expires_at = Column(TIMESTAMP(timezone=True), nullable=False)
+    created_at = Column(
+        TIMESTAMP(timezone=True), server_default=func.now(), nullable=False
+    )
+    revoked: bool = Column(Boolean, nullable=False, default=False)
+
+    user = relationship("User", back_populates="refresh_tokens")
+
+    __table_args__ = (
+        Index("idx_refresh_tokens_user_id", "user_id"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# dataset_files — 数据中心上传的 CSV/Excel 数据集（数据分析模块）
+# ---------------------------------------------------------------------------
+
+class DatasetFile(Base):
+    """
+    用户上传的结构化数据文件（CSV / Excel）。
+    解析后的统计信息以 JSON 字符串形式存储在 columns_json / stats_json 中，
+    原始文件保存在 file_path 指向的本地磁盘路径。
+    """
+    __tablename__ = "dataset_files"
+
+    id: str = Column(
+        String, primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    original_name: str = Column(String, nullable=False)
+    file_path: str = Column(String, nullable=False)
+    file_type: str = Column(String(10), nullable=False)   # csv / xlsx / xls
+    row_count: int = Column(Integer, nullable=True)
+    column_count: int = Column(Integer, nullable=True)
+    columns_json: str = Column(Text, nullable=True)        # JSON: [{name, dtype, null_count}]
+    stats_json: str = Column(Text, nullable=True)          # JSON: {col: {min,max,mean,std}}
+    uploaded_at = Column(
+        TIMESTAMP(timezone=True), server_default=func.now(), nullable=False
+    )
+    uploader_id: str = Column(
+        String, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+    __table_args__ = (
+        Index("idx_dataset_files_uploader", "uploader_id"),
+        Index("idx_dataset_files_uploaded_at", "uploaded_at"),
     )

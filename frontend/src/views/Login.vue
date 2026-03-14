@@ -304,9 +304,9 @@ function validatePhone(): boolean {
 async function handleSubmit() {
   errorMsg.value = ''
   const ok =
-    validateUsername() &
-    validatePassword() &
-    (mode.value === 'login' ? 1 : (validateConfirm() ? 1 : 0) & (validateEmail() ? 1 : 0) & (validatePhone() ? 1 : 0))
+    validateUsername() &&
+    validatePassword() &&
+    (mode.value === 'login' ? true : validateConfirm() && validateEmail() && validatePhone())
   if (!ok) return
 
   loading.value = true

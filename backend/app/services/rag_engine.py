@@ -215,7 +215,7 @@ async def search_ragflow(
         payload["rerank_id"] = settings.RAGFLOW_RERANK_ID
 
     try:
-        async with httpx.AsyncClient(timeout=20.0) as client:
+        async with httpx.AsyncClient(timeout=20.0, trust_env=False) as client:
             resp = await client.post(
                 f"{settings.RAGFLOW_API_URL}/api/v1/retrieval",
                 headers={"Authorization": f"Bearer {settings.RAGFLOW_API_KEY}"},

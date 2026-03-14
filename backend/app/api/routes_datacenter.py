@@ -273,8 +273,8 @@ async def upload_document(
             detail="文件大小超过 50 MB 限制",
         )
 
-    url = _ragflow_url(f"/api/v1/dataset/{settings.RAGFLOW_DATASET_ID}/document")
-    async with httpx.AsyncClient(timeout=60) as client:
+    url = _ragflow_url(f"/api/v1/datasets/{settings.RAGFLOW_DATASET_ID}/documents")
+    async with httpx.AsyncClient(timeout=60, trust_env=False) as client:
         try:
             resp = await client.post(
                 url,
@@ -301,8 +301,8 @@ async def list_documents(
             detail="RAGFlow 未配置",
         )
 
-    url = _ragflow_url(f"/api/v1/dataset/{settings.RAGFLOW_DATASET_ID}/document")
-    async with httpx.AsyncClient(timeout=30) as client:
+    url = _ragflow_url(f"/api/v1/datasets/{settings.RAGFLOW_DATASET_ID}/documents")
+    async with httpx.AsyncClient(timeout=30, trust_env=False) as client:
         try:
             resp = await client.get(
                 url,
@@ -325,8 +325,8 @@ async def delete_document(
     if not settings.RAGFLOW_API_KEY or not settings.RAGFLOW_DATASET_ID:
         raise HTTPException(status_code=503, detail="RAGFlow 未配置")
 
-    url = _ragflow_url(f"/api/v1/dataset/{settings.RAGFLOW_DATASET_ID}/document")
-    async with httpx.AsyncClient(timeout=30) as client:
+    url = _ragflow_url(f"/api/v1/datasets/{settings.RAGFLOW_DATASET_ID}/documents")
+    async with httpx.AsyncClient(timeout=30, trust_env=False) as client:
         try:
             resp = await client.delete(
                 url,
@@ -349,8 +349,8 @@ async def parse_document(
     if not settings.RAGFLOW_API_KEY or not settings.RAGFLOW_DATASET_ID:
         raise HTTPException(status_code=503, detail="RAGFlow 未配置")
 
-    url = _ragflow_url(f"/api/v1/dataset/{settings.RAGFLOW_DATASET_ID}/document/run")
-    async with httpx.AsyncClient(timeout=30) as client:
+    url = _ragflow_url(f"/api/v1/datasets/{settings.RAGFLOW_DATASET_ID}/documents/run")
+    async with httpx.AsyncClient(timeout=30, trust_env=False) as client:
         try:
             resp = await client.post(
                 url,
@@ -388,11 +388,24 @@ async def _get_dataset_or_404(
 
 
 def _raise_ragflow_error(exc: httpx.HTTPStatusError) -> None:
-    """将 RAGFlow HTTP 错误转换为 FastAPI HTTPException。"""
+    """将 RAGFlow HTTP 错误转换为 FastAPI HTTPException，尽量保留原始错误信息。"""
+    detail = ""
     try:
-        detail = exc.response.json().get("message", exc.response.text)
+        body = exc.response.json()
+        if isinstance(body, dict):
+            detail = (
+                body.get("message")
+                or body.get("msg")
+                or body.get("error")
+                or body.get("detail")
+                or ""
+            )
     except Exception:
-        detail = exc.response.text
+        pass
+    if not detail:
+        detail = exc.response.text or f"HTTP {exc.response.status_code}"
+    if exc.response.status_code in (502, 503):
+        detail = f"{detail}（请确认 RAGFlow 服务已启动且 RAGFLOW_API_URL 可访问）"
     raise HTTPException(
         status_code=exc.response.status_code,
         detail=f"RAGFlow 返回错误：{detail}",

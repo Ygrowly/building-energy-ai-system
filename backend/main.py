@@ -24,6 +24,33 @@ settings = get_settings()
 _DEFAULT_JWT_KEY = "change-this-to-a-random-secret-in-production"
 
 
+async def _run_migrations() -> None:
+    """
+    启动时自动执行 migrations/ 目录下所有 .sql 文件（幂等，IF NOT EXISTS）。
+    顺序按文件名字典序（001_xxx.sql < 002_xxx.sql < ...）。
+    """
+    import logging
+    import pathlib
+    import sqlalchemy
+    from app.db.session import AsyncSessionLocal
+
+    log = logging.getLogger("migrations")
+    migrations_dir = pathlib.Path(__file__).parent / "migrations"
+    sql_files = sorted(migrations_dir.glob("*.sql"))
+    if not sql_files:
+        return
+    async with AsyncSessionLocal() as session:
+        for sql_file in sql_files:
+            sql = sql_file.read_text(encoding="utf-8")
+            try:
+                await session.execute(sqlalchemy.text(sql))
+                await session.commit()
+                log.info("Migration applied: %s", sql_file.name)
+            except Exception as exc:
+                await session.rollback()
+                log.warning("Migration %s skipped/failed: %s", sql_file.name, exc)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期：启动时预热 + 启动异常检测后台任务，关闭时清理。"""
@@ -37,6 +64,9 @@ async def lifespan(app: FastAPI):
     # 注册会话管理 ORM 模型（触发 SQLAlchemy metadata 注册，供 session_store 使用）
     import app.db.chat_models  # noqa: F401
     import app.db.models  # noqa: F401  — 触发 User/RefreshToken metadata 注册
+
+    # 自动执行数据库 migration（幂等，不会重复执行已存在的列/表/索引）
+    await _run_migrations()
 
     # 预编译 LangGraph 图（避免首次请求延迟）
     from app.graph.workflow import get_graph

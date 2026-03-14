@@ -989,7 +989,7 @@ class TestDocumentParseAPI:
 
     @pytest.mark.asyncio
     async def test_parse_calls_correct_ragflow_endpoint(self, client):
-        """验证调用了正确的 RAGFlow /documents/run 端点。"""
+        """验证调用了正确的 RAGFlow v0.24 /chunks 端点（原 /documents/run 已废弃）。"""
         mock_resp = _make_ragflow_http_response({"code": 0})
         mock_http_client = AsyncMock()
         mock_http_client.__aenter__ = AsyncMock(return_value=mock_http_client)
@@ -1001,4 +1001,5 @@ class TestDocumentParseAPI:
 
         call_args = mock_http_client.post.call_args
         url = call_args.args[0] if call_args.args else call_args.kwargs.get("url", "")
-        assert "/documents/run" in url
+        # v0.24 API: POST /api/v1/datasets/{dataset_id}/chunks
+        assert "/chunks" in url

@@ -341,6 +341,43 @@ async def delete_document(
             raise HTTPException(status_code=502, detail=f"RAGFlow 连接失败：{exc}") from exc
 
 
+@router.get("/documents/{doc_id}/status", summary="查询 RAGFlow 文档解析状态")
+async def get_document_status(
+    doc_id: str,
+    current_user: User = Depends(get_current_active_user),
+) -> dict[str, Any]:
+    """
+    返回 RAGFlow 中指定文档的解析状态。
+    关键字段：
+      - run: "UNSTART" | "RUNNING" | "DONE" | "CANCEL" | "FAIL"
+      - chunk_count: 已生成的 chunk 数量（>0 表示解析完成）
+      - progress: 0.0 ~ 1.0
+    """
+    if not settings.RAGFLOW_API_KEY or not settings.RAGFLOW_DATASET_ID:
+        raise HTTPException(status_code=503, detail="RAGFlow 未配置")
+
+    url = _ragflow_url(
+        f"/api/v1/datasets/{settings.RAGFLOW_DATASET_ID}/documents/{doc_id}"
+    )
+    async with httpx.AsyncClient(timeout=15, trust_env=False) as client:
+        try:
+            resp = await client.get(url, headers=_ragflow_headers())
+            resp.raise_for_status()
+            body = resp.json()
+            doc = body.get("data", body)
+            return {
+                "id": doc_id,
+                "run": doc.get("run", "UNSTART"),
+                "chunk_count": doc.get("chunk_count", 0),
+                "progress": doc.get("progress", 0.0),
+                "progress_msg": doc.get("progress_msg", []),
+            }
+        except httpx.HTTPStatusError as exc:
+            _raise_ragflow_error(exc)
+        except httpx.RequestError as exc:
+            raise HTTPException(status_code=502, detail=f"RAGFlow 连接失败：{exc}") from exc
+
+
 @router.post("/documents/{doc_id}/parse", summary="触发 RAGFlow 文档解析（向量化）")
 async def parse_document(
     doc_id: str,
@@ -349,7 +386,8 @@ async def parse_document(
     if not settings.RAGFLOW_API_KEY or not settings.RAGFLOW_DATASET_ID:
         raise HTTPException(status_code=503, detail="RAGFlow 未配置")
 
-    url = _ragflow_url(f"/api/v1/datasets/{settings.RAGFLOW_DATASET_ID}/documents/run")
+    # v0.24 Parse API: POST /api/v1/datasets/{dataset_id}/chunks
+    url = _ragflow_url(f"/api/v1/datasets/{settings.RAGFLOW_DATASET_ID}/chunks")
     async with httpx.AsyncClient(timeout=30, trust_env=False) as client:
         try:
             resp = await client.post(

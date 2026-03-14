@@ -46,8 +46,8 @@ BASE_URL = os.environ.get("RAG_E2E_BASE_URL", "http://localhost:8000").rstrip("/
 PROJECT_ROOT = _backend_dir.parent
 DEFAULT_PDF_PATH = PROJECT_ROOT / "dataset" / "raw_knowledge" / "数据集使用方案.pdf"
 PDF_PATH = Path(os.environ.get("RAG_E2E_PDF_PATH", str(DEFAULT_PDF_PATH)))
-# 等待向量化完成时间（秒）
-PARSE_WAIT_SECONDS = int(os.environ.get("RAG_E2E_PARSE_WAIT", "25"))
+# 等待向量化完成最长时间（秒，轮询模式）
+PARSE_WAIT_SECONDS = int(os.environ.get("RAG_E2E_PARSE_WAIT", "120"))
 
 # 测试用户（若已存在则直接登录）
 E2E_USER = os.environ.get("RAG_E2E_USER", "rag_e2e_test")
@@ -142,7 +142,7 @@ async def upload_document(client: httpx.AsyncClient, token: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# 步骤 3：触发向量化并等待
+# 步骤 3：触发向量化并轮询等待完成
 # ---------------------------------------------------------------------------
 async def parse_and_wait(client: httpx.AsyncClient, token: str, doc_id: str) -> None:
     resp = await client.post(
@@ -152,8 +152,34 @@ async def parse_and_wait(client: httpx.AsyncClient, token: str, doc_id: str) -> 
     if resp.status_code != 200:
         raise RuntimeError(f"触发解析失败: {resp.status_code} {resp.text}")
 
-    print(f"  已触发向量化，等待 {PARSE_WAIT_SECONDS} 秒...")
-    await asyncio.sleep(PARSE_WAIT_SECONDS)
+    print(f"  已触发向量化，轮询解析状态（最多 {PARSE_WAIT_SECONDS} 秒）...")
+    waited = 0
+    poll_interval = 5  # 每 5 秒轮询一次
+    while waited < PARSE_WAIT_SECONDS:
+        await asyncio.sleep(poll_interval)
+        waited += poll_interval
+        try:
+            st_resp = await client.get(
+                f"{BASE_URL}/api/datacenter/documents/{doc_id}/status",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if st_resp.status_code == 200:
+                st = st_resp.json()
+                run = st.get("run", "UNSTART")
+                chunks = st.get("chunk_count", 0)
+                progress = st.get("progress", 0.0)
+                print(f"    [{waited:>3}s] run={run}  chunks={chunks}  progress={progress:.0%}")
+                if run == "DONE" and chunks > 0:
+                    print("  解析完成！")
+                    return
+                if run in ("FAIL", "CANCEL"):
+                    raise RuntimeError(f"RAGFlow 解析失败，状态: {run}")
+        except RuntimeError:
+            raise
+        except Exception as exc:
+            print(f"    轮询异常（忽略）: {exc}")
+
+    print(f"  等待 {PARSE_WAIT_SECONDS} 秒超时，继续执行（RAGFlow 可能仍在处理）...")
 
 
 # ---------------------------------------------------------------------------

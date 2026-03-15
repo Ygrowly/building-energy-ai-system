@@ -54,6 +54,57 @@ export interface SessionInfo {
 const _msgCache = new Map<string, ChatMessage[]>()
 const TAB_STORAGE_KEY = 'chat_open_tab_ids'
 
+// ── Artifact 持久化（localStorage，跨会话切换保留图表）────────────────────────
+const ARTIFACT_STORAGE_PREFIX = 'chat_art_'
+
+/** 将单条 artifact 消息持久化到 localStorage（以 artifact_id 或 msg.id 去重） */
+function _saveArtifactToStorage(sessionId: string, msg: ChatMessage) {
+  if (!msg.artifact) return
+  try {
+    const key = `${ARTIFACT_STORAGE_PREFIX}${sessionId}`
+    const existing: Record<string, unknown> = JSON.parse(localStorage.getItem(key) ?? '{}')
+    const storeKey = msg.artifact.artifact_id ?? msg.id
+    existing[storeKey] = { ...msg, timestamp: (msg.timestamp as Date).toISOString() }
+    localStorage.setItem(key, JSON.stringify(existing))
+  } catch {
+    // localStorage 可能已满或不可用，静默忽略
+  }
+}
+
+/** 从 localStorage 加载指定会话的所有 artifact 消息，按时间戳升序排列 */
+function _loadArtifactsFromStorage(sessionId: string): ChatMessage[] {
+  try {
+    const key = `${ARTIFACT_STORAGE_PREFIX}${sessionId}`
+    const stored = localStorage.getItem(key)
+    if (!stored) return []
+    const parsed = JSON.parse(stored) as Record<string, Record<string, unknown>>
+    return Object.values(parsed).map(m => ({
+      ...(m as ChatMessage),
+      timestamp: new Date(m.timestamp as string),
+    }))
+  } catch {
+    return []
+  }
+}
+
+/** 删除指定会话在 localStorage 中的 artifact 缓存 */
+function _deleteArtifactsFromStorage(sessionId: string) {
+  try {
+    localStorage.removeItem(`${ARTIFACT_STORAGE_PREFIX}${sessionId}`)
+  } catch { /* 静默忽略 */ }
+}
+
+/** 将 artifact 缓存从旧 sessionId 迁移到新 sessionId */
+function _migrateArtifactStorage(oldId: string, newId: string) {
+  try {
+    const key = `${ARTIFACT_STORAGE_PREFIX}${oldId}`
+    const data = localStorage.getItem(key)
+    if (!data) return
+    localStorage.setItem(`${ARTIFACT_STORAGE_PREFIX}${newId}`, data)
+    localStorage.removeItem(key)
+  } catch { /* 静默忽略 */ }
+}
+
 export const useChatStore = defineStore('chat', () => {
   const sessionList = ref<SessionInfo[]>([])       // 全量历史（含已关闭的 Tab）
   const openTabIds = ref<string[]>([])             // 顶栏中展示的 Tab ID 列表
@@ -136,6 +187,14 @@ export const useChatStore = defineStore('chat', () => {
         thinkingFinished: true,
       }))
 
+      // 从 localStorage 恢复本会话生成的 artifact（图表、工单等），追加到文本消息之后
+      const cachedArtifacts = _loadArtifactsFromStorage(sessionId)
+      if (cachedArtifacts.length > 0) {
+        // artifact 按原始时间戳排序，保留生成顺序
+        cachedArtifacts.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime())
+        parsed.push(...cachedArtifacts)
+      }
+
       _msgCache.set(sessionId, parsed)
       // 只有仍处于该会话时才更新显示
       if (currentSessionId.value === sessionId) {
@@ -184,6 +243,8 @@ export const useChatStore = defineStore('chat', () => {
     _msgCache.delete(tempId)
     _msgCache.set(info.session_id, cached)
     if (currentSessionId.value === tempId) currentSessionId.value = info.session_id
+    // 迁移 artifact localStorage 缓存（temp-id → 真实 session_id）
+    _migrateArtifactStorage(tempId, info.session_id)
     return info.session_id
   }
 
@@ -235,6 +296,7 @@ export const useChatStore = defineStore('chat', () => {
     openTabIds.value = openTabIds.value.filter(tid => tid !== id)
     sessionList.value = sessionList.value.filter(s => s.session_id !== id)
     _msgCache.delete(id)
+    _deleteArtifactsFromStorage(id)
 
     if (currentSessionId.value === id) {
       if (openTabIds.value.length > 0) {
@@ -265,6 +327,10 @@ export const useChatStore = defineStore('chat', () => {
     if (sid) {
       if (!_msgCache.has(sid)) _msgCache.set(sid, [])
       _msgCache.get(sid)!.push(msg)
+      // artifact 消息额外持久化到 localStorage，确保切换会话后仍可恢复
+      if (role === 'artifact') {
+        _saveArtifactToStorage(sid, msg)
+      }
     }
   }
 
@@ -292,6 +358,14 @@ export const useChatStore = defineStore('chat', () => {
       thinkingSteps: [], thinkingFinished: false,
     }
     messages.value.push(aiMsg)
+    // 将 aiMsg 同步写入缓存，与 messages.value 共享同一对象引用。
+    // 后续 onText/onThinking 的原地修改（m.content += ...）会同时反映在缓存中，
+    // 确保切换会话再返回时 AI 回复不丢失。
+    const _sid = currentSessionId.value
+    if (_sid) {
+      if (!_msgCache.has(_sid)) _msgCache.set(_sid, [])
+      _msgCache.get(_sid)!.push(aiMsg)
+    }
 
     let textStarted = false
     const sessionIdAtStart = currentSessionId.value!

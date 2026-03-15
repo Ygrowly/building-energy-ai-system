@@ -41,7 +41,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { Icon } from '@iconify/vue'
 import * as echarts from 'echarts'
 import type { ArtifactEvent } from '@/api/stream_client'
@@ -53,6 +53,9 @@ const props = defineProps<{
 const chartEl = ref<HTMLElement>()
 const showSource = ref(false)
 const chartReady = ref(false)
+
+let _chart: echarts.ECharts | null = null
+let _ro: ResizeObserver | null = null
 
 const title = props.artifact.title ?? '能耗图表'
 const sourceInfo = props.artifact.source_info as Record<string, unknown> | undefined
@@ -143,13 +146,39 @@ function buildOption() {
 
   // ── 多系列格式：{ series: [{ name, data, timestamps? }, ...] } ──────────
   // 兼容：LLM 按 genui_protocol ChartPayload 结构传入多楼对比数据
+  // 同时对 AI 可能使用的非标准字段名做容错处理
   const objPayload = payload as Record<string, unknown>
   if (!Array.isArray(payload) && Array.isArray(objPayload.series)) {
-    type SeriesItem = { name: string; data: number[]; timestamps?: string[] }
+    type SeriesItem = Record<string, unknown>
+
+    /** 从 series item 中提取数值数组，兼容 AI 可能使用的多种字段名 */
+    function extractData(s: SeriesItem): (number | null)[] {
+      const raw = (s.data ?? s.values ?? s.y ?? s.value ?? s.electricity_kwh ?? []) as unknown[]
+      if (!Array.isArray(raw) || raw.length === 0) return []
+      return raw.map((v) => {
+        if (v === null || v === undefined) return null
+        if (typeof v === 'number') return v
+        if (typeof v === 'object') {
+          const obj = v as Record<string, unknown>
+          const val = obj.value ?? obj.total_electricity_kwh ?? obj.electricity_kwh
+            ?? obj.kwh ?? obj.amount ?? obj.y
+          return val !== undefined ? Number(val) : null
+        }
+        const n = Number(v)
+        return isNaN(n) ? null : n
+      })
+    }
+
+    /** 从 series item 中提取时间戳/标签数组，兼容多种字段名 */
+    function extractTimestamps(s: SeriesItem): string[] {
+      const raw = (s.timestamps ?? s.dates ?? s.days ?? s.labels ?? s.x ?? s.time ?? []) as unknown[]
+      return Array.isArray(raw) ? raw.map(String) : []
+    }
+
     const seriesList = objPayload.series as SeriesItem[]
-    const xData: string[] = (seriesList[0]?.timestamps ?? []).map(String)
-    // timestamps 为空时用数字序号作为 x 轴
-    const xFallback = seriesList[0]?.data?.map((_: number, i: number) => String(i + 1)) ?? []
+    const xData = extractTimestamps(seriesList[0] ?? {})
+    const firstData = extractData(seriesList[0] ?? {})
+    const xFallback = firstData.map((_, i) => String(i + 1))
     const xAxis = xData.length ? xData : xFallback
 
     const hasLegend = seriesList.length > 1
@@ -165,10 +194,11 @@ function buildOption() {
       tooltip: { trigger: 'axis' },
       series: seriesList.map((s, i) => {
         const color = PALETTE[i % PALETTE.length]
+        const yData = extractData(s)
         return isBar
-          ? { type: 'bar', name: s.name, data: s.data, itemStyle: { color, borderRadius: [3, 3, 0, 0] } }
+          ? { type: 'bar', name: String(s.name ?? `系列${i + 1}`), data: yData, itemStyle: { color, borderRadius: [3, 3, 0, 0] } }
           : {
-              type: 'line', name: s.name, data: s.data, smooth: true,
+              type: 'line', name: String(s.name ?? `系列${i + 1}`), data: yData, smooth: true,
               lineStyle: { color, width: 2 },
               itemStyle: { color },
               areaStyle: {
@@ -225,14 +255,28 @@ function buildOption() {
 async function initChart() {
   await nextTick()
   if (!chartEl.value) return
-  const chart = echarts.init(chartEl.value, 'dark')
-  chart.setOption(buildOption())
-  window.addEventListener('resize', () => chart.resize())
+
+  _chart = echarts.init(chartEl.value, 'dark')
+  _chart.setOption(buildOption())
+
+  // ResizeObserver 替代 window.resize：元素获得实际尺寸时立即触发，
+  // 解决 ECharts 在 flexbox 布局中初始化时 canvas 宽度为 0 的问题
+  _ro = new ResizeObserver(() => {
+    _chart?.resize()
+  })
+  _ro.observe(chartEl.value)
 }
 
 onMounted(async () => {
   chartReady.value = true
   await initChart()
+})
+
+onUnmounted(() => {
+  _ro?.disconnect()
+  _ro = null
+  _chart?.dispose()
+  _chart = null
 })
 </script>
 

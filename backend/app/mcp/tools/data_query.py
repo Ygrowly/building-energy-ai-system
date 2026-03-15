@@ -41,16 +41,17 @@ from app.schemas.mcp_schemas import (
     QueryEnergyMetricsOutput,
 )
 
-# 指标 → (DB列名, 单位) 映射表
+# 指标 → (DB列名, 单位) 映射表（与 energy_data 实际列名严格一致）
 _METRIC_META: dict[MetricType, tuple[str, str]] = {
-    MetricType.ELECTRICITY_KWH:    ("electricity_kwh",             "kWh"),
-    MetricType.WATER_M3:           ("water_m3",                    "m³"),
-    MetricType.HVAC_ENERGY_KWH:    ("hvac_energy_kwh",             "kWh"),
-    MetricType.HVAC_SUPPLY_TEMP_C: ("hvac_supply_temp_c",          "°C"),
-    MetricType.HVAC_RETURN_TEMP_C: ("hvac_return_temp_c",          "°C"),
-    MetricType.AMBIENT_TEMP_C:     ("ambient_temp_c",              "°C"),
-    MetricType.HUMIDITY_RH_PCT:    ("humidity_rh_pct",             "%RH"),
-    MetricType.OCCUPANCY_DENSITY:  ("occupancy_density_per_100sqm","人/100㎡"),
+    MetricType.ELECTRICITY_KWH:    ("electricity_kwh",   "kWh"),
+    MetricType.WATER_M3:           ("water_m3",          "m³"),
+    MetricType.HOTWATER_KWH:       ("hotwater_kwh",      "kWh"),
+    MetricType.CHILLEDWATER_KWH:   ("chilledwater_kwh",  "kWh"),
+    MetricType.SIM_SUPPLY_TEMP_C:  ("sim_supply_temp_c", "°C"),
+    MetricType.SIM_RETURN_TEMP_C:  ("sim_return_temp_c", "°C"),
+    MetricType.AIR_TEMP_C:         ("air_temp_c",        "°C"),
+    MetricType.DEW_TEMP_C:         ("dew_temp_c",        "°C"),
+    MetricType.HUMIDITY_RH_PCT:    ("humidity_rh_pct",   "%RH"),
 }
 
 
@@ -67,18 +68,19 @@ async def get_building_info(
     session: AsyncSession, building_type: str
 ) -> tuple[str, str] | tuple[None, None]:
     """
-    通过 building_type（如 'Office'）查找对应建筑。
-    返回 (meter_device_id, actual_building_id)，找不到返回 (None, None)。
+    通过 primary_space_usage（如 'Office'）查找对应建筑。
+    返回 (building_id_as_meter_id, actual_building_id)，找不到返回 (None, None)。
     支持动态扩展：数据库新增楼宇后无需修改代码。
     """
     result = await session.execute(
-        select(Building.meter_device_id, Building.building_id)
-        .where(Building.building_type == building_type)
+        select(Building.building_id)
+        .where(Building.primary_space_usage == building_type)
     )
     row = result.first()
     if row is None:
         return None, None
-    return row[0], row[1]
+    actual_bid = row[0]
+    return actual_bid, actual_bid  # buildings 无 meter_device_id，用 building_id 代替
 
 
 # ===========================================================================
@@ -163,19 +165,20 @@ async def get_device_live_status(
     按 meter_device_id 反查 building_id，再取 energy_data 最新 1 条记录。
     场景：驾驶舱首页"实时设备状态"卡片。
     """
-    # meter_device_id → building_id
+    # primary_space_usage → building_id
     building_result = await session.execute(
-        select(Building.building_id).where(
-            Building.meter_device_id == inp.meter_device_id
+        select(Building.building_id, Building.primary_space_usage).where(
+            Building.primary_space_usage == inp.building_type
         )
     )
-    building_id = building_result.scalar_one_or_none()
-    if building_id is None:
+    bld_row = building_result.first()
+    if bld_row is None:
         return MCPError(
-            error=f"设备 '{inp.meter_device_id}' 不存在，请核对 meter_device_id 格式（M-XXX-NNN）",
-            error_code="DEVICE_NOT_FOUND",
+            error=f"建筑类型 '{inp.building_type}' 不存在，请先调用 list_available_buildings 确认合法值",
+            error_code="BUILDING_NOT_FOUND",
             tool_name="get_device_live_status",
         )
+    building_id, usage = bld_row
 
     # 取最新 1 条（命中复合索引头部，极速）
     result = await session.execute(
@@ -187,18 +190,19 @@ async def get_device_live_status(
     row: EnergyData | None = result.scalar_one_or_none()
     if row is None:
         return MCPError(
-            error=f"设备 '{inp.meter_device_id}' 暂无历史数据记录",
+            error=f"建筑 '{inp.building_type}' 暂无历史数据记录",
             error_code="NO_DATA_FOUND",
             tool_name="get_device_live_status",
         )
 
     return GetDeviceLiveStatusOutput(
-        meter_device_id=inp.meter_device_id,
-        operation_status=OperationStatus(row.operation_status.value),
-        ambient_temp_c=float(row.ambient_temp_c or 0),
+        building_type=usage or inp.building_type,
+        building_id=building_id,
+        anomaly_status=row.anomaly_status,
+        air_temp_c=float(row.air_temp_c or 0),
         humidity_rh_pct=float(row.humidity_rh_pct or 0),
         electricity_kwh=float(row.electricity_kwh or 0),
-        occupancy_density_per_100sqm=float(row.occupancy_density_per_100sqm or 0),
+        chilledwater_kwh=float(row.chilledwater_kwh or 0),
         last_updated_utc=row.timestamp,
     )
 
@@ -243,7 +247,7 @@ async def query_daily_energy_summary(
                 building_id=row.building_id,
                 total_electricity_kwh=float(row.total_electricity_kwh or 0),
                 avg_ambient_temp=float(row.avg_ambient_temp or 0),
-                max_occupancy=float(row.max_occupancy or 0),
+                total_water_m3=float(row.total_water_m3 or 0),
             )
             for row in rows_orm
         ]
@@ -253,8 +257,8 @@ async def query_daily_energy_summary(
             SELECT
                 date_trunc(:gran, "timestamp") AS period,
                 SUM(electricity_kwh)           AS total_electricity_kwh,
-                AVG(ambient_temp_c)            AS avg_ambient_temp,
-                MAX(occupancy_density_per_100sqm) AS max_occupancy
+                AVG(air_temp_c)                AS avg_ambient_temp,
+                SUM(water_m3)                  AS total_water_m3
             FROM energy_data
             WHERE building_id = :bid
               AND "timestamp" >= :start
@@ -278,7 +282,7 @@ async def query_daily_energy_summary(
                 building_id=inp.building_id,
                 total_electricity_kwh=float(row[1] or 0),
                 avg_ambient_temp=float(row[2] or 0),
-                max_occupancy=float(row[3] or 0),
+                total_water_m3=float(row[3] or 0),
             )
             for row in rows_raw
         ]
@@ -306,19 +310,17 @@ async def list_available_buildings(
     result = await session.execute(
         select(
             Building.building_id,
-            Building.building_type,
-            Building.meter_device_id,
+            Building.primary_space_usage,
             Building.sqm,
-        ).order_by(Building.building_type)
+        ).order_by(Building.primary_space_usage)
     )
     rows = result.fetchall()
 
     buildings = [
         BuildingInfo(
             building_id=r[0],
-            building_type=r[1],
-            meter_device_id=r[2],
-            sqm=float(r[3]) if r[3] is not None else None,
+            building_type=r[1] or r[0],
+            sqm=float(r[2]) if r[2] is not None else None,
         )
         for r in rows
     ]
@@ -347,14 +349,14 @@ async def compare_metric_across_buildings(
     # 确定要对比的楼宇（传空 = 全部），同时取 sqm 用于计算能耗强度
     if inp.building_ids:
         bld_rows = await session.execute(
-            select(Building.building_type, Building.meter_device_id, Building.building_id, Building.sqm)
-            .where(Building.building_type.in_(inp.building_ids))
+            select(Building.primary_space_usage, Building.building_id, Building.sqm)
+            .where(Building.primary_space_usage.in_(inp.building_ids))
         )
     else:
         bld_rows = await session.execute(
-            select(Building.building_type, Building.meter_device_id, Building.building_id, Building.sqm)
+            select(Building.primary_space_usage, Building.building_id, Building.sqm)
         )
-    buildings_map = {r[2]: (r[0], r[1], r[3]) for r in bld_rows.fetchall()}  # actual_bid → (type, meter_id, sqm)
+    buildings_map = {r[1]: (r[0], r[1], r[2]) for r in bld_rows.fetchall()}  # actual_bid → (usage, bid, sqm)
 
     if not buildings_map:
         return MCPError(
@@ -396,7 +398,7 @@ async def compare_metric_across_buildings(
     for r in rows:
         if r[0] not in buildings_map:
             continue
-        bld_type, meter_id, sqm = buildings_map[r[0]]
+        usage, bid, sqm = buildings_map[r[0]]
         agg_val = round(float(r[1]), 4)
         # 能耗强度：仅当指标为 electricity_kwh 且面积有效时计算
         intensity: float | None = None
@@ -404,8 +406,8 @@ async def compare_metric_across_buildings(
             intensity = round(agg_val / sqm, 6)
         stats.append(
             BuildingMetricStats(
-                building_type=bld_type,
-                meter_device_id=meter_id,
+                building_type=usage or bid,
+                meter_device_id=bid,
                 aggregated_value=agg_val,
                 unit=unit,
                 data_points=int(r[2]),

@@ -28,27 +28,61 @@ async def _run_migrations() -> None:
     """
     启动时自动执行 migrations/ 目录下所有 .sql 文件（幂等，IF NOT EXISTS）。
     顺序按文件名字典序（001_xxx.sql < 002_xxx.sql < ...）。
+
+    使用 exec_driver_sql 直接调用 asyncpg.execute()（支持多命令），
+    并按分号拆分语句逐条执行，确保单条失败不影响其他语句。
     """
     import logging
     import pathlib
-    import sqlalchemy
-    from app.db.session import AsyncSessionLocal
+    import re
+    from app.db.session import engine
 
     log = logging.getLogger("migrations")
     migrations_dir = pathlib.Path(__file__).parent / "migrations"
     sql_files = sorted(migrations_dir.glob("*.sql"))
     if not sql_files:
         return
-    async with AsyncSessionLocal() as session:
-        for sql_file in sql_files:
-            sql = sql_file.read_text(encoding="utf-8")
+
+    def _split_statements(sql: str) -> list[str]:
+        """
+        按分号拆分 SQL，正确跳过 $$ 美元引号块（PL/pgSQL 函数体）。
+        奇数索引 token 是 $tag$...$tag$ 块，整体保留不拆分。
+        """
+        tokens = re.split(r'(\$\w*\$.*?\$\w*\$)', sql, flags=re.DOTALL)
+        stmts: list[str] = []
+        buf = ''
+        for i, token in enumerate(tokens):
+            if i % 2 == 1:
+                buf += token
+            else:
+                parts = token.split(';')
+                buf += parts[0]
+                for part in parts[1:]:
+                    if re.sub(r'--[^\n]*', '', buf).strip():
+                        stmts.append(buf.strip())
+                    buf = part
+        if re.sub(r'--[^\n]*', '', buf).strip():
+            stmts.append(buf.strip())
+        return stmts
+
+    for sql_file in sql_files:
+        sql = sql_file.read_text(encoding="utf-8")
+        statements = _split_statements(sql)
+        errors = 0
+        for stmt in statements:
             try:
-                await session.execute(sqlalchemy.text(sql))
-                await session.commit()
-                log.info("Migration applied: %s", sql_file.name)
+                async with engine.begin() as conn:
+                    await conn.exec_driver_sql(stmt)
             except Exception as exc:
-                await session.rollback()
-                log.warning("Migration %s skipped/failed: %s", sql_file.name, exc)
+                log.warning(
+                    "Migration %s: 语句跳过（对象已存在或不兼容）: %s | SQL: %.120s",
+                    sql_file.name, exc, stmt,
+                )
+                errors += 1
+        if errors == 0:
+            log.info("Migration applied: %s", sql_file.name)
+        else:
+            log.warning("Migration %s: %d 条语句跳过", sql_file.name, errors)
 
 
 @asynccontextmanager

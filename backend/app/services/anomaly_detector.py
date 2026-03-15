@@ -7,10 +7,10 @@
   3. 支持全量历史扫描（首次启动）和增量扫描（此后定期执行）
 
 规则列表：
-  night_high_power         — 本地时间（UTC+8）0-6 点，electricity_kwh > 50
-  zero_occupancy_high_hvac — occupancy_density = 0 且 hvac_energy_kwh > 30
-  sensor_spike             — electricity_kwh 超当日均值 3 倍
-  db_flagged               — energy_data.operation_status = 'Anomaly'（存量标注兜底）
+  night_high_power   — 本地时间（UTC+8）0-6 点，electricity_kwh > 50
+  high_chilled_water — chilledwater_kwh 超当日批次均值 3 倍（HVAC 过耗）
+  sensor_spike       — electricity_kwh 超当日批次均值 3 倍（传感器跳变）
+  db_flagged         — energy_data.anomaly_status = 'Anomaly'（存量标注兜底）
 """
 from __future__ import annotations
 
@@ -35,9 +35,10 @@ _TIMEZONE_OFFSET_H = 8          # 中国标准时 UTC+8
 _NIGHT_START_LOCAL = 0          # 本地时间夜间开始（小时）
 _NIGHT_END_LOCAL = 6            # 本地时间夜间结束（小时）
 _NIGHT_POWER_THRESHOLD = 50.0   # kWh
-_ZERO_OCC_HVAC_THRESHOLD = 30.0 # kWh
 _SPIKE_MULTIPLIER = 3.0         # 超过均值 N 倍判定为跳变
 _SCAN_BATCH_HOURS = 24          # 每批扫描的时间窗口（小时）
+
+_HIGH_CHILLED_WATER_MULTIPLIER = 3.0  # chilledwater_kwh 超均值 N 倍判定为过耗
 
 _BUILDING_NAMES: dict[str, str] = {
     "Education": "教学楼",
@@ -61,7 +62,7 @@ async def scan_and_persist(
     返回本次新写入的记录数。
     """
     result = await session.execute(
-        select(EnergyData, Building.building_type, Building.meter_device_id)
+        select(EnergyData, Building.primary_space_usage)
         .join(Building, EnergyData.building_id == Building.building_id)
         .where(EnergyData.timestamp >= batch_start)
         .where(EnergyData.timestamp < batch_end)
@@ -72,25 +73,30 @@ async def scan_and_persist(
     if not rows:
         return 0
 
-    # 按建筑分组，为 sensor_spike 规则预计算当批次均值
+    # 按建筑分组，为均值类规则预计算当批次均值
     by_building: dict[str, list[EnergyData]] = {}
-    for ed, _btype, _meter in rows:
+    for ed, _usage in rows:
         by_building.setdefault(ed.building_id, []).append(ed)
 
     elec_means: dict[str, float] = {}
+    chilled_means: dict[str, float] = {}
     for bid, recs in by_building.items():
-        vals = [r.electricity_kwh for r in recs if r.electricity_kwh is not None]
-        elec_means[bid] = statistics.mean(vals) if vals else 0.0
+        elec_vals = [r.electricity_kwh for r in recs if r.electricity_kwh is not None]
+        elec_means[bid] = statistics.mean(elec_vals) if elec_vals else 0.0
+        chilled_vals = [r.chilledwater_kwh for r in recs if r.chilledwater_kwh is not None]
+        chilled_means[bid] = statistics.mean(chilled_vals) if chilled_vals else 0.0
 
     now = datetime.now(timezone.utc)
     to_insert: list[dict] = []
 
-    for ed, btype, meter_id in rows:
+    for ed, usage in rows:
         ts: datetime = ed.timestamp
         hour_utc = ts.hour if ts.tzinfo else ts.replace(tzinfo=timezone.utc).hour
         hour_local = (hour_utc + _TIMEZONE_OFFSET_H) % 24
         elec_mean = elec_means.get(ed.building_id, 0.0)
-        display = _BUILDING_NAMES.get(btype, btype)
+        chilled_mean = chilled_means.get(ed.building_id, 0.0)
+        display = _BUILDING_NAMES.get(usage or "", usage or ed.building_id)
+        meter_id = ed.building_id  # buildings 表无 meter_device_id，使用 building_id 代替
 
         # ── 规则 1：夜间高功率（本地 0-6 点）─────────────────────────────
         if (
@@ -99,29 +105,29 @@ async def scan_and_persist(
             and ed.electricity_kwh > _NIGHT_POWER_THRESHOLD
         ):
             to_insert.append(_make_record(
-                ts, ed, btype, meter_id, now,
+                ts, ed, meter_id, now,
                 rule="night_high_power",
                 actual=ed.electricity_kwh,
                 threshold=_NIGHT_POWER_THRESHOLD,
                 msg=f"{display}夜间能耗异常：{ed.electricity_kwh:.1f} kWh",
             ))
 
-        # ── 规则 2：无人 + 空调高耗 ───────────────────────────────────────
+        # ── 规则 2：冷冻水高耗（超批次均值 3 倍，HVAC 过耗告警）──────────
         if (
-            ed.occupancy_density_per_100sqm is not None
-            and ed.hvac_energy_kwh is not None
-            and ed.occupancy_density_per_100sqm == 0
-            and ed.hvac_energy_kwh > _ZERO_OCC_HVAC_THRESHOLD
+            ed.chilledwater_kwh is not None
+            and chilled_mean > 0
+            and ed.chilledwater_kwh > chilled_mean * _HIGH_CHILLED_WATER_MULTIPLIER
         ):
+            spike_threshold = round(chilled_mean * _HIGH_CHILLED_WATER_MULTIPLIER, 2)
             to_insert.append(_make_record(
-                ts, ed, btype, meter_id, now,
-                rule="zero_occupancy_high_hvac",
-                actual=ed.hvac_energy_kwh,
-                threshold=_ZERO_OCC_HVAC_THRESHOLD,
-                msg=f"{display}无人时空调高耗：{ed.hvac_energy_kwh:.1f} kWh",
+                ts, ed, meter_id, now,
+                rule="high_chilled_water",
+                actual=ed.chilledwater_kwh,
+                threshold=spike_threshold,
+                msg=f"{display}冷冻水过耗：{ed.chilledwater_kwh:.1f} kWh（超均值 3 倍）",
             ))
 
-        # ── 规则 3：传感器跳变 ────────────────────────────────────────────
+        # ── 规则 3：传感器跳变（用电量超批次均值 3 倍）──────────────────
         if (
             ed.electricity_kwh is not None
             and elec_mean > 0
@@ -129,7 +135,7 @@ async def scan_and_persist(
         ):
             spike_threshold = round(elec_mean * _SPIKE_MULTIPLIER, 2)
             to_insert.append(_make_record(
-                ts, ed, btype, meter_id, now,
+                ts, ed, meter_id, now,
                 rule="sensor_spike",
                 actual=ed.electricity_kwh,
                 threshold=spike_threshold,
@@ -137,9 +143,9 @@ async def scan_and_persist(
             ))
 
         # ── 规则 4：DB 存量标注兜底 ───────────────────────────────────────
-        if ed.operation_status is not None and ed.operation_status.value == "Anomaly":
+        if ed.anomaly_status is not None and ed.anomaly_status == "Anomaly":
             to_insert.append(_make_record(
-                ts, ed, btype, meter_id, now,
+                ts, ed, meter_id, now,
                 rule="db_flagged",
                 actual=None,
                 threshold=None,
@@ -154,11 +160,11 @@ async def scan_and_persist(
         await session.execute(
             text("""
                 INSERT INTO anomaly_events
-                    (id, detected_at, data_timestamp, building_id, building_type,
+                    (id, detected_at, data_timestamp, building_id,
                      meter_device_id, rule_triggered, actual_value, threshold_value,
                      message, is_resolved)
                 VALUES
-                    (:id, :detected_at, :data_timestamp, :building_id, :building_type,
+                    (:id, :detected_at, :data_timestamp, :building_id,
                      :meter_device_id, :rule_triggered, :actual_value, :threshold_value,
                      :message, false)
                 ON CONFLICT (data_timestamp, building_id, rule_triggered) DO NOTHING
@@ -177,7 +183,6 @@ async def scan_and_persist(
 def _make_record(
     ts: datetime,
     ed: EnergyData,
-    btype: str,
     meter_id: str,
     now: datetime,
     *,
@@ -191,7 +196,6 @@ def _make_record(
         "detected_at": now,
         "data_timestamp": ts,
         "building_id": ed.building_id,
-        "building_type": btype,
         "meter_device_id": meter_id,
         "rule_triggered": rule,
         "actual_value": actual,

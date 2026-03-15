@@ -46,33 +46,35 @@ class BuildingID(str, Enum):
 class MetricType(str, Enum):
     """
     energy_data 表中的真实列名映射，杜绝大模型编造列名。
-    hvac 字段说明：
-      - hvac_energy_kwh      → 空调系统总能耗
-      - hvac_supply_temp_c   → 供水温度（冷冻水送水端）
-      - hvac_return_temp_c   → 回水温度（冷冻水回水端）
+    冷热水字段：
+      - chilledwater_kwh  → 冷冻水（空调制冷）能耗
+      - hotwater_kwh      → 热水能耗
+      - sim_supply_temp_c → 模拟供水温度（冷冻水送水端）
+      - sim_return_temp_c → 模拟回水温度（冷冻水回水端）
     COP 由后端计算，不直接暴露给大模型。
     """
     ELECTRICITY_KWH = "electricity_kwh"
     WATER_M3 = "water_m3"
-    HVAC_ENERGY_KWH = "hvac_energy_kwh"
-    HVAC_SUPPLY_TEMP_C = "hvac_supply_temp_c"
-    HVAC_RETURN_TEMP_C = "hvac_return_temp_c"
-    AMBIENT_TEMP_C = "ambient_temp_c"
+    HOTWATER_KWH = "hotwater_kwh"
+    CHILLEDWATER_KWH = "chilledwater_kwh"
+    SIM_SUPPLY_TEMP_C = "sim_supply_temp_c"
+    SIM_RETURN_TEMP_C = "sim_return_temp_c"
+    AIR_TEMP_C = "air_temp_c"
+    DEW_TEMP_C = "dew_temp_c"
     HUMIDITY_RH_PCT = "humidity_rh_pct"
-    OCCUPANCY_DENSITY = "occupancy_density_per_100sqm"
 
 
 class OperationStatus(str, Enum):
-    """energy_data.operation_status 枚举值，与 DB 枚举类型 operation_status_enum 一致。"""
+    """energy_data.anomaly_status 字段的可能值。"""
     NORMAL = "Normal"
     ANOMALY = "Anomaly"
 
 
 class AnomalyRule(str, Enum):
     """detect_energy_anomalies 支持的检测规则白名单。"""
-    NIGHT_HIGH_POWER = "night_high_power"           # 夜间(0-6点)功率 > 50kW
-    ZERO_OCC_HIGH_HVAC = "zero_occupancy_high_hvac"  # 无人 + 空调高耗电
-    SENSOR_SPIKE = "sensor_spike"                   # 传感器数值跳变（疑似故障）
+    NIGHT_HIGH_POWER = "night_high_power"       # 夜间(0-6点)功率 > 50kWh
+    HIGH_CHILLED_WATER = "high_chilled_water"   # chilledwater_kwh 超均值 3 倍
+    SENSOR_SPIKE = "sensor_spike"               # electricity_kwh 跳变（疑似故障）
 
 
 class WorkOrderPriority(str, Enum):
@@ -154,23 +156,23 @@ class QueryEnergyMetricsOutput(BaseModel):
 
 class GetDeviceLiveStatusInput(BaseModel):
     """
-    通过 meter_device_id 查询 energy_data 最新 1 条记录（按 timestamp DESC）。
-    device_id 必须符合 M-XXX-NNN 格式，防止非法查询。
+    通过 building_type（primary_space_usage，如 'Office'）查询最新传感器快照。
     """
-    meter_device_id: str = Field(
-        pattern=r"^M-(EDU|OFF|PUB)-\d{3}$",
-        description="如 'M-OFF-001'，格式必须符合 M-{类型}-{编号}"
+    building_type: str = Field(
+        min_length=1,
+        description="建筑类型名称，如 'Education'、'Office'、'Public'，由数据库动态校验"
     )
 
 
 class GetDeviceLiveStatusOutput(BaseModel):
-    """设备最新传感器快照，含运行状态枚举（与 DB 一致）。"""
-    meter_device_id: str
-    operation_status: OperationStatus
-    ambient_temp_c: float
+    """设备最新传感器快照。"""
+    building_type: str
+    building_id: str
+    anomaly_status: Optional[str] = Field(default=None, description="'Normal' 或 'Anomaly'")
+    air_temp_c: float
     humidity_rh_pct: float
     electricity_kwh: float
-    occupancy_density_per_100sqm: float
+    chilledwater_kwh: float
     last_updated_utc: datetime
     source_table: Literal["energy_data"] = "energy_data"
 
@@ -181,9 +183,9 @@ class GetDeviceLiveStatusOutput(BaseModel):
 
 class CalculateSystemCOPInput(BaseModel):
     """
-    基于 energy_data 表中 hvac_energy_kwh（空调总能耗）与供回水温差
-    （hvac_supply_temp_c / hvac_return_temp_c）估算制冷效率指标。
-    物理异常捕获：若 hvac_energy_kwh ≈ 0 但温差较大，
+    基于 energy_data 表中 chilledwater_kwh（冷冻水能耗）与供回水温差
+    （sim_supply_temp_c / sim_return_temp_c）估算制冷效率指标。
+    物理异常捕获：若 chilledwater_kwh ≈ 0 但温差较大，
     后端抛出 MCPError(error_code='SENSOR_FAULT_DIVIDE_BY_ZERO')，不进行计算。
     """
     building_id: str = Field(
@@ -231,17 +233,17 @@ class DailyEnergySummaryRecord(BaseModel):
     """
     按天汇总记录，字段与物化视图 daily_energy_summary 列名严格一一对应。
     视图定义：
-      SELECT date_trunc('day', timestamp) AS day, building_id,
+      SELECT date_trunc('day', timestamp)::date AS day, building_id,
              SUM(electricity_kwh) AS total_electricity_kwh,
-             AVG(ambient_temp_c)  AS avg_ambient_temp,
-             MAX(occupancy_density_per_100sqm) AS max_occupancy
+             AVG(air_temp_c)      AS avg_ambient_temp,
+             SUM(water_m3)        AS total_water_m3
       FROM energy_data GROUP BY day, building_id;
     """
-    day: str = Field(description="日期截断结果，如 '2023-10-25 00:00:00+00'")
+    day: str = Field(description="日期，如 '2023-10-25'")
     building_id: str
     total_electricity_kwh: float
     avg_ambient_temp: float = Field(description="当天平均环境温度（°C）")
-    max_occupancy: float = Field(description="当天最高人员密度（人/100㎡）")
+    total_water_m3: float = Field(default=0.0, description="当天总用水量（m³）")
 
 
 class QueryDailyEnergySummaryOutput(BaseModel):
@@ -309,7 +311,7 @@ class DetectEnergyAnomaliesInput(BaseModel):
     )
     time_range: TimeRange
     rules: list[AnomalyRule] = Field(
-        default=[AnomalyRule.NIGHT_HIGH_POWER, AnomalyRule.ZERO_OCC_HIGH_HVAC, AnomalyRule.SENSOR_SPIKE],
+        default=[AnomalyRule.NIGHT_HIGH_POWER, AnomalyRule.HIGH_CHILLED_WATER, AnomalyRule.SENSOR_SPIKE],
         min_length=1
     )
 
@@ -323,7 +325,7 @@ class AnomalyRecord(BaseModel):
     actual_value: float
     threshold_value: float
     duration_hours: Optional[float] = Field(default=None, description="持续时长（小时）")
-    operation_status: OperationStatus
+    anomaly_status: OperationStatus = Field(default=OperationStatus.ANOMALY)
 
 
 class DetectEnergyAnomaliesOutput(BaseModel):
@@ -412,10 +414,9 @@ class CreateWorkOrderDraftOutput(BaseModel):
 # ===========================================================================
 
 class BuildingInfo(BaseModel):
-    """单栋建筑的基本信息，用于向 Agent 动态告知合法 building_id。"""
+    """单栋建筑的基本信息，用于向 Agent 动态告知合法 building_type。"""
     building_id: str = Field(description="数据库中的实际主键，如 'Bobcat_office_Kassandra'")
-    building_type: str = Field(description="类型标签，工具传参时使用此值，如 'Office'")
-    meter_device_id: str = Field(description="仪表设备 ID，如 'M-OFF-001'")
+    building_type: str = Field(description="类型标签（primary_space_usage），工具传参时使用此值，如 'Office'")
     sqm: Optional[float] = Field(default=None, description="建筑面积（平方米）")
 
 

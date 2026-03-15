@@ -46,7 +46,7 @@ async def export_report(
         raise HTTPException(status_code=400, detail="start_date 不能晚于 end_date")
 
     bld_result = await db.execute(
-        select(Building).where(Building.building_type == building_type)
+        select(Building).where(Building.primary_space_usage == building_type)
     )
     building = bld_result.scalar_one_or_none()
     if not building:
@@ -57,7 +57,7 @@ async def export_report(
 
     if report_type == "daily_summary":
         writer.writerow([
-            "日期", "建筑类型", "总用电量(kWh)", "平均温度(°C)", "最大人员密度(人/100㎡)",
+            "日期", "建筑类型", "总用电量(kWh)", "总用水量(m³)", "平均温度(°C)",
         ])
         result = await db.execute(
             select(DailyEnergySummary)
@@ -73,15 +73,16 @@ async def export_report(
                 r.day.strftime("%Y-%m-%d") if r.day else "",
                 building_type,
                 round(r.total_electricity_kwh or 0, 2),
+                round(r.total_water_m3 or 0, 2),
                 round(r.avg_ambient_temp or 0, 1),
-                round(r.max_occupancy or 0, 1),
             ])
 
     elif report_type == "energy_detail":
         writer.writerow([
-            "时间戳", "建筑类型", "设备ID", "电力(kWh)", "水耗(m³)",
-            "空调能耗(kWh)", "供水温度(°C)", "回水温度(°C)",
-            "环境温度(°C)", "湿度(%RH)", "人员密度(人/100㎡)", "运行状态",
+            "时间戳", "建筑类型", "电力(kWh)", "水耗(m³)",
+            "热水(kWh)", "冷冻水(kWh)",
+            "模拟供水温度(°C)", "模拟回水温度(°C)",
+            "气温(°C)", "露点温度(°C)", "湿度(%RH)", "异常状态",
         ])
         result = await db.execute(
             select(EnergyData)
@@ -96,16 +97,16 @@ async def export_report(
             writer.writerow([
                 r.timestamp.isoformat() if r.timestamp else "",
                 building_type,
-                building.meter_device_id,
                 r.electricity_kwh,
                 r.water_m3,
-                r.hvac_energy_kwh,
-                r.hvac_supply_temp_c,
-                r.hvac_return_temp_c,
-                r.ambient_temp_c,
+                r.hotwater_kwh,
+                r.chilledwater_kwh,
+                r.sim_supply_temp_c,
+                r.sim_return_temp_c,
+                r.air_temp_c,
+                r.dew_temp_c,
                 r.humidity_rh_pct,
-                r.occupancy_density_per_100sqm,
-                r.operation_status.value if r.operation_status else "",
+                r.anomaly_status or "",
             ])
     else:
         raise HTTPException(

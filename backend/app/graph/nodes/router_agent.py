@@ -120,20 +120,34 @@ MAX_HOPS = 5
 
 
 _cached_router_llm: ChatOpenAI | None = None
+_router_llm_lock: Any = None
+
+
+def _get_router_llm_lock() -> Any:
+    import threading
+    global _router_llm_lock
+    if _router_llm_lock is None:
+        _router_llm_lock = threading.Lock()
+    return _router_llm_lock
 
 
 def _get_router_llm() -> ChatOpenAI:
-    """获取路由 LLM 单例（首次调用时初始化，后续复用，避免重复创建对象）。"""
+    """获取路由 LLM 单例（首次调用时初始化，锁保护避免并发重复创建）。"""
     global _cached_router_llm
-    if _cached_router_llm is None:
-        settings = get_settings()
-        _cached_router_llm = ChatOpenAI(
-            model=settings.LLM_MODEL,
-            api_key=settings.LLM_API_KEY or "placeholder",
-            base_url=settings.LLM_BASE_URL,
-            temperature=0.0,   # 路由不需要创意，确定性优先
-            max_tokens=512,
-        )
+    with _get_router_llm_lock():
+        if _cached_router_llm is None:
+            settings = get_settings()
+            if not (settings.LLM_API_KEY or "").strip():
+                logger.warning(
+                    "LLM_API_KEY 未配置，将使用 placeholder；生产环境请在 .env 中设置 LLM_API_KEY"
+                )
+            _cached_router_llm = ChatOpenAI(
+                model=settings.LLM_MODEL,
+                api_key=settings.LLM_API_KEY or "placeholder",
+                base_url=settings.LLM_BASE_URL,
+                temperature=0.0,   # 路由不需要创意，确定性优先
+                max_tokens=512,
+            )
     return _cached_router_llm
 
 
@@ -217,7 +231,14 @@ async def router_node(state: AgentState) -> dict[str, Any]:
     llm = _get_router_llm()
     try:
         response = await llm.ainvoke(llm_messages)
-        raw_output = response.content
+        # P3：多模态返回 content 可能为 list，统一转为 str 再解析
+        content = response.content
+        if isinstance(content, list):
+            raw_output = "".join(
+                c.get("text", "") for c in content if isinstance(c, dict)
+            )
+        else:
+            raw_output = str(content or "")
     except Exception as exc:
         logger.error("Router LLM 调用失败: %s", exc)
         error_msg = AIMessage(content="系统暂时无法处理您的请求，请稍后重试。")

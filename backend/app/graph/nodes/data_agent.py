@@ -219,28 +219,39 @@ DATA_AGENT_TOOLS = [
 
 
 _cached_data_agent = None
+_data_agent_lock: Any = None
+
+
+def _get_data_agent_lock() -> Any:
+    import threading
+    global _data_agent_lock
+    if _data_agent_lock is None:
+        _data_agent_lock = threading.Lock()
+    return _data_agent_lock
+
 
 # 历史消息最大条数（超出时截断最早的），避免 token 随对话增长而膨胀
 _MAX_HISTORY_MESSAGES = 8
 
 
 def _get_data_agent():
-    """获取 Data Agent 单例（首次调用时构建，后续复用）。"""
+    """获取 Data Agent 单例（首次调用时构建，锁保护避免并发重复创建）。"""
     global _cached_data_agent
-    if _cached_data_agent is None:
-        settings = get_settings()
-        llm = ChatOpenAI(
-            model=settings.LLM_MODEL,
-            api_key=settings.LLM_API_KEY or "placeholder",
-            base_url=settings.LLM_BASE_URL,
-            temperature=0.1,
-            max_tokens=1500,   # 降低：减少单次 LLM 调用的生成量
-        )
-        _cached_data_agent = create_react_agent(
-            llm,
-            tools=DATA_AGENT_TOOLS,
-            prompt=DATA_AGENT_SYSTEM_PROMPT,
-        )
+    with _get_data_agent_lock():
+        if _cached_data_agent is None:
+            settings = get_settings()
+            llm = ChatOpenAI(
+                model=settings.LLM_MODEL,
+                api_key=settings.LLM_API_KEY or "placeholder",
+                base_url=settings.LLM_BASE_URL,
+                temperature=0.1,
+                max_tokens=1500,   # 降低：减少单次 LLM 调用的生成量
+            )
+            _cached_data_agent = create_react_agent(
+                llm,
+                tools=DATA_AGENT_TOOLS,
+                prompt=DATA_AGENT_SYSTEM_PROMPT,
+            )
     return _cached_data_agent
 
 

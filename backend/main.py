@@ -34,6 +34,13 @@ async def lifespan(app: FastAPI):
             "请运行: python -c \"import secrets; print(secrets.token_hex(32))\""
         )
 
+    # P2：生产环境必须配置 LLM API Key，避免用 placeholder 误请求
+    if settings.APP_ENV == "production" and (not settings.LLM_API_KEY or not settings.LLM_API_KEY.strip()):
+        raise RuntimeError(
+            "生产环境必须在 .env 中设置 LLM_API_KEY（如 DeepSeek/OpenAI API Key），"
+            "否则 Agent 无法正常调用大模型。"
+        )
+
     # 注册会话管理 ORM 模型（触发 SQLAlchemy metadata 注册，供 session_store 使用）
     import app.db.chat_models  # noqa: F401
     import app.db.models  # noqa: F401  — 触发 User/RefreshToken metadata 注册

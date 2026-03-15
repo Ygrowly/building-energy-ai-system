@@ -6,7 +6,7 @@
 """
 from __future__ import annotations
 
-from sqlalchemy import Boolean, Column, Integer, String, Text, TIMESTAMP
+from sqlalchemy import Boolean, Column, ForeignKey, Integer, String, Text, TIMESTAMP
 from sqlalchemy.sql import func
 
 from app.db.models import Base
@@ -26,7 +26,13 @@ class ChatSession(Base):
 
     __tablename__ = "chat_sessions"
 
-    id = Column(String, primary_key=True)
+    id = Column(String(64), primary_key=True)
+    user_id = Column(
+        String,
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )  # 归属用户，生产环境鉴权用；NULL 表示历史/匿名会话
     title = Column(String(200), nullable=False, default="新对话")
     created_at = Column(
         TIMESTAMP(timezone=True),

@@ -88,14 +88,26 @@ def build_graph() -> Any:
 
 
 # ---------------------------------------------------------------------------
-# 模块级单例（延迟初始化）
+# 模块级单例（延迟初始化，P2：加锁避免并发首次调用重复构建）
 # ---------------------------------------------------------------------------
 _compiled_graph = None
+_graph_lock: Any = None
+
+
+def _get_graph_lock() -> Any:
+    """延迟导入 threading，避免循环依赖。"""
+    import threading
+    global _graph_lock
+    if _graph_lock is None:
+        _graph_lock = threading.Lock()
+    return _graph_lock
 
 
 def get_graph() -> Any:
-    """获取已编译的图（单例，首次调用时构建）。"""
+    """获取已编译的图（单例，首次调用时构建，锁保护）。"""
     global _compiled_graph
-    if _compiled_graph is None:
-        _compiled_graph = build_graph()
+    lock = _get_graph_lock()
+    with lock:
+        if _compiled_graph is None:
+            _compiled_graph = build_graph()
     return _compiled_graph

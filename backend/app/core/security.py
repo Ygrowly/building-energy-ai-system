@@ -233,3 +233,28 @@ async def get_current_active_user(
 ) -> "User":
     """便捷依赖：同 get_current_user，语义更明确。"""
     return current_user
+
+
+async def get_current_user_optional(
+    token: str | None = Depends(_oauth2_scheme),
+    db: AsyncSession = Depends(get_db_session),
+) -> "User | None":
+    """
+    可选认证依赖：有有效 Token 时返回当前用户，否则返回 None（不抛异常）。
+    用于对话等接口：开发环境可不带 Token，生产环境由路由层校验非空并拒绝请求。
+    """
+    from app.db.models import User as UserModel
+
+    if not token:
+        return None
+    try:
+        user_id = decode_access_token(token)
+    except HTTPException:
+        return None
+    result = await db.execute(
+        select(UserModel).where(UserModel.id == user_id)
+    )
+    user = result.scalar_one_or_none()
+    if user is None or not user.is_active:
+        return None
+    return user

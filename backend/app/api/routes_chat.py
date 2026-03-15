@@ -26,13 +26,18 @@ import json
 import logging
 import time
 import uuid
+from collections import OrderedDict
 from typing import Any, AsyncGenerator
 
-from fastapi import APIRouter, HTTPException, Query
+import re
+
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, status
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
+from app.core.config import get_settings
+from app.core.security import get_current_user_optional
 from app.db.session import AsyncSessionLocal
 from app.db.session_store import session_store
 from app.graph.state import initial_state
@@ -50,18 +55,124 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["对话"])
 
 # ---------------------------------------------------------------------------
-# 简易内存会话缓存（热路径用，DB 作为持久化后端）
+# 有界会话缓存（LRU，防止内存无限增长）
 # ---------------------------------------------------------------------------
-_sessions: dict[str, dict[str, Any]] = {}
+
+class BoundedSessionCache:
+    """LRU 会话缓存，超过 max_size 时淘汰最久未访问的条目。"""
+
+    def __init__(self, max_size: int = 2000):
+        self._data: OrderedDict[str, dict[str, Any]] = OrderedDict()
+        self._max_size = max(max_size, 1)
+
+    def get(self, key: str) -> dict[str, Any] | None:
+        if key not in self._data:
+            return None
+        self._data.move_to_end(key)
+        return self._data[key]
+
+    def __contains__(self, key: str) -> bool:
+        return key in self._data
+
+    def __setitem__(self, key: str, value: dict[str, Any]) -> None:
+        if key in self._data:
+            self._data.move_to_end(key)
+        else:
+            while len(self._data) >= self._max_size:
+                self._data.popitem(last=False)
+        self._data[key] = value
+
+    def pop(self, key: str, default: Any = None) -> Any:
+        return self._data.pop(key, default)
+
+    def __getitem__(self, key: str) -> dict[str, Any]:
+        if key not in self._data:
+            raise KeyError(key)
+        self._data.move_to_end(key)
+        return self._data[key]
+
+
+_sessions: BoundedSessionCache = BoundedSessionCache(max_size=2000)
+
+# P3：简单内存限流（按 IP/用户，每分钟请求数）
+_RATE_LIMIT_WINDOW = 60.0   # 秒
+_RATE_LIMIT_MAX_PER_WINDOW = 30
+_rate_limit_timestamps: dict[str, list[float]] = {}
+_rate_limit_lock = asyncio.Lock()
+
+
+async def _check_chat_rate_limit(request: Request, current_user: Any) -> None:
+    """对话接口限流：同一用户/IP 每分钟最多 _RATE_LIMIT_MAX_PER_WINDOW 次。"""
+    key = current_user.id if current_user else (request.client.host or "unknown")
+    now = time.time()
+    async with _rate_limit_lock:
+        if key not in _rate_limit_timestamps:
+            _rate_limit_timestamps[key] = []
+        ts_list = _rate_limit_timestamps[key]
+        ts_list.append(now)
+        # 只保留窗口内的
+        cutoff = now - _RATE_LIMIT_WINDOW
+        _rate_limit_timestamps[key] = [t for t in ts_list if t > cutoff]
+        if len(_rate_limit_timestamps[key]) > _RATE_LIMIT_MAX_PER_WINDOW:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=f"请求过于频繁，请 {int(_RATE_LIMIT_WINDOW)} 秒后再试",
+            )
+
+
+def _require_auth_in_production(current_user: Any) -> None:
+    """生产环境下未登录则 401。"""
+    if get_settings().APP_ENV == "production" and current_user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="请先登录",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+
+def _check_session_access(row: Any, current_user: Any) -> None:
+    """校验会话归属：有 current_user 时仅允许访问自己的会话或无主会话（user_id 为空）。"""
+    if current_user is None:
+        return
+    if row is None:
+        return
+    session_user_id = getattr(row, "user_id", None)
+    if session_user_id is None:
+        return  # 历史无主会话允许访问
+    if session_user_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="无权访问该会话",
+        )
 
 
 # ---------------------------------------------------------------------------
 # 请求/响应模型
 # ---------------------------------------------------------------------------
 
+# P3：session_id 格式与长度约束（与 DB chat_sessions.id 一致）
+_SESSION_ID_MAX_LEN = 64
+_SESSION_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
+
+
+def _validate_session_id(v: str | None) -> str | None:
+    if v is None or v == "":
+        return None
+    if len(v) > _SESSION_ID_MAX_LEN:
+        raise ValueError(f"session_id 长度不得超过 {_SESSION_ID_MAX_LEN}")
+    if not _SESSION_ID_PATTERN.match(v):
+        raise ValueError("session_id 仅允许字母、数字、下划线、连字符")
+    return v
+
+
 class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=2000, description="用户消息")
     session_id: str | None = Field(None, description="会话 ID，为空则新建")
+
+    @field_validator("session_id")
+    @classmethod
+    def check_session_id(cls, v: str | None) -> str | None:
+        return _validate_session_id(v)
 
 
 class ApproveRequest(BaseModel):
@@ -117,12 +228,15 @@ def _error_event(message: str, tool_name: str | None = None) -> str:
     })
 
 
-def _done_event(session_id: str, hop_count: int = 0) -> str:
-    return _sse({
+def _done_event(session_id: str, hop_count: int = 0, request_id: str | None = None) -> str:
+    payload: dict[str, Any] = {
         "type": "done",
         "session_id": session_id,
         "hop_count": hop_count,
-    })
+    }
+    if request_id:
+        payload["request_id"] = request_id
+    return _sse(payload)
 
 
 # ---------------------------------------------------------------------------
@@ -187,17 +301,22 @@ def _build_session_info(row: Any, in_memory_state: dict[str, Any] | None = None)
 async def _stream_graph(
     session_id: str,
     user_message: str,
+    user_id: str | None = None,
+    request_id: str | None = None,
 ) -> AsyncGenerator[str, None]:
     """
     执行 LangGraph 图并将过程以 SSE 事件流方式推出。
     每轮结束后异步持久化会话状态到 PostgreSQL。
+    user_id：当前用户 ID，首次创建会话时写入归属。
+    request_id：本请求追踪 ID，用于日志与 done 事件（P3 可观测性）。
     """
+    request_id = request_id or str(uuid.uuid4())
     state = await _get_or_create_state(session_id)
 
     # 确保 DB 中存在该会话记录（首次发送消息时自动创建）
     db_row = await session_store.get(session_id)
     if db_row is None:
-        await session_store.create(session_id)
+        await session_store.create(session_id, title="新对话", user_id=user_id)
 
     is_first_message = len(state.get("messages", [])) == 0
 
@@ -308,7 +427,8 @@ async def _stream_graph(
 
     except Exception as exc:
         logger.exception("图执行异常: %s", exc)
-        yield _error_event(f"系统处理异常：{exc}")
+        # 生产安全：不向客户端回传内部错误详情，仅写日志
+        yield _error_event("系统处理异常，请稍后重试")
 
     # 更新内存会话状态
     if final_state_holder:
@@ -332,17 +452,28 @@ async def _stream_graph(
             hop = state.get("hop_count", 0)
 
     total_elapsed = time.time() - _t.get("request", time.time())
-    logger.info("请求完成: session=%s, 总工具调用=%d, 总用时=%.1fs", session_id, _tool_count, total_elapsed)
+    logger.info(
+        "请求完成: request_id=%s session=%s 工具调用=%d 用时=%.1fs",
+        request_id, session_id, _tool_count, total_elapsed,
+    )
 
-    # 异步持久化（不阻塞 SSE 流）
-    asyncio.create_task(_persist_session(
+    # 异步持久化（不阻塞 SSE 流，P2：done_callback 记录异常避免静默失败）
+    _persist_task = asyncio.create_task(_persist_session(
         session_id=session_id,
         state=merged,
         user_message=user_message,
         is_first_message=is_first_message,
     ))
+    def _on_persist_done(t: asyncio.Task[None]) -> None:
+        try:
+            t.result()
+        except asyncio.CancelledError:
+            pass
+        except Exception as exc:
+            logger.error("会话持久化后台任务异常: session=%s, error=%s", session_id, exc)
+    _persist_task.add_done_callback(_on_persist_done)
 
-    yield _done_event(session_id, hop_count=hop)
+    yield _done_event(session_id, hop_count=hop, request_id=request_id)
 
 
 async def _persist_session(
@@ -375,16 +506,23 @@ async def _persist_session(
 # ---------------------------------------------------------------------------
 
 @router.post("/chat", response_class=StreamingResponse, summary="SSE 流式对话")
-async def chat(req: ChatRequest):
+async def chat(
+    request: Request,
+    req: ChatRequest,
+    current_user: Any = Depends(get_current_user_optional),
+):
     """
     接收用户消息，启动 LangGraph 并以 SSE 推流返回。
-    - session_id 为空时自动生成新 UUID
-    - 每轮对话完成后异步持久化到 PostgreSQL
+    生产环境需登录；开发环境可不带 Token。限流：同一用户/IP 每分钟最多 30 次。
     """
+    _require_auth_in_production(current_user)
+    await _check_chat_rate_limit(request, current_user)
     session_id = req.session_id or str(uuid.uuid4())
+    user_id = current_user.id if current_user else None
+    request_id = str(uuid.uuid4())
 
     return StreamingResponse(
-        _stream_graph(session_id, req.message),
+        _stream_graph(session_id, req.message, user_id=user_id, request_id=request_id),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -395,8 +533,14 @@ async def chat(req: ChatRequest):
 
 
 @router.post("/chat/approve", summary="人机协同：审批工单（兼容旧路径）")
-async def approve_work_order_compat(req: ApproveRequest):
-    """兼容旧接口路径，内部转发到工单模块。"""
+async def approve_work_order_compat(
+    req: ApproveRequest,
+    current_user: Any = Depends(get_current_user_optional),
+):
+    """兼容旧接口路径，内部转发到工单模块。生产环境需登录并校验会话归属。"""
+    _require_auth_in_production(current_user)
+    row = await session_store.get(req.session_id)
+    _check_session_access(row, current_user)
     from app.api.routes_workorder import ApproveRequest as WOApproveReq, approve_work_order
     wo_req = WOApproveReq(
         session_id=req.session_id,
@@ -414,12 +558,14 @@ async def approve_work_order_compat(req: ApproveRequest):
 @router.get("/chat/sessions", response_model=SessionListResponse, summary="列出所有会话")
 async def list_sessions(
     include_archived: bool = Query(False, description="是否包含已归档的会话"),
+    current_user: Any = Depends(get_current_user_optional),
 ):
     """
-    返回所有会话的元数据列表，按最近更新时间倒序排列。
-    前端侧边栏历史列表使用此接口。
+    返回当前用户的会话列表（生产环境需登录，仅返回归属本人的会话）。
     """
-    rows = await session_store.list_all(include_archived=include_archived)
+    _require_auth_in_production(current_user)
+    user_id = current_user.id if current_user else None
+    rows = await session_store.list_all(include_archived=include_archived, user_id=user_id)
     sessions = [
         _build_session_info(row, _sessions.get(row.id))
         for row in rows
@@ -428,26 +574,34 @@ async def list_sessions(
 
 
 @router.post("/chat/sessions", response_model=SessionInfo, summary="预建命名会话")
-async def create_session(req: SessionCreateRequest):
+async def create_session(
+    req: SessionCreateRequest,
+    current_user: Any = Depends(get_current_user_optional),
+):
     """
-    预先创建一个命名会话（对应 Cursor "New Chat"）。
-    返回的 session_id 可在后续 POST /api/chat 时直接使用。
+    预先创建一个命名会话。生产环境需登录，会话归属当前用户。
     """
+    _require_auth_in_production(current_user)
     session_id = str(uuid.uuid4())
     title = req.title or "新对话"
-    row = await session_store.create(session_id, title=title)
+    user_id = current_user.id if current_user else None
+    row = await session_store.create(session_id, title=title, user_id=user_id)
     if row is None:
         raise HTTPException(status_code=500, detail="会话创建失败，请检查数据库连接")
     return _build_session_info(row)
 
 
 @router.get("/chat/sessions/{session_id}", summary="获取会话摘要")
-async def get_session(session_id: str):
+async def get_session(
+    session_id: str = Path(..., max_length=_SESSION_ID_MAX_LEN, pattern=r"^[a-zA-Z0-9_-]+$"),
+    current_user: Any = Depends(get_current_user_optional),
+):
     """
-    返回指定会话的元数据摘要。
-    优先从内存读取活跃状态，再从 DB 补充持久化字段。
+    返回指定会话的元数据摘要。生产环境需登录且仅能访问本人会话。
     """
+    _require_auth_in_production(current_user)
     row = await session_store.get(session_id)
+    _check_session_access(row, current_user)
     in_memory = _sessions.get(session_id)
 
     if row is None and in_memory is None:
@@ -471,12 +625,19 @@ async def get_session(session_id: str):
 
 
 @router.patch("/chat/sessions/{session_id}", response_model=SessionInfo, summary="重命名或更新会话")
-async def update_session(session_id: str, req: SessionUpdateRequest):
+async def update_session(
+    session_id: str = Path(..., max_length=_SESSION_ID_MAX_LEN, pattern=r"^[a-zA-Z0-9_-]+$"),
+    req: SessionUpdateRequest,
+    current_user: Any = Depends(get_current_user_optional),
+):
     """
-    更新会话元数据（对应 Cursor 右键重命名 / Configure Chat）。
-    - title: 新标题
-    - building_id: 绑定楼宇类型，传空字符串可清除绑定
+    更新会话元数据。生产环境需登录且仅能操作本人会话。
     """
+    _require_auth_in_production(current_user)
+    row = await session_store.get(session_id)
+    _check_session_access(row, current_user)
+    if row is None:
+        raise HTTPException(status_code=404, detail="会话不存在")
     # 处理 building_id 空字符串（表示清除绑定）
     building_id = req.building_id
     if building_id == "":
@@ -498,11 +659,18 @@ async def update_session(session_id: str, req: SessionUpdateRequest):
 
 
 @router.post("/chat/sessions/{session_id}/archive", response_model=SessionInfo, summary="归档会话")
-async def archive_session(session_id: str):
+async def archive_session(
+    session_id: str = Path(..., max_length=_SESSION_ID_MAX_LEN, pattern=r"^[a-zA-Z0-9_-]+$"),
+    current_user: Any = Depends(get_current_user_optional),
+):
     """
-    软删除会话（对应 Cursor More > Archive Chat）。
-    归档后不在默认列表显示，可通过 ?include_archived=true 查询。
+    软删除会话。生产环境需登录且仅能操作本人会话。
     """
+    _require_auth_in_production(current_user)
+    row = await session_store.get(session_id)
+    _check_session_access(row, current_user)
+    if row is None:
+        raise HTTPException(status_code=404, detail="会话不存在")
     row = await session_store.archive(session_id)
     if row is None:
         raise HTTPException(status_code=404, detail="会话不存在")
@@ -514,22 +682,35 @@ async def archive_session(session_id: str):
 
 
 @router.delete("/chat/sessions/{session_id}", summary="物理删除会话")
-async def clear_session(session_id: str):
+async def clear_session(
+    session_id: str = Path(..., max_length=_SESSION_ID_MAX_LEN, pattern=r"^[a-zA-Z0-9_-]+$"),
+    current_user: Any = Depends(get_current_user_optional),
+):
     """
-    物理删除会话，同时清除内存缓存和 DB 记录（对应 Cursor 右键删除）。
+    物理删除会话。生产环境需登录且仅能操作本人会话。
     """
+    _require_auth_in_production(current_user)
+    row = await session_store.get(session_id)
+    _check_session_access(row, current_user)
+    # 允许删除无 DB 记录的会话（仅内存或已过期）
     _sessions.pop(session_id, None)
     await session_store.delete(session_id)
     return {"status": "deleted", "session_id": session_id}
 
 
 @router.get("/chat/sessions/{session_id}/messages", summary="获取对话消息历史")
-async def get_session_messages(session_id: str):
+async def get_session_messages(
+    session_id: str = Path(..., max_length=_SESSION_ID_MAX_LEN, pattern=r"^[a-zA-Z0-9_-]+$"),
+    current_user: Any = Depends(get_current_user_optional),
+):
     """
-    返回指定会话的消息列表（role + content）。
-    优先从内存读取，内存无则尝试从 DB 恢复后返回。
-    仅返回 HumanMessage 和 AIMessage，过滤内部 ToolMessage。
+    返回指定会话的消息列表。生产环境需登录且仅能访问本人会话。
     """
+    _require_auth_in_production(current_user)
+    row = await session_store.get(session_id)
+    _check_session_access(row, current_user)
+    if row is None:
+        raise HTTPException(status_code=404, detail="会话不存在")
     state = _sessions.get(session_id)
     if state is None:
         state = await session_store.load_state(session_id)

@@ -131,6 +131,10 @@ def _make_mcp_tool(
 
 DIAGNOSE_AGENT_TOOLS = [
     _make_mcp_tool(
+        "list_available_buildings",
+        "列出数据库中所有楼宇及其设备（building_type、devices 列表）。创建工单前必须先调用以获取真实的 device_id，禁止编造。无需参数，直接调用即可。",
+    ),
+    _make_mcp_tool(
         "query_energy_metrics",
         "查询指定建筑在时间范围内的能耗指标时序数据（事实核查用）。"
         "默认时间范围：2016-04-01 ~ 2016-05-02。",
@@ -166,28 +170,39 @@ DIAGNOSE_AGENT_TOOLS = [
 
 
 _cached_diagnose_agent = None
+_diagnose_agent_lock: Any = None
+
+
+def _get_diagnose_agent_lock() -> Any:
+    import threading
+    global _diagnose_agent_lock
+    if _diagnose_agent_lock is None:
+        _diagnose_agent_lock = threading.Lock()
+    return _diagnose_agent_lock
+
 
 # 历史消息最大条数（与 data_agent 保持一致）
 _MAX_HISTORY_MESSAGES = 8
 
 
 def _get_diagnose_agent():
-    """获取 Diagnose Agent 单例（首次调用时构建，后续复用）。"""
+    """获取 Diagnose Agent 单例（首次调用时构建，锁保护避免并发重复创建）。"""
     global _cached_diagnose_agent
-    if _cached_diagnose_agent is None:
-        settings = get_settings()
-        llm = ChatOpenAI(
-            model=settings.LLM_MODEL,
-            api_key=settings.LLM_API_KEY or "placeholder",
-            base_url=settings.LLM_BASE_URL,
-            temperature=0.2,
-            max_tokens=2048,   # 诊断报告允许稍长，但不超过 2048
-        )
-        _cached_diagnose_agent = create_react_agent(
-            llm,
-            tools=DIAGNOSE_AGENT_TOOLS,
-            prompt=DIAGNOSE_AGENT_SYSTEM_PROMPT,
-        )
+    with _get_diagnose_agent_lock():
+        if _cached_diagnose_agent is None:
+            settings = get_settings()
+            llm = ChatOpenAI(
+                model=settings.LLM_MODEL,
+                api_key=settings.LLM_API_KEY or "placeholder",
+                base_url=settings.LLM_BASE_URL,
+                temperature=0.2,
+                max_tokens=2048,   # 诊断报告允许稍长，但不超过 2048
+            )
+            _cached_diagnose_agent = create_react_agent(
+                llm,
+                tools=DIAGNOSE_AGENT_TOOLS,
+                prompt=DIAGNOSE_AGENT_SYSTEM_PROMPT,
+            )
     return _cached_diagnose_agent
 
 

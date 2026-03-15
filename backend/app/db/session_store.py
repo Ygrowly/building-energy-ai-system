@@ -121,11 +121,16 @@ class SessionStore:
     # 创建
     # ------------------------------------------------------------------
 
-    async def create(self, session_id: str, title: str = "新对话") -> ChatSession | None:
-        """在数据库中预建一条会话记录。"""
+    async def create(
+        self,
+        session_id: str,
+        title: str = "新对话",
+        user_id: str | None = None,
+    ) -> ChatSession | None:
+        """在数据库中预建一条会话记录。user_id 为归属用户，生产环境鉴权用。"""
         try:
             async with AsyncSessionLocal() as db:
-                row = ChatSession(id=session_id, title=title)
+                row = ChatSession(id=session_id, title=title, user_id=user_id)
                 db.add(row)
                 await db.commit()
                 await db.refresh(row)
@@ -151,16 +156,23 @@ class SessionStore:
             logger.error("查询会话失败 %s: %s", session_id, exc)
             return None
 
-    async def list_all(self, include_archived: bool = False) -> list[ChatSession]:
+    async def list_all(
+        self,
+        include_archived: bool = False,
+        user_id: str | None = None,
+    ) -> list[ChatSession]:
         """
-        列出所有会话，按 updated_at 倒序。
+        列出会话，按 updated_at 倒序。
         include_archived=False 时过滤归档会话。
+        user_id 非空时仅返回该用户的会话（生产环境鉴权）；为 None 时返回全部（兼容开发环境）。
         """
         try:
             async with AsyncSessionLocal() as db:
                 stmt = select(ChatSession).order_by(ChatSession.updated_at.desc())
                 if not include_archived:
                     stmt = stmt.where(ChatSession.is_archived.is_(False))
+                if user_id is not None:
+                    stmt = stmt.where(ChatSession.user_id == user_id)
                 result = await db.execute(stmt)
                 return list(result.scalars().all())
         except Exception as exc:

@@ -44,10 +44,10 @@ html[data-theme="dark"] {
    ══════════════════════════════════════════════ */
 html[data-theme="light"] {
   --bg-dark:        #f0f2f5;        /* canvas background */
-  --bg-panel:       #1a3828;        /* sidebar + KPI cards */
-  --bg-card:        #213d2e;        /* panel sub-headers */
-  --bg-hover:       #1f3a2a;        /* hover on dark-green items */
-  --border:         #264d36;
+  --bg-panel:       #3e6354;        /* sidebar + KPI cards */
+  --bg-card:        #365849;        /* panel sub-headers */
+  --bg-hover:       #3a5e4f;        /* hover on dark-green items */
+  --border:         #4d7868;
   --border-accent:  rgba(34,197,94,0.40);
 
   --accent:         #22c55e;
@@ -70,7 +70,7 @@ html[data-theme="light"] {
   --card-shadow-hover:   0 6px 24px rgba(0,0,0,0.65), 0 0 0 1px rgba(34,197,94,0.25);
   --panel-shadow:        0 8px 40px rgba(0,0,0,0.50);
 
-  --scrollbar-thumb:       #264d36;
+  --scrollbar-thumb:       #4d7868;
   --scrollbar-thumb-hover: #22c55e;
 }
 

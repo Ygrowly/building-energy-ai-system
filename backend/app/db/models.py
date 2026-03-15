@@ -2,6 +2,9 @@
 SQLAlchemy ORM 表定义（与数据库 DDL 严格对齐）。
 energy_data / buildings / daily_energy_summary：Data Agent 只读账号（SELECT only）。
 anomaly_events：后台检测服务拥有完整读写权限。
+
+数据库四层架构：
+  物理实体（buildings/devices） + 时序事实（energy_data） + 业务闭环（anomaly_events）
 """
 import uuid
 
@@ -28,22 +31,54 @@ class Base(DeclarativeBase):
 
 # ---------------------------------------------------------------------------
 # buildings — 资产身份证（关系型，静态元数据）
-# 实际 DDL 列：building_id, primary_space_usage, sqm
+# DDL 列：building_id, primary_space_usage, sqm, timezone
 # ---------------------------------------------------------------------------
 
 class Building(Base):
     """
-    建筑物静态信息表。
+    建筑物静态信息表（多租户顶层实体）。
     primary_space_usage 对应原 building_type（'Education'/'Office'/'Public'）。
+    timezone 用于将 UTC 时间戳转换为建筑所在地的本地时间（如按天/月聚合时需要）。
     """
     __tablename__ = "buildings"
 
     building_id: str = Column(String, primary_key=True)
     primary_space_usage: str = Column(String)
     sqm: float = Column(Float)
+    timezone: str = Column(String, nullable=True, default="UTC")
+
+    devices = relationship("Device", back_populates="building", cascade="all, delete-orphan")
 
     __table_args__ = (
         Index("idx_buildings_usage", "primary_space_usage"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# devices — 计量设备/传感器（静态信息，N:1 关联 buildings）
+# DDL 列：device_id, building_id, device_type
+# ---------------------------------------------------------------------------
+
+class Device(Base):
+    """
+    设备/传感器静态信息表。
+    device_type 如 'ElectricityMeter'/'WaterMeter'/'HVAC'/'EnvSensor'。
+    一栋楼可挂载多个不同类型的设备（1:N）。
+    """
+    __tablename__ = "devices"
+
+    device_id: str = Column(String, primary_key=True)
+    building_id: str = Column(
+        String,
+        ForeignKey("buildings.building_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    device_type: str = Column(String, nullable=False)
+
+    building = relationship("Building", back_populates="devices")
+
+    __table_args__ = (
+        Index("idx_devices_building", "building_id"),
     )
 
 
@@ -57,8 +92,9 @@ class Building(Base):
 
 class EnergyData(Base):
     """
-    能耗时序记录表。
+    能耗时序记录表（写入最密集的"事实表"）。
     复合主键 (timestamp, building_id)。
+    直接外键关联 buildings，避免经由 devices 表做深度 JOIN（时序架构优化）。
     冷热水字段：
       chilledwater_kwh  → 冷冻水（空调制冷）能耗
       hotwater_kwh      → 热水能耗
@@ -68,7 +104,12 @@ class EnergyData(Base):
     __tablename__ = "energy_data"
 
     timestamp = Column(TIMESTAMP(timezone=True), primary_key=True, nullable=False)
-    building_id: str = Column(String, primary_key=True, nullable=False)
+    building_id: str = Column(
+        String,
+        ForeignKey("buildings.building_id", ondelete="CASCADE"),
+        primary_key=True,
+        nullable=False,
+    )
 
     electricity_kwh: float = Column(Float)
     water_m3: float = Column(Float)
@@ -134,8 +175,14 @@ class DailyEnergySummary(Base):
 
 class AnomalyEvent(Base):
     """
-    异常事件记录表。
+    异常事件记录表（业务闭环层）。
     由 anomaly_detector 后台服务扫描 energy_data 后写入，是所有异常展示的唯一来源。
+
+    设计要点：
+    - UUID 主键 + 复合唯一约束 (data_timestamp, building_id, rule_triggered) 保证幂等性
+    - 外键 CASCADE 保证删楼宇时自动清理相关告警
+    - is_resolved 支持运维闭环工作台的处理状态追踪
+    - meter_device_id 关联 devices 表，但使用软引用（STRING）避免强 FK 阻碍批量写入
 
     rule_triggered 取值：
       night_high_power    → 夜间（本地 0-6 点）electricity_kwh > 50
@@ -146,9 +193,17 @@ class AnomalyEvent(Base):
     __tablename__ = "anomaly_events"
 
     id: str = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    detected_at = Column(TIMESTAMP(timezone=True), nullable=False)
+    detected_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
     data_timestamp = Column(TIMESTAMP(timezone=True), nullable=False)
-    building_id: str = Column(String, nullable=False)
+    building_id: str = Column(
+        String,
+        ForeignKey("buildings.building_id", ondelete="CASCADE"),
+        nullable=False,
+    )
     meter_device_id: str = Column(String, nullable=False)
     rule_triggered: str = Column(String, nullable=False)
     actual_value: float = Column(Float, nullable=True)
@@ -163,6 +218,11 @@ class AnomalyEvent(Base):
         ),
         Index("idx_anomaly_events_data_timestamp", "data_timestamp"),
         Index("idx_anomaly_events_building_ts", "building_id", "data_timestamp"),
+        Index(
+            "idx_anomaly_events_unresolved",
+            "data_timestamp",
+            postgresql_where=Column("is_resolved") == False,  # noqa: E712
+        ),
     )
 
 

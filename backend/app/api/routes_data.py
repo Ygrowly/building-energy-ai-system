@@ -17,7 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import AnomalyEvent, Building, DailyEnergySummary, EnergyData
+from app.db.models import AnomalyEvent, Building, DailyEnergySummary, Device, EnergyData
 from app.db.session import get_db_session
 from app.mcp.server import list_tools
 
@@ -42,19 +42,36 @@ _BUILDING_NAMES = {
 # ---------------------------------------------------------------------------
 @router.get("/buildings", summary="获取所有建筑列表")
 async def get_buildings(db: AsyncSession = Depends(get_db_session)):
-    """返回 buildings 表中所有建筑的基本信息。"""
+    """返回 buildings 表中所有建筑的基本信息（含 timezone 和关联设备列表）。"""
     try:
         result = await db.execute(
             select(Building).order_by(Building.primary_space_usage)
         )
         buildings = result.scalars().all()
+
+        # 一次查出所有设备（避免 N+1）
+        all_bids = [b.building_id for b in buildings]
+        dev_map: dict[str, list[dict]] = {bid: [] for bid in all_bids}
+        if all_bids:
+            dev_result = await db.execute(
+                select(Device.device_id, Device.building_id, Device.device_type)
+                .where(Device.building_id.in_(all_bids))
+                .order_by(Device.building_id, Device.device_type)
+            )
+            for drow in dev_result.fetchall():
+                dev_map[drow[1]].append({"device_id": drow[0], "device_type": drow[2]})
+
         return [
             {
                 "building_id": b.building_id,
                 "building_type": b.primary_space_usage,
-                "display_name": _BUILDING_NAMES.get(b.primary_space_usage or "", b.primary_space_usage or b.building_id),
+                "display_name": _BUILDING_NAMES.get(
+                    b.primary_space_usage or "", b.primary_space_usage or b.building_id
+                ),
                 "icon": _BUILDING_ICONS.get(b.primary_space_usage or "", "🏠"),
                 "sqm": b.sqm,
+                "timezone": b.timezone or "UTC",
+                "devices": dev_map.get(b.building_id, []),
             }
             for b in buildings
         ]
@@ -89,11 +106,21 @@ async def get_building_status(
     if not latest:
         raise HTTPException(status_code=404, detail=f"建筑 {building_type} 暂无数据")
 
+    # 获取关联设备列表（电表设备 ID 用于工单创建和 RAG 过滤）
+    dev_result = await db.execute(
+        select(Device.device_id, Device.device_type)
+        .where(Device.building_id == building.building_id)
+        .order_by(Device.device_type)
+    )
+    devices = [{"device_id": r[0], "device_type": r[1]} for r in dev_result.fetchall()]
+
     return {
         "building_type": building_type,
         "display_name": _BUILDING_NAMES.get(building_type, building_type),
         "icon": _BUILDING_ICONS.get(building_type, "🏠"),
         "sqm": building.sqm,
+        "timezone": building.timezone or "UTC",
+        "devices": devices,
         "last_updated_utc": latest.timestamp.isoformat() if latest.timestamp else None,
         "anomaly_status": latest.anomaly_status,
         "electricity_kwh": latest.electricity_kwh,
@@ -382,10 +409,51 @@ async def get_recent_anomalies(
             "source": "anomaly_events",
         }
 
-    except Exception:
-        # ── 降级路径：迁移未执行时实时计算（兼容旧版）────────────────────
-        logger.warning("anomaly_events 表不可用，降级为实时规则计算（请执行迁移 002_create_anomaly_events.sql）")
-        return await _fallback_realtime_anomalies(start_time, now_utc, hours, building_type, db)
+    except Exception as exc:
+        exc_type = type(exc).__name__
+        exc_msg = str(exc)
+
+        # ── 连接级别错误（网络断开、连接池耗尽等）──────────────────────────
+        # 此时 db session 已损坏，不能再用同一连接重试，直接返回安全空响应。
+        # 典型特征：ConnectionError / asyncpg connection_lost / InterfaceError
+        _conn_keywords = ("connection_lost", "ConnectionError", "InterfaceError",
+                          "connection", "connect", "asyncpg")
+        is_connection_error = (
+            "ConnectionError" in exc_type
+            or "InterfaceError" in exc_type
+            or any(kw in exc_msg for kw in _conn_keywords)
+        )
+        if is_connection_error:
+            logger.error(
+                "数据库连接异常，/api/anomalies/recent 返回空结果（请检查 DB 连接）: %s: %s",
+                exc_type, exc_msg,
+            )
+            return {
+                "anomalies": [],
+                "total": 0,
+                "check_period": {"start": start_time.isoformat(), "end": now_utc.isoformat(), "hours": hours},
+                "source": "connection_error",
+                "error": "数据库连接异常，请稍后重试",
+            }
+
+        # ── 表不存在等 DDL 错误 → 降级为实时规则计算（兼容迁移未执行）────
+        logger.warning(
+            "anomaly_events 表不可用，降级为实时规则计算（%s: %s）"
+            "——请执行迁移 002_create_anomaly_events.sql",
+            exc_type, exc_msg,
+        )
+        try:
+            return await _fallback_realtime_anomalies(start_time, now_utc, hours, building_type, db)
+        except Exception as fb_exc:
+            # 降级路径也失败（例如 session 已污染），返回安全空响应
+            logger.error("降级路径执行失败: %s: %s", type(fb_exc).__name__, fb_exc)
+            return {
+                "anomalies": [],
+                "total": 0,
+                "check_period": {"start": start_time.isoformat(), "end": now_utc.isoformat(), "hours": hours},
+                "source": "fallback_error",
+                "error": "告警数据暂时不可用",
+            }
 
 
 async def _fallback_realtime_anomalies(
@@ -418,6 +486,9 @@ async def _fallback_realtime_anomalies(
         hour_local = (hour_utc + 8) % 24  # 转换为 CST（UTC+8）
         display = _BUILDING_NAMES.get(usage or "", usage or ed.building_id)
 
+        # 降级路径中 meter_device_id 使用 building_id + '_elec' 格式（与 migration 008 约定一致）
+        meter_id = ed.building_id + "_elec"
+
         if (
             ed.electricity_kwh is not None
             and 0 <= hour_local < 6
@@ -427,7 +498,7 @@ async def _fallback_realtime_anomalies(
                 "timestamp": ts.isoformat(),
                 "building_type": usage,
                 "building_id": ed.building_id,
-                "meter_device_id": ed.building_id,
+                "meter_device_id": meter_id,
                 "rule": "night_high_power",
                 "message": f"{display}夜间能耗异常：{ed.electricity_kwh:.1f} kWh",
                 "actual_value": ed.electricity_kwh,
@@ -443,7 +514,7 @@ async def _fallback_realtime_anomalies(
                 "timestamp": ts.isoformat(),
                 "building_type": usage,
                 "building_id": ed.building_id,
-                "meter_device_id": ed.building_id,
+                "meter_device_id": meter_id,
                 "rule": "db_flagged",
                 "message": f"{display}运行状态异常（系统标记）",
                 "actual_value": None,

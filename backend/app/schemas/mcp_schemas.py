@@ -1,21 +1,28 @@
 """
-阶段一：接口契约 —— MCP 工具出入参规范（8 个核心工具）
+阶段一：接口契约 —— MCP 工具出入参规范（12 个核心工具）
 ==========================================================
 所有工具参数必须通过 Pydantic v2 严格校验，禁止裸 dict 传参。
 工具报错时不抛 Exception，统一返回 MCPError 结构（让大模型读懂并自我修正）。
+
+数据库四层架构对应：
+  buildings（楼宇静态元数据，含 timezone）
+  devices（计量设备/传感器，1:N 关联 buildings）
+  energy_data（时序能耗事实表，直接外键关联 buildings）
+  anomaly_events（异常事件业务表，含运维闭环 is_resolved）
 
 工具清单：
   1. query_energy_metrics        ← 能耗时序数据查询
   2. get_device_live_status      ← 设备实时状态快照
   3. calculate_system_cop        ← 空调能效比 COP 计算
   4. query_daily_energy_summary  ← 按天/周/月聚合趋势（granularity 参数）
-  5. rag_hybrid_search           ← 混合检索运维手册
+  5. rag_hybrid_search           ← 混合检索运维手册（device_id 元数据精准过滤）
   6. detect_energy_anomalies     ← 基于规则的异常检测
   7. render_ui_component         ← 生成前端组件 JSON 指令
   8. create_work_order_draft     ← 生成工单草稿（需人工审批）
-  9. list_available_buildings    ← 列出所有楼宇（动态校验白名单）
- 10. compare_metric_across_buildings ← 多楼宇横向对比（含能耗强度）
+  9. list_available_buildings    ← 列出所有楼宇及其设备（动态校验白名单）
+ 10. compare_metric_across_buildings ← 多楼宇横向对比（含能耗强度 kWh/㎡）
  11. compare_time_periods        ← 同环比分析（period_a vs period_b）
+ 12. generate_report             ← 生成统计报表 CSV 下载链接
 """
 
 from __future__ import annotations
@@ -260,12 +267,23 @@ class QueryDailyEnergySummaryOutput(BaseModel):
 
 class MetadataFilter(BaseModel):
     """
-    元数据硬过滤：先用 device_id 过滤掉 90% 无关文档，再做向量检索。
-    全部字段可选，不传则不过滤（范围检索模式）。
+    RAG 元数据硬过滤：先用 device_id 过滤掉 90% 无关文档，再做向量检索。
+    device_id 来自 devices 表（如 'Eagle_public_Henry_hvac'）；
+    building_type 来自 buildings.primary_space_usage（如 'Office'）。
+    全部字段可选，不传则不过滤（全库范围检索模式）。
     """
-    device_id: Optional[str] = Field(default=None, description="如 'M-OFF-001'")
-    building_type: Optional[str] = Field(default=None, description="如 'Office'")
-    doc_category: Optional[str] = Field(default=None, description="如 'maintenance_manual'")
+    device_id: Optional[str] = Field(
+        default=None,
+        description="设备 ID，来自 devices 表，如 'Bobcat_office_Kassandra_hvac'"
+    )
+    building_type: Optional[str] = Field(
+        default=None,
+        description="建筑用途类型，来自 buildings.primary_space_usage，如 'Office'"
+    )
+    doc_category: Optional[str] = Field(
+        default=None,
+        description="文档分类标签，如 'maintenance_manual' / 'energy_standard'"
+    )
 
 
 class RAGHybridSearchInput(BaseModel):
@@ -377,10 +395,17 @@ class CreateWorkOrderDraftInput(BaseModel):
     Human-in-the-loop 核心工具。
     此工具绝不直接写入生产数据库，只生成草稿并触发前端审批卡片。
     用户点击"批准"后，前端才发出真正的派单 API 请求。
+
+    device_id 应来自 devices 表中的真实设备 ID（可先调用 list_available_buildings 获取）。
+    格式约束已放宽以兼容 devices 表中的自由格式 device_id（如 'Building_hvac'）。
     """
     device_id: str = Field(
-        pattern=r"^M-[A-Z]+-\d{3}$",
-        description="如 'M-OFF-001'，格式：M-{类型缩写}-{编号}"
+        min_length=1,
+        max_length=128,
+        description=(
+            "设备 ID，来自 devices 表，如 'Bobcat_office_Kassandra_hvac'。"
+            "可先调用 list_available_buildings 查看各楼宇的关联设备列表"
+        )
     )
     building_id: str = Field(
         min_length=1,
@@ -413,15 +438,42 @@ class CreateWorkOrderDraftOutput(BaseModel):
 # Tool 9：list_available_buildings — 列举当前数据库中所有楼宇
 # ===========================================================================
 
+class DeviceInfo(BaseModel):
+    """单个设备的基本信息（来自 devices 表）。"""
+    device_id: str = Field(
+        description="设备唯一标识，如 'Bobcat_office_Kassandra_hvac'"
+    )
+    device_type: str = Field(
+        description="设备类型，如 'ElectricityMeter' / 'WaterMeter' / 'HVAC' / 'EnvSensor'"
+    )
+
+
 class BuildingInfo(BaseModel):
-    """单栋建筑的基本信息，用于向 Agent 动态告知合法 building_type。"""
+    """
+    单栋建筑的基本信息，用于向 Agent 动态告知合法 building_type 和关联设备。
+    当 Agent 需要填写 device_id（如 create_work_order_draft、rag_hybrid_search 过滤）时，
+    应从此列表的 devices 字段中选取真实 device_id。
+    """
     building_id: str = Field(description="数据库中的实际主键，如 'Bobcat_office_Kassandra'")
-    building_type: str = Field(description="类型标签（primary_space_usage），工具传参时使用此值，如 'Office'")
+    building_type: str = Field(
+        description="用途类型标签（primary_space_usage），工具传参时使用此值，如 'Office'"
+    )
     sqm: Optional[float] = Field(default=None, description="建筑面积（平方米）")
+    timezone: str = Field(
+        default="UTC",
+        description="建筑所在时区，如 'Asia/Shanghai'，用于本地时间聚合"
+    )
+    devices: list[DeviceInfo] = Field(
+        default_factory=list,
+        description="该楼宇下的所有设备列表，device_id 可用于工单和 RAG 过滤"
+    )
 
 
 class ListBuildingsOutput(BaseModel):
-    """当前数据库中所有建筑的清单，Agent 路由前可先调用此工具确认合法 building_type。"""
+    """
+    当前数据库中所有建筑的清单（含设备列表）。
+    Agent 在不确定有哪些合法 building_id 或 device_id 时应先调用此工具。
+    """
     buildings: list[BuildingInfo]
     total: int
 

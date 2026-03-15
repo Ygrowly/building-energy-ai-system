@@ -6,6 +6,11 @@
   2. 将检测到的异常持久化写入 anomaly_events 表
   3. 支持全量历史扫描（首次启动）和增量扫描（此后定期执行）
 
+数据库设计对齐：
+  meter_device_id 字段现在优先取 devices 表中该楼宇的 ElectricityMeter 类型设备 ID，
+  而非原先使用 building_id 充当的占位符。
+  通过在扫描开始时一次性预查 devices 表构建映射缓存，避免 N+1 查询。
+
 规则列表：
   night_high_power   — 本地时间（UTC+8）0-6 点，electricity_kwh > 50
   high_chilled_water — chilledwater_kwh 超当日批次均值 3 倍（HVAC 过耗）
@@ -23,7 +28,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import AnomalyEvent, Building, EnergyData
+from app.db.models import AnomalyEvent, Building, Device, EnergyData
 from app.db.session import AsyncSessionLocal
 
 logger = logging.getLogger(__name__)
@@ -51,6 +56,20 @@ _BUILDING_NAMES: dict[str, str] = {
 # 核心：单批次扫描并持久化
 # ---------------------------------------------------------------------------
 
+async def _load_meter_device_ids(session: AsyncSession) -> dict[str, str]:
+    """
+    一次性从 devices 表加载所有楼宇的主计量表设备 ID（ElectricityMeter 类型优先）。
+    返回 {building_id: meter_device_id} 映射。
+    若某楼宇无设备记录，退化为 building_id（向后兼容）。
+    """
+    result = await session.execute(
+        select(Device.building_id, Device.device_id)
+        .where(Device.device_type == "ElectricityMeter")
+        .order_by(Device.building_id)
+    )
+    return {row[0]: row[1] for row in result.fetchall()}
+
+
 async def scan_and_persist(
     batch_start: datetime,
     batch_end: datetime,
@@ -60,7 +79,13 @@ async def scan_and_persist(
     扫描 [batch_start, batch_end) 时间段内所有建筑的能耗数据，
     运行规则检测，将新增异常写入 anomaly_events（幂等 UPSERT）。
     返回本次新写入的记录数。
+
+    meter_device_id 现在从 devices 表查取真实电表设备 ID，
+    而非原先用 building_id 充当的占位符。
     """
+    # 预加载设备 ID 映射（避免 N+1 查询）
+    meter_id_map = await _load_meter_device_ids(session)
+
     result = await session.execute(
         select(EnergyData, Building.primary_space_usage)
         .join(Building, EnergyData.building_id == Building.building_id)
@@ -96,7 +121,8 @@ async def scan_and_persist(
         elec_mean = elec_means.get(ed.building_id, 0.0)
         chilled_mean = chilled_means.get(ed.building_id, 0.0)
         display = _BUILDING_NAMES.get(usage or "", usage or ed.building_id)
-        meter_id = ed.building_id  # buildings 表无 meter_device_id，使用 building_id 代替
+        # 使用 devices 表中真实电表设备 ID；若无则退化为 building_id（向后兼容）
+        meter_id = meter_id_map.get(ed.building_id, ed.building_id)
 
         # ── 规则 1：夜间高功率（本地 0-6 点）─────────────────────────────
         if (

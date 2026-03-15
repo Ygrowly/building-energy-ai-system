@@ -1,15 +1,19 @@
 """
-阶段二：原子能力库 —— 数据查询工具（Tool 1 / 2 / 4）
-=====================================================
+阶段二：原子能力库 —— 数据查询工具（Tool 1 / 2 / 4 / 9 / 10 / 11）
+=====================================================================
 工具清单：
-  query_energy_metrics       → Tool 1  直查 energy_data 时序原表
-  get_device_live_status     → Tool 2  取最新 1 条传感器快照
-  query_daily_energy_summary → Tool 4  查物化视图 daily_energy_summary
+  query_energy_metrics           → Tool 1   直查 energy_data 时序原表
+  get_device_live_status         → Tool 2   取最新 1 条传感器快照
+  query_daily_energy_summary     → Tool 4   查物化视图 daily_energy_summary
+  list_available_buildings       → Tool 9   列出所有楼宇及其设备（含 timezone）
+  compare_metric_across_buildings→ Tool 10  多楼宇横向对比
+  compare_time_periods           → Tool 11  同环比分析
 
 设计约定：
   · 所有工具为 async 函数，参数类型严格绑定 Schema 枚举，防止 SQL 注入
   · 报错统一返回 MCPError 字符串（让 LLM 看懂并自我修正），绝不抛 Exception
   · 每条返回记录必须携带 source_table / meter_device_id（数据血缘溯源）
+  · meter_device_id 优先取 devices 表中该楼宇的 ElectricityMeter 设备 ID
 """
 from __future__ import annotations
 
@@ -19,7 +23,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import Building, DailyEnergySummary, EnergyData
+from app.db.models import Building, DailyEnergySummary, Device, EnergyData
 from app.schemas.mcp_schemas import (
     BuildingInfo,
     BuildingMetricStats,
@@ -28,6 +32,7 @@ from app.schemas.mcp_schemas import (
     CompareTimePeriodsInput,
     CompareTimePeriodsOutput,
     DailyEnergySummaryRecord,
+    DeviceInfo,
     EnergyMetricRecord,
     GetDeviceLiveStatusInput,
     GetDeviceLiveStatusOutput,
@@ -61,6 +66,7 @@ _METRIC_META: dict[MetricType, tuple[str, str]] = {
 # 数据库中：
 #   building_type 列 = 'Education'/'Office'/'Public'（工具传参使用此值）
 #   building_id   列 = 实际资产名 'Bobcat_office_Kassandra'（energy_data 外键使用此值）
+#   meter_device_id  = devices 表中该楼宇的 ElectricityMeter 设备 ID（血缘溯源首选）
 # 此函数被 data_query.py 和 physics_calc.py 共同引用，避免重复逻辑。
 # ---------------------------------------------------------------------------
 
@@ -69,7 +75,10 @@ async def get_building_info(
 ) -> tuple[str, str] | tuple[None, None]:
     """
     通过 primary_space_usage（如 'Office'）查找对应建筑。
-    返回 (building_id_as_meter_id, actual_building_id)，找不到返回 (None, None)。
+    返回 (meter_device_id, actual_building_id)，找不到返回 (None, None)。
+
+    meter_device_id 优先取 devices 表中该楼宇的 ElectricityMeter 类型设备 ID；
+    若 devices 表为空或无电表设备，退化为 building_id（向后兼容）。
     支持动态扩展：数据库新增楼宇后无需修改代码。
     """
     result = await session.execute(
@@ -80,7 +89,18 @@ async def get_building_info(
     if row is None:
         return None, None
     actual_bid = row[0]
-    return actual_bid, actual_bid  # buildings 无 meter_device_id，用 building_id 代替
+
+    # 优先取电表设备 ID 作为 meter_device_id（数据血缘溯源）
+    dev_result = await session.execute(
+        select(Device.device_id)
+        .where(Device.building_id == actual_bid)
+        .where(Device.device_type == "ElectricityMeter")
+        .limit(1)
+    )
+    dev_row = dev_result.first()
+    meter_id = dev_row[0] if dev_row else actual_bid  # 无设备记录时退化为 building_id
+
+    return meter_id, actual_bid
 
 
 # ===========================================================================
@@ -303,26 +323,51 @@ async def list_available_buildings(
     session: AsyncSession,
 ) -> ListBuildingsOutput:
     """
-    返回数据库中所有建筑的 building_type、meter_device_id 和面积。
-    Agent 在不确定有哪些合法 building_id 时，应先调用此工具再传参，
-    避免因楼宇名称错误触发 BUILDING_NOT_FOUND。
+    返回数据库中所有建筑的 building_type、面积、时区及关联设备列表。
+
+    Agent 在以下场景应先调用此工具：
+    1. 不确定有哪些合法 building_id 时（避免 BUILDING_NOT_FOUND）
+    2. 需要 device_id 填写工单（从返回的 devices 列表中选取）
+    3. 需要设备 ID 用于 rag_hybrid_search 的 metadata_filter.device_id 精准过滤
     """
-    result = await session.execute(
+    # 查所有楼宇基本信息
+    bld_result = await session.execute(
         select(
             Building.building_id,
             Building.primary_space_usage,
             Building.sqm,
+            Building.timezone,
         ).order_by(Building.primary_space_usage)
     )
-    rows = result.fetchall()
+    bld_rows = bld_result.fetchall()
+
+    if not bld_rows:
+        return ListBuildingsOutput(buildings=[], total=0)
+
+    # 一次查出所有楼宇的设备（避免 N+1 查询）
+    all_bid_list = [r[0] for r in bld_rows]
+    dev_result = await session.execute(
+        select(Device.device_id, Device.building_id, Device.device_type)
+        .where(Device.building_id.in_(all_bid_list))
+        .order_by(Device.building_id, Device.device_type)
+    )
+    # building_id → [DeviceInfo, ...]
+    devices_by_building: dict[str, list[DeviceInfo]] = {}
+    for drow in dev_result.fetchall():
+        did, bid, dtype = drow
+        devices_by_building.setdefault(bid, []).append(
+            DeviceInfo(device_id=did, device_type=dtype)
+        )
 
     buildings = [
         BuildingInfo(
             building_id=r[0],
             building_type=r[1] or r[0],
             sqm=float(r[2]) if r[2] is not None else None,
+            timezone=r[3] or "UTC",
+            devices=devices_by_building.get(r[0], []),
         )
-        for r in rows
+        for r in bld_rows
     ]
     return ListBuildingsOutput(buildings=buildings, total=len(buildings))
 

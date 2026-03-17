@@ -53,17 +53,15 @@ class BuildingID(str, Enum):
 class MetricType(str, Enum):
     """
     energy_data 表中的真实列名映射，杜绝大模型编造列名。
-    冷热水字段：
-      - chilledwater_kwh  → 冷冻水（空调制冷）能耗
-      - hotwater_kwh      → 热水能耗
-      - sim_supply_temp_c → 模拟供水温度（冷冻水送水端）
-      - sim_return_temp_c → 模拟回水温度（冷冻水回水端）
+    以 Supabase 实际 schema 为准：
+      - hac_energy        → 暖通空调综合能耗（Heating/Air-Conditioning）
+      - sim_supply_temp_c → 模拟供水温度（送水端）
+      - sim_return_temp_c → 模拟回水温度（回水端）
     COP 由后端计算，不直接暴露给大模型。
     """
     ELECTRICITY_KWH = "electricity_kwh"
     WATER_M3 = "water_m3"
-    HOTWATER_KWH = "hotwater_kwh"
-    CHILLEDWATER_KWH = "chilledwater_kwh"
+    HAC_ENERGY = "hac_energy"
     SIM_SUPPLY_TEMP_C = "sim_supply_temp_c"
     SIM_RETURN_TEMP_C = "sim_return_temp_c"
     AIR_TEMP_C = "air_temp_c"
@@ -79,9 +77,9 @@ class OperationStatus(str, Enum):
 
 class AnomalyRule(str, Enum):
     """detect_energy_anomalies 支持的检测规则白名单。"""
-    NIGHT_HIGH_POWER = "night_high_power"       # 夜间(0-6点)功率 > 50kWh
-    HIGH_CHILLED_WATER = "high_chilled_water"   # chilledwater_kwh 超均值 3 倍
-    SENSOR_SPIKE = "sensor_spike"               # electricity_kwh 跳变（疑似故障）
+    NIGHT_HIGH_POWER = "night_high_power"   # 夜间(0-6点)功率 > 50kWh
+    HIGH_HAC_ENERGY = "high_hac_energy"     # hac_energy 超均值 3 倍（暖通过耗）
+    SENSOR_SPIKE = "sensor_spike"           # electricity_kwh 跳变（疑似故障）
 
 
 class WorkOrderPriority(str, Enum):
@@ -179,7 +177,7 @@ class GetDeviceLiveStatusOutput(BaseModel):
     air_temp_c: float
     humidity_rh_pct: float
     electricity_kwh: float
-    chilledwater_kwh: float
+    hac_energy: float = Field(default=0.0, description="暖通空调综合能耗（kWh）")
     last_updated_utc: datetime
     source_table: Literal["energy_data"] = "energy_data"
 
@@ -190,9 +188,9 @@ class GetDeviceLiveStatusOutput(BaseModel):
 
 class CalculateSystemCOPInput(BaseModel):
     """
-    基于 energy_data 表中 chilledwater_kwh（冷冻水能耗）与供回水温差
+    基于 energy_data 表中 hac_energy（暖通空调综合能耗）与供回水温差
     （sim_supply_temp_c / sim_return_temp_c）估算制冷效率指标。
-    物理异常捕获：若 chilledwater_kwh ≈ 0 但温差较大，
+    物理异常捕获：若 hac_energy ≈ 0 但温差较大，
     后端抛出 MCPError(error_code='SENSOR_FAULT_DIVIDE_BY_ZERO')，不进行计算。
     """
     building_id: str = Field(
@@ -329,7 +327,7 @@ class DetectEnergyAnomaliesInput(BaseModel):
     )
     time_range: TimeRange
     rules: list[AnomalyRule] = Field(
-        default=[AnomalyRule.NIGHT_HIGH_POWER, AnomalyRule.HIGH_CHILLED_WATER, AnomalyRule.SENSOR_SPIKE],
+        default=[AnomalyRule.NIGHT_HIGH_POWER, AnomalyRule.HIGH_HAC_ENERGY, AnomalyRule.SENSOR_SPIKE],
         min_length=1
     )
 
@@ -459,10 +457,6 @@ class BuildingInfo(BaseModel):
         description="用途类型标签（primary_space_usage），工具传参时使用此值，如 'Office'"
     )
     sqm: Optional[float] = Field(default=None, description="建筑面积（平方米）")
-    timezone: str = Field(
-        default="UTC",
-        description="建筑所在时区，如 'Asia/Shanghai'，用于本地时间聚合"
-    )
     devices: list[DeviceInfo] = Field(
         default_factory=list,
         description="该楼宇下的所有设备列表，device_id 可用于工单和 RAG 过滤"

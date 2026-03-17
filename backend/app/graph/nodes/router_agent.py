@@ -52,6 +52,7 @@ _ROUTER_SYSTEM_PROMPT_TEMPLATE = """你是楼宇能耗管理系统的智能助�
 | cop_analysis | 计算空调能效比 COP | "能效比"、"COP"、"制冷效率"、"HVAC 性能" |
 | fault_diagnosis | 故障诊断/异常分析 | "为什么这么高"、"有没有问题"、"凌晨异常"、"传感器跳变" |
 | work_order | 生成维修工单 | "派单"、"报修"、"维修"、"工单" |
+| knowledge_query | 查询建筑规范/技术标准/运维知识/节能法规 | "GB 55015 规定"、"建筑节能标准"、"供暖设计规范"、"预测性维护要求"、"设施管理标准"、"能效等级限值"、"智能化系统规范"、"建筑电气规范"、"设施运维指南"、"知识库"、"手册"、"规范要求"、"标准规定" |
 | clarify | 问题太模糊需追问 | 代词不明确、缺少关键实体时 |
 | unknown | 与楼宇能耗管理完全无关 | "股票行情"、"天气预报"、"今天午饭吃什么" |
 
@@ -65,6 +66,12 @@ _ROUTER_SYSTEM_PROMPT_TEMPLATE = """你是楼宇能耗管理系统的智能助�
 7. 业务意图（data_query/cop_analysis/fault_diagnosis/work_order）：提取实体并路由
 8. 提取 device_id 时：若用户提到设备类型（如"空调"、"电表"）可在 device_id 填写类型提示，
    后续 Diagnose Agent 会从 devices 表查取真实 device_id
+9. 以下任意情形识别为 knowledge_query（路由到 diagnose_agent 进行 RAG 检索）：
+   - 提问涉及国家标准/行业标准/地方标准/建筑规范（如 GB、JGJ、DB 开头的标准编号）
+   - 询问规范条文、技术要求、设计标准、限值指标
+   - 询问设备维护规程、运维手册、设施管理知识
+   - 含"规定"、"标准"、"规范"、"要求"、"指南"、"手册"、"知识库"等词
+   - 询问节能、建筑电气、暖通空调、智能化系统的技术规定
 
 ## 输出格式（严格 JSON，不要加 Markdown 代码块）
 {{
@@ -82,7 +89,8 @@ _ROUTER_SYSTEM_PROMPT_TEMPLATE = """你是楼宇能耗管理系统的智能助�
 - 系统监管 4 类设备：电表（ElectricityMeter）、水表（WaterMeter）、空调（HVAC）、环境传感器（EnvSensor）
 - 业务查询时，禁止自行给出数据数字、诊断结论——交给后续专家节点
 - 禁止幻造不在上方建筑列表内的建筑名
-- intent=unknown 仅用于与楼宇能耗管理系统毫无关联的问题"""
+- intent=unknown 仅用于与楼宇能耗管理系统毫无关联的问题（如股票、天气、美食等）
+- 涉及建筑/节能/设备/设施/智能化/暖通等领域的知识性问题，即使没有具体楼宇，也应识别为 knowledge_query 而非 unknown"""
 
 
 def build_router_system_prompt(building_types: list[str] | None = None) -> str:
@@ -108,8 +116,9 @@ _INTENT_ROUTING: dict[IntentType | str, NextNode] = {
     "cop_analysis":    "data_agent",
     "fault_diagnosis": "diagnose_agent",
     "work_order":      "diagnose_agent",
-    "general_chat":    "end",      # Router 直接回复，无需下游 Agent
-    "clarify":         "router",   # 继续等待用户澄清
+    "knowledge_query": "diagnose_agent",  # 知识库/规范查询 → RAG 检索
+    "general_chat":    "end",             # Router 直接回复，无需下游 Agent
+    "clarify":         "router",          # 继续等待用户澄清
     "unknown":         "end",
 }
 

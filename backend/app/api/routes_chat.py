@@ -31,7 +31,7 @@ from typing import Any, AsyncGenerator
 
 import re
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query, Request, status
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from pydantic import BaseModel, Field, field_validator
@@ -627,7 +627,7 @@ async def get_session(
 @router.patch("/chat/sessions/{session_id}", response_model=SessionInfo, summary="重命名或更新会话")
 async def update_session(
     session_id: str = Path(..., max_length=_SESSION_ID_MAX_LEN, pattern=r"^[a-zA-Z0-9_-]+$"),
-    req: SessionUpdateRequest,
+    req: SessionUpdateRequest = Body(...),
     current_user: Any = Depends(get_current_user_optional),
 ):
     """

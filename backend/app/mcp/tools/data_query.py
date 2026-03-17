@@ -46,17 +46,16 @@ from app.schemas.mcp_schemas import (
     QueryEnergyMetricsOutput,
 )
 
-# 指标 → (DB列名, 单位) 映射表（与 energy_data 实际列名严格一致）
+# 指标 → (DB列名, 单位) 映射表（与 Supabase energy_data 实际列名严格一致）
 _METRIC_META: dict[MetricType, tuple[str, str]] = {
-    MetricType.ELECTRICITY_KWH:    ("electricity_kwh",   "kWh"),
-    MetricType.WATER_M3:           ("water_m3",          "m³"),
-    MetricType.HOTWATER_KWH:       ("hotwater_kwh",      "kWh"),
-    MetricType.CHILLEDWATER_KWH:   ("chilledwater_kwh",  "kWh"),
-    MetricType.SIM_SUPPLY_TEMP_C:  ("sim_supply_temp_c", "°C"),
-    MetricType.SIM_RETURN_TEMP_C:  ("sim_return_temp_c", "°C"),
-    MetricType.AIR_TEMP_C:         ("air_temp_c",        "°C"),
-    MetricType.DEW_TEMP_C:         ("dew_temp_c",        "°C"),
-    MetricType.HUMIDITY_RH_PCT:    ("humidity_rh_pct",   "%RH"),
+    MetricType.ELECTRICITY_KWH:   ("electricity_kwh",   "kWh"),
+    MetricType.WATER_M3:          ("water_m3",          "m³"),
+    MetricType.HAC_ENERGY:        ("hac_energy",        "kWh"),
+    MetricType.SIM_SUPPLY_TEMP_C: ("sim_supply_temp_c", "°C"),
+    MetricType.SIM_RETURN_TEMP_C: ("sim_return_temp_c", "°C"),
+    MetricType.AIR_TEMP_C:        ("air_temp_c",        "°C"),
+    MetricType.DEW_TEMP_C:        ("dew_temp_c",        "°C"),
+    MetricType.HUMIDITY_RH_PCT:   ("humidity_rh_pct",   "%RH"),
 }
 
 
@@ -222,7 +221,7 @@ async def get_device_live_status(
         air_temp_c=float(row.air_temp_c or 0),
         humidity_rh_pct=float(row.humidity_rh_pct or 0),
         electricity_kwh=float(row.electricity_kwh or 0),
-        chilledwater_kwh=float(row.chilledwater_kwh or 0),
+        hac_energy=float(row.hac_energy or 0),
         last_updated_utc=row.timestamp,
     )
 
@@ -336,7 +335,6 @@ async def list_available_buildings(
             Building.building_id,
             Building.primary_space_usage,
             Building.sqm,
-            Building.timezone,
         ).order_by(Building.primary_space_usage)
     )
     bld_rows = bld_result.fetchall()
@@ -364,7 +362,6 @@ async def list_available_buildings(
             building_id=r[0],
             building_type=r[1] or r[0],
             sqm=float(r[2]) if r[2] is not None else None,
-            timezone=r[3] or "UTC",
             devices=devices_by_building.get(r[0], []),
         )
         for r in bld_rows

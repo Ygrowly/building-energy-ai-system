@@ -70,7 +70,6 @@ async def get_buildings(db: AsyncSession = Depends(get_db_session)):
                 ),
                 "icon": _BUILDING_ICONS.get(b.primary_space_usage or "", "🏠"),
                 "sqm": b.sqm,
-                "timezone": b.timezone or "UTC",
                 "devices": dev_map.get(b.building_id, []),
             }
             for b in buildings
@@ -119,14 +118,12 @@ async def get_building_status(
         "display_name": _BUILDING_NAMES.get(building_type, building_type),
         "icon": _BUILDING_ICONS.get(building_type, "🏠"),
         "sqm": building.sqm,
-        "timezone": building.timezone or "UTC",
         "devices": devices,
         "last_updated_utc": latest.timestamp.isoformat() if latest.timestamp else None,
         "anomaly_status": latest.anomaly_status,
         "electricity_kwh": latest.electricity_kwh,
         "water_m3": latest.water_m3,
-        "hotwater_kwh": latest.hotwater_kwh,
-        "chilledwater_kwh": latest.chilledwater_kwh,
+        "hac_energy": latest.hac_energy,
         "sim_supply_temp_c": latest.sim_supply_temp_c,
         "sim_return_temp_c": latest.sim_return_temp_c,
         "air_temp_c": latest.air_temp_c,
@@ -262,7 +259,7 @@ async def get_overview(db: AsyncSession = Depends(get_db_session)):
                 b.primary_space_usage,
                 e.anomaly_status,
                 e.water_m3,
-                e.chilledwater_kwh,
+                e.hac_energy,
                 e.air_temp_c
             FROM energy_data e
             JOIN buildings b ON e.building_id = b.building_id

@@ -11,11 +11,11 @@
   而非原先使用 building_id 充当的占位符。
   通过在扫描开始时一次性预查 devices 表构建映射缓存，避免 N+1 查询。
 
-规则列表：
-  night_high_power   — 本地时间（UTC+8）0-6 点，electricity_kwh > 50
-  high_chilled_water — chilledwater_kwh 超当日批次均值 3 倍（HVAC 过耗）
-  sensor_spike       — electricity_kwh 超当日批次均值 3 倍（传感器跳变）
-  db_flagged         — energy_data.anomaly_status = 'Anomaly'（存量标注兜底）
+规则列表（以 Supabase 实际 schema 为准）：
+  night_high_power  — 本地时间（UTC+8）0-6 点，electricity_kwh > 50
+  high_hac_energy   — hac_energy 超当日批次均值 3 倍（暖通空调过耗）
+  sensor_spike      — electricity_kwh 超当日批次均值 3 倍（传感器跳变）
+  db_flagged        — energy_data.anomaly_status = 'Anomaly'（存量标注兜底）
 """
 from __future__ import annotations
 
@@ -43,7 +43,7 @@ _NIGHT_POWER_THRESHOLD = 50.0   # kWh
 _SPIKE_MULTIPLIER = 3.0         # 超过均值 N 倍判定为跳变
 _SCAN_BATCH_HOURS = 24          # 每批扫描的时间窗口（小时）
 
-_HIGH_CHILLED_WATER_MULTIPLIER = 3.0  # chilledwater_kwh 超均值 N 倍判定为过耗
+_HIGH_HAC_ENERGY_MULTIPLIER = 3.0  # hac_energy 超均值 N 倍判定为暖通过耗
 
 _BUILDING_NAMES: dict[str, str] = {
     "Education": "教学楼",
@@ -104,12 +104,12 @@ async def scan_and_persist(
         by_building.setdefault(ed.building_id, []).append(ed)
 
     elec_means: dict[str, float] = {}
-    chilled_means: dict[str, float] = {}
+    hac_means: dict[str, float] = {}
     for bid, recs in by_building.items():
         elec_vals = [r.electricity_kwh for r in recs if r.electricity_kwh is not None]
         elec_means[bid] = statistics.mean(elec_vals) if elec_vals else 0.0
-        chilled_vals = [r.chilledwater_kwh for r in recs if r.chilledwater_kwh is not None]
-        chilled_means[bid] = statistics.mean(chilled_vals) if chilled_vals else 0.0
+        hac_vals = [r.hac_energy for r in recs if r.hac_energy is not None]
+        hac_means[bid] = statistics.mean(hac_vals) if hac_vals else 0.0
 
     now = datetime.now(timezone.utc)
     to_insert: list[dict] = []
@@ -119,7 +119,7 @@ async def scan_and_persist(
         hour_utc = ts.hour if ts.tzinfo else ts.replace(tzinfo=timezone.utc).hour
         hour_local = (hour_utc + _TIMEZONE_OFFSET_H) % 24
         elec_mean = elec_means.get(ed.building_id, 0.0)
-        chilled_mean = chilled_means.get(ed.building_id, 0.0)
+        hac_mean = hac_means.get(ed.building_id, 0.0)
         display = _BUILDING_NAMES.get(usage or "", usage or ed.building_id)
         # 使用 devices 表中真实电表设备 ID；若无则退化为 building_id（向后兼容）
         meter_id = meter_id_map.get(ed.building_id, ed.building_id)
@@ -138,19 +138,19 @@ async def scan_and_persist(
                 msg=f"{display}夜间能耗异常：{ed.electricity_kwh:.1f} kWh",
             ))
 
-        # ── 规则 2：冷冻水高耗（超批次均值 3 倍，HVAC 过耗告警）──────────
+        # ── 规则 2：暖通空调高耗（超批次均值 3 倍，HAC 过耗告警）──────────
         if (
-            ed.chilledwater_kwh is not None
-            and chilled_mean > 0
-            and ed.chilledwater_kwh > chilled_mean * _HIGH_CHILLED_WATER_MULTIPLIER
+            ed.hac_energy is not None
+            and hac_mean > 0
+            and ed.hac_energy > hac_mean * _HIGH_HAC_ENERGY_MULTIPLIER
         ):
-            spike_threshold = round(chilled_mean * _HIGH_CHILLED_WATER_MULTIPLIER, 2)
+            spike_threshold = round(hac_mean * _HIGH_HAC_ENERGY_MULTIPLIER, 2)
             to_insert.append(_make_record(
                 ts, ed, meter_id, now,
-                rule="high_chilled_water",
-                actual=ed.chilledwater_kwh,
+                rule="high_hac_energy",
+                actual=ed.hac_energy,
                 threshold=spike_threshold,
-                msg=f"{display}冷冻水过耗：{ed.chilledwater_kwh:.1f} kWh（超均值 3 倍）",
+                msg=f"{display}暖通空调过耗：{ed.hac_energy:.1f} kWh（超均值 3 倍）",
             ))
 
         # ── 规则 3：传感器跳变（用电量超批次均值 3 倍）──────────────────

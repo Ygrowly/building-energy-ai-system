@@ -8,9 +8,9 @@
 物理逻辑说明（COP 估算）：
   标准 COP = 制冷量 / 耗电量。本项目数据库中没有独立的"制冷量"列，
   但有供回水温差（△T = sim_return_temp_c - sim_supply_temp_c）和
-  冷冻水能耗（chilledwater_kwh）。
+  暖通空调综合能耗（hac_energy）。
 
-  工程近似：以 △T / chilledwater_kwh 作为"冷却效率代理指标"（越高越好），
+  工程近似：以 △T / hac_energy 作为"冷却效率代理指标"（越高越好），
   再归一化到 COP 量纲（×scaling_factor）进行 ASHRAE 90.1 横向对比。
   物理异常捕获：△T ≤ 0（供水 ≥ 回水，制冷未启动）或 energy ≈ 0 时
   直接返回 MCPError，不做虚假计算。
@@ -45,7 +45,7 @@ _SCALING_FACTOR = 15.0          # △T(°C) / kWh → COP 量纲近似系数（�
 _NIGHT_HOUR_START = 0           # 夜间开始小时（UTC）
 _NIGHT_HOUR_END = 6             # 夜间结束小时（UTC）
 _NIGHT_POWER_THRESHOLD = 50.0   # kWh，夜间超此值告警
-_CHILLED_SPIKE_MULTIPLIER = 3.0 # chilledwater_kwh 超均值 3 倍判定为过耗
+_HAC_SPIKE_MULTIPLIER = 3.0     # hac_energy 超均值 3 倍判定为暖通过耗
 _SPIKE_MULTIPLIER = 3.0         # 传感器跳变：超过均值 3 倍判定为 spike
 
 
@@ -76,21 +76,21 @@ async def calculate_system_cop(
     result = await session.execute(
         select(
             EnergyData.timestamp,
-            EnergyData.chilledwater_kwh,
+            EnergyData.hac_energy,
             EnergyData.sim_supply_temp_c,
             EnergyData.sim_return_temp_c,
         )
         .where(EnergyData.building_id == actual_bid)
         .where(EnergyData.timestamp >= inp.time_range.start)
         .where(EnergyData.timestamp <= inp.time_range.end)
-        .where(EnergyData.chilledwater_kwh.isnot(None))
+        .where(EnergyData.hac_energy.isnot(None))
         .order_by(EnergyData.timestamp.asc())
     )
     rows = result.fetchall()
 
     if not rows:
         return MCPError(
-            error=f"建筑 '{inp.building_id}' 在指定时段内无冷冻水能耗数据",
+            error=f"建筑 '{inp.building_id}' 在指定时段内无暖通空调能耗数据",
             error_code="NO_HVAC_DATA",
             tool_name="calculate_system_cop",
         )
@@ -180,8 +180,8 @@ async def detect_energy_anomalies(
     # 用于均值类规则的预计算
     elec_vals = [r.electricity_kwh for r in rows if r.electricity_kwh is not None]
     elec_mean = statistics.mean(elec_vals) if elec_vals else 0
-    chilled_vals = [r.chilledwater_kwh for r in rows if r.chilledwater_kwh is not None]
-    chilled_mean = statistics.mean(chilled_vals) if chilled_vals else 0
+    hac_vals = [r.hac_energy for r in rows if r.hac_energy is not None]
+    hac_mean = statistics.mean(hac_vals) if hac_vals else 0
 
     anomalies: list[AnomalyRecord] = []
 
@@ -207,20 +207,20 @@ async def detect_energy_anomalies(
                 anomaly_status=anomaly_status,
             ))
 
-        # ── 规则 2：冷冻水高耗（超均值 3 倍）─────────────────────────────
+        # ── 规则 2：暖通空调高耗（超均值 3 倍）───────────────────────────
         if (
-            AnomalyRule.HIGH_CHILLED_WATER in inp.rules
-            and row.chilledwater_kwh is not None
-            and chilled_mean > 0
-            and row.chilledwater_kwh > chilled_mean * _CHILLED_SPIKE_MULTIPLIER
+            AnomalyRule.HIGH_HAC_ENERGY in inp.rules
+            and row.hac_energy is not None
+            and hac_mean > 0
+            and row.hac_energy > hac_mean * _HAC_SPIKE_MULTIPLIER
         ):
             anomalies.append(AnomalyRecord(
                 timestamp=ts,
                 building_id=inp.building_id,
                 meter_device_id=meter_id or "",
-                rule_triggered=AnomalyRule.HIGH_CHILLED_WATER,
-                actual_value=row.chilledwater_kwh,
-                threshold_value=round(chilled_mean * _CHILLED_SPIKE_MULTIPLIER, 2),
+                rule_triggered=AnomalyRule.HIGH_HAC_ENERGY,
+                actual_value=row.hac_energy,
+                threshold_value=round(hac_mean * _HAC_SPIKE_MULTIPLIER, 2),
                 anomaly_status=anomaly_status,
             ))
 

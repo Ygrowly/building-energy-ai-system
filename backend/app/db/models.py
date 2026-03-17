@@ -1,10 +1,15 @@
 """
-SQLAlchemy ORM 表定义（与数据库 DDL 严格对齐）。
+SQLAlchemy ORM 表定义（与 Supabase DDL 严格对齐）。
 energy_data / buildings / daily_energy_summary：Data Agent 只读账号（SELECT only）。
 anomaly_events：后台检测服务拥有完整读写权限。
 
 数据库四层架构：
   物理实体（buildings/devices） + 时序事实（energy_data） + 业务闭环（anomaly_events）
+
+energy_data 实际列（以 Supabase schema 为准）：
+  timestamp, building_id, electricity_kwh, water_m3, hac_energy,
+  sim_supply_temp_c, sim_return_temp_c, air_temp_c, dew_temp_c,
+  humidity_rh_pct, anomaly_status
 """
 import uuid
 
@@ -38,14 +43,12 @@ class Building(Base):
     """
     建筑物静态信息表（多租户顶层实体）。
     primary_space_usage 对应原 building_type（'Education'/'Office'/'Public'）。
-    timezone 用于将 UTC 时间戳转换为建筑所在地的本地时间（如按天/月聚合时需要）。
     """
     __tablename__ = "buildings"
 
     building_id: str = Column(String, primary_key=True)
     primary_space_usage: str = Column(String)
     sqm: float = Column(Float)
-    timezone: str = Column(String, nullable=True, default="UTC")
 
     devices = relationship("Device", back_populates="building", cascade="all, delete-orphan")
 
@@ -84,10 +87,10 @@ class Device(Base):
 
 # ---------------------------------------------------------------------------
 # energy_data — 核心数据日志（时序宽表）
-# 实际 DDL 列：timestamp, building_id, electricity_kwh, water_m3,
-#              hotwater_kwh, chilledwater_kwh,
-#              sim_supply_temp_c, sim_return_temp_c,
-#              air_temp_c, dew_temp_c, humidity_rh_pct, anomaly_status
+# 实际 DDL 列（以 Supabase schema 为准）：
+#   timestamp, building_id, electricity_kwh, water_m3, hac_energy,
+#   sim_supply_temp_c, sim_return_temp_c,
+#   air_temp_c, dew_temp_c, humidity_rh_pct, anomaly_status
 # ---------------------------------------------------------------------------
 
 class EnergyData(Base):
@@ -95,11 +98,7 @@ class EnergyData(Base):
     能耗时序记录表（写入最密集的"事实表"）。
     复合主键 (timestamp, building_id)。
     直接外键关联 buildings，避免经由 devices 表做深度 JOIN（时序架构优化）。
-    冷热水字段：
-      chilledwater_kwh  → 冷冻水（空调制冷）能耗
-      hotwater_kwh      → 热水能耗
-      sim_supply_temp_c → 模拟供水温度（冷冻水送水端）
-      sim_return_temp_c → 模拟回水温度（冷冻水回水端）
+    hac_energy → 暖通空调综合能耗（Heating/Air-Conditioning）
     """
     __tablename__ = "energy_data"
 
@@ -113,8 +112,7 @@ class EnergyData(Base):
 
     electricity_kwh: float = Column(Float)
     water_m3: float = Column(Float)
-    hotwater_kwh: float = Column(Float)
-    chilledwater_kwh: float = Column(Float)
+    hac_energy: float = Column(Float)
     sim_supply_temp_c: float = Column(Float)
     sim_return_temp_c: float = Column(Float)
     air_temp_c: float = Column(Float)
@@ -185,10 +183,10 @@ class AnomalyEvent(Base):
     - meter_device_id 关联 devices 表，但使用软引用（STRING）避免强 FK 阻碍批量写入
 
     rule_triggered 取值：
-      night_high_power    → 夜间（本地 0-6 点）electricity_kwh > 50
-      high_chilled_water  → chilledwater_kwh 超当日均值 3 倍（HVAC 过耗）
-      sensor_spike        → electricity_kwh 超当日均值 3 倍
-      db_flagged          → energy_data.anomaly_status = 'Anomaly'（存量标注兜底）
+      night_high_power  → 夜间（本地 0-6 点）electricity_kwh > 50
+      high_hac_energy   → hac_energy 超当日均值 3 倍（暖通空调过耗）
+      sensor_spike      → electricity_kwh 超当日均值 3 倍
+      db_flagged        → energy_data.anomaly_status = 'Anomaly'（存量标注兜底）
     """
     __tablename__ = "anomaly_events"
 

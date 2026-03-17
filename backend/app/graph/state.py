@@ -25,6 +25,7 @@ IntentType = Literal[
     "cop_analysis",     # 能效比计算
     "fault_diagnosis",  # 故障诊断
     "work_order",       # 生成工单
+    "knowledge_query",  # 查询建筑规范 / 标准 / 技术知识库（RAG 检索）
     "general_chat",     # 通用对话（问候、系统介绍、闲聊等），Router 直接回复
     "clarify",          # 需要反问澄清
     "unknown",          # 完全无关的问题（股票、天气等）
@@ -167,6 +168,7 @@ _INTENT_ZH: dict[str, str] = {
     "cop_analysis":    "COP分析",
     "fault_diagnosis": "故障诊断",
     "work_order":      "工单",
+    "knowledge_query": "知识库查询",
     "general_chat":    "通用对话",
     "clarify":         "澄清",
     "unknown":         "未知",

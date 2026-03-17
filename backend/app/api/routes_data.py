@@ -520,8 +520,19 @@ async def get_recent_anomalies(
         window_start = max_data_ts - timedelta(hours=hours)
 
         stmt = (
-            select(AnomalyEvent, Building.primary_space_usage)
+            select(
+                AnomalyEvent,
+                Building.primary_space_usage,
+                EnergyData.electricity_kwh,
+                EnergyData.water_m3,
+                EnergyData.hac_energy,
+            )
             .outerjoin(Building, AnomalyEvent.building_id == Building.building_id)
+            .outerjoin(
+                EnergyData,
+                (AnomalyEvent.building_id == EnergyData.building_id)
+                & (AnomalyEvent.data_timestamp == EnergyData.timestamp),
+            )
             .where(AnomalyEvent.data_timestamp >= window_start)
             .where(AnomalyEvent.is_resolved.is_(False))
             .order_by(AnomalyEvent.data_timestamp.desc())
@@ -532,6 +543,16 @@ async def get_recent_anomalies(
         result = await db.execute(stmt)
         rows = result.fetchall()
 
+        def _pick_actual(rule: str, elec, water, hac) -> float | None:
+            """根据规则类型，从 energy_data 中取对应原始字段作为实际值。"""
+            if rule == "electricity_overload":
+                return elec
+            if rule == "water_leak":
+                return water
+            if rule == "hvac_overconsumption":
+                return hac
+            return None  # db_flagged 等兜底规则无量化实际值
+
         anomalies = [
             {
                 "timestamp": ev.data_timestamp.isoformat(),
@@ -540,11 +561,14 @@ async def get_recent_anomalies(
                 "meter_device_id": ev.meter_device_id,
                 "rule": ev.rule_triggered,
                 "message": ev.message,
-                "actual_value": ev.actual_value,
+                # 实际值直接从 energy_data 原始列读取，不使用 anomaly_events 缓存值
+                "actual_value": _pick_actual(ev.rule_triggered, elec, water, hac),
                 "threshold": ev.threshold_value,
+                "expected_value": ev.expected_value,
+                "deviation_pct": ev.deviation_pct,
                 "anomaly_status": "Anomaly",
             }
-            for ev, usage in rows[:100]
+            for ev, usage, elec, water, hac in rows[:100]
         ]
         events = rows  # 用于 total 计数
 

@@ -50,8 +50,12 @@
             </div>
           </div>
           <div class="anomaly-right">
-            <span class="anomaly-val">{{ a.actual_value.toFixed(1) }} kWh</span>
-            <span class="anomaly-threshold">阈值 {{ a.threshold }} kWh</span>
+            <span v-if="a.actual_value != null" class="anomaly-val">
+              {{ Number(a.actual_value).toFixed(2) }} {{ ruleUnit(a.rule) }}
+            </span>
+            <span v-if="a.threshold != null" class="anomaly-threshold">
+              阈值 {{ Number(a.threshold).toFixed(4) }} {{ ruleUnit(a.rule) }}
+            </span>
           </div>
         </div>
       </div>
@@ -164,7 +168,12 @@ function buildingName(type: string): string {
 }
 
 function rulePriority(rule: string): 'high' | 'medium' {
-  return rule === 'night_high_power' ? 'high' : 'medium'
+  return ['night_high_power', 'hvac_overconsumption'].includes(rule) ? 'high' : 'medium'
+}
+
+function ruleUnit(rule: string): string {
+  if (rule === 'water_leak') return 'm³'
+  return 'kWh'
 }
 
 function formatTime(iso: string): string {

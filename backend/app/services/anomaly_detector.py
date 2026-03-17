@@ -302,8 +302,8 @@ async def scan_and_persist(
                     ),
                 ))
 
-        # ── 规则 4：DB 存量标注兜底（向后兼容）────────────────────────────
-        if ed.anomaly_status is not None and ed.anomaly_status == "Anomaly":
+        # ── 规则 4：DB 存量标注兜底（向后兼容；大小写不敏感匹配）──────────
+        if ed.anomaly_status is not None and ed.anomaly_status.lower() == "anomaly":
             to_insert.append(_make_record(
                 ts, ed, meter_id, now,
                 rule="db_flagged",

@@ -167,8 +167,11 @@ class DailyEnergySummary(Base):
 # ---------------------------------------------------------------------------
 # anomaly_events — 异常事件持久化表（后台检测服务写入）
 # 实际 DDL 列：id(UUID), detected_at, data_timestamp, building_id,
-#              meter_device_id, rule_triggered, actual_value,
-#              threshold_value, message, is_resolved
+#              meter_device_id, rule_triggered, actual_value, threshold_value,
+#              expected_value, deviation_pct, hvac_root_cause,
+#              message, is_resolved
+# 迁移历史：002_create_anomaly_events.sql（基础表）
+#            010_upgrade_anomaly_events.sql（新增 expected_value/deviation_pct/hvac_root_cause）
 # ---------------------------------------------------------------------------
 
 class AnomalyEvent(Base):
@@ -182,11 +185,17 @@ class AnomalyEvent(Base):
     - is_resolved 支持运维闭环工作台的处理状态追踪
     - meter_device_id 关联 devices 表，但使用软引用（STRING）避免强 FK 阻碍批量写入
 
-    rule_triggered 取值：
-      night_high_power  → 夜间（本地 0-6 点）electricity_kwh > 50
-      high_hac_energy   → hac_energy 超当日均值 3 倍（暖通空调过耗）
-      sensor_spike      → electricity_kwh 超当日均值 3 倍
-      db_flagged        → energy_data.anomaly_status = 'Anomaly'（存量标注兜底）
+    rule_triggered 取值（双阈值 GB 物理规则）：
+      water_leak            → 水耗偏差 > 20% 且 > 1.0 m³（管网漏水）
+      electricity_overload  → 总电耗偏差 > 15% 且 > 期望的 10%（异常高电耗）
+      hvac_overconsumption  → 空调能耗偏差 > 20% 且 > 20 kWh（空调系统过耗）
+      db_flagged            → energy_data.anomaly_status = 'Anomaly'（存量标注兜底）
+
+    hvac_root_cause 取值（仅 hvac_overconsumption 触发时非 NULL）：
+      A_low_efficiency  → 主机效能衰退（供水温度偏离期望 > 1.5℃）
+      B_small_deltaT    → 水力失调/大流量小温差（供回水温差 < 3℃）
+      C_unexpected_on   → 非预期开机/排程失效（设计负荷率 ≤ 0.05 但空调仍运行）
+      other_hvac        → 空调能耗异常但无法归类
     """
     __tablename__ = "anomaly_events"
 
@@ -206,6 +215,9 @@ class AnomalyEvent(Base):
     rule_triggered: str = Column(String, nullable=False)
     actual_value: float = Column(Float, nullable=True)
     threshold_value: float = Column(Float, nullable=True)
+    expected_value: float = Column(Float, nullable=True)
+    deviation_pct: float = Column(Float, nullable=True)
+    hvac_root_cause: str = Column(String, nullable=True)
     message: str = Column(String, nullable=True)
     is_resolved: bool = Column(Boolean, nullable=False, default=False)
 

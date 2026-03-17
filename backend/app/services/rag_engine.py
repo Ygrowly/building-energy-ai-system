@@ -60,11 +60,11 @@ _LOCAL_KB: list[tuple[list[str], str, str, str]] = [
   数据来源：energy_data 表的 sim_supply_temp_c、sim_return_temp_c、chilledwater_kwh 列
   相关设备：devices 表中 device_type='HVAC' 的设备
 
-  参考基准（ASHRAE 90.1-2022）：
-    - 高效机组 COP ≥ 5.5（满负荷）
-    - 正常运行 COP 3.5 ~ 5.5
-    - 低效预警 COP < 3.5（需检查）
-    - 严重低效 COP < 2.0（立即停机检修）
+  参考基准（GB 50189-2015 国标）：
+    - 制冷季系统综合 COP 基准值：3.5（含主机+水泵+冷却塔）
+    - 供暖季系统综合 COP 基准值：2.5（热泵/锅炉综合系统）
+    - 低效预警：COP 低于国标基准（需检查）
+    - 严重低效：COP < 2.0（立即停机检修）
 
 常见 COP 下降原因：
   1. 冷却塔结垢 → 冷凝温度上升 → COP 下降 0.5~1.0

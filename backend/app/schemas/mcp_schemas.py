@@ -76,10 +76,39 @@ class OperationStatus(str, Enum):
 
 
 class AnomalyRule(str, Enum):
-    """detect_energy_anomalies 支持的检测规则白名单。"""
-    NIGHT_HIGH_POWER = "night_high_power"   # 夜间(0-6点)功率 > 50kWh
-    HIGH_HAC_ENERGY = "high_hac_energy"     # hac_energy 超均值 3 倍（暖通过耗）
-    SENSOR_SPIKE = "sensor_spike"           # electricity_kwh 跳变（疑似故障）
+    """
+    detect_energy_anomalies 支持的检测规则白名单（双阈值 GB 物理规则）。
+
+    GB 规则（新）— 基于国标期望值的相对+绝对双阈值：
+      water_leak            → 水耗偏差 > 20% 且 > 1.0 m³（管网漏水/异常用水）
+      electricity_overload  → 总电耗偏差 > 15% 且 > 期望的 10%（异常高电耗）
+      hvac_overconsumption  → 空调能耗偏差 > 20% 且 > 20 kWh（空调系统过耗）
+
+    HVAC 根因规则（第二层，仅当 hvac_overconsumption 触发后附加输出）：
+      hvac_A_low_efficiency → 主机效能衰退（供水温度偏离期望 > 1.5℃）
+      hvac_B_small_deltaT   → 水力失调/大流量小温差（供回水温差 < 3℃）
+      hvac_C_unexpected_on  → 非预期开机（负荷率 ≤ 0.05 但空调仍运行）
+
+    兜底规则（保留向后兼容）：
+      db_flagged            → energy_data.anomaly_status = 'Anomaly'
+    """
+    # ── GB 物理双阈值规则（主要检测层）────────────────────────────────────
+    WATER_LEAK = "water_leak"
+    ELECTRICITY_OVERLOAD = "electricity_overload"
+    HVAC_OVERCONSUMPTION = "hvac_overconsumption"
+
+    # ── HVAC 根因诊断规则（第二层，附加到 hvac_overconsumption 记录上）──
+    HVAC_A_LOW_EFFICIENCY = "hvac_A_low_efficiency"
+    HVAC_B_SMALL_DELTA_T = "hvac_B_small_deltaT"
+    HVAC_C_UNEXPECTED_ON = "hvac_C_unexpected_on"
+
+    # ── 兜底规则（向后兼容，保留旧数据可读性）──────────────────────────
+    DB_FLAGGED = "db_flagged"
+
+    # ── 旧规则（已废弃，仅用于读取历史数据）────────────────────────────
+    NIGHT_HIGH_POWER = "night_high_power"
+    HIGH_HAC_ENERGY = "high_hac_energy"
+    SENSOR_SPIKE = "sensor_spike"
 
 
 class WorkOrderPriority(str, Enum):
@@ -201,16 +230,83 @@ class CalculateSystemCOPInput(BaseModel):
 
 
 class CalculateSystemCOPOutput(BaseModel):
-    """COP 计算结果，含 ASHRAE 90.1 基准比对。"""
+    """
+    COP 计算结果，基于 GB 50189-2015 国标进行基准对比。
+    hvac_mode 由平均气温推断：Cooling / Heating / Mixed（过渡季）。
+    """
     building_id: str
-    cop_mean: float = Field(description="时间段内平均 COP")
+    cop_mean: float = Field(description="时间段内平均 COP（代理指标）")
     cop_min: float
     cop_max: float
-    ashrae_baseline: float = Field(default=3.0, description="ASHRAE 90.1 标准基准值")
-    is_below_baseline: bool = Field(description="低于基准则需关注，True=需告警")
+    hvac_mode: str = Field(description="推断的 HVAC 工况：Cooling / Heating / Mixed")
+    # 国标基准 — GB 50189-2015
+    gb_baseline: float = Field(
+        description="GB 50189-2015 国标基准：制冷季 3.5 / 供暖季 2.5 / 过渡季 3.5"
+    )
+    is_below_gb: bool = Field(description="低于 GB 50189-2015 国标基准时为 True")
     period_start: datetime
     period_end: datetime
     data_points_used: int = Field(ge=1)
+    source_table: Literal["energy_data"] = "energy_data"
+
+
+# ===========================================================================
+# Tool 3b：get_building_rated_values — 国标期望值查询（新增）
+# ===========================================================================
+
+class GetBuildingRatedValuesInput(BaseModel):
+    """
+    查询指定建筑在某时间段内每小时的国标（GB）期望值。
+    返回结果包含 rated（期望）和 actual（实际）两列数据，便于 AI 做对比分析
+    或前端渲染"实际 vs 期望"折线图。
+
+    注意：期望值由 gb_simulator 实时计算（无需额外存储），轻量且精确。
+    建议时间范围不超过 7 天（168 条），以避免响应体过大。
+    """
+    building_id: str = Field(
+        min_length=1,
+        description="建筑类型名称，如 'Education'、'Office'、'Public'，由数据库动态校验"
+    )
+    time_range: TimeRange
+    metrics: list[Literal["water", "electricity", "hac_energy"]] = Field(
+        default=["water", "electricity", "hac_energy"],
+        description="需要对比的指标子集，默认全部三项",
+    )
+
+
+class RatedActualRecord(BaseModel):
+    """单小时的期望值与实际值对比记录。"""
+    timestamp: datetime
+    hvac_mode: str = Field(description="当前小时 HVAC 工况：Cooling / Heating / Ventilation")
+    schedule_factor: float = Field(description="建筑负荷率 S ∈ [0.05, 1.0]")
+    # 期望值（国标）
+    rated_water_m3: float
+    rated_electricity_kwh: float
+    rated_hac_energy: float
+    expected_supply_temp: float
+    expected_return_temp: float
+    # 实际值（来自 energy_data，可能为 None 表示数据库无记录）
+    actual_water_m3: Optional[float] = None
+    actual_electricity_kwh: Optional[float] = None
+    actual_hac_energy: Optional[float] = None
+    actual_supply_temp: Optional[float] = None
+    actual_return_temp: Optional[float] = None
+    # 偏差（仅当实际值存在时计算）
+    water_deviation_pct: Optional[float] = Field(default=None, description="水耗偏差%")
+    electricity_deviation_pct: Optional[float] = Field(default=None, description="电耗偏差%")
+    hac_deviation_pct: Optional[float] = Field(default=None, description="空调偏差%")
+
+
+class GetBuildingRatedValuesOutput(BaseModel):
+    """国标期望值 vs 实际值的逐小时对比数据集。"""
+    building_id: str
+    primary_space_usage: str = Field(description="建筑用途类型，如 'Office'")
+    sqm: float = Field(description="建筑面积（㎡）")
+    records: list[RatedActualRecord]
+    total_hours: int = Field(description="查询覆盖的总小时数")
+    anomaly_hours: int = Field(description="至少一项指标存在异常偏差的小时数")
+    period_start: datetime
+    period_end: datetime
     source_table: Literal["energy_data"] = "energy_data"
 
 
@@ -327,19 +423,34 @@ class DetectEnergyAnomaliesInput(BaseModel):
     )
     time_range: TimeRange
     rules: list[AnomalyRule] = Field(
-        default=[AnomalyRule.NIGHT_HIGH_POWER, AnomalyRule.HIGH_HAC_ENERGY, AnomalyRule.SENSOR_SPIKE],
-        min_length=1
+        default=[
+            AnomalyRule.WATER_LEAK,
+            AnomalyRule.ELECTRICITY_OVERLOAD,
+            AnomalyRule.HVAC_OVERCONSUMPTION,
+            AnomalyRule.DB_FLAGGED,
+        ],
+        min_length=1,
+        description="检测规则白名单，默认启用全部 GB 物理规则",
     )
 
 
 class AnomalyRecord(BaseModel):
-    """单条异常记录，携带足够信息供 Diagnose Agent 做后续归因。"""
+    """
+    单条异常记录，携带足够信息供 Diagnose Agent 做后续归因。
+    新增 expected_value / deviation_pct / hvac_root_cause 支持物理分层诊断。
+    """
     timestamp: datetime
     building_id: str
     meter_device_id: str
     rule_triggered: AnomalyRule
     actual_value: float
     threshold_value: float
+    expected_value: Optional[float] = Field(default=None, description="国标期望值（同量纲）")
+    deviation_pct: Optional[float] = Field(default=None, description="相对偏差百分比")
+    hvac_root_cause: Optional[str] = Field(
+        default=None,
+        description="HVAC 根因诊断码：A_low_efficiency / B_small_deltaT / C_unexpected_on / other_hvac",
+    )
     duration_hours: Optional[float] = Field(default=None, description="持续时长（小时）")
     anomaly_status: OperationStatus = Field(default=OperationStatus.ANOMALY)
 

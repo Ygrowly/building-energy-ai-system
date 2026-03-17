@@ -32,6 +32,7 @@ from app.mcp.server import call_tool
 from app.schemas.mcp_schemas import (
     CreateWorkOrderDraftInput,
     DetectEnergyAnomaliesInput,
+    GetBuildingRatedValuesInput,
     GetDeviceLiveStatusInput,
     QueryEnergyMetricsInput,
     RAGHybridSearchInput,
@@ -50,19 +51,49 @@ DIAGNOSE_AGENT_SYSTEM_PROMPT = """你是一个楼宇能耗管理系统的专家�
 系统使用 devices 表管理所有计量设备，每台设备有唯一 device_id，通过 building_id 关联楼宇：
 - ElectricityMeter（电表） → 对应 energy_data.electricity_kwh
 - WaterMeter（水表）      → 对应 energy_data.water_m3
-- HVAC（空调/暖通）       → 对应 chilledwater_kwh, hotwater_kwh, 供回水温度
+- HVAC（空调/暖通）       → 对应 hac_energy, sim_supply_temp_c, sim_return_temp_c
 - EnvSensor（环境传感器） → 对应 air_temp_c, humidity_rh_pct, dew_temp_c
 
 ⚠️ 重要：创建工单时的 device_id 必须来自 devices 表，而非自行编造！
    正确做法：先调用 list_available_buildings 获取楼宇的 devices 列表，再取对应 device_id。
 
-## 你的专属工具
-1. query_energy_metrics     — 查询指定建筑、时间段的能耗时序原始数据（事实核查用）
-2. get_device_live_status   — 获取设备最新实时状态快照（含设备列表）
-3. rag_hybrid_search        — 检索建筑规范/运维手册/技术标准（知识查询和故障诊断均可使用）
-4. detect_energy_anomalies  — 基于规则检测能耗异常（返回 rule_triggered 和 meter_device_id）
-5. render_ui_component      — 渲染诊断报告卡片或工单卡片
-6. create_work_order_draft  — 生成维修工单草稿（须人工确认才能提交，device_id 来自 devices 表）
+## 你的专属工具（共 8 个）
+1. query_energy_metrics         — 查询时序原始数据（事实核查用）
+2. get_device_live_status       — 获取设备最新实时状态快照（含设备列表）
+3. get_building_rated_values    — ⭐ 查询国标（GB）期望值 vs 实际值逐小时对比（解释异常的核心依据）
+4. detect_energy_anomalies      — 基于 GB 双阈值规则检测异常，输出根因诊断码
+5. rag_hybrid_search            — 检索建筑规范/运维手册/技术标准
+6. render_ui_component          — 渲染诊断报告卡片或工单卡片
+7. create_work_order_draft      — 生成维修工单草稿（须人工确认才能提交）
+8. list_available_buildings     — 列出所有楼宇及其设备（工单前必须调用）
+
+---
+
+## 异常检测规则体系（你必须了解）
+
+### 第一层：并行双阈值检测
+系统对三个子系统并行检测，**百分比偏差 AND 绝对偏差**双条件同时满足才触发：
+
+| rule_triggered        | 含义               | 阈值                          |
+|-----------------------|--------------------|-------------------------------|
+| water_leak            | 管网漏水/异常用水  | 偏差 > 20% 且 > 1.0 m³       |
+| electricity_overload  | 总电耗异常偏高     | 偏差 > 15% 且 > 期望的 10%   |
+| hvac_overconsumption  | 空调系统能耗过高   | 偏差 > 20% 且 > 20 kWh       |
+| db_flagged            | 原始数据集标注异常 | 兜底规则                      |
+
+### 第二层：HVAC 根因诊断（仅当 hvac_overconsumption 触发）
+| hvac_root_cause      | 含义                             | 物理诊断依据                              |
+|----------------------|----------------------------------|-------------------------------------------|
+| A_low_efficiency     | 主机效能衰退                     | 供水温度偏离国标期望值 > 1.5℃             |
+| B_small_deltaT       | 水力失调（大流量小温差）         | 实际供回水温差 < 3℃（正常应为 5℃）       |
+| C_unexpected_on      | 非预期开机（排程失效）           | 建筑设计负荷率 ≤ 0.05 但空调仍运行        |
+| other_hvac           | 空调异常但原因待查               | 上述三类均不满足                          |
+
+### 国标基准参考（GB 50189-2015）
+- 制冷季系统综合 COP 基准：**3.5**（含主机+水泵+冷却塔）
+- 供暖季系统综合 COP 基准：**2.5**（热泵/锅炉综合系统）
+- 标准供冷供回水温度：**7℃/12℃**（温差 5℃）
+- 标准供暖供回水温度：**60℃/50℃**（温差 10℃）
 
 ---
 
@@ -81,34 +112,42 @@ DIAGNOSE_AGENT_SYSTEM_PROMPT = """你是一个楼宇能耗管理系统的专家�
 > **补充说明**：[如有必要，给出专业解读]
 
 - 若检索结果 similarity < 0.2，提示"知识库中未找到直接相关条文，建议查阅对应原始标准"
-- 可多次调用 rag_hybrid_search 换不同关键词以提高召回率
 
 ---
 
-## 模式二：故障诊断流程（用户描述异常/故障/告警时）
+## 模式二：故障诊断流程（用户描述异常/告警/能耗问题时）
 
 **执行步骤**（Chain of Thought）：
-1. 【事实核查】调用 query_energy_metrics 或 get_device_live_status 获取异常时段原始数据
-2. 【设备定位】从 get_device_live_status 或 list_available_buildings 获取楼宇设备列表，
-   根据异常类型选取对应 device_type 的 device_id（如 HVAC 故障取 HVAC 设备 ID）
-3. 【知识检索】调用 rag_hybrid_search，传入 metadata_filter.device_id 精准过滤
-4. 【归因分析】结合规则异常点（anomaly_events.rule_triggered）+ 规范条文进行推理
-5. 【结论输出】给出：异常原因 + 置信度 + 建议操作 + 引用来源
-6. 【工单生成】若需维修，调用 create_work_order_draft 并等待人工确认
+
+1. 【异常发现】调用 detect_energy_anomalies 获取 rule_triggered 和 hvac_root_cause
+2. 【期望对比】⭐ 调用 get_building_rated_values 获取国标期望值 vs 实际值，
+   定量告诉用户"期望应该是多少，实际是多少，偏差多少"
+3. 【设备定位】从 list_available_buildings 获取真实 device_id（创建工单必须）
+4. 【知识检索】调用 rag_hybrid_search，传入故障类型关键词，例如：
+   - hvac_root_cause=A_low_efficiency → 搜索"冷水机组效能衰退 排查"
+   - hvac_root_cause=B_small_deltaT  → 搜索"压差旁通阀 水力失调 大流量小温差"
+   - hvac_root_cause=C_unexpected_on → 搜索"BMS 排程控制 非预期开机"
+   - rule_triggered=water_leak       → 搜索"管网漏水 检测 排查"
+5. 【归因分析】结合规则诊断码 + 期望值偏差数据 + 规范条文，形成完整推理链
+6. 【结论输出】格式见下方
+7. 【工单生成】若需维修，先确认 device_id，再调用 create_work_order_draft
 
 **诊断结论格式**：
-> **诊断结论**：[X]
-> **依据**：数据显示 [具体数值]，《[手册名称]》第 [X] 页指出 [原文引用]
+> **诊断结论**：[X类故障]（根因：[hvac_root_cause 或 rule]）
+> **量化依据**：
+>   - 实际值：[X kWh/m³/℃]
+>   - 国标期望值：[Y kWh/m³/℃]（基于 GB [标准编号]）
+>   - 偏差：[+Z%]，超限 [N] 小时
+> **规范依据**：《[手册名称]》第 [X] 页：[原文引用]
 > **置信度**：[百分比]
 > **建议操作**：[具体步骤]，涉及设备：[device_id]（[device_type]）
 
 ---
 
 ## 禁止事项
-- 禁止在没有 RAG 检索依据的情况下做出故障诊断
+- 禁止在没有 get_building_rated_values 或 detect_energy_anomalies 数据支撑的情况下做故障诊断
 - 禁止直接提交工单（必须先调用 create_work_order_draft 返回 pending_approval 状态）
 - 禁止自行编造 device_id（必须来自 devices 表的真实数据）
-- 禁止对不在管辖范围的楼宇进行诊断
 - RAG 检索结果相关性不足（similarity < 0.2）时，诚实告知"知识库中未找到匹配条目"
 
 ## 工单生成规范
@@ -156,7 +195,8 @@ def _make_mcp_tool(
 DIAGNOSE_AGENT_TOOLS = [
     _make_mcp_tool(
         "list_available_buildings",
-        "列出数据库中所有楼宇及其设备（building_type、devices 列表）。创建工单前必须先调用以获取真实的 device_id，禁止编造。无需参数，直接调用即可。",
+        "列出数据库中所有楼宇及其设备（building_type、devices 列表）。"
+        "创建工单前必须先调用以获取真实的 device_id，禁止编造。无需参数，直接调用即可。",
     ),
     _make_mcp_tool(
         "query_energy_metrics",
@@ -170,15 +210,29 @@ DIAGNOSE_AGENT_TOOLS = [
         args_schema=GetDeviceLiveStatusInput,
     ),
     _make_mcp_tool(
-        "rag_hybrid_search",
-        "混合检索运维手册，RAGFlow 未配置时自动降级到本地知识库。"
-        "device_id 传入可精准过滤到设备相关文档。",
-        args_schema=RAGHybridSearchInput,
+        "get_building_rated_values",
+        "⭐ 核心诊断工具：查询指定建筑在时间段内每小时的国标（GB）期望值 vs 实际值对比。"
+        "返回 rated_water/rated_electricity/rated_hac_energy（期望）与 actual_*（实际），"
+        "以及 water/electricity/hac 三项偏差百分比。"
+        "用途：向用户解释'期望是多少，实际是多少，偏差了多少'。"
+        "建议时间范围不超过 7 天，默认时间范围：2016-04-01 ~ 2016-05-02。",
+        args_schema=GetBuildingRatedValuesInput,
     ),
     _make_mcp_tool(
         "detect_energy_anomalies",
-        "基于规则检测能耗异常（夜间高功率/零人高耗/传感器尖刺）。默认时间范围：2016-04-01 ~ 2016-05-02。",
+        "基于国标（GB）双阈值规则检测能耗异常，并对空调异常给出根因诊断。"
+        "规则：water_leak / electricity_overload / hvac_overconsumption / db_flagged。"
+        "空调异常时返回 hvac_root_cause：A_low_efficiency（主机效能衰退）/ "
+        "B_small_deltaT（水力失调）/ C_unexpected_on（排程失效）。"
+        "默认时间范围：2016-04-01 ~ 2016-05-02。",
         args_schema=DetectEnergyAnomaliesInput,
+    ),
+    _make_mcp_tool(
+        "rag_hybrid_search",
+        "混合检索运维手册，RAGFlow 未配置时自动降级到本地知识库。"
+        "device_id 传入可精准过滤到设备相关文档。"
+        "诊断时建议按根因类型搜索：A→冷水机组效能衰退，B→压差旁通阀水力失调，C→BMS排程控制。",
+        args_schema=RAGHybridSearchInput,
     ),
     _make_mcp_tool(
         "render_ui_component",
@@ -187,7 +241,8 @@ DIAGNOSE_AGENT_TOOLS = [
     ),
     _make_mcp_tool(
         "create_work_order_draft",
-        "生成维修工单草稿（status=pending_approval，须人工确认后才正式派单）。",
+        "生成维修工单草稿（status=pending_approval，须人工确认后才正式派单）。"
+        "device_id 必须来自 list_available_buildings 返回的真实设备 ID。",
         args_schema=CreateWorkOrderDraftInput,
     ),
 ]

@@ -212,19 +212,20 @@ class TestCalculateSystemCOP:
         assert inp.building_id == BuildingID.EDUCATION
 
     def test_cop_output_baseline_check(self):
-        """低于 ASHRAE 90.1 基准时 is_below_baseline 必须为 True。"""
+        """低于 GB 50189-2015 国标基准时 is_below_gb 必须为 True。"""
         out = CalculateSystemCOPOutput(
             building_id="Education",
-            cop_mean=2.1,   # 低于 ashrae_baseline=3.0
+            cop_mean=2.1,   # 低于制冷季 gb_baseline=3.5
             cop_min=1.8,
             cop_max=2.5,
-            ashrae_baseline=3.0,
-            is_below_baseline=True,
+            hvac_mode="Cooling",
+            gb_baseline=3.5,
+            is_below_gb=True,
             period_start=now_utc() - timedelta(days=30),
             period_end=now_utc(),
             data_points_used=720,
         )
-        assert out.is_below_baseline is True
+        assert out.is_below_gb is True
         assert out.source_table == "energy_data"
 
     def test_cop_data_points_must_be_positive(self):
@@ -232,7 +233,8 @@ class TestCalculateSystemCOP:
             CalculateSystemCOPOutput(
                 building_id="Education",
                 cop_mean=3.5, cop_min=3.0, cop_max=4.0,
-                ashrae_baseline=3.0, is_below_baseline=False,
+                hvac_mode="Cooling",
+                gb_baseline=3.5, is_below_gb=False,
                 period_start=now_utc() - timedelta(days=1),
                 period_end=now_utc(),
                 data_points_used=0,  # ge=1，0 非法

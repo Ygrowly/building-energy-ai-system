@@ -29,6 +29,7 @@ from app.mcp.tools.data_query import (
 from app.mcp.tools.physics_calc import (
     calculate_system_cop,
     detect_energy_anomalies,
+    get_building_rated_values,
 )
 from app.mcp.tools.ui_render import (
     create_work_order_draft,
@@ -45,6 +46,7 @@ from app.schemas.mcp_schemas import (
     CreateWorkOrderDraftInput,
     DetectEnergyAnomaliesInput,
     GenerateReportInput,
+    GetBuildingRatedValuesInput,
     GetDeviceLiveStatusInput,
     QueryDailyEnergySummaryInput,
     QueryEnergyMetricsInput,
@@ -91,10 +93,28 @@ _register(ToolDefinition(
 
 _register(ToolDefinition(
     name="calculate_system_cop",
-    description="估算指定建筑指定时段的空调能效代理指标，与 ASHRAE 90.1 基准对比",
+    description=(
+        "估算指定建筑指定时段的空调能效代理指标（COP proxy），"
+        "与 GB 50189-2015 国标基准对比（制冷季 COP=3.5 / 供暖季 COP=2.5）。"
+        "输出 hvac_mode（Cooling/Heating/Mixed）帮助选取对应国标基准。"
+    ),
     input_schema=CalculateSystemCOPInput,
     requires_db=True,
     func=calculate_system_cop,
+))
+
+_register(ToolDefinition(
+    name="get_building_rated_values",
+    description=(
+        "查询指定建筑在时间段内每小时的国标（GB）期望值，并与数据库实际值并排返回。"
+        "输出包含 rated_water/rated_electricity/rated_hac_energy（期望）与 actual_*（实际）的逐小时对比，"
+        "以及 water/electricity/hac 三项偏差百分比。"
+        "适用场景：解释异常原因（'期望是多少，实际是多少'），或为前端渲染'实际 vs 期望'对比折线图提供数据。"
+        "建议时间范围不超过 7 天（168 条）。"
+    ),
+    input_schema=GetBuildingRatedValuesInput,
+    requires_db=True,
+    func=get_building_rated_values,
 ))
 
 _register(ToolDefinition(
@@ -115,7 +135,13 @@ _register(ToolDefinition(
 
 _register(ToolDefinition(
     name="detect_energy_anomalies",
-    description="基于物理规则（夜间高功率 / 无人高空调 / 传感器跳变）检测异常",
+    description=(
+        "基于国标（GB）双阈值物理规则检测能耗异常，并对空调异常自动给出根因诊断。"
+        "规则：water_leak（水耗偏差>20%且>1m³）/ electricity_overload（电耗偏差>15%）/ "
+        "hvac_overconsumption（空调偏差>20%且>20kWh）/ db_flagged（原始标注兜底）。"
+        "空调异常时输出 hvac_root_cause：A_low_efficiency（主机效能衰退）/ "
+        "B_small_deltaT（水力失调/大流量小温差）/ C_unexpected_on（排程失效/非预期开机）。"
+    ),
     input_schema=DetectEnergyAnomaliesInput,
     requires_db=True,
     func=detect_energy_anomalies,

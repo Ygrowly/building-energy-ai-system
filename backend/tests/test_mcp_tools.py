@@ -25,9 +25,6 @@ import pytest_asyncio
 
 from app.db.models import OperationStatusEnum
 from app.mcp.tools.physics_calc import (
-    _NIGHT_POWER_THRESHOLD,
-    _ZERO_OCC_HVAC_THRESHOLD,
-    _ASHRAE_BASELINE,
     calculate_system_cop,
     detect_energy_anomalies,
 )

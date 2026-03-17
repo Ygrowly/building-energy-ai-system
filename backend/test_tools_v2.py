@@ -89,7 +89,7 @@ async def main():
         )
         if hasattr(r3, "cop_mean"):
             ok(f"COP 均值={r3.cop_mean}  最小={r3.cop_min}  最大={r3.cop_max}")
-            ok(f"低于 ASHRAE 基准: {r3.is_below_baseline}")
+            ok(f"低于 GB 50189 国标基准: {r3.is_below_gb}")
         else:
             fail(str(r3.error))
 

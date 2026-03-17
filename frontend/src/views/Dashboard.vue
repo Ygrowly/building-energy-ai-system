@@ -362,6 +362,12 @@
       </div>
     </section>
 
+    <!-- 实际 vs 国标期望对比（新） -->
+    <RatedVsActualSection
+      :buildings="buildingStore.buildings"
+      :active-building-type="selectedBuildingType"
+    />
+
     <!-- 提示用户使用 AI -->
     <div class="ai-hint">
       <Icon icon="mdi:lightbulb" width="16" class="bar-icon" />
@@ -376,6 +382,7 @@ import { Icon } from '@iconify/vue'
 import * as echarts from 'echarts'
 import { apiFetch } from '@/api/http'
 import { useBuildingStore } from '@/stores/buildingStore'
+import RatedVsActualSection from '@/components/RatedVsActualSection.vue'
 
 const buildingStore = useBuildingStore()
 

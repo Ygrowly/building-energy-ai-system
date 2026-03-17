@@ -183,7 +183,7 @@ DATA_AGENT_TOOLS = [
     ),
     _make_mcp_tool(
         "calculate_system_cop",
-        "计算指定建筑空调系统的能效比 COP 并与 ASHRAE 90.1 基准对比。默认时间范围：2016-04-01 ~ 2016-05-02。",
+        "计算指定建筑空调系统的能效比 COP 并与 GB 50189-2015 国标基准对比。默认时间范围：2016-04-01 ~ 2016-05-02。",
         args_schema=CalculateSystemCOPInput,
     ),
     _make_mcp_tool(

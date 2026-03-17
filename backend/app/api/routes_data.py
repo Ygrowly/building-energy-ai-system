@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import date
+from datetime import date, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select, text
@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.models import AnomalyEvent, Building, DailyEnergySummary, Device, EnergyData
 from app.db.session import get_db_session
 from app.mcp.server import list_tools
+from app.services.gb_simulator import calculate_rated_values
 
 logger = logging.getLogger(__name__)
 
@@ -206,6 +207,158 @@ async def get_building_energy_trend(
         "source": "daily_energy_summary (materialized view)",
         "records": records,
         "count": len(records),
+    }
+
+
+# ---------------------------------------------------------------------------
+# 实际 vs 国标期望逐小时对比（供前端"实际 vs 期望"折线图使用）
+# ---------------------------------------------------------------------------
+_METRIC_COLS = {
+    "electricity": ("electricity_kwh", "kWh"),
+    "water":       ("water_m3",        "m³"),
+    "hac_energy":  ("hac_energy",      "kWh"),
+}
+_TZ_OFFSET_H = 8   # UTC+8
+
+@router.get(
+    "/buildings/{building_type}/rated-vs-actual",
+    summary="获取建筑逐小时实际 vs 国标期望值对比",
+)
+async def get_rated_vs_actual(
+    building_type: str,
+    start_date: date = Query(..., description="开始日期 YYYY-MM-DD（建议跨度 ≤ 7 天）"),
+    end_date: date   = Query(..., description="结束日期 YYYY-MM-DD"),
+    metric: str      = Query("electricity", description="指标：electricity | water | hac_energy"),
+    db: AsyncSession = Depends(get_db_session),
+):
+    """
+    逐小时返回指定建筑的"实际值 vs 国标 GB 期望值"对比数据。
+
+    期望值由 gb_simulator 实时计算（基于 GB/T 51161、GB 50034、GB 50189、
+    GB 50736、GB 50015 五项国标），不依赖外部存储。
+
+    返回字段：
+      timestamp        — ISO 8601 时间戳（UTC）
+      actual           — 实际值（来自 energy_data 表）
+      rated            — 国标期望值
+      deviation_pct    — 偏差百分比（正数=超标，负数=低于期望）
+      hvac_mode        — 当前 HVAC 工况（Cooling / Heating / Ventilation）
+      schedule_factor  — 当前小时建筑负荷率 S
+      is_anomaly       — 是否异常（|偏差| > 15% 且满足绝对值阈值）
+    """
+    if start_date > end_date:
+        raise HTTPException(status_code=400, detail="start_date 不能晚于 end_date")
+    if (end_date - start_date).days > 7:
+        raise HTTPException(status_code=400, detail="查询跨度不能超过 7 天（168 小时）")
+    if metric not in _METRIC_COLS:
+        raise HTTPException(status_code=400, detail=f"metric 只能为：{list(_METRIC_COLS.keys())}")
+
+    col_name, unit = _METRIC_COLS[metric]
+    abs_thresholds = {"electricity": None, "water": 1.0, "hac_energy": 20.0}
+    rel_threshold  = {"electricity": 0.15, "water": 0.20, "hac_energy": 0.20}
+    abs_thr = abs_thresholds[metric]
+    rel_thr = rel_threshold[metric]
+
+    # 查建筑元数据
+    bld_result = await db.execute(
+        select(Building.building_id, Building.sqm, Building.primary_space_usage)
+        .where(Building.primary_space_usage == building_type)
+    )
+    bld_row = bld_result.fetchone()
+    if not bld_row:
+        raise HTTPException(status_code=404, detail=f"建筑类型 {building_type} 不存在")
+    building_id, sqm, usage = bld_row
+    sqm = sqm or 1000.0
+
+    # 查时段内所有小时记录
+    result = await db.execute(
+        select(
+            EnergyData.timestamp,
+            EnergyData.electricity_kwh,
+            EnergyData.water_m3,
+            EnergyData.hac_energy,
+            EnergyData.sim_supply_temp_c,
+            EnergyData.sim_return_temp_c,
+            EnergyData.air_temp_c,
+            EnergyData.dew_temp_c,
+        )
+        .where(EnergyData.building_id == building_id)
+        .where(EnergyData.timestamp >= start_date)
+        .where(EnergyData.timestamp < end_date + timedelta(days=1))
+        .order_by(EnergyData.timestamp.asc())
+    )
+    rows = result.fetchall()
+
+    records = []
+    anomaly_count = 0
+    eps = 1e-6
+
+    for ts, elec, water, hac, supply, ret, air_t, dew_t in rows:
+        # 转换为本地时间计算时间系数
+        ts_utc = ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
+        ts_local = ts_utc + timedelta(hours=_TZ_OFFSET_H)
+
+        try:
+            rated = calculate_rated_values(
+                sqm=sqm,
+                primary_space_usage=usage or "Office",
+                hour=ts_local.hour,
+                dayofweek=ts_local.isoweekday(),
+                air_temp=air_t or 20.0,
+                dew_temp=dew_t or 10.0,
+            )
+        except Exception:
+            continue
+
+        actual_val: float | None = {
+            "electricity": elec,
+            "water":       water,
+            "hac_energy":  hac,
+        }[metric]
+        rated_val: float = {
+            "electricity": rated.rated_electricity_kwh,
+            "water":       rated.rated_water_m3,
+            "hac_energy":  rated.rated_hac_energy,
+        }[metric]
+
+        dev_pct: float | None = None
+        is_anomaly = False
+        if actual_val is not None and rated_val > eps:
+            delta = actual_val - rated_val
+            dev_pct = round(delta / rated_val * 100, 2)
+            # 异常判定：满足相对阈值 AND 绝对阈值（电耗只用相对阈值）
+            if abs_thr is None:
+                is_anomaly = dev_pct > rel_thr * 100
+            else:
+                is_anomaly = dev_pct > rel_thr * 100 and delta > abs_thr
+
+        if is_anomaly:
+            anomaly_count += 1
+
+        records.append({
+            "timestamp":       ts_utc.isoformat(),
+            "actual":          round(actual_val, 4) if actual_val is not None else None,
+            "rated":           round(rated_val, 4),
+            "deviation_pct":   dev_pct,
+            "hvac_mode":       rated.hvac_mode,
+            "schedule_factor": rated.schedule_factor,
+            "is_anomaly":      is_anomaly,
+        })
+
+    return {
+        "building_type":   building_type,
+        "metric":          metric,
+        "unit":            unit,
+        "primary_space_usage": usage,
+        "sqm":             sqm,
+        "start_date":      start_date.isoformat(),
+        "end_date":        end_date.isoformat(),
+        "records":         records,
+        "summary": {
+            "total_hours":      len(records),
+            "anomaly_hours":    anomaly_count,
+            "anomaly_rate_pct": round(anomaly_count / len(records) * 100, 1) if records else 0,
+        },
     }
 
 

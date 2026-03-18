@@ -70,6 +70,7 @@ export async function sendChatMessage(
   message: string,
   sessionId: string | null,
   handlers: StreamHandlers,
+  enableWebSearch = false,
 ): Promise<string> {
   const token = _getToken()
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
@@ -78,7 +79,7 @@ export async function sendChatMessage(
   const response = await fetch('/api/chat', {
     method: 'POST',
     headers,
-    body: JSON.stringify({ message, session_id: sessionId }),
+    body: JSON.stringify({ message, session_id: sessionId, enable_web_search: enableWebSearch }),
   })
 
   if (!response.ok) {

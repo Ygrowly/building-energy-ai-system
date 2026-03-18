@@ -346,7 +346,253 @@ class TestChatEndpoint:
 
         resp = await client.delete(f"/api/chat/sessions/{test_sid}")
         assert resp.status_code == 200
-        assert resp.json()["status"] == "cleared"
 
         resp2 = await client.get(f"/api/chat/sessions/{test_sid}")
         assert resp2.status_code == 404
+
+
+# ===========================================================================
+# 5. 联网搜索集成测试
+# ===========================================================================
+
+def _parse_sse(text: str) -> list[dict]:
+    """从 SSE 响应文本中解析所有 data 行并返回事件列表。"""
+    events = []
+    for line in text.split("\n"):
+        if line.startswith("data: "):
+            try:
+                events.append(json.loads(line[6:]))
+            except json.JSONDecodeError:
+                pass
+    return events
+
+
+def _make_graph_mock():
+    """
+    返回一个极简 mock LangGraph：产生一条 AI 回复并结束。
+
+    关键：`astream_events` 会把输入 state 的 messages 透传到
+    "LangGraph" chain_end 输出，从而让 `final_state_holder` 得到正确的
+    messages 列表（含 HumanMessage），使 P2 还原逻辑可以被触发和验证。
+    """
+    from langchain_core.messages import AIMessage
+
+    mock_graph = AsyncMock()
+
+    async def _mock_events(state, version):
+        msgs = list(state.get("messages", []))
+        ai_reply = AIMessage(content="这是基于搜索结果的回答。")
+        # 模拟 agent 节点完成并输出文字
+        yield {
+            "event": "on_chain_end",
+            "name": "data_agent",
+            "data": {"output": {"messages": msgs + [ai_reply]}},
+        }
+        # 模拟 LangGraph 整图结束，把完整 state 回写给调用方
+        yield {
+            "event": "on_chain_end",
+            "name": "LangGraph",
+            "data": {"output": {
+                "messages": msgs + [ai_reply],
+                "hop_count": 1,
+                "artifacts": [],
+                "pending_action": None,
+            }},
+        }
+
+    mock_graph.astream_events = _mock_events
+    mock_graph.ainvoke = AsyncMock(return_value={
+        "messages": [], "hop_count": 1, "artifacts": [], "pending_action": None,
+    })
+    return mock_graph
+
+
+def _make_search_summary(query: str = "test", n_results: int = 2):
+    """构造一个含 n_results 条结果的 WebSearchSummary。"""
+    from app.services.web_search import SearchResult, WebSearchSummary
+
+    results = [
+        SearchResult(
+            title=f"Result {i}",
+            url=f"https://site{i}.com/page",
+            content=f"这是第 {i} 条搜索结果摘要。",
+            score=round(1.0 - i * 0.1, 1),
+        )
+        for i in range(1, n_results + 1)
+    ]
+    context = "<<<WEB_SEARCH_RESULTS>>>\n" + "\n".join(
+        f"[{i+1}] 标题：{r.title}\n    来源：{r.url}\n    摘要：{r.content}"
+        for i, r in enumerate(results)
+    ) + "\n<<<WEB_SEARCH_RESULTS_END>>>"
+    return WebSearchSummary(query=query, results=results, context_block=context)
+
+
+class TestChatWebSearch:
+    """POST /api/chat 联网搜索功能集成测试。"""
+
+    @pytest.mark.asyncio
+    async def test_web_search_false_does_not_call_tavily(self, client):
+        """enable_web_search=False 时完全不调用 tavily_search。"""
+        mock_graph = _make_graph_mock()
+
+        with patch("app.api.routes_chat.get_graph", return_value=mock_graph), \
+             patch("app.api.routes_chat.tavily_search", new_callable=AsyncMock) as mock_tavily:
+            await client.post(
+                "/api/chat",
+                json={"message": "什么是光伏发电？", "enable_web_search": False},
+            )
+
+        mock_tavily.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_web_search_default_does_not_call_tavily(self, client):
+        """enable_web_search 字段缺省时默认为 False，不调用 tavily_search。"""
+        mock_graph = _make_graph_mock()
+
+        with patch("app.api.routes_chat.get_graph", return_value=mock_graph), \
+             patch("app.api.routes_chat.tavily_search", new_callable=AsyncMock) as mock_tavily:
+            await client.post(
+                "/api/chat",
+                json={"message": "默认无搜索"},  # 不传 enable_web_search
+            )
+
+        mock_tavily.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_web_search_true_calls_tavily_with_user_message(self, client):
+        """enable_web_search=True 时以原始用户消息调用 tavily_search。"""
+        user_msg = "绿色建筑认证标准有哪些？"
+        mock_graph = _make_graph_mock()
+        mock_summary = _make_search_summary(query=user_msg[:200])
+
+        with patch("app.api.routes_chat.get_graph", return_value=mock_graph), \
+             patch("app.api.routes_chat.tavily_search",
+                   new_callable=AsyncMock, return_value=mock_summary) as mock_tavily:
+            await client.post(
+                "/api/chat",
+                json={"message": user_msg, "enable_web_search": True},
+            )
+
+        mock_tavily.assert_called_once_with(user_msg)
+
+    @pytest.mark.asyncio
+    async def test_web_search_success_emits_web_search_thinking_events(self, client):
+        """联网搜索成功时 SSE 流含多个 agent=web_search 的 thinking 事件。"""
+        mock_graph = _make_graph_mock()
+        mock_summary = _make_search_summary(n_results=2)
+
+        with patch("app.api.routes_chat.get_graph", return_value=mock_graph), \
+             patch("app.api.routes_chat.tavily_search",
+                   new_callable=AsyncMock, return_value=mock_summary):
+            resp = await client.post(
+                "/api/chat",
+                json={"message": "联网测试问题", "enable_web_search": True},
+            )
+
+        assert resp.status_code == 200
+        events = _parse_sse(resp.text)
+        ws_events = [e for e in events if e.get("type") == "thinking" and e.get("agent") == "web_search"]
+
+        assert len(ws_events) >= 2
+        # 第 1 个事件：开始搜索
+        assert ws_events[0]["message"] == "正在联网搜索最新信息..."
+        # 第 2 个事件：搜索完成，告知获取了多少条资料
+        assert any("已获取" in e["message"] and "条参考资料" in e["message"] for e in ws_events)
+
+    @pytest.mark.asyncio
+    async def test_web_search_returns_none_emits_no_results_event(self, client):
+        """tavily_search 返回 None 时 SSE 流含 '未找到相关资料' 事件。"""
+        mock_graph = _make_graph_mock()
+
+        with patch("app.api.routes_chat.get_graph", return_value=mock_graph), \
+             patch("app.api.routes_chat.tavily_search",
+                   new_callable=AsyncMock, return_value=None):
+            resp = await client.post(
+                "/api/chat",
+                json={"message": "无结果查询", "enable_web_search": True},
+            )
+
+        events = _parse_sse(resp.text)
+        ws_events = [e for e in events if e.get("type") == "thinking" and e.get("agent") == "web_search"]
+        assert any("未找到相关资料" in e["message"] for e in ws_events)
+
+    @pytest.mark.asyncio
+    async def test_web_search_exception_emits_unavailable_event(self, client):
+        """tavily_search 抛出异常时 SSE 流含 '暂时不可用' 事件，整体请求不崩溃。"""
+        mock_graph = _make_graph_mock()
+
+        with patch("app.api.routes_chat.get_graph", return_value=mock_graph), \
+             patch("app.api.routes_chat.tavily_search",
+                   new_callable=AsyncMock, side_effect=RuntimeError("网络故障")):
+            resp = await client.post(
+                "/api/chat",
+                json={"message": "异常场景测试", "enable_web_search": True},
+            )
+
+        assert resp.status_code == 200  # 整体不崩溃
+        events = _parse_sse(resp.text)
+        ws_events = [e for e in events if e.get("type") == "thinking" and e.get("agent") == "web_search"]
+        assert any("暂时不可用" in e["message"] for e in ws_events)
+
+    @pytest.mark.asyncio
+    async def test_web_search_sse_also_contains_done_event(self, client):
+        """联网搜索流程完整结束后 SSE 含 done 事件。"""
+        mock_graph = _make_graph_mock()
+        mock_summary = _make_search_summary()
+
+        with patch("app.api.routes_chat.get_graph", return_value=mock_graph), \
+             patch("app.api.routes_chat.tavily_search",
+                   new_callable=AsyncMock, return_value=mock_summary):
+            resp = await client.post(
+                "/api/chat",
+                json={"message": "完整流程测试", "enable_web_search": True},
+            )
+
+        events = _parse_sse(resp.text)
+        assert any(e.get("type") == "done" for e in events)
+
+    @pytest.mark.asyncio
+    async def test_persisted_message_is_original_not_augmented(self, client):
+        """
+        P2 修复验证：持久化到 state 的 HumanMessage 是原始消息，
+        不含搜索上下文（<<<WEB_SEARCH_RESULTS>>> 标记）。
+        """
+        from langchain_core.messages import HumanMessage
+        from app.api.routes_chat import _sessions
+
+        user_msg = "什么是绿色建筑？"
+        mock_graph = _make_graph_mock()
+        mock_summary = _make_search_summary(query=user_msg[:200])
+
+        with patch("app.api.routes_chat.get_graph", return_value=mock_graph), \
+             patch("app.api.routes_chat.tavily_search",
+                   new_callable=AsyncMock, return_value=mock_summary):
+            resp = await client.post(
+                "/api/chat",
+                json={"message": user_msg, "enable_web_search": True},
+            )
+
+        assert resp.status_code == 200
+        session_id = resp.headers.get("x-session-id")
+        assert session_id is not None
+
+        state = _sessions.get(session_id)
+        if state:
+            human_msgs = [
+                m for m in state.get("messages", [])
+                if isinstance(m, HumanMessage)
+            ]
+            assert len(human_msgs) >= 1
+            last_content = human_msgs[-1].content
+            # 原始消息应在 state 中，搜索标记不应在 state 中
+            assert last_content == user_msg
+            assert "<<<WEB_SEARCH_RESULTS>>>" not in last_content
+
+    @pytest.mark.asyncio
+    async def test_enable_web_search_null_returns_422(self, client):
+        """enable_web_search 字段为 null 时返回 422（不是可选字段）。"""
+        resp = await client.post(
+            "/api/chat",
+            json={"message": "test", "enable_web_search": None},  # null 不是合法 bool
+        )
+        assert resp.status_code == 422

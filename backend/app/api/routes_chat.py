@@ -43,6 +43,7 @@ from app.db.session_store import session_store
 from app.graph.state import initial_state
 from app.graph.workflow import get_graph
 from app.mcp.tools.data_query import list_available_buildings
+from app.services.web_search import tavily_search
 from app.schemas.genui_protocol import (
     SessionInfo,
     SessionListResponse,
@@ -168,6 +169,7 @@ def _validate_session_id(v: str | None) -> str | None:
 class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=2000, description="用户消息")
     session_id: str | None = Field(None, description="会话 ID，为空则新建")
+    enable_web_search: bool = Field(False, description="是否启用 Tavily 联网搜索")
 
     @field_validator("session_id")
     @classmethod
@@ -303,12 +305,14 @@ async def _stream_graph(
     user_message: str,
     user_id: str | None = None,
     request_id: str | None = None,
+    enable_web_search: bool = False,
 ) -> AsyncGenerator[str, None]:
     """
     执行 LangGraph 图并将过程以 SSE 事件流方式推出。
     每轮结束后异步持久化会话状态到 PostgreSQL。
     user_id：当前用户 ID，首次创建会话时写入归属。
     request_id：本请求追踪 ID，用于日志与 done 事件（P3 可观测性）。
+    enable_web_search：若为 True，先调用 Tavily 搜索，将结果注入为上下文。
     """
     request_id = request_id or str(uuid.uuid4())
     state = await _get_or_create_state(session_id)
@@ -320,7 +324,42 @@ async def _stream_graph(
 
     is_first_message = len(state.get("messages", [])) == 0
 
+    # ── 始终将原始消息写入 state（持久化到 DB 的历史）────────────────────────
     state["messages"] = list(state["messages"]) + [HumanMessage(content=user_message)]
+
+    # ── 联网搜索：构造仅用于当次 LLM 调用的 graph_input，不污染持久化历史 ──
+    # graph_input 与 state 的唯一区别是最后一条 HumanMessage 携带搜索上下文。
+    # 搜索完成后 final_state_holder["messages"] 可能包含注入内容，
+    # 在合并 merged 时需还原为原始消息（见下方"恢复原始消息"注释块）。
+    graph_input = state
+    augmented_message = user_message
+
+    if enable_web_search:
+        yield _thinking_event("web_search", "正在联网搜索最新信息...", hop_count=0)
+        try:
+            summary = await tavily_search(user_message)
+            if summary and summary.context_block:
+                augmented_message = f"{summary.context_block}\n\n用户问题：{user_message}"
+                # graph_input 是 state 的浅拷贝，messages 替换为带搜索上下文的版本
+                graph_input = dict(state)
+                graph_input["messages"] = list(state["messages"][:-1]) + [
+                    HumanMessage(content=augmented_message)
+                ]
+                yield _thinking_event(
+                    "web_search",
+                    f"已获取 {len(summary.results)} 条参考资料，正在分析...",
+                    hop_count=0,
+                )
+                logger.info(
+                    "联网搜索注入上下文: session=%s results=%d",
+                    session_id, len(summary.results),
+                )
+            else:
+                yield _thinking_event("web_search", "未找到相关资料，将基于已有知识回答", hop_count=0)
+                logger.warning("联网搜索未返回结果: session=%s", session_id)
+        except Exception as exc:
+            yield _thinking_event("web_search", "联网搜索暂时不可用，将基于已有知识回答", hop_count=0)
+            logger.error("联网搜索异常，降级: %s", exc)
 
     yield _thinking_event("router", "正在分析您的请求...", hop_count=state.get("hop_count", 0))
 
@@ -332,7 +371,7 @@ async def _stream_graph(
     _tool_count = 0
 
     try:
-        async for event in graph.astream_events(state, version="v2"):
+        async for event in graph.astream_events(graph_input, version="v2"):
             kind = event.get("event", "")
             name = event.get("name", "")
             data = event.get("data", {})
@@ -434,6 +473,18 @@ async def _stream_graph(
     if final_state_holder:
         merged = dict(state)
         merged.update(final_state_holder)
+
+        # ── 恢复原始用户消息（防止搜索上下文污染持久化的对话历史）──────────
+        # final_state_holder["messages"] 可能含有带搜索上下文的 HumanMessage，
+        # 找到并替换回 user_message，确保 DB 中存储的是原始消息而非注入内容。
+        if augmented_message != user_message and "messages" in merged:
+            msgs = list(merged["messages"])
+            for i in range(len(msgs) - 1, -1, -1):
+                if isinstance(msgs[i], HumanMessage) and msgs[i].content == augmented_message:
+                    msgs[i] = HumanMessage(content=user_message)
+                    merged["messages"] = msgs
+                    break
+
         _sessions[session_id] = merged
         hop = merged.get("hop_count", 0)
         pa = merged.get("pending_action")
@@ -442,7 +493,15 @@ async def _stream_graph(
             register_pending_order(pa)
     else:
         try:
-            fallback_state = await graph.ainvoke(state)
+            fallback_state = await graph.ainvoke(graph_input)
+            # 同样恢复原始消息
+            if augmented_message != user_message and "messages" in fallback_state:
+                msgs = list(fallback_state["messages"])
+                for i in range(len(msgs) - 1, -1, -1):
+                    if isinstance(msgs[i], HumanMessage) and msgs[i].content == augmented_message:
+                        msgs[i] = HumanMessage(content=user_message)
+                        fallback_state["messages"] = msgs
+                        break
             _sessions[session_id] = fallback_state
             merged = fallback_state
             hop = fallback_state.get("hop_count", 0)
@@ -522,7 +581,12 @@ async def chat(
     request_id = str(uuid.uuid4())
 
     return StreamingResponse(
-        _stream_graph(session_id, req.message, user_id=user_id, request_id=request_id),
+        _stream_graph(
+            session_id, req.message,
+            user_id=user_id,
+            request_id=request_id,
+            enable_web_search=req.enable_web_search,
+        ),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

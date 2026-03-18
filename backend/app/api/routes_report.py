@@ -82,7 +82,7 @@ async def export_report(
             "时间戳", "建筑类型", "电力(kWh)", "水耗(m³)",
             "热水(kWh)", "冷冻水(kWh)",
             "模拟供水温度(°C)", "模拟回水温度(°C)",
-            "气温(°C)", "露点温度(°C)", "湿度(%RH)", "异常状态",
+            "气温(°C)", "露点温度(°C)", "湿度(%RH)",
         ])
         result = await db.execute(
             select(EnergyData)
@@ -106,7 +106,6 @@ async def export_report(
                 r.air_temp_c,
                 r.dew_temp_c,
                 r.humidity_rh_pct,
-                r.anomaly_status or "",
             ])
     else:
         raise HTTPException(

@@ -13,9 +13,6 @@
     - B_small_deltaT       水力失调（大流量小温差）：供回水温差 < 3℃
     - C_unexpected_on      非预期开机：负荷率系数 ≤ 0.05 但空调仍大量运行
 
-  兜底规则：
-    - db_flagged           energy_data.anomaly_status = 'Anomaly'（向后兼容）
-
 核心改进（相比旧版）：
   - 用 gb_simulator 计算每条记录的物理期望值，取代"批次均值 × 3"的统计法
   - 采用"百分比 + 绝对值"双满足条件，消除夜间低值下的垃圾告警
@@ -46,7 +43,6 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # 调度常量
 # ---------------------------------------------------------------------------
-_TIMEZONE_OFFSET_H = 8      # 中国标准时 UTC+8
 _SCAN_BATCH_HOURS = 24      # 每批扫描的时间窗口（小时）
 
 # ---------------------------------------------------------------------------
@@ -57,9 +53,9 @@ _SCAN_BATCH_HOURS = 24      # 每批扫描的时间窗口（小时）
 _WATER_REL_THRESHOLD = 0.20    # 20%
 _WATER_ABS_THRESHOLD = 1.0     # 1.0 m³（过滤管网微小波动）
 
-# 总电耗：相对偏差阈值 + 绝对偏差相对于期望的比例
+# 总电耗：相对偏差阈值 + 固定绝对偏差最小值（防止夜间低负荷时微小差异误报）
 _ELEC_REL_THRESHOLD = 0.15     # 15%
-_ELEC_ABS_RATIO = 0.10         # 期望值的 10%（避免对小额电耗无限放大）
+_ELEC_ABS_THRESHOLD = 5.0      # 5 kWh（绝对差值不足 5 kWh 不触发，过滤夜间待机底噪）
 
 # 空调能耗：相对偏差阈值 + 绝对偏差最小值
 _HAC_REL_THRESHOLD = 0.20      # 20%
@@ -196,11 +192,9 @@ async def scan_and_persist(
     for ed, usage, sqm in rows:
         ts: datetime = ed.timestamp
 
-        # 本地时间（UTC+8）提取 hour / dayofweek
-        ts_utc = ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
-        ts_local = ts_utc + timedelta(hours=_TIMEZONE_OFFSET_H)
-        hour_local = ts_local.hour
-        dow_local = ts_local.isoweekday()  # 1=周一, 7=周日
+        # energy_data.timestamp 存储的即为使用时刻（本地时间），直接读取
+        hour_local = ts.hour
+        dow_local = ts.isoweekday()  # 1=周一, 7=周日
 
         display = _BUILDING_NAMES.get(usage or "", usage or ed.building_id)
         meter_id = meter_id_map.get(ed.building_id, ed.building_id)
@@ -251,8 +245,7 @@ async def scan_and_persist(
         if ed.electricity_kwh is not None and rated.rated_electricity_kwh > eps:
             delta_e = ed.electricity_kwh - rated.rated_electricity_kwh
             rel_e = delta_e / rated.rated_electricity_kwh
-            abs_thr_e = rated.rated_electricity_kwh * _ELEC_ABS_RATIO
-            if rel_e > _ELEC_REL_THRESHOLD and delta_e > abs_thr_e:
+            if rel_e > _ELEC_REL_THRESHOLD and delta_e > _ELEC_ABS_THRESHOLD:
                 dev_pct = round(rel_e * 100, 2)
                 to_insert.append(_make_record(
                     ts, ed, meter_id, now,
@@ -302,18 +295,6 @@ async def scan_and_persist(
                     ),
                 ))
 
-        # ── 规则 4：DB 存量标注兜底（向后兼容；大小写不敏感匹配）──────────
-        if ed.anomaly_status is not None and ed.anomaly_status.lower() == "anomaly":
-            to_insert.append(_make_record(
-                ts, ed, meter_id, now,
-                rule="db_flagged",
-                actual=None,
-                expected=None,
-                threshold=None,
-                deviation_pct=None,
-                hvac_root_cause=None,
-                msg=f"{display} 运行状态异常（原始数据集标记）",
-            ))
 
     if not to_insert:
         return 0

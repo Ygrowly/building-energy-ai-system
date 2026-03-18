@@ -121,7 +121,6 @@ async def get_building_status(
         "sqm": building.sqm,
         "devices": devices,
         "last_updated_utc": latest.timestamp.isoformat() if latest.timestamp else None,
-        "anomaly_status": latest.anomaly_status,
         "electricity_kwh": latest.electricity_kwh,
         "water_m3": latest.water_m3,
         "hac_energy": latest.hac_energy,
@@ -218,8 +217,6 @@ _METRIC_COLS = {
     "water":       ("water_m3",        "m³"),
     "hac_energy":  ("hac_energy",      "kWh"),
 }
-_TZ_OFFSET_H = 8   # UTC+8
-
 @router.get(
     "/buildings/{building_type}/rated-vs-actual",
     summary="获取建筑逐小时实际 vs 国标期望值对比",
@@ -294,16 +291,12 @@ async def get_rated_vs_actual(
     eps = 1e-6
 
     for ts, elec, water, hac, supply, ret, air_t, dew_t in rows:
-        # 转换为本地时间计算时间系数
-        ts_utc = ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
-        ts_local = ts_utc + timedelta(hours=_TZ_OFFSET_H)
-
         try:
             rated = calculate_rated_values(
                 sqm=sqm,
                 primary_space_usage=usage or "Office",
-                hour=ts_local.hour,
-                dayofweek=ts_local.isoweekday(),
+                hour=ts.hour,
+                dayofweek=ts.isoweekday(),
                 air_temp=air_t or 20.0,
                 dew_temp=dew_t or 10.0,
             )
@@ -404,13 +397,12 @@ async def get_overview(db: AsyncSession = Depends(get_db_session)):
     if not daily_rows:
         return {"error": f"日期 {latest_day} 无能耗数据"}
 
-    # 各楼最新一条实时记录（anomaly_status + 实时读数）
+    # 各楼最新一条实时记录（实时读数）
     live_result = await db.execute(
         text("""
             SELECT DISTINCT ON (e.building_id)
                 e.building_id,
                 b.primary_space_usage,
-                e.anomaly_status,
                 e.water_m3,
                 e.hac_energy,
                 e.air_temp_c
@@ -436,10 +428,7 @@ async def get_overview(db: AsyncSession = Depends(get_db_session)):
         )
         anomaly_building_ids = {r[0] for r in anomaly_result.fetchall()}
     except Exception:
-        # 降级：从实时数据的 anomaly_status 字段判断
-        for r in live_map.values():
-            if r[2] == "Anomaly":
-                anomaly_building_ids.add(r[0])
+        pass
 
     total_electricity = 0.0
     total_water = 0.0
@@ -448,7 +437,7 @@ async def get_overview(db: AsyncSession = Depends(get_db_session)):
     for dr in daily_rows:
         bid, usage, sqm, total_elec, total_w, avg_temp = dr
         live = live_map.get(bid)
-        latest_w = float(live[3] or 0) if live else 0.0
+        latest_w = float(live[2] or 0) if live else 0.0
         is_anomaly = bid in anomaly_building_ids
         intensity = (
             round(float(total_elec or 0) / float(sqm), 2)
@@ -520,19 +509,8 @@ async def get_recent_anomalies(
         window_start = max_data_ts - timedelta(hours=hours)
 
         stmt = (
-            select(
-                AnomalyEvent,
-                Building.primary_space_usage,
-                EnergyData.electricity_kwh,
-                EnergyData.water_m3,
-                EnergyData.hac_energy,
-            )
+            select(AnomalyEvent, Building.primary_space_usage)
             .outerjoin(Building, AnomalyEvent.building_id == Building.building_id)
-            .outerjoin(
-                EnergyData,
-                (AnomalyEvent.building_id == EnergyData.building_id)
-                & (AnomalyEvent.data_timestamp == EnergyData.timestamp),
-            )
             .where(AnomalyEvent.data_timestamp >= window_start)
             .where(AnomalyEvent.is_resolved.is_(False))
             .order_by(AnomalyEvent.data_timestamp.desc())
@@ -543,16 +521,13 @@ async def get_recent_anomalies(
         result = await db.execute(stmt)
         rows = result.fetchall()
 
-        def _pick_actual(rule: str, elec, water, hac) -> float | None:
-            """根据规则类型，从 energy_data 中取对应原始字段作为实际值。"""
-            if rule == "electricity_overload":
-                return elec
-            if rule == "water_leak":
-                return water
-            if rule == "hvac_overconsumption":
-                return hac
-            return None  # db_flagged 等兜底规则无量化实际值
-
+        # actual_value 使用扫描时存入的值（anomaly_events.actual_value）
+        # 扫描器遍历 energy_data 每一行，已正确取对应字段：
+        #   electricity_overload → electricity_kwh
+        #   water_leak           → water_m3
+        #   hvac_overconsumption → hac_energy
+        # 注意：energy_data 无主键，可能存在重复行（正常+注入异常各一条），
+        #       扫描时对异常行触发告警并存入正确的 actual_value，此处直接使用。
         anomalies = [
             {
                 "timestamp": ev.data_timestamp.isoformat(),
@@ -561,14 +536,13 @@ async def get_recent_anomalies(
                 "meter_device_id": ev.meter_device_id,
                 "rule": ev.rule_triggered,
                 "message": ev.message,
-                # 实际值直接从 energy_data 原始列读取，不使用 anomaly_events 缓存值
-                "actual_value": _pick_actual(ev.rule_triggered, elec, water, hac),
+                "actual_value": ev.actual_value,
                 "threshold": ev.threshold_value,
                 "expected_value": ev.expected_value,
                 "deviation_pct": ev.deviation_pct,
                 "anomaly_status": "Anomaly",
             }
-            for ev, usage, elec, water, hac in rows[:100]
+            for ev, usage in rows[:100]
         ]
         events = rows  # 用于 total 计数
 
@@ -680,21 +654,6 @@ async def _fallback_realtime_anomalies(
                 "anomaly_status": "Anomaly",
             })
 
-        if (
-            ed.anomaly_status is not None
-            and ed.anomaly_status == "Anomaly"
-        ):
-            anomalies.append({
-                "timestamp": ts.isoformat(),
-                "building_type": usage,
-                "building_id": ed.building_id,
-                "meter_device_id": meter_id,
-                "rule": "db_flagged",
-                "message": f"{display}运行状态异常（系统标记）",
-                "actual_value": None,
-                "threshold": None,
-                "anomaly_status": "Anomaly",
-            })
 
     return {
         "anomalies": anomalies[:100],

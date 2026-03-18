@@ -288,15 +288,11 @@ function renderChart() {
   const rs     = records.value
   const unit   = currentUnit.value
 
-  // X 轴：取时间戳的 MM-DD HH:mm 部分（本地时间近似）
+  // X 轴：energy_data.timestamp 存储的即为使用时刻（本地时间），直接从字符串中提取
   const xData = rs.map(r => {
-    const d = new Date(r.timestamp)
-    // UTC+8 偏移显示
-    const local = new Date(d.getTime() + 8 * 3600 * 1000)
-    const mo = String(local.getUTCMonth() + 1).padStart(2, '0')
-    const da = String(local.getUTCDate()).padStart(2, '0')
-    const hh = String(local.getUTCHours()).padStart(2, '0')
-    return `${mo}-${da} ${hh}:00`
+    const m = r.timestamp.match(/\d{4}-(\d{2})-(\d{2})T(\d{2})/)
+    if (m) return `${m[1]}-${m[2]} ${m[3]}:00`
+    return r.timestamp.slice(5, 13) + ':00'
   })
 
   const actualData  = rs.map(r => r.actual  != null ? +r.actual.toFixed(3)  : null)
@@ -487,12 +483,10 @@ onUnmounted(destroyChart)
 // ── 工具函数 ─────────────────────────────────────────────────────────────────
 function formatTs(iso: string): string {
   if (!iso) return '—'
-  const d = new Date(iso)
-  const local = new Date(d.getTime() + 8 * 3600 * 1000)
-  const mo = String(local.getUTCMonth() + 1).padStart(2, '0')
-  const da = String(local.getUTCDate()).padStart(2, '0')
-  const hh = String(local.getUTCHours()).padStart(2, '0')
-  return `${mo}-${da} ${hh}:00`
+  // energy_data.timestamp 存储的即为使用时刻（本地时间），直接从字符串中提取
+  const m = iso.match(/\d{4}-(\d{2})-(\d{2})T(\d{2})/)
+  if (m) return `${m[1]}-${m[2]} ${m[3]}:00`
+  return iso.slice(5, 13) + ':00'
 }
 
 function devClass(pct: number | null): string {

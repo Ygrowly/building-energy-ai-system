@@ -190,10 +190,10 @@ def calculate_rated_values(
     # ── 2. 空调热力学负荷（kW）───────────────────────────────────────────
     t_in = _T_IN_SUMMER if air_temp > 20.0 else _T_IN_WINTER
 
-    # 围护结构传热负荷（W/㎡）
+    # 围护结构传热负荷（W/㎡，带正负号）
     q_env = _U_COEFF * (air_temp - t_in)
 
-    # 内部得热（照明+设备+人员）（W/㎡）
+    # 内部得热（照明+设备+人员）（W/㎡，始终为正）
     q_internal = p_base * S + q_person * S
 
     # 潜热/除湿负荷（W/㎡）— 仅夏季露点超过 15℃ 时有效（GB 50736-2012）
@@ -203,13 +203,16 @@ def calculate_rated_values(
         else 0.0
     )
 
-    q_total = q_env + q_internal + q_latent
     q_design_kw = sqm * _Q_DESIGN_DENSITY / 1000.0  # 额定设计总负荷（kW）
 
     # 工况判定
-    if air_temp > 22.0 or (15.0 <= air_temp <= 22.0 and q_total > 20.0):
+    if air_temp > 22.0 or (15.0 <= air_temp <= 22.0 and q_internal > 20.0):
         mode = "Cooling"
-        q_load_kw = (sqm * max(0.1, q_total)) / 1000.0
+        # 制冷负荷：围护传热仅取正值（室外更凉时围护不增加冷负荷），
+        # 内部得热（人+设备）无论室外温度如何都必须由空调排出。
+        q_env_cooling = max(0.0, q_env)
+        q_cooling = q_env_cooling + q_internal + q_latent
+        q_load_kw = (sqm * max(1.0, q_cooling)) / 1000.0
     elif air_temp < 15.0:
         mode = "Heating"
         # 供暖负荷 = 围护结构散热 - 内部得热（内部得热可抵消部分供暖需求）

@@ -24,7 +24,7 @@ detect_energy_anomalies 升级说明（v2）：
 from __future__ import annotations
 
 import statistics
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -60,14 +60,12 @@ _GB_COP_HEATING = 2.5           # 供暖季系统综合 COP（热泵/锅炉综�
 _WATER_REL_THR = 0.20           # 水耗：相对偏差阈值
 _WATER_ABS_THR = 1.0            # 水耗：绝对偏差（m³）
 _ELEC_REL_THR = 0.15            # 电耗：相对偏差阈值
-_ELEC_ABS_RATIO = 0.10          # 电耗：绝对偏差为期望的比例
+_ELEC_ABS_THR = 5.0             # 电耗：固定绝对偏差最小值（kWh），防止夜间低负荷误报
 _HAC_REL_THR = 0.20             # 空调：相对偏差阈值
 _HAC_ABS_THR = 20.0             # 空调：绝对偏差（kWh）
 
 # 异常偏差判断阈值（用于 get_building_rated_values 中的 anomaly_hours 统计）
 _ANOMALY_REL_THR = 0.15         # 任意一项偏差超过 15% 即视为"该小时有异常"
-
-_TIMEZONE_OFFSET_H = 8          # UTC+8
 
 
 # ===========================================================================
@@ -189,8 +187,6 @@ async def detect_energy_anomalies(
       water_leak           → 水耗偏差 > 20% 且 > 1.0 m³（管网漏水）
       electricity_overload → 总电耗偏差 > 15% 且 > 期望的 10%（异常高电耗）
       hvac_overconsumption → 空调偏差 > 20% 且 > 20 kWh（空调系统过耗）
-      db_flagged           → energy_data.anomaly_status = 'Anomaly'（兜底）
-
     每条记录的期望值由 gb_simulator.calculate_rated_values() 实时计算，
     基于国标物理模型，取代旧版"批次均值"统计基线。
     """
@@ -232,15 +228,8 @@ async def detect_energy_anomalies(
 
     for row in rows:
         ts: datetime = row.timestamp
-        ts_utc = ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
-        ts_local = ts_utc + timedelta(hours=_TIMEZONE_OFFSET_H)
-        hour_local = ts_local.hour
-        dow_local = ts_local.isoweekday()
-
-        anomaly_status = (
-            OperationStatus.ANOMALY if row.anomaly_status == "Anomaly"
-            else OperationStatus.NORMAL
-        )
+        hour_local = ts.hour
+        dow_local = ts.isoweekday()
 
         # 计算国标期望值
         try:
@@ -273,7 +262,6 @@ async def detect_energy_anomalies(
                     threshold_value=round(rated.rated_water_m3 * (1 + _WATER_REL_THR), 4),
                     expected_value=rated.rated_water_m3,
                     deviation_pct=round(rel_w * 100, 2),
-                    anomaly_status=anomaly_status,
                 ))
 
         # ── 规则 2：总电耗异常 ────────────────────────────────────────────
@@ -284,8 +272,7 @@ async def detect_energy_anomalies(
         ):
             delta_e = row.electricity_kwh - rated.rated_electricity_kwh
             rel_e = delta_e / rated.rated_electricity_kwh
-            abs_thr_e = rated.rated_electricity_kwh * _ELEC_ABS_RATIO
-            if rel_e > _ELEC_REL_THR and delta_e > abs_thr_e:
+            if rel_e > _ELEC_REL_THR and delta_e > _ELEC_ABS_THR:
                 anomalies.append(AnomalyRecord(
                     timestamp=ts,
                     building_id=inp.building_id,
@@ -295,7 +282,6 @@ async def detect_energy_anomalies(
                     threshold_value=round(rated.rated_electricity_kwh * (1 + _ELEC_REL_THR), 2),
                     expected_value=rated.rated_electricity_kwh,
                     deviation_pct=round(rel_e * 100, 2),
-                    anomaly_status=anomaly_status,
                 ))
 
         # ── 规则 3：空调能耗异常（含第二层根因诊断）─────────────────────
@@ -319,23 +305,7 @@ async def detect_energy_anomalies(
                     expected_value=rated.rated_hac_energy,
                     deviation_pct=round(rel_h * 100, 2),
                     hvac_root_cause=root_cause,
-                    anomaly_status=anomaly_status,
                 ))
-
-        # ── 规则 4：db_flagged 兜底 ────────────────────────────────────
-        if (
-            AnomalyRule.DB_FLAGGED in inp.rules
-            and row.anomaly_status == "Anomaly"
-        ):
-            anomalies.append(AnomalyRecord(
-                timestamp=ts,
-                building_id=inp.building_id,
-                meter_device_id=meter_id or "",
-                rule_triggered=AnomalyRule.DB_FLAGGED,
-                actual_value=0.0,
-                threshold_value=0.0,
-                anomaly_status=OperationStatus.ANOMALY,
-            ))
 
     return DetectEnergyAnomaliesOutput(
         anomalies=anomalies,
@@ -429,15 +399,13 @@ async def get_building_rated_values(
 
     for row in rows:
         ts: datetime = row.timestamp
-        ts_utc = ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
-        ts_local = ts_utc + timedelta(hours=_TIMEZONE_OFFSET_H)
 
         try:
             rated = calculate_rated_values(
                 sqm=sqm,
                 primary_space_usage=usage,
-                hour=ts_local.hour,
-                dayofweek=ts_local.isoweekday(),
+                hour=ts.hour,
+                dayofweek=ts.isoweekday(),
                 air_temp=row.air_temp_c or 20.0,
                 dew_temp=row.dew_temp_c or 10.0,
             )

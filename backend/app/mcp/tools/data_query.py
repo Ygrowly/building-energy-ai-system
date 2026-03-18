@@ -214,10 +214,25 @@ async def get_device_live_status(
             tool_name="get_device_live_status",
         )
 
+    # 查询该楼宇近 24h 是否有未解决异常（anomaly_status 改由 anomaly_events 推断）
+    anomaly_check = await session.execute(
+        text("""
+            SELECT 1 FROM anomaly_events
+            WHERE building_id = :bid
+              AND is_resolved = false
+              AND data_timestamp >= (
+                  SELECT MAX(data_timestamp) FROM anomaly_events
+              ) - INTERVAL '24 hours'
+            LIMIT 1
+        """),
+        {"bid": building_id},
+    )
+    has_anomaly = anomaly_check.fetchone() is not None
+
     return GetDeviceLiveStatusOutput(
         building_type=usage or inp.building_type,
         building_id=building_id,
-        anomaly_status=row.anomaly_status,
+        anomaly_status="Anomaly" if has_anomaly else "Normal",
         air_temp_c=float(row.air_temp_c or 0),
         humidity_rh_pct=float(row.humidity_rh_pct or 0),
         electricity_kwh=float(row.electricity_kwh or 0),

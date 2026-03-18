@@ -70,7 +70,7 @@ class MetricType(str, Enum):
 
 
 class OperationStatus(str, Enum):
-    """energy_data.anomaly_status 字段的可能值。"""
+    """设备运行状态（由 anomaly_events 表推断）。"""
     NORMAL = "Normal"
     ANOMALY = "Anomaly"
 
@@ -79,18 +79,15 @@ class AnomalyRule(str, Enum):
     """
     detect_energy_anomalies 支持的检测规则白名单（双阈值 GB 物理规则）。
 
-    GB 规则（新）— 基于国标期望值的相对+绝对双阈值：
+    GB 规则 — 基于国标期望值的相对+绝对双阈值：
       water_leak            → 水耗偏差 > 20% 且 > 1.0 m³（管网漏水/异常用水）
-      electricity_overload  → 总电耗偏差 > 15% 且 > 期望的 10%（异常高电耗）
+      electricity_overload  → 总电耗偏差 > 15% 且 > 5 kWh（异常高电耗）
       hvac_overconsumption  → 空调能耗偏差 > 20% 且 > 20 kWh（空调系统过耗）
 
     HVAC 根因规则（第二层，仅当 hvac_overconsumption 触发后附加输出）：
       hvac_A_low_efficiency → 主机效能衰退（供水温度偏离期望 > 1.5℃）
       hvac_B_small_deltaT   → 水力失调/大流量小温差（供回水温差 < 3℃）
       hvac_C_unexpected_on  → 非预期开机（负荷率 ≤ 0.05 但空调仍运行）
-
-    兜底规则（保留向后兼容）：
-      db_flagged            → energy_data.anomaly_status = 'Anomaly'
     """
     # ── GB 物理双阈值规则（主要检测层）────────────────────────────────────
     WATER_LEAK = "water_leak"
@@ -101,9 +98,6 @@ class AnomalyRule(str, Enum):
     HVAC_A_LOW_EFFICIENCY = "hvac_A_low_efficiency"
     HVAC_B_SMALL_DELTA_T = "hvac_B_small_deltaT"
     HVAC_C_UNEXPECTED_ON = "hvac_C_unexpected_on"
-
-    # ── 兜底规则（向后兼容，保留旧数据可读性）──────────────────────────
-    DB_FLAGGED = "db_flagged"
 
     # ── 旧规则（已废弃，仅用于读取历史数据）────────────────────────────
     NIGHT_HIGH_POWER = "night_high_power"
@@ -202,7 +196,7 @@ class GetDeviceLiveStatusOutput(BaseModel):
     """设备最新传感器快照。"""
     building_type: str
     building_id: str
-    anomaly_status: Optional[str] = Field(default=None, description="'Normal' 或 'Anomaly'")
+    anomaly_status: Optional[str] = Field(default=None, description="'Anomaly' 表示该楼宇近期有未解决异常（来自 anomaly_events）")
     air_temp_c: float
     humidity_rh_pct: float
     electricity_kwh: float
@@ -427,7 +421,6 @@ class DetectEnergyAnomaliesInput(BaseModel):
             AnomalyRule.WATER_LEAK,
             AnomalyRule.ELECTRICITY_OVERLOAD,
             AnomalyRule.HVAC_OVERCONSUMPTION,
-            AnomalyRule.DB_FLAGGED,
         ],
         min_length=1,
         description="检测规则白名单，默认启用全部 GB 物理规则",

@@ -45,9 +45,7 @@ _LOCAL_KB: list[tuple[list[str], str, str, str]] = [
    - 原因：传感器老化、网络丢包导致异常值写入、电磁干扰
    - 处理：通过 devices.device_id 定位具体设备，申请传感器校准工单
 
-4. 数据库存量标注（energy_data.anomaly_status = 'Anomaly'）
-   - 告警规则：db_flagged（兜底规则，优先级最低）
-   - 说明：原始数据集自带的异常标注，覆盖上述规则未捕获的异常""",
+所有异常事件统一存储在 anomaly_events 表，由 GB 物理双阈值规则检测生成。""",
     ),
     (
         ["COP", "能效比", "制冷效率", "空调", "HVAC", "制冷"],

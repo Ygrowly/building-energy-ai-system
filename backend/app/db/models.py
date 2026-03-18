@@ -118,7 +118,6 @@ class EnergyData(Base):
     air_temp_c: float = Column(Float)
     dew_temp_c: float = Column(Float)
     humidity_rh_pct: float = Column(Float)
-    anomaly_status: str = Column(String)
 
     __table_args__ = (
         Index(

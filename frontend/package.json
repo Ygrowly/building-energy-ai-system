@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@iconify/vue": "^5.0.0",
+    "@lottiefiles/dotlottie-vue": "^0.11.7",
     "axios": "^1.6.0",
     "echarts": "^5.4.3",
     "pinia": "^2.1.7",

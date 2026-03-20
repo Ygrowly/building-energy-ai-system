@@ -19,7 +19,11 @@
           @click="activeBuilding = opt.key"
         >{{ opt.label }}</button>
       </div>
-      <div class="weather-widget">
+      <div class="weather-widget"
+           data-pick-id="weather"
+           data-pick-type="weather"
+           data-pick-title="天气信息"
+           :data-pick-subtitle="`温度 ${weatherTemp != null ? Number(weatherTemp).toFixed(1) + '°C' : '--'}，湿度 ${weatherHumi ?? '--'}%`">
         <div class="weather-date">
           <Icon icon="mdi:calendar-month" width="14" />
           <span>{{ dataDate || '加载中...' }}</span>
@@ -40,7 +44,11 @@
 
     <!-- ── KPI Strip (5 cards) ─────────────────────────────── -->
     <section class="kpi-strip">
-      <div v-for="k in kpis" :key="k.label" class="kpi-card">
+      <div v-for="k in kpis" :key="k.label" class="kpi-card"
+           :data-pick-id="'kpi-' + k.label"
+           data-pick-type="kpi"
+           :data-pick-title="k.label"
+           :data-pick-subtitle="String(k.value)">
         <div class="kpi-ico" :style="{ background: k.bg, color: k.color }">
           <Icon :icon="k.icon" width="20" />
         </div>
@@ -54,14 +62,22 @@
 
     <!-- ── Bento Row 1: EUI Bubble Matrix + HVAC Multi-axis ── -->
     <div class="bento-row bento-r1">
-      <div class="cpanel">
+      <div class="cpanel"
+           data-pick-id="chart-eui-bubble"
+           data-pick-type="chart"
+           data-pick-title="建筑能效强度（EUI）气泡矩阵"
+           data-pick-subtitle="各楼宇建筑面积与单位能耗效率对比，气泡大小表示总能耗规模">
         <div class="cpanel-hd">
           <span class="cpanel-title">建筑能效强度（EUI）气泡矩阵</span>
           <span class="cpanel-sub">各楼宇建筑面积与单位能耗效率对比，气泡大小表示总能耗规模</span>
         </div>
         <div ref="bubbleEl" class="cpanel-body" style="height:252px;"></div>
       </div>
-      <div class="cpanel">
+      <div class="cpanel"
+           data-pick-id="chart-hvac"
+           data-pick-type="chart"
+           data-pick-title="HVAC 虚实映射分析"
+           data-pick-subtitle="实际暖通能耗与仿真最优值对比，背景灰带为室外温度">
         <div class="cpanel-hd">
           <span class="cpanel-title">HVAC 虚实映射分析</span>
           <span class="cpanel-sub">实际暖通能耗与仿真最优值对比，背景灰带为室外温度</span>
@@ -72,7 +88,11 @@
 
     <!-- ── Bento Row 2: Heatmap + Sankey / Scatter ─────────── -->
     <div class="bento-row bento-r2">
-      <div class="cpanel">
+      <div class="cpanel"
+           data-pick-id="chart-heatmap"
+           data-pick-type="heatmap"
+           data-pick-title="24h 能耗日历热力图"
+           data-pick-subtitle="近 7 日逐时能耗分布，追踪非工作时段隐性浪费">
         <div class="cpanel-hd">
           <span class="cpanel-title">24h 能耗日历热力图</span>
           <span class="cpanel-sub">近 7 日逐时能耗分布，追踪非工作时段隐性浪费</span>
@@ -110,14 +130,22 @@
         </div>
       </div>
       <div class="cpanel-col">
-        <div class="cpanel">
+        <div class="cpanel"
+             data-pick-id="chart-sankey"
+             data-pick-type="chart"
+             data-pick-title="异常根因桑基图"
+             data-pick-subtitle="触发规则流向根因类型，流量粗细表示事件频次">
           <div class="cpanel-hd">
             <span class="cpanel-title">异常根因桑基图</span>
             <span class="cpanel-sub">触发规则流向根因类型，流量粗细表示事件频次</span>
           </div>
           <div ref="sankeyEl" class="cpanel-body" style="height:172px;"></div>
         </div>
-        <div class="cpanel">
+        <div class="cpanel"
+             data-pick-id="chart-scatter"
+             data-pick-type="chart"
+             data-pick-title="健康偏离度散点"
+             data-pick-subtitle="各事件指标偏离程度，颜色区分已解决与待处理">
           <div class="cpanel-hd">
             <span class="cpanel-title">健康偏离度散点</span>
             <span class="cpanel-sub">各事件指标偏离程度，颜色区分已解决与待处理</span>

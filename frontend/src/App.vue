@@ -71,6 +71,9 @@
       <AgentConsole />
     </aside>
 
+    <!-- 元素选择器覆盖层 -->
+    <ElementPickerOverlay />
+
     <!-- 主题弹出面板（Teleport 到 body，避免被 overflow:hidden 裁剪） -->
     <Teleport to="body">
       <Transition name="picker-fade">
@@ -100,6 +103,7 @@ import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { RouterView, RouterLink, useRouter, useRoute } from 'vue-router'
 import { Icon } from '@iconify/vue'
 import AgentConsole from '@/components/AgentConsole.vue'
+import ElementPickerOverlay from '@/components/ElementPickerOverlay.vue'
 import { useBuildingStore } from '@/stores/buildingStore'
 import { useAuthStore } from '@/stores/authStore'
 

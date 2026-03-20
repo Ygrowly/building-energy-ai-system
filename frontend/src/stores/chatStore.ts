@@ -322,11 +322,15 @@ export const useChatStore = defineStore('chat', () => {
       id: crypto.randomUUID(), role, content, timestamp: new Date(), ...extra,
     }
     messages.value.push(msg)
-    // 同步缓存
+    // 同步缓存（仅当缓存与 messages.value 不是同一数组时才额外 push，避免重复）
     const sid = currentSessionId.value
     if (sid) {
-      if (!_msgCache.has(sid)) _msgCache.set(sid, [])
-      _msgCache.get(sid)!.push(msg)
+      const cache = _msgCache.get(sid)
+      if (!cache) {
+        _msgCache.set(sid, messages.value)
+      } else if (cache !== messages.value) {
+        cache.push(msg)
+      }
       // artifact 消息额外持久化到 localStorage，确保切换会话后仍可恢复
       if (role === 'artifact') {
         _saveArtifactToStorage(sid, msg)
@@ -358,13 +362,15 @@ export const useChatStore = defineStore('chat', () => {
       thinkingSteps: [], thinkingFinished: false,
     }
     messages.value.push(aiMsg)
-    // 将 aiMsg 同步写入缓存，与 messages.value 共享同一对象引用。
-    // 后续 onText/onThinking 的原地修改（m.content += ...）会同时反映在缓存中，
-    // 确保切换会话再返回时 AI 回复不丢失。
+    // 同步缓存（仅当缓存与 messages.value 不是同一数组时才额外 push，避免重复）
     const _sid = currentSessionId.value
     if (_sid) {
-      if (!_msgCache.has(_sid)) _msgCache.set(_sid, [])
-      _msgCache.get(_sid)!.push(aiMsg)
+      const cache = _msgCache.get(_sid)
+      if (!cache) {
+        _msgCache.set(_sid, messages.value)
+      } else if (cache !== messages.value) {
+        cache.push(aiMsg)
+      }
     }
 
     let textStarted = false

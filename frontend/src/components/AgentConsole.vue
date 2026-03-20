@@ -237,6 +237,12 @@
     <!-- 输入框 -->
     <div class="input-area">
       <div class="input-box" :class="{ focused: inputFocused, disabled: store.isLoading }">
+        <!-- 选中元素上下文标签 -->
+        <div v-if="pickerStore.selectedElement" class="picked-context">
+          <Icon icon="mdi:target" width="14" class="picked-icon" />
+          <span class="picked-label">{{ pickerStore.selectedElement.title }}</span>
+          <button class="picked-close" @click="pickerStore.clearSelection()">×</button>
+        </div>
         <textarea
           v-model="inputText"
           placeholder="输入您的问题，按 Enter 发送..."
@@ -249,6 +255,15 @@
         ></textarea>
         <div class="input-toolbar">
           <div class="toolbar-left">
+            <button
+              class="tag-btn"
+              :class="{ active: pickerStore.isPickerActive }"
+              @click="pickerStore.togglePicker()"
+              title="选择页面元素"
+            >
+              <Icon icon="mdi:crosshairs" width="12" />
+              选择元素
+            </button>
             <button class="tag-btn" title="RAG 知识库">
               <Icon icon="mdi:database-search" width="12" />
               RAG 知识库
@@ -278,6 +293,7 @@
 import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { Icon } from '@iconify/vue'
 import { useChatStore } from '@/stores/chatStore'
+import { useElementPickerStore } from '@/stores/elementPickerStore'
 import type { SessionInfo } from '@/stores/chatStore'
 import ThinkingBubble from '@/generative-ui/ThinkingBubble.vue'
 import DynamicChart from '@/generative-ui/DynamicChart.vue'
@@ -287,6 +303,7 @@ import EvidenceLink from '@/generative-ui/EvidenceLink.vue'
 import type { ArtifactEvent } from '@/api/stream_client'
 
 const store = useChatStore()
+const pickerStore = useElementPickerStore()
 const inputText = ref('')
 const inputFocused = ref(false)
 const messagesEl = ref<HTMLElement>()
@@ -434,7 +451,17 @@ function onClearChat() {
 // ── 发送消息 ────────────────────────────────────────────────────────────────
 function handleSend() {
   if (!inputText.value.trim() || store.isLoading) return
-  store.sendMessage(inputText.value.trim())
+  let text = inputText.value.trim()
+
+  // 附带选中元素的上下文信息
+  if (pickerStore.selectedElement) {
+    const el = pickerStore.selectedElement
+    const ctx = `[关于页面元素「${el.title}」${el.subtitle ? '（' + el.subtitle + '）' : ''}，类型：${el.type}]\n`
+    text = ctx + text
+    pickerStore.clearSelection()
+  }
+
+  store.sendMessage(text)
   inputText.value = ''
 }
 
@@ -1040,6 +1067,46 @@ html[data-theme="light"] .tab.active:hover .tab-fade {
 }
 .input-box.disabled { opacity: 0.55; }
 
+/* 选中元素上下文标签 */
+.picked-context {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  margin: 6px 8px 0;
+  background: var(--accent-glow, rgba(96, 165, 250, 0.1));
+  border: 1px solid var(--border-accent, rgba(96, 165, 250, 0.3));
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--accent, #60a5fa);
+}
+.picked-icon { flex-shrink: 0; }
+.picked-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+.picked-close {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  color: var(--accent, #60a5fa);
+  font-size: 14px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.picked-close:hover {
+  background: rgba(96, 165, 250, 0.2);
+}
+
 textarea {
   flex: 1;
   background: transparent;
@@ -1088,6 +1155,11 @@ textarea::placeholder { color: var(--text-muted); }
   color: var(--text-primary);
   border-color: var(--accent);
   background: rgba(108, 142, 245, 0.06);
+}
+.tag-btn.active {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-glow, rgba(96, 165, 250, 0.1));
 }
 
 .toolbar-right {

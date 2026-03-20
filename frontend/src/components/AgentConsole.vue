@@ -271,6 +271,20 @@
               <Icon icon="mdi:puzzle-outline" width="12" />
               MCP
             </button>
+            <button
+              class="tag-btn web-search-btn"
+              :class="{ 'web-search-active': store.webSearchEnabled }"
+              :title="store.webSearchEnabled ? '关闭联网搜索' : '开启联网搜索（Tavily）'"
+              :disabled="store.isLoading"
+              @click="store.toggleWebSearch()"
+            >
+              <Icon
+                :icon="store.webSearchEnabled ? 'mdi:web-check' : 'mdi:web'"
+                width="12"
+              />
+              联网搜索
+              <span v-if="store.webSearchEnabled" class="web-search-dot"></span>
+            </button>
           </div>
           <div class="toolbar-right">
             <button class="tool-btn" title="上传图片" @click="triggerUpload" :disabled="store.isLoading">
@@ -1157,6 +1171,37 @@ textarea::placeholder { color: var(--text-muted); }
 .tag-btn.active {
   color: var(--accent);
   background: var(--accent-glow, rgba(96, 165, 250, 0.1));
+}
+
+.web-search-btn {
+  position: relative;
+}
+
+.web-search-active {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: rgba(108, 142, 245, 0.1);
+}
+
+.web-search-active:hover {
+  background: rgba(108, 142, 245, 0.16);
+}
+
+.web-search-dot {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #22c55e;
+  margin-left: 2px;
+  vertical-align: middle;
+  flex-shrink: 0;
+  animation: pulse-dot 2s ease-in-out infinite;
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.6; transform: scale(0.8); }
 }
 
 .toolbar-right {

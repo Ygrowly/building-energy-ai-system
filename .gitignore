@@ -26,3 +26,5 @@ dataset/output/knowledge_vectors/
 # OS
 .DS_Store
 Thumbs.db
+
+guide/

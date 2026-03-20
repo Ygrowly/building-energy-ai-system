@@ -63,6 +63,39 @@ class RefreshRequest(BaseModel):
     refresh_token: str = Field(..., min_length=1, max_length=2048)
 
 
+class ChangePasswordRequest(BaseModel):
+    old_password: str = Field(..., min_length=1, max_length=128)
+    new_password: str = Field(..., min_length=8, max_length=128)
+
+    @field_validator("new_password")
+    @classmethod
+    def password_strength(cls, v: str) -> str:
+        if not re.search(r"[A-Za-z]", v):
+            raise ValueError("密码必须包含至少一个字母")
+        if not re.search(r"\d", v):
+            raise ValueError("密码必须包含至少一个数字")
+        return v
+
+
+class UpdateProfileRequest(BaseModel):
+    email: Optional[str] = Field(None, max_length=254)
+    phone: Optional[str] = Field(None, max_length=20)
+
+    @field_validator("email")
+    @classmethod
+    def email_format(cls, v: Optional[str]) -> Optional[str]:
+        if v and not re.match(r"^[^@]+@[^@]+\.[^@]+$", v):
+            raise ValueError("邮箱格式不正确")
+        return v
+
+    @field_validator("phone")
+    @classmethod
+    def phone_format(cls, v: Optional[str]) -> Optional[str]:
+        if v and not re.match(r"^[\d\+\-\(\)\s]{5,20}$", v):
+            raise ValueError("手机号格式不正确")
+        return v
+
+
 # ---------------------------------------------------------------------------
 # 响应体
 # ---------------------------------------------------------------------------
@@ -79,6 +112,7 @@ class UserResponse(BaseModel):
     username: str
     email: Optional[str] = None
     phone: Optional[str] = None
+    role: str = "resident"
     is_active: bool
     created_at: datetime
 

@@ -320,7 +320,7 @@
                 <div class="action-btns">
                   <button
                     class="action-btn parse-btn"
-                    :disabled="doc.run === 'running'"
+                    :disabled="getRunKey(doc.run) === 'running' || parsingByDoc[doc.id]"
                     title="解析向量化"
                     @click="triggerParse(doc.id)"
                   >
@@ -387,6 +387,7 @@ const loadingDocs = ref(false)
 const docError = ref('')
 const docSuccess = ref('')
 const documents = ref<RagDocument[]>([])
+const parsingByDoc = ref<Record<string, boolean>>({})
 
 // 删除确认
 const deleteConfirm = ref<{ message: string; action: () => Promise<void> } | null>(null)
@@ -525,9 +526,17 @@ async function uploadDocFile(file: File) {
   docSuccess.value = ''
   uploadingDoc.value = true
   try {
-    await api.uploadDocument(file)
-    docSuccess.value = `「${file.name}」已上传，点击"解析"按钮进行向量化`
+    const uploadRes = await api.uploadDocument(file)
     await loadDocuments()
+
+    const docId = extractDocIdFromUpload(uploadRes)
+    if (docId) {
+      docSuccess.value = `「${file.name}」已上传，正在后台解析...`
+      // 不阻塞上传 UI：上传完成后直接后台触发轮询直到 Done/失败
+      void triggerParse(docId, { auto: true })
+    } else {
+      docSuccess.value = `「${file.name}」已上传，需点击"解析"按钮进行向量化`
+    }
   } catch (e) {
     docError.value = (e as Error).message
   } finally {
@@ -535,14 +544,29 @@ async function uploadDocFile(file: File) {
   }
 }
 
-async function triggerParse(docId: string) {
+async function triggerParse(docId: string, opts?: { auto?: boolean }) {
+  if (parsingByDoc.value[docId]) return
+  parsingByDoc.value[docId] = true
   docError.value = ''
   try {
+    // 乐观更新：让用户立刻看到“解析中”，并禁用重复点击
+    const idx = documents.value.findIndex(d => d.id === docId)
+    if (idx !== -1) {
+      documents.value[idx] = {
+        ...documents.value[idx],
+        run: 'running',
+        progress: Math.max(documents.value[idx].progress ?? 0, 0.01),
+      }
+    }
+
     await api.parseDocument(docId)
-    docSuccess.value = '已提交解析任务，稍后刷新查看进度'
-    setTimeout(() => loadDocuments(), 2000)
+    docSuccess.value = opts?.auto ? '已提交解析任务，正在后台解析...' : '已提交解析任务，正在后台解析...'
+    await pollDocStatus(docId)
   } catch (e) {
     docError.value = (e as Error).message
+    await loadDocuments()
+  } finally {
+    parsingByDoc.value[docId] = false
   }
 }
 
@@ -597,6 +621,7 @@ function getDocIcon(name: string): string {
 }
 
 function getStatusClass(run: string): string {
+  const key = getRunKey(run)
   const map: Record<string, string> = {
     unstart: 'status-idle',
     running: 'status-running',
@@ -604,10 +629,11 @@ function getStatusClass(run: string): string {
     fail: 'status-fail',
     CANCEL: 'status-cancel',
   }
-  return map[run] ?? 'status-idle'
+  return map[key] ?? 'status-idle'
 }
 
 function getStatusIcon(run: string): string {
+  const key = getRunKey(run)
   const map: Record<string, string> = {
     unstart: 'mdi:clock-outline',
     running: 'mdi:loading',
@@ -615,10 +641,11 @@ function getStatusIcon(run: string): string {
     fail: 'mdi:alert-circle-outline',
     CANCEL: 'mdi:cancel',
   }
-  return map[run] ?? 'mdi:clock-outline'
+  return map[key] ?? 'mdi:clock-outline'
 }
 
 function getStatusLabel(run: string): string {
+  const key = getRunKey(run)
   const map: Record<string, string> = {
     unstart: '待解析',
     running: '解析中',
@@ -626,7 +653,74 @@ function getStatusLabel(run: string): string {
     fail: '解析失败',
     CANCEL: '已取消',
   }
-  return map[run] ?? run
+  return map[key] ?? run
+}
+
+function getRunKey(run: string): 'unstart' | 'running' | 'done' | 'fail' | 'CANCEL' {
+  const r = (run ?? '').toString().trim()
+  const upper = r.toUpperCase()
+  if (upper === 'CANCEL') return 'CANCEL'
+  const lower = r.toLowerCase()
+  if (lower === 'unstart' || lower === 'running' || lower === 'done' || lower === 'fail') return lower as any
+  return 'unstart'
+}
+
+function isFinalRunKey(key: string): boolean {
+  return key === 'done' || key === 'fail' || key === 'CANCEL'
+}
+
+function extractDocIdFromUpload(uploadRes: api.RagUploadResponse | unknown): string | null {
+  const data = uploadRes as any
+  const inner = data?.data
+  if (Array.isArray(inner)) return inner?.[0]?.id ?? null
+  if (inner && typeof inner === 'object') return inner.id ?? null
+  return data?.id ?? null
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+async function pollDocStatus(docId: string) {
+  const intervalMs = 2000
+  const timeoutMs = 900000 // 15 分钟轮询：RAGFlow 解析有时会较慢，避免“卡在中间态后需手动刷新”
+  const startedAt = Date.now()
+  let errorCount = 0
+  const maxErrorCount = 10
+
+  while (Date.now() - startedAt < timeoutMs) {
+    let status: api.RagDocumentStatus
+    try {
+      status = await api.getDocumentStatus(docId)
+      errorCount = 0
+    } catch (e) {
+      errorCount++
+      // 解析过程中偶发网络/网关问题不应终止轮询
+      if (errorCount >= maxErrorCount) break
+      await sleep(Math.min(10000, intervalMs * errorCount))
+      continue
+    }
+
+    const runKey = getRunKey(status.run ?? '')
+
+    const idx = documents.value.findIndex(d => d.id === docId)
+    if (idx !== -1) {
+      documents.value[idx] = {
+        ...documents.value[idx],
+        run: runKey,
+        progress: status.progress ?? documents.value[idx].progress,
+        update_time: status.update_time ?? documents.value[idx].update_time,
+      }
+    } else {
+      // 如果当前列表还没包含该 doc（分页/刷新时序等），强制拉一次列表
+      await loadDocuments()
+    }
+
+    if (isFinalRunKey(runKey)) break
+    await sleep(intervalMs)
+  }
+
+  await loadDocuments()
 }
 
 /** 极简 Markdown → HTML 转换（仅支持标题、加粗、换行、有序/无序列表）。 */
@@ -1020,12 +1114,12 @@ function markdownToHtml(md: string): string {
   gap: 4px;
   padding: 3px 9px;
   border-radius: 20px;
-  font-size: 11px;
-  font-weight: 500;
+  font-size: 12px;
+  font-weight: 600;
 }
 .status-idle { background: rgba(107,122,154,0.12); color: var(--text-secondary); }
 .status-running { background: rgba(96,165,250,0.12); color: var(--accent); }
-.status-done { background: rgba(74,222,128,0.1); color: var(--success); }
+.status-done { background: rgba(34,197,94,0.22); color: #22c55e; border: 1px solid rgba(34,197,94,0.35); }
 .status-fail { background: rgba(248,113,113,0.1); color: var(--danger); }
 .status-cancel { background: rgba(251,191,36,0.1); color: var(--warning); }
 

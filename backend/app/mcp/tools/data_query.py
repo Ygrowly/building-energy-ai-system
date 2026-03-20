@@ -17,11 +17,13 @@
 """
 from __future__ import annotations
 
+import logging
 import time
 from datetime import datetime, timezone
 
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import ProgrammingError
 
 from app.db.models import Building, DailyEnergySummary, Device, EnergyData
 from app.schemas.mcp_schemas import (
@@ -45,6 +47,8 @@ from app.schemas.mcp_schemas import (
     QueryEnergyMetricsInput,
     QueryEnergyMetricsOutput,
 )
+
+logger = logging.getLogger(__name__)
 
 # 指标 → (DB列名, 单位) 映射表（与 Supabase energy_data 实际列名严格一致）
 _METRIC_META: dict[MetricType, tuple[str, str]] = {
@@ -266,25 +270,80 @@ async def query_daily_energy_summary(
     granularity = inp.granularity  # "day" | "week" | "month"
 
     if granularity == "day":
-        # 走物化视图，最快
-        result = await session.execute(
-            select(DailyEnergySummary)
-            .where(DailyEnergySummary.building_id == actual_bid)
-            .where(DailyEnergySummary.day >= inp.date_range.start)  # type: ignore[attr-defined]
-            .where(DailyEnergySummary.day <= inp.date_range.end)    # type: ignore[attr-defined]
-            .order_by(DailyEnergySummary.day.asc())
-        )
-        rows_orm = result.scalars().all()
-        records = [
-            DailyEnergySummaryRecord(
-                day=str(row.day),
-                building_id=row.building_id,
-                total_electricity_kwh=float(row.total_electricity_kwh or 0),
-                avg_ambient_temp=float(row.avg_ambient_temp or 0),
-                total_water_m3=float(row.total_water_m3 or 0),
+        # 优先走物化视图（最快）；如果视图未创建，降级为直接聚合 energy_data。
+        try:
+            result = await session.execute(
+                select(DailyEnergySummary)
+                .where(DailyEnergySummary.building_id == actual_bid)
+                .where(DailyEnergySummary.day >= inp.date_range.start)  # type: ignore[attr-defined]
+                .where(DailyEnergySummary.day <= inp.date_range.end)    # type: ignore[attr-defined]
+                .order_by(DailyEnergySummary.day.asc())
             )
-            for row in rows_orm
-        ]
+            rows_orm = result.scalars().all()
+            records = [
+                DailyEnergySummaryRecord(
+                    day=str(row.day),
+                    building_id=inp.building_id,
+                    total_electricity_kwh=float(row.total_electricity_kwh or 0),
+                    avg_ambient_temp=float(row.avg_ambient_temp or 0),
+                    total_water_m3=float(row.total_water_m3 or 0),
+                )
+                for row in rows_orm
+            ]
+        except ProgrammingError as exc:
+            # 例如：relation "daily_energy_summary" does not exist
+            msg = str(exc).lower()
+            if "daily_energy_summary" in msg and ("does not exist" in msg or "undefined" in msg):
+                logger.warning(
+                    "daily_energy_summary 物化视图缺失，降级聚合 energy_data: building=%s range=%s..%s",
+                    inp.building_id,
+                    inp.date_range.start,
+                    inp.date_range.end,
+                )
+                t_sql_start = time.perf_counter()
+                result = await session.execute(
+                    text("""
+                        SELECT
+                            date_trunc('day', "timestamp")::date AS day,
+                            SUM(electricity_kwh)  AS total_electricity_kwh,
+                            AVG(air_temp_c)       AS avg_ambient_temp,
+                            SUM(water_m3)         AS total_water_m3
+                        FROM energy_data
+                        WHERE building_id = :bid
+                          AND "timestamp" >= :start
+                          AND "timestamp" <= :end
+                        GROUP BY date_trunc('day', "timestamp")::date
+                        ORDER BY day ASC
+                    """),
+                    {
+                        "bid": actual_bid,
+                        "start": inp.date_range.start,
+                        "end": inp.date_range.end,
+                    },
+                )
+                rows_raw = result.fetchall()
+                records = [
+                    DailyEnergySummaryRecord(
+                        day=str(row[0]),
+                        building_id=inp.building_id,
+                        total_electricity_kwh=float(row[1] or 0),
+                        avg_ambient_temp=float(row[2] or 0),
+                        total_water_m3=float(row[3] or 0),
+                    )
+                    for row in rows_raw
+                ]
+                elapsed_ms = int((time.perf_counter() - t_sql_start) * 1000)
+                return QueryDailyEnergySummaryOutput(
+                    records=records,
+                    building_id=inp.building_id,
+                    query_ms=elapsed_ms,
+                )
+
+            return MCPError(
+                error=f"查询 daily_energy_summary 失败，请稍后重试。{type(exc).__name__}",
+                error_code="DAILY_SUMMARY_QUERY_FAILED",
+                tool_name="query_daily_energy_summary",
+            )
     else:
         # 直查 energy_data，用 date_trunc 做周/月聚合
         sql = text(f"""

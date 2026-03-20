@@ -852,7 +852,7 @@ class TestDocumentDeleteAPI:
         mock_http_client = AsyncMock()
         mock_http_client.__aenter__ = AsyncMock(return_value=mock_http_client)
         mock_http_client.__aexit__ = AsyncMock(return_value=None)
-        mock_http_client.delete = AsyncMock(return_value=mock_resp)
+        mock_http_client.request = AsyncMock(return_value=mock_resp)
 
         with patch("app.api.routes_datacenter.httpx.AsyncClient", return_value=mock_http_client):
             resp = await client.delete("/api/datacenter/documents/doc-001")
@@ -868,16 +868,14 @@ class TestDocumentDeleteAPI:
         mock_http_client = AsyncMock()
         mock_http_client.__aenter__ = AsyncMock(return_value=mock_http_client)
         mock_http_client.__aexit__ = AsyncMock(return_value=None)
-        mock_http_client.delete = AsyncMock(return_value=mock_resp)
+        mock_http_client.request = AsyncMock(return_value=mock_resp)
 
         with patch("app.api.routes_datacenter.httpx.AsyncClient", return_value=mock_http_client):
             await client.delete("/api/datacenter/documents/target-doc-xyz")
 
-        call_kwargs = mock_http_client.delete.call_args
-        content = call_kwargs.kwargs.get("content", b"")
-        import json
-        body = json.loads(content)
-        assert "target-doc-xyz" in body["ids"]
+        call_kwargs = mock_http_client.request.call_args
+        body = call_kwargs.kwargs.get("json", {})
+        assert "target-doc-xyz" in body.get("ids", [])
 
     @pytest.mark.asyncio
     async def test_delete_not_configured_returns_503(self, client):
@@ -899,7 +897,7 @@ class TestDocumentDeleteAPI:
         mock_http_client = AsyncMock()
         mock_http_client.__aenter__ = AsyncMock(return_value=mock_http_client)
         mock_http_client.__aexit__ = AsyncMock(return_value=None)
-        mock_http_client.delete = AsyncMock(return_value=mock_resp)
+        mock_http_client.request = AsyncMock(return_value=mock_resp)
 
         with patch("app.api.routes_datacenter.httpx.AsyncClient", return_value=mock_http_client):
             resp = await client.delete("/api/datacenter/documents/nonexistent-doc")

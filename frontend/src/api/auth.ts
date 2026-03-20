@@ -16,6 +16,9 @@ export interface TokenResponse {
 export interface UserInfo {
   id: string
   username: string
+  email?: string | null
+  phone?: string | null
+  role: string
   is_active: boolean
   created_at: string
 }
@@ -66,4 +69,42 @@ export async function apiLogout(refresh_token: string): Promise<void> {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ refresh_token }),
   }).catch(() => {})
+}
+
+export async function apiChangePassword(
+  accessToken: string,
+  oldPassword: string,
+  newPassword: string,
+): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/auth/change-password`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify({ old_password: oldPassword, new_password: newPassword }),
+  })
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}))
+    throw new Error((data as { detail?: string }).detail ?? `HTTP ${res.status}`)
+  }
+}
+
+export async function apiUpdateProfile(
+  accessToken: string,
+  profile: { email?: string; phone?: string },
+): Promise<UserInfo> {
+  const res = await fetch(`${API_BASE}/api/auth/me`, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify(profile),
+  })
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}))
+    throw new Error((data as { detail?: string }).detail ?? `HTTP ${res.status}`)
+  }
+  return res.json() as Promise<UserInfo>
 }

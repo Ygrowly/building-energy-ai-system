@@ -115,6 +115,16 @@ export const useChatStore = defineStore('chat', () => {
   const currentAgentStatus = ref<AgentStatus | null>(null)
   const pendingWorkOrder = ref<ArtifactEvent | null>(null)
 
+  // per-session 联网搜索开关（key = session_id），防止跨 Tab 相互干扰
+  const _webSearchBySession = ref<Record<string, boolean>>({})
+
+  const webSearchEnabled = computed<boolean>({
+    get: () => (currentSessionId.value ? (_webSearchBySession.value[currentSessionId.value] ?? false) : false),
+    set: (v: boolean) => {
+      if (currentSessionId.value) _webSearchBySession.value[currentSessionId.value] = v
+    },
+  })
+
   /** 顶栏 Tab 列表（按 openTabIds 顺序，来自 sessionList） */
   const openTabs = computed<SessionInfo[]>(() =>
     openTabIds.value
@@ -132,6 +142,7 @@ export const useChatStore = defineStore('chat', () => {
     data_agent: '数据分析师',
     diagnose_agent: '故障诊断专家',
     tool: '工具调用',
+    web_search: '联网搜索',
   }
 
   // ── 加载会话列表 ───────────────────────────────────────────────────────────
@@ -276,6 +287,7 @@ export const useChatStore = defineStore('chat', () => {
   function removeTab(id: string) {
     openTabIds.value = openTabIds.value.filter(tid => tid !== id)
     _msgCache.delete(id)
+    delete _webSearchBySession.value[id]
     if (currentSessionId.value === id) {
       if (openTabIds.value.length > 0) {
         switchSession(openTabIds.value[0])
@@ -297,6 +309,7 @@ export const useChatStore = defineStore('chat', () => {
     sessionList.value = sessionList.value.filter(s => s.session_id !== id)
     _msgCache.delete(id)
     _deleteArtifactsFromStorage(id)
+    delete _webSearchBySession.value[id]
 
     if (currentSessionId.value === id) {
       if (openTabIds.value.length > 0) {
@@ -429,7 +442,7 @@ export const useChatStore = defineStore('chat', () => {
           _addMsg('error', `网络错误：${err.message}`)
           isLoading.value = false
         },
-      })
+      }, webSearchEnabled.value)
       void newBackendId // session_id 已在 _persistTempSession 中迁移
     } catch (err) {
       _addMsg('error', `请求失败：${(err as Error).message}`)
@@ -479,6 +492,11 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
+  // ── 联网搜索开关（当前会话级别）──────────────────────────────────────────
+  function toggleWebSearch() {
+    webSearchEnabled.value = !webSearchEnabled.value
+  }
+
   // ── 清除当前会话消息（前端清屏） ──────────────────────────────────────────
   function clearSession() {
     const sid = currentSessionId.value
@@ -493,7 +511,8 @@ export const useChatStore = defineStore('chat', () => {
     sessionList, openTabs, sessionListLoading,
     currentSessionId, currentSession,
     messages, isLoading, currentAgentStatus, pendingWorkOrder, hasMessages,
+    webSearchEnabled,
     init, loadSessionList, newSession, switchSession, removeTab, closeSession,
-    sendMessage, approveOrder, clearSession, renameSession,
+    sendMessage, approveOrder, clearSession, renameSession, toggleWebSearch,
   }
 })

@@ -354,6 +354,7 @@ export const useChatStore = defineStore('chat', () => {
   // ── 发送消息 ───────────────────────────────────────────────────────────────
   async function sendMessage(userText: string) {
     if (!userText.trim() || isLoading.value) return
+    isLoading.value = true                       // 立即上锁，防止 await 期间重复调用
     if (!currentSessionId.value) newSession()
 
     // 如果当前是临时会话，先向后端创建真实会话
@@ -362,12 +363,12 @@ export const useChatStore = defineStore('chat', () => {
         await _persistTempSession(currentSessionId.value!)
       } catch (e) {
         _addMsg('error', `创建会话失败：${(e as Error).message}`)
+        isLoading.value = false
         return
       }
     }
 
     _addMsg('user', userText)
-    isLoading.value = true
 
     const aiMsgId = crypto.randomUUID()
     const aiMsg: ChatMessage = {

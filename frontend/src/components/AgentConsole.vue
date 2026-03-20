@@ -173,7 +173,7 @@
       <template v-for="msg in store.messages" :key="msg.id">
         <!-- 用户消息 -->
         <div class="msg msg-user" v-if="msg.role === 'user'">
-          <div class="bubble user-bubble">{{ msg.content }}</div>
+          <div class="user-bubble">{{ msg.content }}</div>
         </div>
 
         <!-- AI 文字回复 -->
@@ -187,9 +187,8 @@
             class="msg msg-ai"
             v-if="msg.content || (msg.thinkingFinished && store.isLoading)"
           >
-            <div class="ai-avatar"><Icon icon="mdi:robot" width="14" /></div>
             <div class="ai-content">
-              <div class="bubble ai-bubble">
+              <div class="ai-bubble">
                 <span v-if="msg.content" v-html="formatMarkdown(msg.content)"></span>
                 <span v-else class="stream-cursor"></span>
               </div>
@@ -291,8 +290,8 @@
             </button>
             <input ref="fileInputEl" type="file" accept="image/*" style="display:none" @change="onFileChange" />
             <button class="send-icon-btn" @click="handleSend" :disabled="store.isLoading || !inputText.trim()" title="发送">
-              <Icon v-if="store.isLoading" icon="mdi:timer-sand" width="14" />
-              <Icon v-else icon="mdi:arrow-up" width="14" />
+              <Icon v-if="store.isLoading" icon="mdi:timer-sand" width="16" />
+              <Icon v-else icon="mdi:arrow-up" width="16" />
             </button>
           </div>
         </div>
@@ -560,7 +559,8 @@ function formatMarkdown(text: string): string {
   display: flex;
   flex-direction: column;
   height: 100%;
-  background: var(--bg-panel);
+  background: var(--bg-card);           /* Cursor 风格：整面板统一底色 */
+  /* 原底色 var(--bg-panel)，后续可恢复 */
   border-left: 1px solid var(--border);
   position: relative;
   overflow: hidden;
@@ -569,11 +569,10 @@ function formatMarkdown(text: string): string {
 /* ── 顶栏（Cursor 风格：无底部线，圆角浮动 Tab） ────────────────────────── */
 .top-bar {
   display: flex;
-  align-items: center;   /* 垂直居中，为圆角 pill 效果留出上下空间 */
+  align-items: center;
   flex-shrink: 0;
-  background: var(--bg-panel);
+  background: transparent;              /* 继承 .console 底色，统一 */
   min-height: 38px;
-  /* 无底部分隔线 */
 }
 
 /* Tab 列表 */
@@ -933,10 +932,11 @@ html[data-theme="light"] .tab.active:hover .tab-fade {
 .messages {
   flex: 1;
   overflow-y: auto;
-  padding: 16px;
+  padding: 16px 12px;
   display: flex;
   flex-direction: column;
   gap: 8px;
+  background: transparent;              /* 继承 .console 底色，统一 */
 }
 
 .empty-hint {
@@ -965,7 +965,7 @@ html[data-theme="light"] .tab.active:hover .tab-fade {
 }
 
 .hint-chip {
-  background: var(--bg-card);
+  background: var(--bg-panel);
   border: 1px solid var(--border);
   border-radius: 6px;
   color: var(--text-secondary);
@@ -985,7 +985,7 @@ html[data-theme="light"] .tab.active:hover .tab-fade {
 }
 
 .msg { display: flex; align-items: flex-start; gap: 8px; }
-.msg-user { justify-content: flex-end; }
+.msg-user { justify-content: flex-start; width: 100%; }
 .msg-error { justify-content: flex-start; }
 
 .bubble {
@@ -1001,36 +1001,40 @@ html[data-theme="light"] .tab.active:hover .tab-fade {
 }
 
 .user-bubble {
-  background: var(--accent);
-  color: #fff;
-  border-radius: 12px 12px 2px 12px;
+  /* Cursor 风格：与输入框同底色 */
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.6;
+  padding: 10px 14px;
+  max-width: 100%;
+  width: 100%;
+  word-break: break-word;
 }
 
-.ai-avatar {
-  width: 28px; height: 28px;
-  border-radius: 50%;
-  background: var(--bg-card);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--accent);
-  flex-shrink: 0;
-}
+/* .ai-avatar 已移除，不再显示大模型图标 */
 
 .ai-content {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  width: 90%;
+  width: 100%;
   min-width: 0;
 }
 
 .ai-bubble {
-  background: var(--bg-card);
+  /* 无气泡样式，类似 claude.ai 的纯文本输出 */
+  background: transparent;
   color: var(--text-primary);
-  border: 1px solid var(--border);
-  border-radius: 2px 12px 12px 12px;
+  border: none;
+  border-radius: 0;
   max-width: 100%;
+  padding: 10px 14px;
+  font-size: 13px;
+  line-height: 1.6;
 }
 
 .error-bubble {
@@ -1063,21 +1067,21 @@ html[data-theme="light"] .tab.active:hover .tab-fade {
 
 /* ── 输入框 ─────────────────────────────────────────────────────────────── */
 .input-area {
-  padding: 0 12px 16px;
+  padding: 0 12px 12px;
   flex-shrink: 0;
 }
 
 .input-box {
-  background: var(--bg-card);
+  background: var(--bg-panel);          /* 比面板深一级，Cursor 风格输入区 */
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 12px;
   display: flex;
   flex-direction: column;
   transition: border-color 0.2s, box-shadow 0.2s;
 }
 .input-box.focused {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px rgba(108, 142, 245, 0.12);
+  border-color: var(--border);          /* 聚焦时不高亮边框，保持 Cursor 简洁风 */
+  box-shadow: none;
 }
 .input-box.disabled { opacity: 0.55; }
 
@@ -1231,8 +1235,8 @@ textarea::placeholder { color: var(--text-muted); }
 .tool-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
 .send-icon-btn {
-  width: 28px;
-  height: 28px;
+  width: 22px;
+  height: 22px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1243,6 +1247,7 @@ textarea::placeholder { color: var(--text-muted); }
   cursor: pointer;
   transition: opacity 0.15s;
   flex-shrink: 0;
+  margin-left: 6px;
 }
 .send-icon-btn:hover { opacity: 0.85; }
 .send-icon-btn:disabled { opacity: 0.35; cursor: not-allowed; }

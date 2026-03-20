@@ -65,13 +65,13 @@
       <div class="cpanel"
            data-pick-id="chart-eui-bubble"
            data-pick-type="chart"
-           data-pick-title="建筑能耗强度热力象限图"
-           data-pick-subtitle="按 EUI 与面积划分优先级象限，红色=紧急改造，绿色=运行良好">
+           data-pick-title="建筑能耗定额偏离分析"
+           data-pick-subtitle="偏离比 = 实际EUI / 国标基准值，>1 为超标，气泡大小反映总用电量">
         <div class="cpanel-hd">
-          <span class="cpanel-title">建筑能耗强度热力象限图</span>
-          <span class="cpanel-sub">按 EUI 与面积划分优先级象限，红色=紧急改造，绿色=运行良好</span>
+          <span class="cpanel-title">建筑能耗定额偏离分析</span>
+          <span class="cpanel-sub">偏离比 = 实际EUI / 国标基准值，>1 为超标，气泡大小反映总用电量</span>
         </div>
-        <div ref="bubbleEl" class="cpanel-body" style="height:252px;"></div>
+        <div ref="bubbleEl" class="cpanel-body" style="height:300px;"></div>
       </div>
       <div class="cpanel"
            data-pick-id="chart-hvac"
@@ -82,7 +82,7 @@
           <span class="cpanel-title">HVAC 虚实映射分析</span>
           <span class="cpanel-sub">实际暖通能耗与仿真最优值对比，背景灰带为室外温度</span>
         </div>
-        <div ref="hvacEl" class="cpanel-body" style="height:252px;"></div>
+        <div ref="hvacEl" class="cpanel-body" style="height:300px;"></div>
       </div>
     </div>
 
@@ -185,6 +185,7 @@ const weatherTemp = ref<number | null>(null)
 const weatherHumi = ref<number | null>(null)
 const overviewData = ref<any>(null)
 const anomalyData = ref<any[]>([])
+const sankeyData = ref<{ nodes: { name: string }[]; links: { source: string; target: string; value: number }[] } | null>(null)
 
 // ── 建筑切换胶囊 ─────────────────────────────────────────────
 const buildingOptions = [
@@ -312,48 +313,67 @@ async function fetchAnomalies() {
   } catch { /* silent */ }
 }
 
-// ── 1. EUI Bubble Matrix (热力象限图) ────────────────────────
+async function fetchSankeyData() {
+  try {
+    const data = await apiFetch<any>('/api/anomalies/sankey')
+    if (data?.nodes?.length && data?.links?.length) {
+      sankeyData.value = data
+    }
+  } catch { /* silent */ }
+}
+
+// ── 1. 建筑能耗定额偏离分析 ─────────────────────────────────
+// 国标 GB/T 51161-2016 基准值 (kWh/㎡·年)
+const EUI_BASELINE: Record<string, number> = {
+  'Office': 75,
+  'Education': 50,
+  'Public services': 65,
+}
+
 function renderBubble() {
   if (!bubbleEl.value) return
   const c = gc()
   const bldStore = buildingStore.buildings
   const ovData: any[] = overviewData.value?.buildings ?? []
 
-  // 构建数据: [sqm, eui, energy, name, building_type]
   const items = bldStore.map(b => {
     const ov = ovData.find(o => o.building_type === b.building_type)
     const sqm = b.sqm ?? 10000
     const energy = ov?.total_electricity_kwh ?? (50 + Math.random() * 200)
     const eui = energy / sqm
-    return { sqm, eui, energy, name: b.display_name, type: b.building_type }
+    const baseline = EUI_BASELINE[b.building_type] ?? 70
+    // 日数据转年化：eui * 365 / baseline
+    const ratio = (eui * 365) / baseline
+    return { sqm, eui, energy, name: b.display_name, type: b.building_type, baseline, ratio }
   })
 
-  // 计算 EUI 均值作为象限分界线
-  const avgEui = items.length ? items.reduce((s, i) => s + i.eui, 0) / items.length : 0.2
-  const avgSqm = items.length ? items.reduce((s, i) => s + i.sqm, 0) / items.length : 10000
-  const maxEui = Math.max(...items.map(i => i.eui)) * 1.15
-  const maxSqm = Math.max(...items.map(i => i.sqm)) * 1.15
+  const sqmValues = items.map(i => i.sqm)
+  const maxSqm = sqmValues.length ? Math.max(...sqmValues) * 1.15 : 25000
+  const ratioValues = items.map(i => i.ratio)
+  const maxRatio = ratioValues.length ? Math.max(...ratioValues, 1.3) * 1.15 : 2
 
-  // 按优先级着色: 高EUI+大面积=红(P0), 高EUI+小面积=橙(P1), 低EUI+大面积=蓝(P2), 低EUI+小面积=绿(P3)
-  const priorityColor = (eui: number, sqm: number) => {
-    if (eui >= avgEui && sqm >= avgSqm) return { color: '#e05c5c', level: 'P0 紧急', desc: '高能耗+大面积，首要改造' }
-    if (eui >= avgEui && sqm < avgSqm)  return { color: '#e8a64c', level: 'P1 重要', desc: '高能耗，需关注' }
-    if (eui < avgEui && sqm >= avgSqm)  return { color: '#7b9fc7', level: 'P2 观察', desc: '面积大但效率尚可' }
-    return { color: '#5daa87', level: 'P3 良好', desc: '运行效率良好' }
+  // 按偏离比着色
+  const deviationColor = (ratio: number) => {
+    if (ratio >= 1.2) return { color: '#e05c5c', level: '严重超标', desc: '偏离基准 ≥20%，需紧急改造' }
+    if (ratio >= 1.0) return { color: '#e8a64c', level: '轻度超标', desc: '偏离基准 0~20%，需关注优化' }
+    if (ratio >= 0.8) return { color: '#7b9fc7', level: '达标', desc: '低于基准，运行正常' }
+    return { color: '#5daa87', level: '优秀', desc: '远低于基准，节能表现优秀' }
   }
 
   const scatterData = items.map(i => {
-    const p = priorityColor(i.eui, i.sqm)
+    const d = deviationColor(i.ratio)
     return {
-      value: [i.sqm, parseFloat(i.eui.toFixed(5)), parseFloat(i.energy.toFixed(1)), i.name, p.level, p.desc],
-      itemStyle: { color: p.color, opacity: 0.85, borderColor: p.color, borderWidth: 1.5 },
+      // [sqm, ratio, energy, name, level, desc, eui, baseline]
+      value: [i.sqm, parseFloat(i.ratio.toFixed(3)), parseFloat(i.energy.toFixed(1)),
+              i.name, d.level, d.desc, parseFloat((i.eui * 365).toFixed(2)), i.baseline],
+      itemStyle: { color: d.color, opacity: 0.85, borderColor: d.color, borderWidth: 1.5 },
     }
   })
 
   const inst = echarts.init(bubbleEl.value)
   inst.setOption({
     backgroundColor: 'transparent',
-    grid: { top: 20, right: 24, bottom: 46, left: 64 },
+    grid: { top: 36, right: 20, bottom: 46, left: 56 },
     tooltip: {
       trigger: 'item',
       backgroundColor: c.ttBg, borderColor: c.ttBr,
@@ -361,22 +381,23 @@ function renderBubble() {
       formatter: (p: any) => {
         const d = p.data.value
         return `<strong>${d[3]}</strong><br/>` +
-          `优先级: <span style="color:${p.data.itemStyle.color};font-weight:600">${d[4]}</span><br/>` +
+          `状态: <span style="color:${p.data.itemStyle.color};font-weight:600">${d[4]}</span><br/>` +
           `${d[5]}<br/>` +
-          `建筑面积: ${Number(d[0]).toLocaleString()} ㎡<br/>` +
-          `EUI: ${Number(d[1]).toFixed(5)} kWh/㎡<br/>` +
-          `总用电: ${d[2]} kWh`
+          `偏离比: ${d[1]}（${d[1] > 1 ? '超出' : '低于'}基准 ${Math.abs((d[1] - 1) * 100).toFixed(1)}%）<br/>` +
+          `年化 EUI: ${d[6]} kWh/㎡<br/>` +
+          `国标基准: ${d[7]} kWh/㎡·年<br/>` +
+          `建筑面积: ${Number(d[0]).toLocaleString()} ㎡`
       },
     },
     legend: {
-      bottom: 2,
+      top: 4, left: 'center',
       textStyle: { color: c.axis, fontSize: 10 },
-      itemWidth: 10, itemHeight: 10,
+      itemWidth: 8, itemHeight: 8, itemGap: 12,
       data: [
-        { name: 'P0 紧急', icon: 'circle', itemStyle: { color: '#e05c5c' } },
-        { name: 'P1 重要', icon: 'circle', itemStyle: { color: '#e8a64c' } },
-        { name: 'P2 观察', icon: 'circle', itemStyle: { color: '#7b9fc7' } },
-        { name: 'P3 良好', icon: 'circle', itemStyle: { color: '#5daa87' } },
+        { name: '严重超标', icon: 'circle', itemStyle: { color: '#e05c5c' } },
+        { name: '轻度超标', icon: 'circle', itemStyle: { color: '#e8a64c' } },
+        { name: '达标', icon: 'circle', itemStyle: { color: '#7b9fc7' } },
+        { name: '优秀', icon: 'circle', itemStyle: { color: '#5daa87' } },
       ],
     },
     xAxis: {
@@ -388,71 +409,65 @@ function renderBubble() {
       max: maxSqm,
     },
     yAxis: {
-      type: 'value', name: 'EUI (kWh/㎡)',
-      nameLocation: 'middle', nameGap: 50,
-      nameTextStyle: { color: c.axis, fontSize: 11 },
-      axisLabel: { color: c.axis, fontSize: 10 },
+      type: 'value', name: '偏离比（实际/基准）',
+      nameLocation: 'middle', nameGap: 42,
+      nameTextStyle: { color: c.axis, fontSize: 10 },
+      axisLabel: { color: c.axis, fontSize: 10, formatter: (v: number) => v.toFixed(1) },
       splitLine: { lineStyle: { color: c.grid, type: 'dashed' } },
-      max: maxEui,
+      max: maxRatio,
+      min: 0,
     },
     series: [
-      // 背景象限区域
-      {
-        type: 'scatter', data: [], markArea: {
-          silent: true,
-          data: [
-            // 右上: P0 红色区
-            [{ xAxis: avgSqm, yAxis: avgEui, itemStyle: { color: 'rgba(224,92,92,0.06)' } }, { xAxis: maxSqm, yAxis: maxEui }],
-            // 左上: P1 橙色区
-            [{ xAxis: 0, yAxis: avgEui, itemStyle: { color: 'rgba(232,166,76,0.06)' } }, { xAxis: avgSqm, yAxis: maxEui }],
-            // 右下: P2 蓝色区
-            [{ xAxis: avgSqm, yAxis: 0, itemStyle: { color: 'rgba(123,159,199,0.06)' } }, { xAxis: maxSqm, yAxis: avgEui }],
-            // 左下: P3 绿色区
-            [{ xAxis: 0, yAxis: 0, itemStyle: { color: 'rgba(93,170,135,0.06)' } }, { xAxis: avgSqm, yAxis: avgEui }],
-          ],
-        },
-      },
-      // 均值参考线
+      // 达标基准线 y=1
       {
         type: 'scatter', data: [],
         markLine: {
           silent: true,
           symbol: 'none',
-          lineStyle: { color: c.axis, type: 'dashed', width: 1, opacity: 0.4 },
-          label: { fontSize: 9, color: c.axis },
+          lineStyle: { color: '#e05c5c', type: 'dashed', width: 1.5, opacity: 0.6 },
+          label: { fontSize: 10, color: '#e05c5c', opacity: 0.8 },
           data: [
-            { yAxis: avgEui, label: { formatter: `均值 EUI: ${avgEui.toFixed(4)}`, position: 'insideEndTop' } },
-            { xAxis: avgSqm, label: { formatter: `均值面积: ${(avgSqm / 1000).toFixed(1)}k`, position: 'insideEndTop' } },
+            { yAxis: 1, label: { formatter: '国标基准线', position: 'insideEndTop' } },
           ],
         },
       },
-      // P0 紧急
+      // 背景区域：超标区 / 达标区
       {
-        name: 'P0 紧急', type: 'scatter',
-        data: scatterData.filter(d => d.value[4] === 'P0 紧急'),
-        symbolSize: (val: any[]) => Math.max(24, Math.sqrt(val[2]) * 0.12),
-        label: { show: true, formatter: (p: any) => p.data.value[3], position: 'top', fontSize: 11, color: c.axis },
+        type: 'scatter', data: [], markArea: {
+          silent: true,
+          data: [
+            [{ yAxis: 1, itemStyle: { color: 'rgba(224,92,92,0.04)' } }, { yAxis: maxRatio }],
+            [{ yAxis: 0, itemStyle: { color: 'rgba(93,170,135,0.04)' } }, { yAxis: 1 }],
+          ],
+        },
       },
-      // P1 重要
+      // 严重超标
       {
-        name: 'P1 重要', type: 'scatter',
-        data: scatterData.filter(d => d.value[4] === 'P1 重要'),
-        symbolSize: (val: any[]) => Math.max(22, Math.sqrt(val[2]) * 0.1),
-        label: { show: true, formatter: (p: any) => p.data.value[3], position: 'top', fontSize: 11, color: c.axis },
+        name: '严重超标', type: 'scatter',
+        data: scatterData.filter(d => d.value[4] === '严重超标'),
+        symbolSize: (val: any[]) => Math.min(50, Math.max(20, Math.sqrt(val[2]) * 0.1)),
+        label: { show: true, formatter: (p: any) => p.data.value[3], position: 'top', fontSize: 11, color: c.axis, distance: 6 },
       },
-      // P2 观察
+      // 轻度超标
       {
-        name: 'P2 观察', type: 'scatter',
-        data: scatterData.filter(d => d.value[4] === 'P2 观察'),
-        symbolSize: (val: any[]) => Math.max(22, Math.sqrt(val[2]) * 0.1),
-        label: { show: true, formatter: (p: any) => p.data.value[3], position: 'top', fontSize: 11, color: c.axis },
+        name: '轻度超标', type: 'scatter',
+        data: scatterData.filter(d => d.value[4] === '轻度超标'),
+        symbolSize: (val: any[]) => Math.min(46, Math.max(18, Math.sqrt(val[2]) * 0.09)),
+        label: { show: true, formatter: (p: any) => p.data.value[3], position: 'top', fontSize: 11, color: c.axis, distance: 6 },
       },
-      // P3 良好
+      // 达标
       {
-        name: 'P3 良好', type: 'scatter',
-        data: scatterData.filter(d => d.value[4] === 'P3 良好'),
-        symbolSize: (val: any[]) => Math.max(20, Math.sqrt(val[2]) * 0.08),
-        label: { show: true, formatter: (p: any) => p.data.value[3], position: 'top', fontSize: 11, color: c.axis },
+        name: '达标', type: 'scatter',
+        data: scatterData.filter(d => d.value[4] === '达标'),
+        symbolSize: (val: any[]) => Math.min(42, Math.max(16, Math.sqrt(val[2]) * 0.08)),
+        label: { show: true, formatter: (p: any) => p.data.value[3], position: 'top', fontSize: 11, color: c.axis, distance: 6 },
+      },
+      // 优秀
+      {
+        name: '优秀', type: 'scatter',
+        data: scatterData.filter(d => d.value[4] === '优秀'),
+        symbolSize: (val: any[]) => Math.min(38, Math.max(14, Math.sqrt(val[2]) * 0.07)),
+        label: { show: true, formatter: (p: any) => p.data.value[3], position: 'top', fontSize: 11, color: c.axis, distance: 6 },
       },
     ],
   })
@@ -592,9 +607,54 @@ function showGhTip(e: MouseEvent, cell: { d: number; h: number; v: number }) {
 function hideGhTip() { ghTip.value.show = false }
 
 // ── 4. Sankey Diagram ─────────────────────────────────────────
+// 左侧节点（规则/异常类型）使用暖色系，右侧节点（根因）使用冷色系
+const _SANKEY_SOURCE_COLORS: Record<string, string> = {
+  '水耗异常': MC.teal, '电耗超标': MC.blue, '空调过耗': MC.terra,
+  '标注异常': MC.rose, '夜间高耗': MC.lav,
+}
+const _SANKEY_TARGET_COLORS: Record<string, string> = {
+  '主机效能衰退': MC.rose, '水力失调': MC.blue, '非预期开机': MC.lav,
+  '其他空调故障': MC.sage, '管网漏损': MC.teal, '负荷过载': MC.terra,
+  '数据标注': MC.lav, '夜间异常运行': MC.lav,
+}
+
+// mock fallback（API 无数据时使用）
+const _SANKEY_MOCK_NODES = [
+  { name: '温差过大' }, { name: '能耗超标' }, { name: '设备离线' },
+  { name: '过滤网堵塞' }, { name: '传感器失效' }, { name: '冷水机故障' }, { name: '管道泄漏' },
+]
+const _SANKEY_MOCK_LINKS = [
+  { source: '温差过大', target: '过滤网堵塞', value: 14 },
+  { source: '温差过大', target: '冷水机故障', value: 8 },
+  { source: '能耗超标', target: '过滤网堵塞', value: 11 },
+  { source: '能耗超标', target: '传感器失效', value: 9 },
+  { source: '能耗超标', target: '管道泄漏',   value: 5 },
+  { source: '设备离线', target: '传感器失效', value: 17 },
+  { source: '设备离线', target: '冷水机故障', value: 7 },
+]
+
 function renderSankey() {
   if (!sankeyEl.value) return
   const c = gc()
+
+  const sd = sankeyData.value
+  const useApi = sd && sd.nodes.length > 0 && sd.links.length > 0
+
+  // 收集所有 source / target 名称，用于着色
+  const sourceNames = new Set(
+    (useApi ? sd!.links : _SANKEY_MOCK_LINKS).map(l => l.source),
+  )
+
+  const rawNodes = useApi ? sd!.nodes : _SANKEY_MOCK_NODES
+  const nodes = rawNodes.map(n => ({
+    name: n.name,
+    itemStyle: {
+      color: sourceNames.has(n.name)
+        ? (_SANKEY_SOURCE_COLORS[n.name] ?? MC.blue)
+        : (_SANKEY_TARGET_COLORS[n.name] ?? MC.lav),
+    },
+  }))
+  const links = useApi ? sd!.links : _SANKEY_MOCK_LINKS
 
   const inst = echarts.init(sankeyEl.value)
   inst.setOption({
@@ -609,24 +669,8 @@ function renderSankey() {
       left: 16, right: 108, top: 10, bottom: 10,
       emphasis: { focus: 'adjacency' },
       nodeGap: 10, nodeWidth: 12,
-      data: [
-        { name: '温差过大',   itemStyle: { color: MC.terra } },
-        { name: '能耗超标',   itemStyle: { color: MC.blue } },
-        { name: '设备离线',   itemStyle: { color: MC.rose } },
-        { name: '过滤网堵塞', itemStyle: { color: MC.lav } },
-        { name: '传感器失效', itemStyle: { color: MC.lav } },
-        { name: '冷水机故障', itemStyle: { color: MC.lav } },
-        { name: '管道泄漏',   itemStyle: { color: MC.teal } },
-      ],
-      links: [
-        { source: '温差过大', target: '过滤网堵塞', value: 14 },
-        { source: '温差过大', target: '冷水机故障', value: 8 },
-        { source: '能耗超标', target: '过滤网堵塞', value: 11 },
-        { source: '能耗超标', target: '传感器失效', value: 9 },
-        { source: '能耗超标', target: '管道泄漏',   value: 5 },
-        { source: '设备离线', target: '传感器失效', value: 17 },
-        { source: '设备离线', target: '冷水机故障', value: 7 },
-      ],
+      data: nodes,
+      links,
       lineStyle: { color: 'gradient', opacity: 0.42 },
       label: { color: c.axis, fontSize: 11 },
     }],
@@ -710,7 +754,7 @@ let ro: ResizeObserver | null = null
 onMounted(async () => {
   generateGhData()
   await buildingStore.fetchBuildings()
-  await Promise.all([fetchOverview(), fetchAnomalies()])
+  await Promise.all([fetchOverview(), fetchAnomalies(), fetchSankeyData()])
   await nextTick()
   setTimeout(() => {
     renderAll()
@@ -1029,7 +1073,7 @@ onUnmounted(() => {
   .bento-r1 { grid-template-columns: 1.3fr 1fr; }
   .bento-r2 { grid-template-columns: 1.1fr 1fr; }
   /* 图表高度小幅收缩 */
-  .bento-r1 .cpanel-body { height: 220px !important; }
+  .bento-r1 .cpanel-body { height: 260px !important; }
 }
 
 /* ── 单列切换 < 700px ─────────────────────────────────────── */
@@ -1054,7 +1098,7 @@ onUnmounted(() => {
     gap: 10px;
   }
   /* 全宽后图表可以更高 */
-  .bento-r1 .cpanel-body { height: 260px !important; }
+  .bento-r1 .cpanel-body { height: 300px !important; }
   /* 右侧叠加列改为横排 */
   .cpanel-col {
     flex-direction: row;
@@ -1085,7 +1129,7 @@ onUnmounted(() => {
   .kpi-val { font-size: 15px; }
   .kpi-tag { display: none; }
   .cpanel-sub { display: none; }
-  .bento-r1 .cpanel-body { height: 220px !important; }
+  .bento-r1 .cpanel-body { height: 260px !important; }
   .cpanel-col { flex-direction: column; }
   .cpanel-col .cpanel-body { height: 160px !important; }
   /* 热力图缩紧 */
@@ -1105,7 +1149,7 @@ onUnmounted(() => {
   .pg-sub    { display: none; }
   .weather-widget  { display: none; }
   .bento-row { gap: 8px; }
-  .bento-r1 .cpanel-body { height: 180px !important; }
+  .bento-r1 .cpanel-body { height: 220px !important; }
   .cpanel-col .cpanel-body { height: 130px !important; }
   .cpanel-hd { padding: 8px 12px 6px; }
   .cpanel-title { font-size: 12px; }

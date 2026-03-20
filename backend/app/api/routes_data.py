@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import date, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select, text
@@ -30,11 +30,13 @@ _BUILDING_ICONS = {
     "Education": "🏫",
     "Office": "🏢",
     "Public": "🏛️",
+    "Public services": "🏛️",
 }
 _BUILDING_NAMES = {
     "Education": "教学楼",
     "Office": "办公楼",
     "Public": "公共楼",
+    "Public services": "公共楼",
 }
 
 
@@ -359,20 +361,30 @@ async def get_rated_vs_actual(
 # Dashboard KPI 总览（全局汇总，取数据库最新一天的汇总数据）
 # ---------------------------------------------------------------------------
 @router.get("/overview", summary="获取 Dashboard KPI 总览")
-async def get_overview(db: AsyncSession = Depends(get_db_session)):
+async def get_overview(
+    query_date: date | None = Query(None, alias="date", description="指定日期 YYYY-MM-DD，默认取最新日期"),
+    db: AsyncSession = Depends(get_db_session),
+):
     """
-    返回所有建筑的 KPI 汇总数据（最新可用日期），供 Dashboard 使用。
+    返回所有建筑的 KPI 汇总数据（指定日期或最新可用日期），供 Dashboard 使用。
     包含：各楼总用电、总用水、最新设备状态快照。
     直接从 energy_data 聚合，不依赖物化视图，确保数据实时。
     """
-    # 取 energy_data 中最新一天的日期
-    latest_ts_result = await db.execute(
-        text('SELECT MAX("timestamp")::date AS latest_day FROM energy_data')
-    )
-    row = latest_ts_result.fetchone()
-    latest_day = row[0] if row else None
-    if not latest_day:
+    # 确定目标日期：优先用请求参数，否则取最新一天
+    if query_date:
+        target_day = query_date
+    else:
+        latest_ts_result = await db.execute(
+            text('SELECT MAX("timestamp")::date AS latest_day FROM energy_data')
+        )
+        row = latest_ts_result.fetchone()
+        target_day = row[0] if row else None
+    if not target_day:
         return {"error": "暂无能耗数据"}
+
+    # 用时间戳范围代替 ::date 转换，避免时区问题
+    day_start = datetime(target_day.year, target_day.month, target_day.day, tzinfo=timezone.utc)
+    day_end   = day_start + timedelta(days=1)
 
     # 按楼宇聚合当天数据（电、水、温度）
     daily_result = await db.execute(
@@ -383,19 +395,37 @@ async def get_overview(db: AsyncSession = Depends(get_db_session)):
                 b.sqm,
                 SUM(e.electricity_kwh)  AS total_electricity_kwh,
                 SUM(e.water_m3)         AS total_water_m3,
-                AVG(e.air_temp_c)       AS avg_ambient_temp
+                AVG(e.air_temp_c)       AS avg_ambient_temp,
+                SUM(e.hac_energy)       AS total_hac_energy
             FROM energy_data e
             JOIN buildings b ON e.building_id = b.building_id
-            WHERE e."timestamp"::date = :day
+            WHERE e."timestamp" >= :day_start
+              AND e."timestamp" <  :day_end
             GROUP BY e.building_id, b.primary_space_usage, b.sqm
             ORDER BY b.primary_space_usage
         """),
-        {"day": latest_day},
+        {"day_start": day_start, "day_end": day_end},
     )
     daily_rows = daily_result.fetchall()
 
     if not daily_rows:
-        return {"error": f"日期 {latest_day} 无能耗数据"}
+        return {"error": f"日期 {target_day} 无能耗数据"}
+
+    # 全局平均气温和湿度（当天所有建筑平均）
+    weather_result = await db.execute(
+        text("""
+            SELECT
+                AVG(e.air_temp_c)       AS avg_temp,
+                AVG(e.humidity_rh_pct)  AS avg_humidity
+            FROM energy_data e
+            WHERE e."timestamp" >= :day_start
+              AND e."timestamp" <  :day_end
+        """),
+        {"day_start": day_start, "day_end": day_end},
+    )
+    weather_row = weather_result.fetchone()
+    global_avg_temp = round(float(weather_row[0]), 1) if weather_row and weather_row[0] else None
+    global_avg_humidity = round(float(weather_row[1]), 1) if weather_row and weather_row[1] else None
 
     # 各楼最新一条实时记录（实时读数）
     live_result = await db.execute(
@@ -432,10 +462,11 @@ async def get_overview(db: AsyncSession = Depends(get_db_session)):
 
     total_electricity = 0.0
     total_water = 0.0
+    total_hac = 0.0
     buildings_detail = []
 
     for dr in daily_rows:
-        bid, usage, sqm, total_elec, total_w, avg_temp = dr
+        bid, usage, sqm, total_elec, total_w, bld_avg_temp, hac = dr
         live = live_map.get(bid)
         latest_w = float(live[2] or 0) if live else 0.0
         is_anomaly = bid in anomaly_building_ids
@@ -445,13 +476,15 @@ async def get_overview(db: AsyncSession = Depends(get_db_session)):
         )
         total_electricity += float(total_elec or 0)
         total_water += float(total_w or 0)
+        total_hac += float(hac or 0)
         buildings_detail.append({
             "building_type": usage,
             "display_name": _BUILDING_NAMES.get(usage or "", usage or bid),
             "icon": _BUILDING_ICONS.get(usage or "", "🏠"),
             "total_electricity_kwh": round(float(total_elec or 0), 2),
             "total_water_m3": round(float(total_w or 0), 2),
-            "avg_ambient_temp": round(float(avg_temp or 0), 2) if avg_temp else None,
+            "total_hac_energy_kwh": round(float(hac or 0), 2),
+            "avg_ambient_temp": round(float(bld_avg_temp or 0), 1) if bld_avg_temp else None,
             "sqm": sqm,
             "energy_intensity_kwh_per_sqm": intensity,
             "anomaly_status": "Anomaly" if is_anomaly else "Normal",
@@ -459,11 +492,17 @@ async def get_overview(db: AsyncSession = Depends(get_db_session)):
         })
 
     return {
-        "data_date": latest_day.isoformat() if hasattr(latest_day, "isoformat") else str(latest_day),
+        "data_date": target_day.isoformat() if hasattr(target_day, "isoformat") else str(target_day),
         "kpis": {
             "total_electricity_kwh": round(total_electricity, 2),
             "total_water_m3": round(total_water, 2),
+            "total_hac_energy_kwh": round(total_hac, 2),
+            "total_carbon_kg": round(total_electricity * 0.5703, 2),
             "anomaly_count": len(anomaly_building_ids),
+        },
+        "weather": {
+            "temperature": global_avg_temp,
+            "humidity": global_avg_humidity,
         },
         "buildings": buildings_detail,
     }

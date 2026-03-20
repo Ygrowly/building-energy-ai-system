@@ -263,16 +263,18 @@
             >
               <Icon icon="mdi:cursor-default-click-outline" width="18" />
             </button>
-            <button class="tag-btn" title="RAG 知识库">
-              <Icon icon="mdi:database-search" width="12" />
-              RAG 知识库
-            </button>
             <button class="tag-btn" title="MCP 工具">
               <Icon icon="mdi:puzzle-outline" width="12" />
               MCP
             </button>
+            <button class="tag-btn" title="RAG 知识库" @click="router.push('/datacenter?tab=knowledge')">
+              <Icon icon="mdi:database-search" width="16" />
+              RAG 知识库
+            </button>
+          </div>
+          <div class="toolbar-right">
             <button
-              class="tag-btn web-search-btn"
+              class="tool-btn web-search-btn"
               :class="{ 'web-search-active': store.webSearchEnabled }"
               :title="store.webSearchEnabled ? '关闭联网搜索' : '开启联网搜索（Tavily）'"
               :disabled="store.isLoading"
@@ -280,13 +282,10 @@
             >
               <Icon
                 :icon="store.webSearchEnabled ? 'mdi:web-check' : 'mdi:web'"
-                width="12"
+                width="16"
               />
-              联网搜索
               <span v-if="store.webSearchEnabled" class="web-search-dot"></span>
             </button>
-          </div>
-          <div class="toolbar-right">
             <button class="tool-btn" title="上传图片" @click="triggerUpload" :disabled="store.isLoading">
               <Icon icon="mdi:image-plus-outline" width="16" />
             </button>
@@ -305,6 +304,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { Icon } from '@iconify/vue'
+import { useRouter } from 'vue-router'
 import { useChatStore } from '@/stores/chatStore'
 import { useElementPickerStore } from '@/stores/elementPickerStore'
 import type { SessionInfo } from '@/stores/chatStore'
@@ -315,6 +315,7 @@ import ReportDownload from '@/generative-ui/ReportDownload.vue'
 import EvidenceLink from '@/generative-ui/EvidenceLink.vue'
 import type { ArtifactEvent } from '@/api/stream_client'
 
+const router = useRouter()
 const store = useChatStore()
 const pickerStore = useElementPickerStore()
 const inputText = ref('')
@@ -1175,6 +1176,9 @@ textarea::placeholder { color: var(--text-muted); }
 
 .web-search-btn {
   position: relative;
+  width: auto;
+  height: auto;
+  padding: 0;
 }
 
 .web-search-active {
@@ -1188,13 +1192,13 @@ textarea::placeholder { color: var(--text-muted); }
 }
 
 .web-search-dot {
-  display: inline-block;
-  width: 5px;
-  height: 5px;
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
   background: #22c55e;
-  margin-left: 2px;
-  vertical-align: middle;
   flex-shrink: 0;
   animation: pulse-dot 2s ease-in-out infinite;
 }
@@ -1207,7 +1211,7 @@ textarea::placeholder { color: var(--text-muted); }
 .toolbar-right {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 0;
 }
 
 .tool-btn {

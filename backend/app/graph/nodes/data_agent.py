@@ -65,7 +65,7 @@ DATA_AGENT_SYSTEM_PROMPT = """你是一个楼宇能耗管理系统的数据分�
 ## 建筑 ID 说明
 - building_id 使用 building_type 值：'Education'、'Office'、'Public'
 - **上下文已提供楼宇列表时，直接使用，禁止再调用 list_available_buildings**
-- 禁止使用数据库内部 building_id（如 'Bobcat_office_Kassandra'）
+- 禁止使用数据库内部 building_id（如 'Fox_office_Alice'）
 
 ## 数据时间范围
 - 数据库有效数据：2016-04-01 ~ 2016-05-02

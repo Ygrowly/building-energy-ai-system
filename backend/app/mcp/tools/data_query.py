@@ -68,7 +68,7 @@ _METRIC_META: dict[MetricType, tuple[str, str]] = {
 #
 # 数据库中：
 #   building_type 列 = 'Education'/'Office'/'Public'（工具传参使用此值）
-#   building_id   列 = 实际资产名 'Bobcat_office_Kassandra'（energy_data 外键使用此值）
+#   building_id   列 = 实际资产名 'Fox_office_Alice'（energy_data 外键使用此值）
 #   meter_device_id  = devices 表中该楼宇的 ElectricityMeter 设备 ID（血缘溯源首选）
 # 此函数被 data_query.py 和 physics_calc.py 共同引用，避免重复逻辑。
 # ---------------------------------------------------------------------------

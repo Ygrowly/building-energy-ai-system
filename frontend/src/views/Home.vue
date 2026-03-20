@@ -49,14 +49,20 @@
            data-pick-type="kpi"
            :data-pick-title="k.label"
            :data-pick-subtitle="String(k.value)">
-        <div class="kpi-ico" :style="{ background: k.bg, color: k.color }">
+        <div class="kpi-ico" :class="k.anim" :style="{ background: k.bg, color: k.color }">
           <Icon :icon="k.icon" width="20" />
         </div>
         <div class="kpi-body">
           <span class="kpi-val">{{ k.value }}</span>
           <span class="kpi-lbl">{{ k.label }}</span>
         </div>
-        <span class="kpi-tag" :style="{ color: k.color, background: k.bg }">{{ k.tag }}</span>
+        <div class="kpi-right">
+          <span class="kpi-tag" :style="{ color: k.color, background: k.bg }">{{ k.tag }}</span>
+          <span v-if="k.change != null" class="kpi-trend" :class="k.change >= 0 ? 'up' : 'down'">
+            <Icon :icon="k.change >= 0 ? 'mdi:trending-up' : 'mdi:trending-down'" width="12" />
+            {{ k.change >= 0 ? '+' : '' }}{{ k.change }}%
+          </span>
+        </div>
       </div>
     </section>
 
@@ -257,40 +263,56 @@ const kpis = computed(() => {
   if (!ov) return []
   const sel = activeBuilding.value
   const buildings: any[] = ov.buildings ?? []
+  const chg = ov.kpis_change ?? {}
 
   let elec = 0, water = 0, hac = 0
+  let elecChg: number | null = null, waterChg: number | null = null
+  let hacChg: number | null = null, carbonChg: number | null = null
+
   if (sel === 'all') {
     elec  = Number(ov.kpis?.total_electricity_kwh ?? 0)
     water = Number(ov.kpis?.total_water_m3 ?? 0)
     hac   = Number(ov.kpis?.total_hac_energy_kwh ?? 0)
+    elecChg   = chg.total_electricity_pct ?? null
+    waterChg  = chg.total_water_pct ?? null
+    hacChg    = chg.total_hac_pct ?? null
+    carbonChg = chg.total_carbon_pct ?? null
   } else {
     const b = buildings.find((b: any) => b.building_type === sel)
     elec  = b ? Number(b.total_electricity_kwh ?? 0) : 0
     water = b ? Number(b.total_water_m3 ?? 0) : 0
     hac   = b ? Number(b.total_hac_energy_kwh ?? 0) : 0
+    elecChg   = b?.electricity_change_pct ?? null
+    waterChg  = b?.water_change_pct ?? null
+    hacChg    = b?.hac_change_pct ?? null
+    carbonChg = b?.carbon_change_pct ?? null
   }
   const carbon = elec * CARBON_FACTOR
 
   return [
     {
       icon: 'mdi:lightning-bolt', label: '日总用电 (kWh)',
-      value: elec.toFixed(1),
-      tag: '今日', bg: 'rgba(123,159,199,0.14)', color: MC.blue,
+      value: elec.toFixed(1), change: elecChg,
+      tag: '今日', bg: 'rgba(122,170,142,0.14)', color: MC.sage,
+      anim: 'anim-bolt',
     },
     {
       icon: 'mdi:water', label: '日总用水 (m³)',
-      value: water.toFixed(1),
-      tag: '今日', bg: 'rgba(122,170,142,0.14)', color: MC.sage,
+      value: water.toFixed(1), change: waterChg,
+      tag: '今日', bg: 'rgba(123,159,199,0.14)', color: MC.blue,
+      anim: 'anim-drop',
     },
     {
-      icon: 'mdi:air-conditioner', label: '空调能耗 (kWh)',
-      value: hac.toFixed(1),
+      icon: 'mdi:snowflake', label: '空调能耗 (kWh)',
+      value: hac.toFixed(1), change: hacChg,
       tag: '今日', bg: 'rgba(155,143,196,0.14)', color: MC.lav,
+      anim: 'anim-spin',
     },
     {
-      icon: 'mdi:molecule-co2', label: '碳排放量 (kg)',
-      value: carbon.toFixed(1),
+      icon: 'mdi:leaf', label: '碳排放量 (kg)',
+      value: carbon.toFixed(1), change: carbonChg,
       tag: 'CO₂', bg: 'rgba(196,149,106,0.14)', color: MC.terra,
+      anim: 'anim-breathe',
     },
   ]
 })
@@ -965,6 +987,53 @@ onUnmounted(() => {
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+  transition: transform 0.3s ease, box-shadow 0.3s ease;
+}
+.kpi-card:hover .kpi-ico {
+  transform: scale(1.15);
+  box-shadow: 0 0 12px rgba(0,0,0,0.08);
+}
+
+/* ⚡ 闪电 - 闪烁脉冲 */
+.anim-bolt :deep(svg) {
+  animation: bolt-flash 2s ease-in-out infinite;
+}
+@keyframes bolt-flash {
+  0%, 100% { opacity: 1; filter: drop-shadow(0 0 0px currentColor); }
+  15% { opacity: 0.4; filter: drop-shadow(0 0 0px currentColor); }
+  30% { opacity: 1; filter: drop-shadow(0 0 6px currentColor); }
+  45% { opacity: 0.6; }
+  60% { opacity: 1; filter: drop-shadow(0 0 3px currentColor); }
+}
+
+/* 💧 水滴 - 弹跳滴落 */
+.anim-drop :deep(svg) {
+  animation: drop-bounce 2.5s ease-in-out infinite;
+  transform-origin: center bottom;
+}
+@keyframes drop-bounce {
+  0%, 100% { transform: translateY(0) scaleY(1); }
+  30% { transform: translateY(-3px) scaleY(1.05); }
+  50% { transform: translateY(1px) scaleY(0.95) scaleX(1.05); }
+  70% { transform: translateY(-1px) scaleY(1.02); }
+}
+
+/* ❄️ 空调 - 雪花缓慢旋转+脉冲 */
+.anim-spin :deep(svg) {
+  animation: snowflake-pulse 3s ease-in-out infinite;
+}
+@keyframes snowflake-pulse {
+  0%, 100% { transform: rotate(0deg) scale(1); opacity: 0.85; }
+  50% { transform: rotate(180deg) scale(1.15); opacity: 1; }
+}
+
+/* 🌿 CO₂ - 呼吸浮动 */
+.anim-breathe :deep(svg) {
+  animation: co2-breathe 3s ease-in-out infinite;
+}
+@keyframes co2-breathe {
+  0%, 100% { transform: translateY(0) scale(1); opacity: 0.85; }
+  50% { transform: translateY(-3px) scale(1.1); opacity: 1; }
 }
 .kpi-body { flex: 1; min-width: 0; }
 .kpi-val {
@@ -986,14 +1055,32 @@ onUnmounted(() => {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.kpi-right {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+  flex-shrink: 0;
+}
 .kpi-tag {
   font-size: 10px;
   font-weight: 600;
   padding: 2px 8px;
   border-radius: 20px;
-  flex-shrink: 0;
   white-space: nowrap;
 }
+.kpi-trend {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 20px;
+  white-space: nowrap;
+}
+.kpi-trend.up   { color: #16a34a; background: rgba(22,163,74,0.10); }
+.kpi-trend.down { color: #dc2626; background: rgba(220,38,38,0.10); }
 
 /* ── Bento Rows ───────────────────────────────────────────── */
 .bento-row {

@@ -151,7 +151,7 @@ DIAGNOSE_AGENT_SYSTEM_PROMPT = """你是一个楼宇能耗管理系统的专家�
 - RAG 检索结果相关性不足（similarity < 0.2）时，诚实告知"知识库中未找到匹配条目"
 
 ## 工单生成规范
-1. 先从楼宇设备列表确认 device_id（格式如 'Eagle_public_Henry_hvac'）
+1. 先从楼宇设备列表确认 device_id（格式如 'Fox_public_Henr_hvac'）
 2. 调用 create_work_order_draft，device_id 必须填写真实设备 ID
 3. 调用后必须渲染 WorkOrderCard 让用户确认：
 ```

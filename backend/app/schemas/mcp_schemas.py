@@ -356,13 +356,13 @@ class QueryDailyEnergySummaryOutput(BaseModel):
 class MetadataFilter(BaseModel):
     """
     RAG 元数据硬过滤：先用 device_id 过滤掉 90% 无关文档，再做向量检索。
-    device_id 来自 devices 表（如 'Eagle_public_Henry_hvac'）；
+    device_id 来自 devices 表（如 'Fox_public_Henr_hvac'）；
     building_type 来自 buildings.primary_space_usage（如 'Office'）。
     全部字段可选，不传则不过滤（全库范围检索模式）。
     """
     device_id: Optional[str] = Field(
         default=None,
-        description="设备 ID，来自 devices 表，如 'Bobcat_office_Kassandra_hvac'"
+        description="设备 ID，来自 devices 表，如 'Fox_office_Alice_hvac'"
     )
     building_type: Optional[str] = Field(
         default=None,
@@ -505,7 +505,7 @@ class CreateWorkOrderDraftInput(BaseModel):
         min_length=1,
         max_length=128,
         description=(
-            "设备 ID，来自 devices 表，如 'Bobcat_office_Kassandra_hvac'。"
+            "设备 ID，来自 devices 表，如 'Fox_office_Alice_hvac'。"
             "可先调用 list_available_buildings 查看各楼宇的关联设备列表"
         )
     )
@@ -543,7 +543,7 @@ class CreateWorkOrderDraftOutput(BaseModel):
 class DeviceInfo(BaseModel):
     """单个设备的基本信息（来自 devices 表）。"""
     device_id: str = Field(
-        description="设备唯一标识，如 'Bobcat_office_Kassandra_hvac'"
+        description="设备唯一标识，如 'Fox_office_Alice_hvac'"
     )
     device_type: str = Field(
         description="设备类型，如 'ElectricityMeter' / 'WaterMeter' / 'HVAC' / 'EnvSensor'"
@@ -556,7 +556,7 @@ class BuildingInfo(BaseModel):
     当 Agent 需要填写 device_id（如 create_work_order_draft、rag_hybrid_search 过滤）时，
     应从此列表的 devices 字段中选取真实 device_id。
     """
-    building_id: str = Field(description="数据库中的实际主键，如 'Bobcat_office_Kassandra'")
+    building_id: str = Field(description="数据库中的实际主键，如 'Fox_office_Alice'")
     building_type: str = Field(
         description="用途类型标签（primary_space_usage），工具传参时使用此值，如 'Office'"
     )

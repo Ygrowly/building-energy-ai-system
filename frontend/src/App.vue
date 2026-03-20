@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <!-- 登录/注册：全屏独立页，无侧栏、无 Agent 面板 -->
   <div v-if="isStandaloneAuth" class="auth-shell">
     <RouterView />
@@ -230,10 +230,10 @@ function startResize(e: MouseEvent) {
 
 const navItems = [
   { path: '/home',       icon: 'mdi:home',            label: '首页' },
-  { path: '/dashboard',  icon: 'mdi:view-dashboard',  label: '驾驶舱' },
+  { path: '/querystats', icon: 'mdi:chart-bar',        label: '查询统计' },
+  { path: '/datacenter', icon: 'mdi:database-outline', label: '数据中心' },
   { path: '/operations', icon: 'mdi:wrench',           label: '智慧运维' },
   { path: '/workorders', icon: 'mdi:clipboard-list',   label: '工单管理' },
-  { path: '/datacenter', icon: 'mdi:database-outline', label: '数据中心' },
 ]
 
 const BUILDING_ICONS: Record<string, string> = {

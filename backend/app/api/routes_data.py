@@ -492,6 +492,57 @@ async def get_overview(
             "latest_water_m3": latest_w,
         })
 
+    # 查询昨日 KPI 数据（按楼分组），用于计算环比变化
+    prev_day = target_day - timedelta(days=1)
+    prev_start = datetime(prev_day.year, prev_day.month, prev_day.day, tzinfo=timezone.utc)
+    prev_end   = prev_start + timedelta(days=1)
+    prev_result = await db.execute(
+        text("""
+            SELECT
+                b.primary_space_usage,
+                SUM(e.electricity_kwh) AS total_electricity_kwh,
+                SUM(e.water_m3)        AS total_water_m3,
+                SUM(e.hac_energy)      AS total_hac_energy
+            FROM energy_data e
+            JOIN buildings b ON e.building_id = b.building_id
+            WHERE e."timestamp" >= :prev_start
+              AND e."timestamp" <  :prev_end
+            GROUP BY b.primary_space_usage
+        """),
+        {"prev_start": prev_start, "prev_end": prev_end},
+    )
+    # 按建筑类型建立昨日数据映射
+    prev_by_building: dict[str, dict] = {}
+    prev_electricity = 0.0
+    prev_water = 0.0
+    prev_hac = 0.0
+    for pr in prev_result.fetchall():
+        p_usage, p_elec, p_water, p_hac_val = pr
+        p_elec_f = float(p_elec or 0)
+        p_water_f = float(p_water or 0)
+        p_hac_f = float(p_hac_val or 0)
+        prev_electricity += p_elec_f
+        prev_water += p_water_f
+        prev_hac += p_hac_f
+        prev_by_building[p_usage] = {
+            "electricity": p_elec_f,
+            "water": p_water_f,
+            "hac": p_hac_f,
+        }
+
+    def pct_change(today: float, yesterday: float) -> float | None:
+        if yesterday == 0:
+            return None
+        return round((today - yesterday) / yesterday * 100, 1)
+
+    # 为每栋楼追加环比变化
+    for bd in buildings_detail:
+        prev_b = prev_by_building.get(bd["building_type"], {})
+        bd["electricity_change_pct"] = pct_change(bd["total_electricity_kwh"], prev_b.get("electricity", 0))
+        bd["water_change_pct"]       = pct_change(bd["total_water_m3"], prev_b.get("water", 0))
+        bd["hac_change_pct"]         = pct_change(bd["total_hac_energy_kwh"], prev_b.get("hac", 0))
+        bd["carbon_change_pct"]      = pct_change(bd["total_electricity_kwh"] * 0.5703, prev_b.get("electricity", 0) * 0.5703)
+
     return {
         "data_date": target_day.isoformat() if hasattr(target_day, "isoformat") else str(target_day),
         "kpis": {
@@ -500,6 +551,12 @@ async def get_overview(
             "total_hac_energy_kwh": round(total_hac, 2),
             "total_carbon_kg": round(total_electricity * 0.5703, 2),
             "anomaly_count": len(anomaly_building_ids),
+        },
+        "kpis_change": {
+            "total_electricity_pct": pct_change(total_electricity, prev_electricity),
+            "total_water_pct":       pct_change(total_water, prev_water),
+            "total_hac_pct":         pct_change(total_hac, prev_hac),
+            "total_carbon_pct":      pct_change(total_electricity * 0.5703, prev_electricity * 0.5703),
         },
         "weather": {
             "temperature": global_avg_temp,

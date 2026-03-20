@@ -57,6 +57,27 @@ class Settings(BaseSettings):
     DEBUG: bool = True
     APP_ENV: str = "development"  # development | production
 
+    # -----------------------------------------------------------------------
+    # Redis Cache
+    # -----------------------------------------------------------------------
+    # 缓存实现采用 Cache-Aside + TTL，并基于 30 秒 time bucket 控制刷新粒度。
+    REDIS_URL: str = "redis://localhost:6379/0"
+    CACHE_BUCKET_SECONDS: int = 30
+
+    # 针对首页/驾驶舱高频接口的 TTL（秒）
+    CACHE_OVERVIEW_TTL_SECONDS: int = 45
+    CACHE_ANOMALIES_RECENT_TTL_SECONDS: int = 45
+    CACHE_BUILDING_ENERGY_TREND_TTL_SECONDS: int = 300
+    CACHE_BUILDINGS_TTL_SECONDS: int = 3600
+
+    # 请求风暴保护（stampede control）
+    CACHE_LOCK_EXPIRE_SECONDS: int = 5
+    CACHE_LOCK_WAIT_SECONDS: float = 1.0
+
+    # Redis 不可用时的本地降级缓存容量（避免内存不够/无限增长）
+    CACHE_LOCAL_MAXSIZE: int = 1024
+    CACHE_LOCAL_DEFAULT_TTL_SECONDS: int = 60
+
     model_config = {"env_file": ".env", "extra": "ignore"}
 
 

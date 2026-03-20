@@ -10,6 +10,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.core.cache import close_redis_client, init_redis_client
 from app.api.routes_auth import router as auth_router
 from app.api.routes_chat import router as chat_router
 from app.api.routes_data import router as data_router
@@ -46,6 +47,9 @@ async def lifespan(app: FastAPI):
     import app.db.models  # noqa: F401  — 触发 User/RefreshToken metadata 注册
     from app.db.session import ensure_auth_schema_compat, ensure_daily_energy_summary_view
 
+    # 初始化缓存层（Redis 不可用时会自动降级到本地缓存）
+    await init_redis_client()
+
     # 兼容历史数据库结构，避免 users.role 缺失导致登录 500
     await ensure_auth_schema_compat()
 
@@ -80,6 +84,9 @@ async def lifespan(app: FastAPI):
     # 关闭数据库连接池
     from app.db.session import engine
     await engine.dispose()
+
+    # 关闭 Redis client（若可用）
+    await close_redis_client()
 
 
 async def _cleanup_refresh_tokens(interval_seconds: int = 86400) -> None:

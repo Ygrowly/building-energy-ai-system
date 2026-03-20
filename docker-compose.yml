@@ -8,6 +8,12 @@ services:
   # db:
   #   image: timescale/timescaledb:latest-pg15
   #   ...
-  # redis:
-  #   image: redis:7-alpine
-  #   ...
+  # Redis（给后端缓存使用）
+  # 与后端配置 `REDIS_URL=redis://localhost:6379/0` 对应：
+  # - host: localhost
+  # - port: 6379
+  # - db: 0
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"

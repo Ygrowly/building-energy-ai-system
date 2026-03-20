@@ -15,7 +15,11 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from app.core.cache import delete_cache_by_prefix, get_or_compute_json
+from app.core.config import get_settings
+
 logger = logging.getLogger(__name__)
+settings = get_settings()
 
 router = APIRouter(prefix="/work-orders", tags=["工单"])
 
@@ -36,6 +40,13 @@ def register_pending_order(order_data: dict[str, Any]) -> None:
             "status": "pending_approval",
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
+        # 非阻塞场景下无法 await；此处仅做 best-effort 失效，失败不影响主流程。
+        try:
+            import asyncio
+            loop = asyncio.get_running_loop()
+            loop.create_task(delete_cache_by_prefix("workorders:"))
+        except Exception:
+            pass
 
 
 def get_pending_order(ticket_id: str) -> dict[str, Any] | None:
@@ -60,20 +71,32 @@ async def list_work_orders(
     status: str | None = Query(None, description="按状态过滤：pending_approval / approved / rejected"),
 ):
     """返回所有工单，支持按 status 过滤。"""
-    orders = list(_work_orders.values())
-    if status:
-        orders = [o for o in orders if o.get("status") == status]
-    orders.sort(key=lambda o: o.get("created_at", ""), reverse=True)
-    return {"work_orders": orders, "total": len(orders)}
+    cache_key = f"workorders:list:{status or 'all'}"
+    ttl_seconds = settings.CACHE_WORKORDERS_TTL_SECONDS
+
+    async def _compute() -> dict[str, Any]:
+        orders = list(_work_orders.values())
+        if status:
+            orders = [o for o in orders if o.get("status") == status]
+        orders.sort(key=lambda o: o.get("created_at", ""), reverse=True)
+        return {"work_orders": orders, "total": len(orders)}
+
+    return await get_or_compute_json(cache_key, ttl_seconds, _compute)
 
 
 @router.get("/{ticket_id}", summary="获取单个工单详情")
 async def get_work_order(ticket_id: str):
     """返回指定工单的详细信息。"""
-    order = _work_orders.get(ticket_id)
-    if not order:
-        raise HTTPException(status_code=404, detail=f"工单 {ticket_id} 不存在")
-    return order
+    cache_key = f"workorders:detail:{ticket_id}"
+    ttl_seconds = settings.CACHE_WORKORDERS_TTL_SECONDS
+
+    async def _compute() -> dict[str, Any]:
+        order = _work_orders.get(ticket_id)
+        if not order:
+            raise HTTPException(status_code=404, detail=f"工单 {ticket_id} 不存在")
+        return order
+
+    return await get_or_compute_json(cache_key, ttl_seconds, _compute)
 
 
 @router.post("/approve", summary="审批工单")
@@ -115,11 +138,13 @@ async def approve_work_order(req: ApproveRequest):
             (pending or {}).get("priority"),
         )
         _sessions[req.session_id]["pending_action"] = None
-        return {
+        resp = {
             "status": "approved",
             "ticket_id": req.ticket_id,
             "message": f"工单 {req.ticket_id} 已批准，已推送至运维班组。",
         }
+        await delete_cache_by_prefix("workorders:")
+        return resp
     else:
         if req.ticket_id in _work_orders:
             _work_orders[req.ticket_id]["status"] = "rejected"
@@ -133,9 +158,11 @@ async def approve_work_order(req: ApproveRequest):
                 "reject_reason": req.reason,
             }
         _sessions[req.session_id]["pending_action"] = None
-        return {
+        resp = {
             "status": "rejected",
             "ticket_id": req.ticket_id,
             "message": f"工单 {req.ticket_id} 已驳回。",
             "reason": req.reason,
         }
+        await delete_cache_by_prefix("workorders:")
+        return resp

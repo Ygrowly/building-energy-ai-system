@@ -36,6 +36,7 @@ from fastapi.responses import StreamingResponse
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from pydantic import BaseModel, Field, field_validator
 
+from app.core.cache import delete_cache_by_prefix, get_or_compute_json
 from app.core.config import get_settings
 from app.core.security import get_current_user_optional
 from app.db.session import AsyncSessionLocal
@@ -629,12 +630,19 @@ async def list_sessions(
     """
     _require_auth_in_production(current_user)
     user_id = current_user.id if current_user else None
-    rows = await session_store.list_all(include_archived=include_archived, user_id=user_id)
-    sessions = [
-        _build_session_info(row, _sessions.get(row.id))
-        for row in rows
-    ]
-    return SessionListResponse(sessions=sessions, total=len(sessions))
+    cache_key = f"chat:sessions:list:{user_id or 'anonymous'}:{int(include_archived)}"
+    ttl_seconds = get_settings().CACHE_CHAT_SESSIONS_TTL_SECONDS
+
+    async def _compute() -> dict[str, Any]:
+        rows = await session_store.list_all(include_archived=include_archived, user_id=user_id)
+        sessions = [
+            _build_session_info(row, _sessions.get(row.id))
+            for row in rows
+        ]
+        return SessionListResponse(sessions=sessions, total=len(sessions)).model_dump()
+
+    data = await get_or_compute_json(cache_key, ttl_seconds, _compute)
+    return SessionListResponse(**data)
 
 
 @router.post("/chat/sessions", response_model=SessionInfo, summary="预建命名会话")
@@ -652,6 +660,7 @@ async def create_session(
     row = await session_store.create(session_id, title=title, user_id=user_id)
     if row is None:
         raise HTTPException(status_code=500, detail="会话创建失败，请检查数据库连接")
+    await delete_cache_by_prefix(f"chat:sessions:list:{user_id or 'anonymous'}:")
     return _build_session_info(row)
 
 
@@ -664,28 +673,35 @@ async def get_session(
     返回指定会话的元数据摘要。生产环境需登录且仅能访问本人会话。
     """
     _require_auth_in_production(current_user)
-    row = await session_store.get(session_id)
-    _check_session_access(row, current_user)
-    in_memory = _sessions.get(session_id)
+    user_id = current_user.id if current_user else None
+    cache_key = f"chat:sessions:detail:{user_id or 'anonymous'}:{session_id}"
+    ttl_seconds = get_settings().CACHE_CHAT_SESSIONS_TTL_SECONDS
 
-    if row is None and in_memory is None:
-        raise HTTPException(status_code=404, detail="会话不存在")
+    async def _compute() -> dict[str, Any]:
+        row = await session_store.get(session_id)
+        _check_session_access(row, current_user)
+        in_memory = _sessions.get(session_id)
 
-    if row is not None:
-        return _build_session_info(row, in_memory)
+        if row is None and in_memory is None:
+            raise HTTPException(status_code=404, detail="会话不存在")
 
-    # 仅在内存中（还未持久化的极短会话），降级返回内存摘要
-    return {
-        "session_id": session_id,
-        "title": "新对话",
-        "hop_count": in_memory.get("hop_count", 0),
-        "intent": in_memory.get("intent"),
-        "building_id": in_memory.get("building_id"),
-        "has_pending_action": in_memory.get("pending_action") is not None,
-        "message_count": len(in_memory.get("messages", [])),
-        "artifact_count": len(in_memory.get("artifacts", [])),
-        "is_archived": False,
-    }
+        if row is not None:
+            return _build_session_info(row, in_memory).model_dump()
+
+        # 仅在内存中（还未持久化的极短会话），降级返回内存摘要
+        return {
+            "session_id": session_id,
+            "title": "新对话",
+            "hop_count": in_memory.get("hop_count", 0),
+            "intent": in_memory.get("intent"),
+            "building_id": in_memory.get("building_id"),
+            "has_pending_action": in_memory.get("pending_action") is not None,
+            "message_count": len(in_memory.get("messages", [])),
+            "artifact_count": len(in_memory.get("artifacts", [])),
+            "is_archived": False,
+        }
+
+    return await get_or_compute_json(cache_key, ttl_seconds, _compute)
 
 
 @router.patch("/chat/sessions/{session_id}", response_model=SessionInfo, summary="重命名或更新会话")
@@ -718,6 +734,9 @@ async def update_session(
     # 若内存中存在且传入了 building_id，同步更新内存状态
     if req.building_id is not None and session_id in _sessions:
         _sessions[session_id]["building_id"] = building_id or _sessions[session_id].get("building_id")
+    user_cache = current_user.id if current_user else "anonymous"
+    await delete_cache_by_prefix(f"chat:sessions:list:{user_cache}:")
+    await delete_cache_by_prefix(f"chat:sessions:detail:{user_cache}:{session_id}")
 
     return _build_session_info(row, _sessions.get(session_id))
 
@@ -741,6 +760,10 @@ async def archive_session(
 
     # 从内存缓存移除，释放资源
     _sessions.pop(session_id, None)
+    user_cache = current_user.id if current_user else "anonymous"
+    await delete_cache_by_prefix(f"chat:sessions:list:{user_cache}:")
+    await delete_cache_by_prefix(f"chat:sessions:detail:{user_cache}:{session_id}")
+    await delete_cache_by_prefix(f"chat:sessions:messages:{user_cache}:{session_id}")
 
     return _build_session_info(row)
 
@@ -759,6 +782,10 @@ async def clear_session(
     # 允许删除无 DB 记录的会话（仅内存或已过期）
     _sessions.pop(session_id, None)
     await session_store.delete(session_id)
+    user_cache = current_user.id if current_user else "anonymous"
+    await delete_cache_by_prefix(f"chat:sessions:list:{user_cache}:")
+    await delete_cache_by_prefix(f"chat:sessions:detail:{user_cache}:{session_id}")
+    await delete_cache_by_prefix(f"chat:sessions:messages:{user_cache}:{session_id}")
     return {"status": "deleted", "session_id": session_id}
 
 
@@ -771,28 +798,35 @@ async def get_session_messages(
     返回指定会话的消息列表。生产环境需登录且仅能访问本人会话。
     """
     _require_auth_in_production(current_user)
-    row = await session_store.get(session_id)
-    _check_session_access(row, current_user)
-    if row is None:
-        raise HTTPException(status_code=404, detail="会话不存在")
-    state = _sessions.get(session_id)
-    if state is None:
-        state = await session_store.load_state(session_id)
-    if state is None:
-        raise HTTPException(status_code=404, detail="会话不存在")
+    user_id = current_user.id if current_user else None
+    cache_key = f"chat:sessions:messages:{user_id or 'anonymous'}:{session_id}"
+    ttl_seconds = get_settings().CACHE_CHAT_MESSAGES_TTL_SECONDS
 
-    messages = state.get("messages", [])
-    result = []
-    for msg in messages:
-        if isinstance(msg, HumanMessage):
-            result.append({"role": "user", "content": msg.content})
-        elif isinstance(msg, AIMessage) and msg.content:
-            if "[Router]" in str(msg.content):
-                continue
-            result.append({"role": "assistant", "content": msg.content})
+    async def _compute() -> dict[str, Any]:
+        row = await session_store.get(session_id)
+        _check_session_access(row, current_user)
+        if row is None:
+            raise HTTPException(status_code=404, detail="会话不存在")
+        state = _sessions.get(session_id)
+        if state is None:
+            state = await session_store.load_state(session_id)
+        if state is None:
+            raise HTTPException(status_code=404, detail="会话不存在")
 
-    return {
-        "session_id": session_id,
-        "messages": result,
-        "total": len(result),
-    }
+        messages = state.get("messages", [])
+        result = []
+        for msg in messages:
+            if isinstance(msg, HumanMessage):
+                result.append({"role": "user", "content": msg.content})
+            elif isinstance(msg, AIMessage) and msg.content:
+                if "[Router]" in str(msg.content):
+                    continue
+                result.append({"role": "assistant", "content": msg.content})
+
+        return {
+            "session_id": session_id,
+            "messages": result,
+            "total": len(result),
+        }
+
+    return await get_or_compute_json(cache_key, ttl_seconds, _compute)

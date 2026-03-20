@@ -14,9 +14,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from datetime import date, datetime
 import time
 import uuid
 from collections import OrderedDict
+from decimal import Decimal
 from typing import Any, Awaitable, Callable, Optional, TypeVar
 
 from app.core.config import get_settings
@@ -64,6 +66,16 @@ class LocalTTLCache:
             while len(self._data) > self._maxsize:
                 # FIFO in OrderedDict => LRU
                 self._data.popitem(last=False)
+
+    async def delete(self, key: str) -> None:
+        async with self._lock:
+            self._data.pop(key, None)
+
+    async def delete_by_prefix(self, prefix: str) -> None:
+        async with self._lock:
+            keys = [k for k in self._data.keys() if k.startswith(prefix)]
+            for k in keys:
+                self._data.pop(k, None)
 
 
 _local_cache: Optional[LocalTTLCache] = None
@@ -147,7 +159,9 @@ async def _get_from_redis(key: str) -> Optional[Any]:
     try:
         raw = await _redis_client.get(key)
         if raw is None:
+            logger.info("[cache] miss redis key=%s", key)
             return None
+        logger.info("[cache] hit redis key=%s", key)
         return json.loads(raw)
     except Exception:
         logger.debug("Redis get 失败，回退本地：key=%s", key, exc_info=True)
@@ -158,8 +172,24 @@ async def _set_to_redis(key: str, value: Any, ttl_seconds: int) -> None:
     if _redis_client is None:
         return
     try:
-        raw = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+        # Redis 只存字符串；当前业务返回值可能包含 Decimal/date/datetime，
+        # 需要显式转换，避免 json.dumps 失败导致整次写入被忽略。
+        def _json_default(obj: Any) -> Any:
+            if isinstance(obj, (datetime, date)):
+                return obj.isoformat()
+            if isinstance(obj, Decimal):
+                # 用 float 进入前端计算/展示；若精度有要求再改为 str
+                return float(obj)
+            return str(obj)
+
+        raw = json.dumps(
+            value,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            default=_json_default,
+        )
         await _redis_client.set(key, raw, ex=ttl_seconds)
+        logger.info("[cache] set redis key=%s ttl=%ss", key, ttl_seconds)
     except Exception:
         logger.debug("Redis set 失败，忽略：key=%s", key, exc_info=True)
 
@@ -192,14 +222,58 @@ async def _release_redis_lock(lock_key: str, lock_value: str) -> None:
         logger.debug("Redis unlock 失败：%s", lock_key, exc_info=True)
 
 
+async def delete_cache_key(cache_key: str) -> None:
+    """删除单个缓存 key（同时清理本地与 Redis）。"""
+    cache = await _get_local_cache()
+    await cache.delete(cache_key)
+    logger.info("[cache] delete local key=%s", cache_key)
+    if _redis_client is not None:
+        try:
+            await _redis_client.delete(cache_key)
+            logger.info("[cache] delete redis key=%s", cache_key)
+        except Exception:
+            logger.debug("Redis delete 失败：%s", cache_key, exc_info=True)
+
+
+async def delete_cache_by_prefix(prefix: str) -> None:
+    """按前缀批量删除缓存（用于会话/工单变更后的失效）。"""
+    cache = await _get_local_cache()
+    await cache.delete_by_prefix(prefix)
+    logger.info("[cache] delete local prefix=%s*", prefix)
+
+    if _redis_client is None:
+        return
+
+    try:
+        cursor = 0
+        pattern = f"{prefix}*"
+        total_deleted = 0
+        while True:
+            cursor, keys = await _redis_client.scan(cursor=cursor, match=pattern, count=200)
+            if keys:
+                deleted = await _redis_client.delete(*keys)
+                total_deleted += int(deleted or 0)
+            if cursor == 0:
+                break
+        logger.info("[cache] delete redis prefix=%s* deleted=%d", prefix, total_deleted)
+    except Exception:
+        logger.debug("Redis delete_by_prefix 失败：%s", prefix, exc_info=True)
+
+
 async def _get_from_local(key: str) -> Optional[Any]:
     cache = await _get_local_cache()
-    return await cache.get(key)
+    value = await cache.get(key)
+    if value is None:
+        logger.info("[cache] miss local key=%s", key)
+    else:
+        logger.info("[cache] hit local key=%s", key)
+    return value
 
 
 async def _set_to_local(key: str, value: Any, ttl_seconds: int) -> None:
     cache = await _get_local_cache()
     await cache.set(key, value, ttl_seconds=ttl_seconds)
+    logger.info("[cache] set local key=%s ttl=%ss", key, ttl_seconds)
 
 
 async def get_or_compute_json(
@@ -236,6 +310,7 @@ async def get_or_compute_json(
     )
 
     if not got_lock:
+        logger.info("[cache] lock busy key=%s wait=%ss", cache_key, settings.CACHE_LOCK_WAIT_SECONDS)
         # 没拿到 lock：短等待后重读（尽量避免多个请求同时回源）
         await asyncio.sleep(float(settings.CACHE_LOCK_WAIT_SECONDS))
 
@@ -249,6 +324,7 @@ async def get_or_compute_json(
             return redis_hit2  # type: ignore[return-value]
 
         # 仍然 miss：兜底直接回源（极端情况下允许少量重复计算）
+        logger.info("[cache] recompute fallback key=%s", cache_key)
         value = await compute()
         await _set_to_local(cache_key, value, ttl_seconds=ttl_seconds)
         await _set_to_redis(cache_key, value, ttl_seconds=ttl_seconds)
@@ -256,6 +332,7 @@ async def get_or_compute_json(
 
     # 拿到 lock 的请求：负责回源并写回
     try:
+        logger.info("[cache] recompute primary key=%s", cache_key)
         value = await compute()
         await _set_to_local(cache_key, value, ttl_seconds=ttl_seconds)
         await _set_to_redis(cache_key, value, ttl_seconds=ttl_seconds)

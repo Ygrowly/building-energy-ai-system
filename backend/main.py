@@ -5,6 +5,7 @@ FastAPI 应用入口。
     uvicorn main:app --reload --host 0.0.0.0 --port 8000
 """
 import asyncio
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -20,6 +21,16 @@ from app.api.routes_workorder import router as workorder_router
 from app.core.config import get_settings
 
 settings = get_settings()
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s - %(message)s",
+)
+# 强制缓存与业务路由日志在控制台可见
+logging.getLogger("app.core.cache").setLevel(logging.INFO)
+logging.getLogger("app.api.routes_data").setLevel(logging.INFO)
+logging.getLogger("app.api.routes_chat").setLevel(logging.INFO)
+logging.getLogger("app.api.routes_workorder").setLevel(logging.INFO)
 
 
 _DEFAULT_JWT_KEY = "change-this-to-a-random-secret-in-production"

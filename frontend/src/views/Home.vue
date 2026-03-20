@@ -28,7 +28,7 @@
         <div class="weather-metrics">
           <div class="weather-item">
             <Icon icon="mdi:thermometer" width="15" class="weather-icon temp-icon" />
-            <span class="weather-val">{{ weatherTemp ?? '--' }}<small>°C</small></span>
+            <span class="weather-val">{{ weatherTemp != null ? Number(weatherTemp).toFixed(1) : '--' }}<small>°C</small></span>
           </div>
           <div class="weather-item">
             <Icon icon="mdi:water-percent" width="15" class="weather-icon humi-icon" />
@@ -163,7 +163,7 @@ const buildingOptions = [
   { key: 'all', label: '全部' },
   { key: 'Education', label: '教学楼' },
   { key: 'Office', label: '办公楼' },
-  { key: 'Public', label: '公共楼' },
+  { key: 'Public services', label: '公共楼' },
 ]
 const activeBuilding = ref('all')
 const capsuleRef = ref<HTMLElement | null>(null)

@@ -173,7 +173,7 @@
       <template v-for="msg in store.messages" :key="msg.id">
         <!-- 用户消息 -->
         <div class="msg msg-user" v-if="msg.role === 'user'">
-          <div class="bubble user-bubble">{{ msg.content }}</div>
+          <div class="user-bubble">{{ msg.content }}</div>
         </div>
 
         <!-- AI 文字回复 -->
@@ -187,9 +187,8 @@
             class="msg msg-ai"
             v-if="msg.content || (msg.thinkingFinished && store.isLoading)"
           >
-            <div class="ai-avatar"><Icon icon="mdi:robot" width="14" /></div>
             <div class="ai-content">
-              <div class="bubble ai-bubble">
+              <div class="ai-bubble">
                 <span v-if="msg.content" v-html="formatMarkdown(msg.content)"></span>
                 <span v-else class="stream-cursor"></span>
               </div>
@@ -237,6 +236,12 @@
     <!-- 输入框 -->
     <div class="input-area">
       <div class="input-box" :class="{ focused: inputFocused, disabled: store.isLoading }">
+        <!-- 选中元素上下文标签 -->
+        <div v-if="pickerStore.selectedElement" class="picked-context">
+          <Icon icon="mdi:target" width="14" class="picked-icon" />
+          <span class="picked-label">{{ pickerStore.selectedElement.title }}</span>
+          <button class="picked-close" @click="pickerStore.clearSelection()">×</button>
+        </div>
         <textarea
           v-model="inputText"
           placeholder="输入您的问题，按 Enter 发送..."
@@ -249,16 +254,26 @@
         ></textarea>
         <div class="input-toolbar">
           <div class="toolbar-left">
-            <button class="tag-btn" title="RAG 知识库">
-              <Icon icon="mdi:database-search" width="12" />
-              RAG 知识库
+            <button
+              class="tool-btn"
+              :class="{ active: pickerStore.isPickerActive }"
+              @click="pickerStore.togglePicker()"
+              title="选择页面元素"
+            >
+              <Icon icon="mdi:cursor-default-click-outline" width="18" />
             </button>
             <button class="tag-btn" title="MCP 工具">
               <Icon icon="mdi:puzzle-outline" width="12" />
               MCP
             </button>
+            <button class="tag-btn" title="RAG 知识库" @click="router.push('/datacenter?tab=knowledge')">
+              <Icon icon="mdi:database-search" width="16" />
+              RAG 知识库
+            </button>
+          </div>
+          <div class="toolbar-right">
             <button
-              class="tag-btn web-search-btn"
+              class="tool-btn web-search-btn"
               :class="{ 'web-search-active': store.webSearchEnabled }"
               :title="store.webSearchEnabled ? '关闭联网搜索' : '开启联网搜索（Tavily）'"
               :disabled="store.isLoading"
@@ -266,20 +281,17 @@
             >
               <Icon
                 :icon="store.webSearchEnabled ? 'mdi:web-check' : 'mdi:web'"
-                width="12"
+                width="16"
               />
-              联网搜索
               <span v-if="store.webSearchEnabled" class="web-search-dot"></span>
             </button>
-          </div>
-          <div class="toolbar-right">
             <button class="tool-btn" title="上传图片" @click="triggerUpload" :disabled="store.isLoading">
               <Icon icon="mdi:image-plus-outline" width="16" />
             </button>
             <input ref="fileInputEl" type="file" accept="image/*" style="display:none" @change="onFileChange" />
             <button class="send-icon-btn" @click="handleSend" :disabled="store.isLoading || !inputText.trim()" title="发送">
-              <Icon v-if="store.isLoading" icon="mdi:timer-sand" width="14" />
-              <Icon v-else icon="mdi:arrow-up" width="14" />
+              <Icon v-if="store.isLoading" icon="mdi:timer-sand" width="16" />
+              <Icon v-else icon="mdi:arrow-up" width="16" />
             </button>
           </div>
         </div>
@@ -291,7 +303,9 @@
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { Icon } from '@iconify/vue'
+import { useRouter } from 'vue-router'
 import { useChatStore } from '@/stores/chatStore'
+import { useElementPickerStore } from '@/stores/elementPickerStore'
 import type { SessionInfo } from '@/stores/chatStore'
 import ThinkingBubble from '@/generative-ui/ThinkingBubble.vue'
 import DynamicChart from '@/generative-ui/DynamicChart.vue'
@@ -300,7 +314,9 @@ import ReportDownload from '@/generative-ui/ReportDownload.vue'
 import EvidenceLink from '@/generative-ui/EvidenceLink.vue'
 import type { ArtifactEvent } from '@/api/stream_client'
 
+const router = useRouter()
 const store = useChatStore()
+const pickerStore = useElementPickerStore()
 const inputText = ref('')
 const inputFocused = ref(false)
 const messagesEl = ref<HTMLElement>()
@@ -448,7 +464,17 @@ function onClearChat() {
 // ── 发送消息 ────────────────────────────────────────────────────────────────
 function handleSend() {
   if (!inputText.value.trim() || store.isLoading) return
-  store.sendMessage(inputText.value.trim())
+  let text = inputText.value.trim()
+
+  // 附带选中元素的上下文信息
+  if (pickerStore.selectedElement) {
+    const el = pickerStore.selectedElement
+    const ctx = `[关于页面元素「${el.title}」${el.subtitle ? '（' + el.subtitle + '）' : ''}，类型：${el.type}]\n`
+    text = ctx + text
+    pickerStore.clearSelection()
+  }
+
+  store.sendMessage(text)
   inputText.value = ''
 }
 
@@ -533,7 +559,8 @@ function formatMarkdown(text: string): string {
   display: flex;
   flex-direction: column;
   height: 100%;
-  background: var(--bg-panel);
+  background: var(--bg-card);           /* Cursor 风格：整面板统一底色 */
+  /* 原底色 var(--bg-panel)，后续可恢复 */
   border-left: 1px solid var(--border);
   position: relative;
   overflow: hidden;
@@ -542,11 +569,10 @@ function formatMarkdown(text: string): string {
 /* ── 顶栏（Cursor 风格：无底部线，圆角浮动 Tab） ────────────────────────── */
 .top-bar {
   display: flex;
-  align-items: center;   /* 垂直居中，为圆角 pill 效果留出上下空间 */
+  align-items: center;
   flex-shrink: 0;
-  background: var(--bg-panel);
+  background: transparent;              /* 继承 .console 底色，统一 */
   min-height: 38px;
-  /* 无底部分隔线 */
 }
 
 /* Tab 列表 */
@@ -906,10 +932,11 @@ html[data-theme="light"] .tab.active:hover .tab-fade {
 .messages {
   flex: 1;
   overflow-y: auto;
-  padding: 16px;
+  padding: 16px 12px;
   display: flex;
   flex-direction: column;
   gap: 8px;
+  background: transparent;              /* 继承 .console 底色，统一 */
 }
 
 .empty-hint {
@@ -938,7 +965,7 @@ html[data-theme="light"] .tab.active:hover .tab-fade {
 }
 
 .hint-chip {
-  background: var(--bg-card);
+  background: var(--bg-panel);
   border: 1px solid var(--border);
   border-radius: 6px;
   color: var(--text-secondary);
@@ -958,7 +985,7 @@ html[data-theme="light"] .tab.active:hover .tab-fade {
 }
 
 .msg { display: flex; align-items: flex-start; gap: 8px; }
-.msg-user { justify-content: flex-end; }
+.msg-user { justify-content: flex-start; width: 100%; }
 .msg-error { justify-content: flex-start; }
 
 .bubble {
@@ -974,36 +1001,40 @@ html[data-theme="light"] .tab.active:hover .tab-fade {
 }
 
 .user-bubble {
-  background: var(--accent);
-  color: #fff;
-  border-radius: 12px 12px 2px 12px;
+  /* Cursor 风格：与输入框同底色 */
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.6;
+  padding: 10px 14px;
+  max-width: 100%;
+  width: 100%;
+  word-break: break-word;
 }
 
-.ai-avatar {
-  width: 28px; height: 28px;
-  border-radius: 50%;
-  background: var(--bg-card);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--accent);
-  flex-shrink: 0;
-}
+/* .ai-avatar 已移除，不再显示大模型图标 */
 
 .ai-content {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  width: 90%;
+  width: 100%;
   min-width: 0;
 }
 
 .ai-bubble {
-  background: var(--bg-card);
+  /* 无气泡样式，类似 claude.ai 的纯文本输出 */
+  background: transparent;
   color: var(--text-primary);
-  border: 1px solid var(--border);
-  border-radius: 2px 12px 12px 12px;
+  border: none;
+  border-radius: 0;
   max-width: 100%;
+  padding: 10px 14px;
+  font-size: 13px;
+  line-height: 1.6;
 }
 
 .error-bubble {
@@ -1036,23 +1067,63 @@ html[data-theme="light"] .tab.active:hover .tab-fade {
 
 /* ── 输入框 ─────────────────────────────────────────────────────────────── */
 .input-area {
-  padding: 0 12px 16px;
+  padding: 0 12px 12px;
   flex-shrink: 0;
 }
 
 .input-box {
-  background: var(--bg-card);
+  background: var(--bg-panel);          /* 比面板深一级，Cursor 风格输入区 */
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 12px;
   display: flex;
   flex-direction: column;
   transition: border-color 0.2s, box-shadow 0.2s;
 }
 .input-box.focused {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px rgba(108, 142, 245, 0.12);
+  border-color: var(--border);          /* 聚焦时不高亮边框，保持 Cursor 简洁风 */
+  box-shadow: none;
 }
 .input-box.disabled { opacity: 0.55; }
+
+/* 选中元素上下文标签 */
+.picked-context {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  margin: 6px 8px 0;
+  background: var(--accent-glow, rgba(96, 165, 250, 0.1));
+  border: 1px solid var(--border-accent, rgba(96, 165, 250, 0.3));
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--accent, #60a5fa);
+}
+.picked-icon { flex-shrink: 0; }
+.picked-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+.picked-close {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  color: var(--accent, #60a5fa);
+  font-size: 14px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.picked-close:hover {
+  background: rgba(96, 165, 250, 0.2);
+}
 
 textarea {
   flex: 1;
@@ -1080,7 +1151,7 @@ textarea::placeholder { color: var(--text-muted); }
 .toolbar-left {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 0px;
 }
 
 .tag-btn {
@@ -1088,7 +1159,7 @@ textarea::placeholder { color: var(--text-muted); }
   align-items: center;
   gap: 4px;
   background: none;
-  border: 1px solid var(--border);
+  border: none;
   border-radius: 5px;
   color: var(--text-muted);
   font-size: 11px;
@@ -1100,12 +1171,18 @@ textarea::placeholder { color: var(--text-muted); }
 }
 .tag-btn:hover {
   color: var(--text-primary);
-  border-color: var(--accent);
   background: rgba(108, 142, 245, 0.06);
+}
+.tag-btn.active {
+  color: var(--accent);
+  background: var(--accent-glow, rgba(96, 165, 250, 0.1));
 }
 
 .web-search-btn {
   position: relative;
+  width: auto;
+  height: auto;
+  padding: 0;
 }
 
 .web-search-active {
@@ -1119,13 +1196,13 @@ textarea::placeholder { color: var(--text-muted); }
 }
 
 .web-search-dot {
-  display: inline-block;
-  width: 5px;
-  height: 5px;
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
   background: #22c55e;
-  margin-left: 2px;
-  vertical-align: middle;
   flex-shrink: 0;
   animation: pulse-dot 2s ease-in-out infinite;
 }
@@ -1138,7 +1215,7 @@ textarea::placeholder { color: var(--text-muted); }
 .toolbar-right {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 0;
 }
 
 .tool-btn {
@@ -1158,8 +1235,8 @@ textarea::placeholder { color: var(--text-muted); }
 .tool-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
 .send-icon-btn {
-  width: 28px;
-  height: 28px;
+  width: 22px;
+  height: 22px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1170,6 +1247,7 @@ textarea::placeholder { color: var(--text-muted); }
   cursor: pointer;
   transition: opacity 0.15s;
   flex-shrink: 0;
+  margin-left: 6px;
 }
 .send-icon-btn:hover { opacity: 0.85; }
 .send-icon-btn:disabled { opacity: 0.35; cursor: not-allowed; }

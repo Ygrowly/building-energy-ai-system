@@ -19,7 +19,11 @@
           @click="activeBuilding = opt.key"
         >{{ opt.label }}</button>
       </div>
-      <div class="weather-widget">
+      <div class="weather-widget"
+           data-pick-id="weather"
+           data-pick-type="weather"
+           data-pick-title="天气信息"
+           :data-pick-subtitle="`温度 ${weatherTemp != null ? Number(weatherTemp).toFixed(1) + '°C' : '--'}，湿度 ${weatherHumi ?? '--'}%`">
         <div class="weather-date">
           <Icon icon="mdi:calendar-month" width="14" />
           <span>{{ dataDate || '加载中...' }}</span>
@@ -40,39 +44,61 @@
 
     <!-- ── KPI Strip (5 cards) ─────────────────────────────── -->
     <section class="kpi-strip">
-      <div v-for="k in kpis" :key="k.label" class="kpi-card">
-        <div class="kpi-ico" :style="{ background: k.bg, color: k.color }">
+      <div v-for="k in kpis" :key="k.label" class="kpi-card"
+           :data-pick-id="'kpi-' + k.label"
+           data-pick-type="kpi"
+           :data-pick-title="k.label"
+           :data-pick-subtitle="String(k.value)">
+        <div class="kpi-ico" :class="k.anim" :style="{ background: k.bg, color: k.color }">
           <Icon :icon="k.icon" width="20" />
         </div>
         <div class="kpi-body">
           <span class="kpi-val">{{ k.value }}</span>
           <span class="kpi-lbl">{{ k.label }}</span>
         </div>
-        <span class="kpi-tag" :style="{ color: k.color, background: k.bg }">{{ k.tag }}</span>
+        <div class="kpi-right">
+          <span class="kpi-tag" :style="{ color: k.color, background: k.bg }">{{ k.tag }}</span>
+          <span v-if="k.change != null" class="kpi-trend" :class="k.change >= 0 ? 'up' : 'down'">
+            <Icon :icon="k.change >= 0 ? 'mdi:trending-up' : 'mdi:trending-down'" width="12" />
+            {{ k.change >= 0 ? '+' : '' }}{{ k.change }}%
+          </span>
+        </div>
       </div>
     </section>
 
     <!-- ── Bento Row 1: EUI Bubble Matrix + HVAC Multi-axis ── -->
-    <div class="bento-row bento-r1">
-      <div class="cpanel">
+    <div class="bento-row bento-r1" v-show="activeBuilding === 'all'">
+      <div class="cpanel"
+           data-pick-id="chart-eui-bubble"
+           data-pick-type="chart"
+           data-pick-title="建筑能耗定额偏离分析"
+           data-pick-subtitle="偏离比 = 实际EUI / 国标基准值，>1 为超标，气泡大小反映总用电量">
         <div class="cpanel-hd">
-          <span class="cpanel-title">建筑能效强度（EUI）气泡矩阵</span>
-          <span class="cpanel-sub">各楼宇建筑面积与单位能耗效率对比，气泡大小表示总能耗规模</span>
+          <span class="cpanel-title">建筑能耗定额偏离分析</span>
+          <span class="cpanel-sub">偏离比 = 实际EUI / 国标基准值，>1 为超标，气泡大小反映总用电量</span>
         </div>
-        <div ref="bubbleEl" class="cpanel-body" style="height:252px;"></div>
+        <div ref="bubbleEl" class="cpanel-body" style="height:300px;"></div>
       </div>
-      <div class="cpanel">
+      <div class="cpanel"
+           data-pick-id="chart-hvac"
+           data-pick-type="chart"
+           data-pick-title="HVAC 虚实映射分析"
+           data-pick-subtitle="实际暖通能耗与仿真最优值对比，背景灰带为室外温度">
         <div class="cpanel-hd">
           <span class="cpanel-title">HVAC 虚实映射分析</span>
           <span class="cpanel-sub">实际暖通能耗与仿真最优值对比，背景灰带为室外温度</span>
         </div>
-        <div ref="hvacEl" class="cpanel-body" style="height:252px;"></div>
+        <div ref="hvacEl" class="cpanel-body" style="height:300px;"></div>
       </div>
     </div>
 
     <!-- ── Bento Row 2: Heatmap + Sankey / Scatter ─────────── -->
     <div class="bento-row bento-r2">
-      <div class="cpanel">
+      <div class="cpanel"
+           data-pick-id="chart-heatmap"
+           data-pick-type="heatmap"
+           data-pick-title="24h 能耗日历热力图"
+           data-pick-subtitle="近 7 日逐时能耗分布，追踪非工作时段隐性浪费">
         <div class="cpanel-hd">
           <span class="cpanel-title">24h 能耗日历热力图</span>
           <span class="cpanel-sub">近 7 日逐时能耗分布，追踪非工作时段隐性浪费</span>
@@ -110,14 +136,22 @@
         </div>
       </div>
       <div class="cpanel-col">
-        <div class="cpanel">
+        <div class="cpanel"
+             data-pick-id="chart-sankey"
+             data-pick-type="chart"
+             data-pick-title="异常根因桑基图"
+             data-pick-subtitle="触发规则流向根因类型，流量粗细表示事件频次">
           <div class="cpanel-hd">
             <span class="cpanel-title">异常根因桑基图</span>
             <span class="cpanel-sub">触发规则流向根因类型，流量粗细表示事件频次</span>
           </div>
           <div ref="sankeyEl" class="cpanel-body" style="height:172px;"></div>
         </div>
-        <div class="cpanel">
+        <div class="cpanel"
+             data-pick-id="chart-scatter"
+             data-pick-type="chart"
+             data-pick-title="健康偏离度散点"
+             data-pick-subtitle="各事件指标偏离程度，颜色区分已解决与待处理">
           <div class="cpanel-hd">
             <span class="cpanel-title">健康偏离度散点</span>
             <span class="cpanel-sub">各事件指标偏离程度，颜色区分已解决与待处理</span>
@@ -157,6 +191,7 @@ const weatherTemp = ref<number | null>(null)
 const weatherHumi = ref<number | null>(null)
 const overviewData = ref<any>(null)
 const anomalyData = ref<any[]>([])
+const sankeyData = ref<{ nodes: { name: string }[]; links: { source: string; target: string; value: number }[] } | null>(null)
 
 // ── 建筑切换胶囊 ─────────────────────────────────────────────
 const buildingOptions = [
@@ -228,40 +263,56 @@ const kpis = computed(() => {
   if (!ov) return []
   const sel = activeBuilding.value
   const buildings: any[] = ov.buildings ?? []
+  const chg = ov.kpis_change ?? {}
 
   let elec = 0, water = 0, hac = 0
+  let elecChg: number | null = null, waterChg: number | null = null
+  let hacChg: number | null = null, carbonChg: number | null = null
+
   if (sel === 'all') {
     elec  = Number(ov.kpis?.total_electricity_kwh ?? 0)
     water = Number(ov.kpis?.total_water_m3 ?? 0)
     hac   = Number(ov.kpis?.total_hac_energy_kwh ?? 0)
+    elecChg   = chg.total_electricity_pct ?? null
+    waterChg  = chg.total_water_pct ?? null
+    hacChg    = chg.total_hac_pct ?? null
+    carbonChg = chg.total_carbon_pct ?? null
   } else {
     const b = buildings.find((b: any) => b.building_type === sel)
     elec  = b ? Number(b.total_electricity_kwh ?? 0) : 0
     water = b ? Number(b.total_water_m3 ?? 0) : 0
     hac   = b ? Number(b.total_hac_energy_kwh ?? 0) : 0
+    elecChg   = b?.electricity_change_pct ?? null
+    waterChg  = b?.water_change_pct ?? null
+    hacChg    = b?.hac_change_pct ?? null
+    carbonChg = b?.carbon_change_pct ?? null
   }
   const carbon = elec * CARBON_FACTOR
 
   return [
     {
       icon: 'mdi:lightning-bolt', label: '日总用电 (kWh)',
-      value: elec.toFixed(1),
-      tag: '今日', bg: 'rgba(123,159,199,0.14)', color: MC.blue,
+      value: elec.toFixed(1), change: elecChg,
+      tag: '今日', bg: 'rgba(122,170,142,0.14)', color: MC.sage,
+      anim: 'anim-bolt',
     },
     {
       icon: 'mdi:water', label: '日总用水 (m³)',
-      value: water.toFixed(1),
-      tag: '今日', bg: 'rgba(122,170,142,0.14)', color: MC.sage,
+      value: water.toFixed(1), change: waterChg,
+      tag: '今日', bg: 'rgba(123,159,199,0.14)', color: MC.blue,
+      anim: 'anim-drop',
     },
     {
-      icon: 'mdi:air-conditioner', label: '空调能耗 (kWh)',
-      value: hac.toFixed(1),
+      icon: 'mdi:snowflake', label: '空调能耗 (kWh)',
+      value: hac.toFixed(1), change: hacChg,
       tag: '今日', bg: 'rgba(155,143,196,0.14)', color: MC.lav,
+      anim: 'anim-spin',
     },
     {
-      icon: 'mdi:molecule-co2', label: '碳排放量 (kg)',
-      value: carbon.toFixed(1),
+      icon: 'mdi:leaf', label: '碳排放量 (kg)',
+      value: carbon.toFixed(1), change: carbonChg,
       tag: 'CO₂', bg: 'rgba(196,149,106,0.14)', color: MC.terra,
+      anim: 'anim-breathe',
     },
   ]
 })
@@ -284,68 +335,163 @@ async function fetchAnomalies() {
   } catch { /* silent */ }
 }
 
-// ── 1. EUI Bubble Matrix ─────────────────────────────────────
+async function fetchSankeyData() {
+  try {
+    const data = await apiFetch<any>('/api/anomalies/sankey')
+    if (data?.nodes?.length && data?.links?.length) {
+      sankeyData.value = data
+    }
+  } catch { /* silent */ }
+}
+
+// ── 1. 建筑能耗定额偏离分析 ─────────────────────────────────
+// 国标 GB/T 51161-2016 基准值 (kWh/㎡·年)
+const EUI_BASELINE: Record<string, number> = {
+  'Office': 75,
+  'Education': 50,
+  'Public services': 65,
+}
+
 function renderBubble() {
   if (!bubbleEl.value) return
   const c = gc()
-  const typeColorMap: Record<string, string> = {
-    Office: MC.blue, Teaching: MC.sage, Lab: MC.lav,
-    Library: MC.terra, Dormitory: MC.rose, Gym: MC.teal,
-  }
   const bldStore = buildingStore.buildings
   const ovData: any[] = overviewData.value?.buildings ?? []
 
-  const series = bldStore.map(b => {
-    const ov  = ovData.find(o => o.building_type === b.building_type)
+  const items = bldStore.map(b => {
+    const ov = ovData.find(o => o.building_type === b.building_type)
     const sqm = b.sqm ?? 10000
     const energy = ov?.total_electricity_kwh ?? (50 + Math.random() * 200)
-    const eui    = energy / sqm
-    const color  = typeColorMap[b.building_type] ?? MC.blue
+    const eui = energy / sqm
+    const baseline = EUI_BASELINE[b.building_type] ?? 70
+    // 日数据转年化：eui * 365 / baseline
+    const ratio = (eui * 365) / baseline
+    return { sqm, eui, energy, name: b.display_name, type: b.building_type, baseline, ratio }
+  })
+
+  const sqmValues = items.map(i => i.sqm)
+  const maxSqm = sqmValues.length ? Math.max(...sqmValues) * 1.15 : 25000
+  const ratioValues = items.map(i => i.ratio)
+  const maxRatio = ratioValues.length ? Math.max(...ratioValues, 1.3) * 1.15 : 2
+
+  // 按偏离比着色
+  const deviationColor = (ratio: number) => {
+    if (ratio >= 1.2) return { color: '#e05c5c', level: '严重超标', desc: '偏离基准 ≥20%，需紧急改造' }
+    if (ratio >= 1.0) return { color: '#e8a64c', level: '轻度超标', desc: '偏离基准 0~20%，需关注优化' }
+    if (ratio >= 0.8) return { color: '#7b9fc7', level: '达标', desc: '低于基准，运行正常' }
+    return { color: '#5daa87', level: '优秀', desc: '远低于基准，节能表现优秀' }
+  }
+
+  const scatterData = items.map(i => {
+    const d = deviationColor(i.ratio)
     return {
-      name: b.display_name,
-      type: 'scatter' as const,
-      data: [[sqm, parseFloat(eui.toFixed(5)), parseFloat(energy.toFixed(1)), b.display_name]],
-      symbolSize: (val: any[]) => Math.max(22, Math.sqrt(val[2]) * 0.1),
-      itemStyle: { color, opacity: 0.80, borderColor: color, borderWidth: 1.5 },
-      label: {
-        show: true,
-        formatter: (p: any) => p.data[3],
-        position: 'top',
-        fontSize: 11,
-        color: c.axis,
-      },
+      // [sqm, ratio, energy, name, level, desc, eui, baseline]
+      value: [i.sqm, parseFloat(i.ratio.toFixed(3)), parseFloat(i.energy.toFixed(1)),
+              i.name, d.level, d.desc, parseFloat((i.eui * 365).toFixed(2)), i.baseline],
+      itemStyle: { color: d.color, opacity: 0.85, borderColor: d.color, borderWidth: 1.5 },
     }
   })
 
   const inst = echarts.init(bubbleEl.value)
   inst.setOption({
     backgroundColor: 'transparent',
-    grid: { top: 16, right: 24, bottom: 46, left: 64 },
+    grid: { top: 36, right: 20, bottom: 46, left: 56 },
     tooltip: {
       trigger: 'item',
       backgroundColor: c.ttBg, borderColor: c.ttBr,
       textStyle: { color: c.ttText, fontSize: 12 },
       formatter: (p: any) => {
-        const d = p.data
-        return `<strong>${d[3]}</strong><br/>建筑面积: ${Number(d[0]).toLocaleString()} ㎡<br/>EUI: ${Number(d[1]).toFixed(5)} kWh/㎡<br/>总用电: ${d[2]} kWh`
+        const d = p.data.value
+        return `<strong>${d[3]}</strong><br/>` +
+          `状态: <span style="color:${p.data.itemStyle.color};font-weight:600">${d[4]}</span><br/>` +
+          `${d[5]}<br/>` +
+          `偏离比: ${d[1]}（${d[1] > 1 ? '超出' : '低于'}基准 ${Math.abs((d[1] - 1) * 100).toFixed(1)}%）<br/>` +
+          `年化 EUI: ${d[6]} kWh/㎡<br/>` +
+          `国标基准: ${d[7]} kWh/㎡·年<br/>` +
+          `建筑面积: ${Number(d[0]).toLocaleString()} ㎡`
       },
     },
-    legend: { bottom: 4, textStyle: { color: c.axis, fontSize: 11 }, itemWidth: 12, itemHeight: 12 },
+    legend: {
+      top: 4, left: 'center',
+      textStyle: { color: c.axis, fontSize: 10 },
+      itemWidth: 8, itemHeight: 8, itemGap: 12,
+      data: [
+        { name: '严重超标', icon: 'circle', itemStyle: { color: '#e05c5c' } },
+        { name: '轻度超标', icon: 'circle', itemStyle: { color: '#e8a64c' } },
+        { name: '达标', icon: 'circle', itemStyle: { color: '#7b9fc7' } },
+        { name: '优秀', icon: 'circle', itemStyle: { color: '#5daa87' } },
+      ],
+    },
     xAxis: {
       type: 'value', name: '建筑面积 (㎡)',
       nameLocation: 'middle', nameGap: 28,
       nameTextStyle: { color: c.axis, fontSize: 11 },
       axisLabel: { color: c.axis, fontSize: 10, formatter: (v: number) => `${(v / 1000).toFixed(0)}k` },
       splitLine: { lineStyle: { color: c.grid, type: 'dashed' } },
+      max: maxSqm,
     },
     yAxis: {
-      type: 'value', name: 'EUI (kWh/㎡)',
-      nameLocation: 'middle', nameGap: 50,
-      nameTextStyle: { color: c.axis, fontSize: 11 },
-      axisLabel: { color: c.axis, fontSize: 10 },
+      type: 'value', name: '偏离比（实际/基准）',
+      nameLocation: 'middle', nameGap: 42,
+      nameTextStyle: { color: c.axis, fontSize: 10 },
+      axisLabel: { color: c.axis, fontSize: 10, formatter: (v: number) => v.toFixed(1) },
       splitLine: { lineStyle: { color: c.grid, type: 'dashed' } },
+      max: maxRatio,
+      min: 0,
     },
-    series,
+    series: [
+      // 达标基准线 y=1
+      {
+        type: 'scatter', data: [],
+        markLine: {
+          silent: true,
+          symbol: 'none',
+          lineStyle: { color: '#e05c5c', type: 'dashed', width: 1.5, opacity: 0.6 },
+          label: { fontSize: 10, color: '#e05c5c', opacity: 0.8 },
+          data: [
+            { yAxis: 1, label: { formatter: '国标基准线', position: 'insideEndTop' } },
+          ],
+        },
+      },
+      // 背景区域：超标区 / 达标区
+      {
+        type: 'scatter', data: [], markArea: {
+          silent: true,
+          data: [
+            [{ yAxis: 1, itemStyle: { color: 'rgba(224,92,92,0.04)' } }, { yAxis: maxRatio }],
+            [{ yAxis: 0, itemStyle: { color: 'rgba(93,170,135,0.04)' } }, { yAxis: 1 }],
+          ],
+        },
+      },
+      // 严重超标
+      {
+        name: '严重超标', type: 'scatter',
+        data: scatterData.filter(d => d.value[4] === '严重超标'),
+        symbolSize: (val: any[]) => Math.min(50, Math.max(20, Math.sqrt(val[2]) * 0.1)),
+        label: { show: true, formatter: (p: any) => p.data.value[3], position: 'top', fontSize: 11, color: c.axis, distance: 6 },
+      },
+      // 轻度超标
+      {
+        name: '轻度超标', type: 'scatter',
+        data: scatterData.filter(d => d.value[4] === '轻度超标'),
+        symbolSize: (val: any[]) => Math.min(46, Math.max(18, Math.sqrt(val[2]) * 0.09)),
+        label: { show: true, formatter: (p: any) => p.data.value[3], position: 'top', fontSize: 11, color: c.axis, distance: 6 },
+      },
+      // 达标
+      {
+        name: '达标', type: 'scatter',
+        data: scatterData.filter(d => d.value[4] === '达标'),
+        symbolSize: (val: any[]) => Math.min(42, Math.max(16, Math.sqrt(val[2]) * 0.08)),
+        label: { show: true, formatter: (p: any) => p.data.value[3], position: 'top', fontSize: 11, color: c.axis, distance: 6 },
+      },
+      // 优秀
+      {
+        name: '优秀', type: 'scatter',
+        data: scatterData.filter(d => d.value[4] === '优秀'),
+        symbolSize: (val: any[]) => Math.min(38, Math.max(14, Math.sqrt(val[2]) * 0.07)),
+        label: { show: true, formatter: (p: any) => p.data.value[3], position: 'top', fontSize: 11, color: c.axis, distance: 6 },
+      },
+    ],
   })
   instances.push(inst)
 }
@@ -483,9 +629,54 @@ function showGhTip(e: MouseEvent, cell: { d: number; h: number; v: number }) {
 function hideGhTip() { ghTip.value.show = false }
 
 // ── 4. Sankey Diagram ─────────────────────────────────────────
+// 左侧节点（规则/异常类型）使用暖色系，右侧节点（根因）使用冷色系
+const _SANKEY_SOURCE_COLORS: Record<string, string> = {
+  '水耗异常': MC.teal, '电耗超标': MC.blue, '空调过耗': MC.terra,
+  '标注异常': MC.rose, '夜间高耗': MC.lav,
+}
+const _SANKEY_TARGET_COLORS: Record<string, string> = {
+  '主机效能衰退': MC.rose, '水力失调': MC.blue, '非预期开机': MC.lav,
+  '其他空调故障': MC.sage, '管网漏损': MC.teal, '负荷过载': MC.terra,
+  '数据标注': MC.lav, '夜间异常运行': MC.lav,
+}
+
+// mock fallback（API 无数据时使用）
+const _SANKEY_MOCK_NODES = [
+  { name: '温差过大' }, { name: '能耗超标' }, { name: '设备离线' },
+  { name: '过滤网堵塞' }, { name: '传感器失效' }, { name: '冷水机故障' }, { name: '管道泄漏' },
+]
+const _SANKEY_MOCK_LINKS = [
+  { source: '温差过大', target: '过滤网堵塞', value: 14 },
+  { source: '温差过大', target: '冷水机故障', value: 8 },
+  { source: '能耗超标', target: '过滤网堵塞', value: 11 },
+  { source: '能耗超标', target: '传感器失效', value: 9 },
+  { source: '能耗超标', target: '管道泄漏',   value: 5 },
+  { source: '设备离线', target: '传感器失效', value: 17 },
+  { source: '设备离线', target: '冷水机故障', value: 7 },
+]
+
 function renderSankey() {
   if (!sankeyEl.value) return
   const c = gc()
+
+  const sd = sankeyData.value
+  const useApi = sd && sd.nodes.length > 0 && sd.links.length > 0
+
+  // 收集所有 source / target 名称，用于着色
+  const sourceNames = new Set(
+    (useApi ? sd!.links : _SANKEY_MOCK_LINKS).map(l => l.source),
+  )
+
+  const rawNodes = useApi ? sd!.nodes : _SANKEY_MOCK_NODES
+  const nodes = rawNodes.map(n => ({
+    name: n.name,
+    itemStyle: {
+      color: sourceNames.has(n.name)
+        ? (_SANKEY_SOURCE_COLORS[n.name] ?? MC.blue)
+        : (_SANKEY_TARGET_COLORS[n.name] ?? MC.lav),
+    },
+  }))
+  const links = useApi ? sd!.links : _SANKEY_MOCK_LINKS
 
   const inst = echarts.init(sankeyEl.value)
   inst.setOption({
@@ -500,24 +691,8 @@ function renderSankey() {
       left: 16, right: 108, top: 10, bottom: 10,
       emphasis: { focus: 'adjacency' },
       nodeGap: 10, nodeWidth: 12,
-      data: [
-        { name: '温差过大',   itemStyle: { color: MC.terra } },
-        { name: '能耗超标',   itemStyle: { color: MC.blue } },
-        { name: '设备离线',   itemStyle: { color: MC.rose } },
-        { name: '过滤网堵塞', itemStyle: { color: MC.lav } },
-        { name: '传感器失效', itemStyle: { color: MC.lav } },
-        { name: '冷水机故障', itemStyle: { color: MC.lav } },
-        { name: '管道泄漏',   itemStyle: { color: MC.teal } },
-      ],
-      links: [
-        { source: '温差过大', target: '过滤网堵塞', value: 14 },
-        { source: '温差过大', target: '冷水机故障', value: 8 },
-        { source: '能耗超标', target: '过滤网堵塞', value: 11 },
-        { source: '能耗超标', target: '传感器失效', value: 9 },
-        { source: '能耗超标', target: '管道泄漏',   value: 5 },
-        { source: '设备离线', target: '传感器失效', value: 17 },
-        { source: '设备离线', target: '冷水机故障', value: 7 },
-      ],
+      data: nodes,
+      links,
       lineStyle: { color: 'gradient', opacity: 0.42 },
       label: { color: c.axis, fontSize: 11 },
     }],
@@ -601,7 +776,7 @@ let ro: ResizeObserver | null = null
 onMounted(async () => {
   generateGhData()
   await buildingStore.fetchBuildings()
-  await Promise.all([fetchOverview(), fetchAnomalies()])
+  await Promise.all([fetchOverview(), fetchAnomalies(), fetchSankeyData()])
   await nextTick()
   setTimeout(() => {
     renderAll()
@@ -812,6 +987,53 @@ onUnmounted(() => {
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+  transition: transform 0.3s ease, box-shadow 0.3s ease;
+}
+.kpi-card:hover .kpi-ico {
+  transform: scale(1.15);
+  box-shadow: 0 0 12px rgba(0,0,0,0.08);
+}
+
+/* ⚡ 闪电 - 闪烁脉冲 */
+.anim-bolt :deep(svg) {
+  animation: bolt-flash 2s ease-in-out infinite;
+}
+@keyframes bolt-flash {
+  0%, 100% { opacity: 1; filter: drop-shadow(0 0 0px currentColor); }
+  15% { opacity: 0.4; filter: drop-shadow(0 0 0px currentColor); }
+  30% { opacity: 1; filter: drop-shadow(0 0 6px currentColor); }
+  45% { opacity: 0.6; }
+  60% { opacity: 1; filter: drop-shadow(0 0 3px currentColor); }
+}
+
+/* 💧 水滴 - 弹跳滴落 */
+.anim-drop :deep(svg) {
+  animation: drop-bounce 2.5s ease-in-out infinite;
+  transform-origin: center bottom;
+}
+@keyframes drop-bounce {
+  0%, 100% { transform: translateY(0) scaleY(1); }
+  30% { transform: translateY(-3px) scaleY(1.05); }
+  50% { transform: translateY(1px) scaleY(0.95) scaleX(1.05); }
+  70% { transform: translateY(-1px) scaleY(1.02); }
+}
+
+/* ❄️ 空调 - 雪花缓慢旋转+脉冲 */
+.anim-spin :deep(svg) {
+  animation: snowflake-pulse 3s ease-in-out infinite;
+}
+@keyframes snowflake-pulse {
+  0%, 100% { transform: rotate(0deg) scale(1); opacity: 0.85; }
+  50% { transform: rotate(180deg) scale(1.15); opacity: 1; }
+}
+
+/* 🌿 CO₂ - 呼吸浮动 */
+.anim-breathe :deep(svg) {
+  animation: co2-breathe 3s ease-in-out infinite;
+}
+@keyframes co2-breathe {
+  0%, 100% { transform: translateY(0) scale(1); opacity: 0.85; }
+  50% { transform: translateY(-3px) scale(1.1); opacity: 1; }
 }
 .kpi-body { flex: 1; min-width: 0; }
 .kpi-val {
@@ -833,14 +1055,32 @@ onUnmounted(() => {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.kpi-right {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+  flex-shrink: 0;
+}
 .kpi-tag {
   font-size: 10px;
   font-weight: 600;
   padding: 2px 8px;
   border-radius: 20px;
-  flex-shrink: 0;
   white-space: nowrap;
 }
+.kpi-trend {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 20px;
+  white-space: nowrap;
+}
+.kpi-trend.up   { color: #16a34a; background: rgba(22,163,74,0.10); }
+.kpi-trend.down { color: #dc2626; background: rgba(220,38,38,0.10); }
 
 /* ── Bento Rows ───────────────────────────────────────────── */
 .bento-row {
@@ -920,7 +1160,7 @@ onUnmounted(() => {
   .bento-r1 { grid-template-columns: 1.3fr 1fr; }
   .bento-r2 { grid-template-columns: 1.1fr 1fr; }
   /* 图表高度小幅收缩 */
-  .bento-r1 .cpanel-body { height: 220px !important; }
+  .bento-r1 .cpanel-body { height: 260px !important; }
 }
 
 /* ── 单列切换 < 700px ─────────────────────────────────────── */
@@ -945,7 +1185,7 @@ onUnmounted(() => {
     gap: 10px;
   }
   /* 全宽后图表可以更高 */
-  .bento-r1 .cpanel-body { height: 260px !important; }
+  .bento-r1 .cpanel-body { height: 300px !important; }
   /* 右侧叠加列改为横排 */
   .cpanel-col {
     flex-direction: row;
@@ -976,7 +1216,7 @@ onUnmounted(() => {
   .kpi-val { font-size: 15px; }
   .kpi-tag { display: none; }
   .cpanel-sub { display: none; }
-  .bento-r1 .cpanel-body { height: 220px !important; }
+  .bento-r1 .cpanel-body { height: 260px !important; }
   .cpanel-col { flex-direction: column; }
   .cpanel-col .cpanel-body { height: 160px !important; }
   /* 热力图缩紧 */
@@ -996,7 +1236,7 @@ onUnmounted(() => {
   .pg-sub    { display: none; }
   .weather-widget  { display: none; }
   .bento-row { gap: 8px; }
-  .bento-r1 .cpanel-body { height: 180px !important; }
+  .bento-r1 .cpanel-body { height: 220px !important; }
   .cpanel-col .cpanel-body { height: 130px !important; }
   .cpanel-hd { padding: 8px 12px 6px; }
   .cpanel-title { font-size: 12px; }

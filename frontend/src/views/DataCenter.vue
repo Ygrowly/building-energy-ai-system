@@ -1,32 +1,32 @@
 <template>
   <div class="datacenter">
-    <!-- 页面标题 -->
+    <!-- 页面标题 + Tab 切换 -->
     <div class="page-header">
-      <div class="page-title">
-        <Icon icon="mdi:database" width="22" class="title-icon" />
-        <span>数据中心</span>
+      <div class="page-header-left">
+        <div class="page-title">
+          <Icon icon="mdi:database" width="22" class="title-icon" />
+          <span>数据中心</span>
+        </div>
+        <p class="page-desc">上传并分析结构化数据，或管理 RAG 知识库文档</p>
       </div>
-      <p class="page-desc">上传并分析结构化数据，或管理 RAG 知识库文档</p>
-    </div>
-
-    <!-- Tab 切换 -->
-    <div class="tab-bar">
-      <button
-        class="tab-btn"
-        :class="{ active: activeTab === 'datasets' }"
-        @click="activeTab = 'datasets'"
-      >
-        <Icon icon="mdi:table-large" width="16" />
-        数据集
-      </button>
-      <button
-        class="tab-btn"
-        :class="{ active: activeTab === 'knowledge' }"
-        @click="activeTab = 'knowledge'; loadDocuments()"
-      >
-        <Icon icon="mdi:book-open-page-variant" width="16" />
-        知识库
-      </button>
+      <div class="tab-bar">
+        <button
+          class="tab-btn"
+          :class="{ active: activeTab === 'datasets' }"
+          @click="activeTab = 'datasets'"
+        >
+          <Icon icon="mdi:table-large" width="16" />
+          数据集
+        </button>
+        <button
+          class="tab-btn"
+          :class="{ active: activeTab === 'knowledge' }"
+          @click="activeTab = 'knowledge'; loadDocuments()"
+        >
+          <Icon icon="mdi:book-open-page-variant" width="16" />
+          知识库
+        </button>
+      </div>
     </div>
 
     <!-- ═══════════════ 数据集 Tab ═══════════════ -->
@@ -123,23 +123,25 @@
           <div v-if="selectedDataset && !loadingDetail" class="detail-content">
             <!-- 数据集标题栏 -->
             <div class="detail-header">
-              <div class="detail-title">
-                <Icon :icon="selectedDataset.file_type === 'csv' ? 'mdi:file-delimited-outline' : 'mdi:microsoft-excel'" width="18" />
-                {{ selectedDataset.original_name }}
+              <div class="detail-title-row">
+                <div class="detail-title">
+                  <Icon :icon="selectedDataset.file_type === 'csv' ? 'mdi:file-delimited-outline' : 'mdi:microsoft-excel'" width="18" />
+                  {{ selectedDataset.original_name }}
+                </div>
+                <button
+                  class="analyze-btn"
+                  :disabled="analyzing"
+                  @click="runAIAnalysis"
+                >
+                  <Icon :icon="analyzing ? 'mdi:loading' : 'mdi:brain'" width="16" :class="{ spin: analyzing }" />
+                  {{ analyzing ? 'AI 分析中...' : 'AI 洞察分析' }}
+                </button>
               </div>
               <div class="detail-meta-row">
                 <span class="meta-badge">{{ selectedDataset.row_count?.toLocaleString() }} 行</span>
                 <span class="meta-badge">{{ selectedDataset.column_count }} 列</span>
                 <span class="meta-badge">{{ selectedDataset.file_type.toUpperCase() }}</span>
               </div>
-              <button
-                class="analyze-btn"
-                :disabled="analyzing"
-                @click="runAIAnalysis"
-              >
-                <Icon :icon="analyzing ? 'mdi:loading' : 'mdi:brain'" width="16" :class="{ spin: analyzing }" />
-                {{ analyzing ? 'AI 分析中...' : 'AI 洞察分析' }}
-              </button>
             </div>
 
             <!-- AI 分析结果 -->
@@ -360,12 +362,15 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { useRoute } from 'vue-router'
 import { Icon } from '@iconify/vue'
 import * as api from '@/api/datacenter'
 import type { DatasetSummary, DatasetDetail, RagDocument } from '@/api/datacenter'
 
 // ── 状态 ─────────────────────────────────────────────────────
-const activeTab = ref<'datasets' | 'knowledge'>('datasets')
+const route = useRoute()
+const initialTab = route.query.tab === 'knowledge' ? 'knowledge' : 'datasets'
+const activeTab = ref<'datasets' | 'knowledge'>(initialTab)
 
 // 数据集状态
 const datasetFileInput = ref<HTMLInputElement | null>(null)
@@ -399,6 +404,7 @@ const deleteConfirm = ref<{ message: string; action: () => Promise<void> } | nul
 // ── 生命周期 ─────────────────────────────────────────────────
 onMounted(() => {
   loadDatasets()
+  if (initialTab === 'knowledge') loadDocuments()
 })
 
 // ── 计算属性 ─────────────────────────────────────────────────
@@ -797,6 +803,19 @@ function markdownToHtml(md: string): string {
 </script>
 
 <style scoped>
+/* ── Light 主题下覆盖深绿变量，改为浅色卡片风格 ── */
+html[data-theme="light"] .datacenter {
+  --bg-panel:       #f5f5f5;
+  --bg-card:        #ffffff;
+  --bg-hover:       #f0f4f2;
+  --border:         #d9dce0;
+  --text-primary:   #1a1a1a;
+  --text-secondary: #5f6368;
+  --text-muted:     #9aa0a6;
+  --accent-glow:    rgba(34,197,94,0.10);
+  --border-accent:  rgba(34,197,94,0.25);
+}
+
 .datacenter {
   height: 100%;
   overflow-y: auto;
@@ -807,24 +826,30 @@ function markdownToHtml(md: string): string {
 }
 
 /* ── 页面标题 ── */
-.page-header { display: flex; flex-direction: column; gap: 4px; }
+.page-header {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+}
+.page-header-left { display: flex; flex-direction: column; gap: 4px; }
 .page-title {
   display: flex;
   align-items: center;
   gap: 10px;
   font-size: 18px;
   font-weight: 600;
-  color: var(--text-primary);
+  color: #1a1a1a;
 }
 .title-icon { color: var(--accent); }
-.page-desc { font-size: 12px; color: var(--text-secondary); margin-left: 32px; }
+.page-desc { font-size: 12px; color: #555; margin-left: 32px; }
 
 /* ── Tab 切换 ── */
 .tab-bar {
   display: flex;
   gap: 4px;
-  background: var(--bg-card);
-  border: 1px solid var(--border);
+  background: #f0f0f0;
+  border: 1px solid #ddd;
   border-radius: 10px;
   padding: 4px;
   width: fit-content;
@@ -837,12 +862,12 @@ function markdownToHtml(md: string): string {
   border-radius: 7px;
   border: none;
   background: transparent;
-  color: var(--text-secondary);
+  color: #555;
   font-size: 13px;
   cursor: pointer;
   transition: all 0.18s;
 }
-.tab-btn:hover { color: var(--text-primary); background: var(--bg-hover); }
+.tab-btn:hover { color: #000; background: #e0e0e0; }
 .tab-btn.active { background: var(--accent); color: #fff; font-weight: 500; }
 
 /* ── Tab 内容区 ── */
@@ -973,6 +998,7 @@ function markdownToHtml(md: string): string {
 }
 .detail-content { padding: 20px; display: flex; flex-direction: column; gap: 20px; }
 .detail-header { display: flex; flex-direction: column; gap: 10px; }
+.detail-title-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .detail-title {
   display: flex;
   align-items: center;
@@ -1064,9 +1090,10 @@ function markdownToHtml(md: string): string {
 
 /* ── 列信息网格 ── */
 .col-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  display: flex;
   gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 6px;
 }
 .col-card {
   background: var(--bg-panel);
@@ -1076,6 +1103,9 @@ function markdownToHtml(md: string): string {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  min-width: 140px;
+  max-width: 180px;
+  flex-shrink: 0;
 }
 .col-name {
   font-size: 12px;

@@ -6,6 +6,7 @@
   GET /api/buildings/{building_type}/status — 获取建筑最新设备状态（按 building_type）
   GET /api/buildings/{building_type}/energy — 获取建筑每日能耗趋势（按 building_type）
   GET /api/overview                         — 获取 Dashboard KPI 汇总（全局总览）
+  GET /api/anomalies/sankey                  — 异常根因桑基图聚合数据
   GET /api/tools                            — 列出所有可用 MCP 工具（调试用）
 """
 from __future__ import annotations
@@ -792,6 +793,78 @@ async def _fallback_realtime_anomalies(
         },
         "source": "realtime_fallback",
     }
+
+
+# ---------------------------------------------------------------------------
+# 异常根因桑基图（Sankey）聚合数据
+# ---------------------------------------------------------------------------
+_RULE_LABEL = {
+    "water_leak": "水耗异常",
+    "electricity_overload": "电耗超标",
+    "hvac_overconsumption": "空调过耗",
+    "db_flagged": "标注异常",
+    "night_high_power": "夜间高耗",
+}
+
+_ROOT_CAUSE_LABEL = {
+    "A_low_efficiency": "主机效能衰退",
+    "B_small_deltaT": "水力失调",
+    "C_unexpected_on": "非预期开机",
+    "other_hvac": "其他空调故障",
+}
+
+
+@router.get("/anomalies/sankey", summary="异常根因桑基图聚合数据")
+async def get_anomaly_sankey(
+    db: AsyncSession = Depends(get_db_session),
+):
+    """
+    聚合 anomaly_events 中所有未解决异常的 rule_triggered → hvac_root_cause 流向与频次，
+    供前端 Sankey 图渲染。
+
+    返回格式:
+      { nodes: [{name}], links: [{source, target, value}] }
+    """
+    try:
+        # 聚合所有未解决异常：按 (rule_triggered, hvac_root_cause) 计数
+        stmt = text("""
+            SELECT rule_triggered,
+                   hvac_root_cause,
+                   COUNT(*) AS cnt
+              FROM anomaly_events
+             WHERE is_resolved = false
+             GROUP BY rule_triggered, hvac_root_cause
+             ORDER BY cnt DESC
+        """)
+        result = await db.execute(stmt)
+        rows = result.fetchall()
+
+        node_set: set[str] = set()
+        links: list[dict] = []
+
+        for rule, root_cause, cnt in rows:
+            source = _RULE_LABEL.get(rule, rule or "未知规则")
+            node_set.add(source)
+
+            if root_cause and root_cause in _ROOT_CAUSE_LABEL:
+                target = _ROOT_CAUSE_LABEL[root_cause]
+            else:
+                # 非 HVAC 规则没有 root_cause，映射到通用目标
+                target = {
+                    "water_leak": "管网漏损",
+                    "electricity_overload": "负荷过载",
+                    "db_flagged": "数据标注",
+                    "night_high_power": "夜间异常运行",
+                }.get(rule, "未分类")
+            node_set.add(target)
+            links.append({"source": source, "target": target, "value": cnt})
+
+        nodes = [{"name": n} for n in sorted(node_set)]
+        return {"nodes": nodes, "links": links}
+
+    except Exception as exc:
+        logger.warning("sankey 聚合查询失败，返回空数据: %s: %s", type(exc).__name__, exc)
+        return {"nodes": [], "links": []}
 
 
 # ---------------------------------------------------------------------------

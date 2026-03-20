@@ -43,7 +43,12 @@
       <!-- 底部功能区 -->
       <div class="sidebar-bottom">
         <!-- 我的 -->
-        <button class="bottom-about" title="我的">
+        <button
+          class="bottom-about"
+          :class="{ active: $route.path === '/me' }"
+          title="我的"
+          @click="router.push('/me')"
+        >
           <Icon icon="mdi:account-circle-outline" width="16" />
         </button>
         <!-- 主题选择（仅展开时显示） -->
@@ -493,6 +498,10 @@ function getBuildingIcon(type: string): string {
 }
 .bottom-about:hover {
   color: var(--text-primary);
+}
+.bottom-about.active {
+  background: var(--accent-glow);
+  color: var(--accent);
 }
 
 .bottom-icon {

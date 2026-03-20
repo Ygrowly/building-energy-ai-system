@@ -243,6 +243,7 @@ class User(Base):
     """
     系统用户表。
     密码以 bcrypt 哈希形式存储，原始密码从不持久化。
+    role 取值：resident（住户）/ ops（运维人员）/ manager（运维经理）/ admin（系统管理员）
     """
     __tablename__ = "users"
 
@@ -253,6 +254,7 @@ class User(Base):
     hashed_password: str = Column(String, nullable=False)
     email: str = Column(String(254), unique=True, nullable=True)
     phone: str = Column(String(20), nullable=True)
+    role: str = Column(String(20), nullable=False, default="resident")
     is_active: bool = Column(Boolean, nullable=False, default=True)
     created_at = Column(
         TIMESTAMP(timezone=True), server_default=func.now(), nullable=False

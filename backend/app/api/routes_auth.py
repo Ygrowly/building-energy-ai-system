@@ -29,11 +29,13 @@ from app.core.security import (
 from app.db.models import RefreshToken, User
 from app.db.session import get_db_session
 from app.schemas.auth_schemas import (
+    ChangePasswordRequest,
     LoginRequest,
     RefreshRequest,
     RegisterRequest,
     RegisterResponse,
     TokenResponse,
+    UpdateProfileRequest,
     UserResponse,
 )
 
@@ -267,3 +269,79 @@ async def get_me(
     current_user: User = Depends(get_current_active_user),
 ) -> UserResponse:
     return UserResponse.model_validate(current_user)
+
+
+# ---------------------------------------------------------------------------
+# POST /api/auth/change-password
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/change-password",
+    summary="修改密码",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def change_password(
+    body: ChangePasswordRequest,
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db_session),
+) -> None:
+    """
+    修改当前用户密码。需提供旧密码校验，成功后写入新密码哈希。
+    """
+    if not verify_password(body.old_password, current_user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="旧密码不正确",
+        )
+    if body.old_password == body.new_password:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="新密码不能与旧密码相同",
+        )
+    result = await db.execute(select(User).where(User.id == current_user.id))
+    user = result.scalar_one_or_none()
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="用户不存在")
+    user.hashed_password = hash_password(body.new_password)
+    await db.commit()
+    logger.info("用户密码已修改: user_id=%s", current_user.id)
+
+
+# ---------------------------------------------------------------------------
+# PATCH /api/auth/me  — 更新个人资料（邮箱/手机/角色）
+# ---------------------------------------------------------------------------
+
+@router.patch(
+    "/me",
+    response_model=UserResponse,
+    summary="更新当前用户资料",
+)
+async def update_me(
+    body: UpdateProfileRequest,
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db_session),
+) -> UserResponse:
+    """
+    更新当前用户的邮箱、手机号。管理员账号可自助调整 role（MVP 阶段对所有登录用户开放）。
+    """
+    result = await db.execute(select(User).where(User.id == current_user.id))
+    user = result.scalar_one_or_none()
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="用户不存在")
+
+    if body.email is not None:
+        user.email = body.email or None
+    if body.phone is not None:
+        user.phone = body.phone or None
+
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="邮箱已被其他账号使用",
+        )
+    await db.refresh(user)
+    logger.info("用户资料已更新: user_id=%s", current_user.id)
+    return UserResponse.model_validate(user)

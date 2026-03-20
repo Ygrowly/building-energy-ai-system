@@ -279,12 +279,13 @@ async def get_me(
     "/change-password",
     summary="修改密码",
     status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
 )
 async def change_password(
     body: ChangePasswordRequest,
     current_user: User = Depends(get_current_active_user),
     db: AsyncSession = Depends(get_db_session),
-) -> None:
+) -> Response:
     """
     修改当前用户密码。需提供旧密码校验，成功后写入新密码哈希。
     """
@@ -305,6 +306,7 @@ async def change_password(
     user.hashed_password = hash_password(body.new_password)
     await db.commit()
     logger.info("用户密码已修改: user_id=%s", current_user.id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 # ---------------------------------------------------------------------------

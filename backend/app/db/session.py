@@ -5,6 +5,7 @@ FastAPI 依赖注入用 get_db_session()；工具函数直接用 AsyncSessionLoc
 import ssl
 from collections.abc import AsyncGenerator
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
@@ -41,3 +42,19 @@ async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
     """FastAPI Depends 注入用。每次请求独立 Session，请求结束自动关闭。"""
     async with AsyncSessionLocal() as session:
         yield session
+
+
+async def ensure_auth_schema_compat() -> None:
+    """
+    兼容旧库结构：确保 users.role 字段存在。
+    历史库可能未执行 012_add_user_role.sql，登录查询会因缺列报错。
+    """
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                """
+                ALTER TABLE users
+                ADD COLUMN IF NOT EXISTS role VARCHAR(20) NOT NULL DEFAULT 'resident'
+                """
+            )
+        )

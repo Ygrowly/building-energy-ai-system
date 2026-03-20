@@ -328,10 +328,13 @@ async def delete_document(
     url = _ragflow_url(f"/api/v1/datasets/{settings.RAGFLOW_DATASET_ID}/documents")
     async with httpx.AsyncClient(timeout=30, trust_env=False) as client:
         try:
-            resp = await client.delete(
+            # 注意：当前 httpx.AsyncClient.delete 在部分版本里不支持 content 参数。
+            # 使用 request + json 发送请求体，兼容性更好。
+            resp = await client.request(
+                "DELETE",
                 url,
                 headers={**_ragflow_headers(), "Content-Type": "application/json"},
-                content=json.dumps({"ids": [doc_id]}).encode(),
+                json={"ids": [doc_id]},
             )
             resp.raise_for_status()
             return resp.json()
@@ -363,14 +366,27 @@ async def get_document_status(
         try:
             resp = await client.get(url, headers=_ragflow_headers())
             resp.raise_for_status()
-            body = resp.json()
-            doc = body.get("data", body)
+            try:
+                body = resp.json()
+            except (UnicodeDecodeError, ValueError, json.JSONDecodeError) as exc:
+                # RAGFlow 在某些异常/兼容场景下可能返回非 UTF-8 或非 JSON，
+                # 这里不要让轮询直接 500。
+                try:
+                    preview = resp.text[:300]
+                except Exception:
+                    preview = "<unavailable>"
+                log.warning("RAGFlow 文档状态解析失败 doc_id=%s: %s preview=%s", doc_id, exc, preview)
+                body = {}
+
+            doc = body.get("data", body) if isinstance(body, dict) else {}
             return {
                 "id": doc_id,
                 "run": doc.get("run", "UNSTART"),
                 "chunk_count": doc.get("chunk_count", 0),
                 "progress": doc.get("progress", 0.0),
                 "progress_msg": doc.get("progress_msg", []),
+                # RAGFlow 文档列表里一般会带 update_time；轮询状态时也返回，便于前端刷新“更新时间”列
+                "update_time": doc.get("update_time"),
             }
         except httpx.HTTPStatusError as exc:
             _raise_ragflow_error(exc)

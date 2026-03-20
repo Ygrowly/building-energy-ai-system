@@ -73,9 +73,18 @@ export interface RagDocument {
   size: number
   run: string         // unstart | running | CANCEL | done | fail
   progress: number
-  create_time: number
-  update_time: number
+  create_time: number | string
+  update_time: number | string
   [key: string]: unknown
+}
+
+export interface RagDocumentStatus {
+  id: string
+  run: string
+  chunk_count: number
+  progress: number
+  progress_msg: unknown[]
+  update_time?: number | string | null
 }
 
 export interface RagDocumentListResponse {
@@ -84,6 +93,13 @@ export interface RagDocumentListResponse {
     docs: RagDocument[]
     total: number
   }
+}
+
+export interface RagUploadResponse {
+  code?: number
+  data?: unknown
+  id?: string
+  [key: string]: unknown
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -168,10 +184,10 @@ export async function analyzeDataset(
 // ══════════════════════════════════════════════════════════════
 
 /** 上传 PDF/Word/TXT 文档到 RAGFlow 知识库。 */
-export async function uploadDocument(file: File): Promise<unknown> {
+export async function uploadDocument(file: File): Promise<RagUploadResponse> {
   const form = new FormData()
   form.append('file', file)
-  return _uploadFile('/api/datacenter/documents/upload', form)
+  return _uploadFile('/api/datacenter/documents/upload', form) as Promise<RagUploadResponse>
 }
 
 /** 获取 RAGFlow 知识库文档列表。 */
@@ -184,6 +200,11 @@ export async function listDocuments(page = 1, pageSize = 30): Promise<RagDocumen
 /** 删除 RAGFlow 知识库中的文档。 */
 export async function deleteDocument(docId: string): Promise<void> {
   await apiFetch(`/api/datacenter/documents/${docId}`, { method: 'DELETE' })
+}
+
+/** 查询 RAGFlow 文档解析状态（轮询用）。 */
+export async function getDocumentStatus(docId: string): Promise<RagDocumentStatus> {
+  return apiFetch<RagDocumentStatus>(`/api/datacenter/documents/${docId}/status`)
 }
 
 /** 触发 RAGFlow 文档解析（向量化）。 */

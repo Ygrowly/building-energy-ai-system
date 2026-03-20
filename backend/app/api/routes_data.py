@@ -383,7 +383,8 @@ async def get_overview(db: AsyncSession = Depends(get_db_session)):
                 b.sqm,
                 SUM(e.electricity_kwh)  AS total_electricity_kwh,
                 SUM(e.water_m3)         AS total_water_m3,
-                AVG(e.air_temp_c)       AS avg_ambient_temp
+                AVG(e.air_temp_c)       AS avg_ambient_temp,
+                SUM(e.hac_energy)       AS total_hac_energy
             FROM energy_data e
             JOIN buildings b ON e.building_id = b.building_id
             WHERE e."timestamp"::date = :day
@@ -396,6 +397,21 @@ async def get_overview(db: AsyncSession = Depends(get_db_session)):
 
     if not daily_rows:
         return {"error": f"日期 {latest_day} 无能耗数据"}
+
+    # 全局平均气温和湿度（当天所有建筑平均）
+    weather_result = await db.execute(
+        text("""
+            SELECT
+                AVG(e.air_temp_c)       AS avg_temp,
+                AVG(e.humidity_rh_pct)  AS avg_humidity
+            FROM energy_data e
+            WHERE e."timestamp"::date = :day
+        """),
+        {"day": latest_day},
+    )
+    weather_row = weather_result.fetchone()
+    avg_temp = round(float(weather_row[0]), 1) if weather_row and weather_row[0] else None
+    avg_humidity = round(float(weather_row[1]), 1) if weather_row and weather_row[1] else None
 
     # 各楼最新一条实时记录（实时读数）
     live_result = await db.execute(
@@ -432,10 +448,11 @@ async def get_overview(db: AsyncSession = Depends(get_db_session)):
 
     total_electricity = 0.0
     total_water = 0.0
+    total_hac = 0.0
     buildings_detail = []
 
     for dr in daily_rows:
-        bid, usage, sqm, total_elec, total_w, avg_temp = dr
+        bid, usage, sqm, total_elec, total_w, avg_temp, hac = dr
         live = live_map.get(bid)
         latest_w = float(live[2] or 0) if live else 0.0
         is_anomaly = bid in anomaly_building_ids
@@ -445,12 +462,14 @@ async def get_overview(db: AsyncSession = Depends(get_db_session)):
         )
         total_electricity += float(total_elec or 0)
         total_water += float(total_w or 0)
+        total_hac += float(hac or 0)
         buildings_detail.append({
             "building_type": usage,
             "display_name": _BUILDING_NAMES.get(usage or "", usage or bid),
             "icon": _BUILDING_ICONS.get(usage or "", "🏠"),
             "total_electricity_kwh": round(float(total_elec or 0), 2),
             "total_water_m3": round(float(total_w or 0), 2),
+            "total_hac_energy_kwh": round(float(hac or 0), 2),
             "avg_ambient_temp": round(float(avg_temp or 0), 2) if avg_temp else None,
             "sqm": sqm,
             "energy_intensity_kwh_per_sqm": intensity,
@@ -463,7 +482,13 @@ async def get_overview(db: AsyncSession = Depends(get_db_session)):
         "kpis": {
             "total_electricity_kwh": round(total_electricity, 2),
             "total_water_m3": round(total_water, 2),
+            "total_hac_energy_kwh": round(total_hac, 2),
+            "total_carbon_kg": round(total_electricity * 0.5703, 2),
             "anomaly_count": len(anomaly_building_ids),
+        },
+        "weather": {
+            "temperature": avg_temp,
+            "humidity": avg_humidity,
         },
         "buildings": buildings_detail,
     }

@@ -4,12 +4,37 @@
     <!-- ── Page Header ─────────────────────────────────────── -->
     <header class="pg-header">
       <div class="pg-greeting">
-        <h1 class="pg-title">你好，{{ displayName }}！<span class="pg-wave">👋</span></h1>
+        <h1 class="pg-title">你好，{{ displayName }}！<DotLottieVue class="pg-wave-lottie" src="/Hello%20World.json" autoplay loop /></h1>
         <p class="pg-sub">今天有什么可以为你效劳的？</p>
       </div>
-      <div class="date-tag">
-        <Icon icon="mdi:calendar-check-outline" width="13" />
-        <span>{{ dataDate || '数据加载中...' }}</span>
+      <!-- 建筑切换胶囊 -->
+      <div class="capsule-switcher" ref="capsuleRef">
+        <div class="capsule-slider" :style="sliderStyle"></div>
+        <button
+          v-for="opt in buildingOptions"
+          :key="opt.key"
+          :ref="(el) => setBtnRef(el, opt.key)"
+          class="capsule-btn"
+          :class="{ active: activeBuilding === opt.key }"
+          @click="activeBuilding = opt.key"
+        >{{ opt.label }}</button>
+      </div>
+      <div class="weather-widget">
+        <div class="weather-date">
+          <Icon icon="mdi:calendar-month" width="14" />
+          <span>{{ dataDate || '加载中...' }}</span>
+        </div>
+        <div class="weather-divider"></div>
+        <div class="weather-metrics">
+          <div class="weather-item">
+            <Icon icon="mdi:thermometer" width="15" class="weather-icon temp-icon" />
+            <span class="weather-val">{{ weatherTemp ?? '--' }}<small>°C</small></span>
+          </div>
+          <div class="weather-item">
+            <Icon icon="mdi:water-percent" width="15" class="weather-icon humi-icon" />
+            <span class="weather-val">{{ weatherHumi ?? '--' }}<small>%</small></span>
+          </div>
+        </div>
       </div>
     </header>
 
@@ -113,7 +138,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { Icon } from '@iconify/vue'
 import { DotLottieVue } from '@lottiefiles/dotlottie-vue'
 import * as echarts from 'echarts'
@@ -128,8 +153,41 @@ const authStore     = useAuthStore()
 const displayName = computed(() => authStore.user?.username ?? '访客')
 
 const dataDate = ref('')
+const weatherTemp = ref<number | null>(null)
+const weatherHumi = ref<number | null>(null)
 const overviewData = ref<any>(null)
 const anomalyData = ref<any[]>([])
+
+// ── 建筑切换胶囊 ─────────────────────────────────────────────
+const buildingOptions = [
+  { key: 'all', label: '全部' },
+  { key: 'Education', label: '教学楼' },
+  { key: 'Office', label: '办公楼' },
+  { key: 'Public', label: '公共楼' },
+]
+const activeBuilding = ref('all')
+const capsuleRef = ref<HTMLElement | null>(null)
+const btnRefs = new Map<string, HTMLElement>()
+
+function setBtnRef(el: any, key: string) {
+  if (el) btnRefs.set(key, el as HTMLElement)
+}
+
+const sliderStyle = computed(() => {
+  const el = btnRefs.get(activeBuilding.value)
+  if (!el || !capsuleRef.value) return { opacity: '0' }
+  const parentRect = capsuleRef.value.getBoundingClientRect()
+  const btnRect = el.getBoundingClientRect()
+  return {
+    width: `${btnRect.width}px`,
+    transform: `translateX(${btnRect.left - parentRect.left}px)`,
+    opacity: '1',
+  }
+})
+
+// 强制刷新 slider 位置
+const forceSliderUpdate = ref(0)
+watch(activeBuilding, () => { nextTick(() => { forceSliderUpdate.value++ }) })
 
 const bubbleEl  = ref<HTMLElement | null>(null)
 const hvacEl    = ref<HTMLElement | null>(null)
@@ -162,42 +220,48 @@ function gc() {
 }
 
 // ── KPI data ─────────────────────────────────────────────────
+const CARBON_FACTOR = 0.5703 // kgCO₂/kWh
 const kpis = computed(() => {
-  const k = overviewData.value?.kpis
-  const buildings: any[] = overviewData.value?.buildings ?? []
-  const totalSqm  = buildings.reduce((s: number, b: any) => s + (b.sqm ?? 0), 0)
-  const totalElec = buildings.reduce((s: number, b: any) => s + (b.total_electricity_kwh ?? 0), 0)
-  const intensity = totalSqm > 0 ? totalElec / totalSqm : 0
-  const anomaly   = k?.anomaly_count ?? 0
+  // eslint-disable-next-line no-unused-vars
+  void forceSliderUpdate.value // 触发依赖刷新
+  const ov = overviewData.value
+  if (!ov) return []
+  const sel = activeBuilding.value
+  const buildings: any[] = ov.buildings ?? []
+
+  let elec = 0, water = 0, hac = 0
+  if (sel === 'all') {
+    elec  = Number(ov.kpis?.total_electricity_kwh ?? 0)
+    water = Number(ov.kpis?.total_water_m3 ?? 0)
+    hac   = Number(ov.kpis?.total_hac_energy_kwh ?? 0)
+  } else {
+    const b = buildings.find((b: any) => b.building_type === sel)
+    elec  = b ? Number(b.total_electricity_kwh ?? 0) : 0
+    water = b ? Number(b.total_water_m3 ?? 0) : 0
+    hac   = b ? Number(b.total_hac_energy_kwh ?? 0) : 0
+  }
+  const carbon = elec * CARBON_FACTOR
 
   return [
     {
       icon: 'mdi:lightning-bolt', label: '日总用电 (kWh)',
-      value: k ? Number(k.total_electricity_kwh).toFixed(1) : '—',
+      value: elec.toFixed(1),
       tag: '今日', bg: 'rgba(123,159,199,0.14)', color: MC.blue,
     },
     {
       icon: 'mdi:water', label: '日总用水 (m³)',
-      value: k ? Number(k.total_water_m3).toFixed(1) : '—',
+      value: water.toFixed(1),
       tag: '今日', bg: 'rgba(122,170,142,0.14)', color: MC.sage,
     },
     {
-      icon: 'mdi:ruler-square', label: '综合能耗强度',
-      value: k ? intensity.toFixed(3) : '—',
-      tag: 'kWh/㎡', bg: 'rgba(155,143,196,0.14)', color: MC.lav,
+      icon: 'mdi:air-conditioner', label: '空调能耗 (kWh)',
+      value: hac.toFixed(1),
+      tag: '今日', bg: 'rgba(155,143,196,0.14)', color: MC.lav,
     },
     {
-      icon: anomaly > 0 ? 'mdi:alert-circle' : 'mdi:check-circle',
-      label: '异常楼宇数',
-      value: k ? String(anomaly) : '—',
-      tag: anomaly > 0 ? '需关注' : '全部正常',
-      bg: anomaly > 0 ? 'rgba(196,149,106,0.14)' : 'rgba(122,170,142,0.14)',
-      color: anomaly > 0 ? MC.terra : MC.sage,
-    },
-    {
-      icon: 'mdi:office-building', label: '在线建筑数',
-      value: buildingStore.buildings.length ? String(buildingStore.buildings.length) : '—',
-      tag: '全部在线', bg: 'rgba(196,144,154,0.14)', color: MC.rose,
+      icon: 'mdi:molecule-co2', label: '碳排放量 (kg)',
+      value: carbon.toFixed(1),
+      tag: 'CO₂', bg: 'rgba(196,149,106,0.14)', color: MC.terra,
     },
   ]
 })
@@ -208,6 +272,8 @@ async function fetchOverview() {
     const data = await apiFetch<any>('/api/overview')
     overviewData.value = data
     dataDate.value = data?.data_date ?? ''
+    weatherTemp.value = data?.weather?.temperature ?? null
+    weatherHumi.value = data?.weather?.humidity ?? null
   } catch { /* silent */ }
 }
 
@@ -581,11 +647,57 @@ onUnmounted(() => {
 /* ── Header ───────────────────────────────────────────────── */
 .pg-header {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   flex-shrink: 0;
   flex-wrap: wrap;
   gap: 10px;
+}
+
+/* ── 建筑切换胶囊 ────────────────────────────────────────── */
+.capsule-switcher {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 24px;
+  padding: 3px;
+  gap: 0;
+  flex-shrink: 0;
+}
+.capsule-slider {
+  position: absolute;
+  top: 3px;
+  left: 0;
+  height: calc(100% - 6px);
+  border-radius: 20px;
+  background: var(--border-accent, rgba(122,170,142,0.35));
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  pointer-events: none;
+  z-index: 0;
+}
+.capsule-btn {
+  position: relative;
+  z-index: 1;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  padding: 5px 16px;
+  border-radius: 20px;
+  cursor: pointer;
+  transition: color 0.25s;
+  white-space: nowrap;
+}
+.capsule-btn.active {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+.capsule-btn:hover:not(.active) {
+  color: var(--text-primary);
 }
 .pg-greeting {
   display: flex;
@@ -603,42 +715,79 @@ onUnmounted(() => {
   gap: 6px;
   flex-wrap: wrap;
 }
-.pg-wave {
-  font-style: normal;
+.pg-wave-lottie {
+  width: 36px;
+  height: 36px;
   display: inline-block;
-  animation: wave 1.8s ease-in-out infinite;
-  transform-origin: 70% 70%;
+  flex-shrink: 0;
 }
-@keyframes wave {
-  0%, 60%, 100% { transform: rotate(0deg); }
-  10%            { transform: rotate(18deg); }
-  20%            { transform: rotate(-8deg); }
-  30%            { transform: rotate(18deg); }
-  40%            { transform: rotate(-4deg); }
-  50%            { transform: rotate(10deg); }
+@container (max-width: 539px) {
+  .pg-wave-lottie { width: 28px; height: 28px; }
+}
+@container (max-width: 399px) {
+  .pg-wave-lottie { width: 22px; height: 22px; }
 }
 .pg-sub {
   font-size: 13px;
   color: var(--text-secondary);
   font-weight: 400;
 }
-.date-tag {
-  display: inline-flex;
+.weather-widget {
+  display: flex;
   align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  color: var(--text-secondary);
+  gap: 10px;
   background: var(--bg-panel);
   border: 1px solid var(--border);
-  border-radius: 20px;
-  padding: 5px 14px;
+  border-radius: 14px;
+  padding: 8px 16px;
   flex-shrink: 0;
+}
+.weather-date {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.weather-divider {
+  width: 1px;
+  height: 22px;
+  background: var(--border);
+  flex-shrink: 0;
+}
+.weather-metrics {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.weather-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.weather-icon {
+  flex-shrink: 0;
+}
+.temp-icon { color: #e8845a; }
+.humi-icon { color: #5a9fd4; }
+.weather-val {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+.weather-val small {
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--text-secondary);
+  margin-left: 1px;
 }
 
 /* ── KPI Strip ────────────────────────────────────────────── */
 .kpi-strip {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
   flex-shrink: 0;
 }
@@ -776,6 +925,12 @@ onUnmounted(() => {
 
 /* ── 单列切换 < 700px ─────────────────────────────────────── */
 @container (max-width: 699px) {
+  .pg-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .capsule-switcher { align-self: stretch; justify-content: center; }
+  .capsule-btn { flex: 1; text-align: center; padding: 5px 10px; }
   .home-page {
     padding: 16px 14px 24px;
     gap: 12px;
@@ -804,6 +959,7 @@ onUnmounted(() => {
 
 /* ── 窄屏 < 540px ─────────────────────────────────────────── */
 @container (max-width: 539px) {
+  .capsule-btn { font-size: 11px; padding: 4px 8px; }
   .home-page {
     padding: 12px 10px 20px;
     gap: 10px;
@@ -838,7 +994,7 @@ onUnmounted(() => {
   .home-page { padding: 10px 8px 16px; gap: 8px; }
   .pg-title  { font-size: 16px; }
   .pg-sub    { display: none; }
-  .date-tag  { display: none; }
+  .weather-widget  { display: none; }
   .bento-row { gap: 8px; }
   .bento-r1 .cpanel-body { height: 180px !important; }
   .cpanel-col .cpanel-body { height: 130px !important; }
@@ -860,11 +1016,29 @@ html[data-theme="light"] .cpanel {
   background: #ffffff;
   border-color: #e2e8e4;
 }
-html[data-theme="light"] .date-tag {
+html[data-theme="light"] .weather-widget {
   background: #ffffff;
   border-color: #e2e8e4;
-  color: #333;
 }
+html[data-theme="light"] .weather-date {
+  color: #666;
+}
+html[data-theme="light"] .weather-val {
+  color: #111;
+}
+html[data-theme="light"] .weather-divider {
+  background: #e2e8e4;
+}
+html[data-theme="light"] .capsule-switcher {
+  background: #f4f7f5;
+  border-color: #e2e8e4;
+}
+html[data-theme="light"] .capsule-slider {
+  background: #ffffff;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+html[data-theme="light"] .capsule-btn { color: #888; }
+html[data-theme="light"] .capsule-btn.active { color: #111; }
 html[data-theme="light"] .pg-title      { color: #111; }
 html[data-theme="light"] .pg-sub        { color: #666; }
 html[data-theme="light"] .cpanel-title  { color: #111; }

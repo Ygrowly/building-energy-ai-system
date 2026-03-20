@@ -44,10 +44,13 @@ async def lifespan(app: FastAPI):
     # 注册会话管理 ORM 模型（触发 SQLAlchemy metadata 注册，供 session_store 使用）
     import app.db.chat_models  # noqa: F401
     import app.db.models  # noqa: F401  — 触发 User/RefreshToken metadata 注册
-    from app.db.session import ensure_auth_schema_compat
+    from app.db.session import ensure_auth_schema_compat, ensure_daily_energy_summary_view
 
     # 兼容历史数据库结构，避免 users.role 缺失导致登录 500
     await ensure_auth_schema_compat()
+
+    # P2：确保 Tool 4 的物化视图可用，避免日粒度查询抛 UndefinedTableError
+    await ensure_daily_energy_summary_view()
 
     # 预编译 LangGraph 图（避免首次请求延迟）
     from app.graph.workflow import get_graph

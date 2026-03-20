@@ -28,6 +28,7 @@ from pydantic import BaseModel
 from app.core.config import get_settings
 from app.db.session import AsyncSessionLocal
 from app.graph.state import AgentState, update_context_summary
+from app.schemas.mcp_schemas import MCPError
 from app.mcp.server import call_tool
 from app.schemas.mcp_schemas import (
     CalculateSystemCOPInput,
@@ -218,7 +219,8 @@ DATA_AGENT_TOOLS = [
 ]
 
 
-_cached_data_agent = None
+_cached_data_agent_full = None
+_cached_data_agent_no_list_buildings = None
 _data_agent_lock: Any = None
 
 
@@ -234,11 +236,17 @@ def _get_data_agent_lock() -> Any:
 _MAX_HISTORY_MESSAGES = 8
 
 
-def _get_data_agent():
-    """获取 Data Agent 单例（首次调用时构建，锁保护避免并发重复创建）。"""
-    global _cached_data_agent
+def _get_data_agent(include_list_available_buildings: bool):
+    """
+    获取 Data Agent 单例（首次调用时构建，锁保护避免并发重复创建）。
+    - include_list_available_buildings=True：提供 list_available_buildings 工具
+    - include_list_available_buildings=False：移除该工具，避免模型在已知楼宇列表时仍冗余调用
+    """
+    global _cached_data_agent_full, _cached_data_agent_no_list_buildings
     with _get_data_agent_lock():
-        if _cached_data_agent is None:
+        if include_list_available_buildings:
+            if _cached_data_agent_full is not None:
+                return _cached_data_agent_full
             settings = get_settings()
             llm = ChatOpenAI(
                 model=settings.LLM_MODEL,
@@ -247,12 +255,34 @@ def _get_data_agent():
                 temperature=0.1,
                 max_tokens=1500,   # 降低：减少单次 LLM 调用的生成量
             )
-            _cached_data_agent = create_react_agent(
+            _cached_data_agent_full = create_react_agent(
                 llm,
                 tools=DATA_AGENT_TOOLS,
                 prompt=DATA_AGENT_SYSTEM_PROMPT,
             )
-    return _cached_data_agent
+            return _cached_data_agent_full
+
+        # 不提供 list_available_buildings 工具
+        if _cached_data_agent_no_list_buildings is not None:
+            return _cached_data_agent_no_list_buildings
+
+        settings = get_settings()
+        llm = ChatOpenAI(
+            model=settings.LLM_MODEL,
+            api_key=settings.LLM_API_KEY or "placeholder",
+            base_url=settings.LLM_BASE_URL,
+            temperature=0.1,
+            max_tokens=1500,   # 降低：减少单次 LLM 调用的生成量
+        )
+        tools_wo_list = [t for t in DATA_AGENT_TOOLS if getattr(t, "name", "") != "list_available_buildings"]
+        _cached_data_agent_no_list_buildings = create_react_agent(
+            llm,
+            tools=tools_wo_list,
+            prompt=DATA_AGENT_SYSTEM_PROMPT,
+        )
+        return _cached_data_agent_no_list_buildings
+    # 理论上不会到达：两种分支里都有 return。这里放一个兜底，避免异常情况下返回 None。
+    return _cached_data_agent_full if include_list_available_buildings else _cached_data_agent_no_list_buildings
 
 
 async def data_agent_node(state: AgentState) -> dict[str, Any]:
@@ -267,7 +297,9 @@ async def data_agent_node(state: AgentState) -> dict[str, Any]:
     """
     t0 = time.time()
     hop_count = state.get("hop_count", 0) + 1
-    agent = _get_data_agent()
+    # 是否允许 ReAct 调用 list_available_buildings：
+    # - 若我们能从 state 或预取拿到 available_buildings，就移除该工具，避免冗余调用
+    agent = None
 
     # ── 构建上下文注入消息 ─────────────────────────────────────────────
     # 将路由层提取的实体 + 历史摘要注入为 SystemMessage，
@@ -280,6 +312,20 @@ async def data_agent_node(state: AgentState) -> dict[str, Any]:
         context_parts.append(f"【历史对话摘要（仅供参考，无需重复查询）】\n{existing_summary}")
 
     available = state.get("available_buildings")
+    # 如果路由层初始化时没有把 available_buildings 写进 state，
+    # 则会导致 LLM 在 ReAct 过程中额外调用 list_available_buildings。
+    # 这里在进入 LLM 前先在代码层拉取一次，减少一次工具调用与思考步数。
+    if not available:
+        try:
+            async with AsyncSessionLocal() as session:
+                res = await call_tool("list_available_buildings", {}, session=session)
+            if not isinstance(res, MCPError):
+                fetched = [b.building_type for b in (res.buildings or []) if b.building_type]
+                if fetched:
+                    available = fetched
+                    state["available_buildings"] = fetched
+        except Exception as exc:
+            logger.warning("prefetch available_buildings 失败: %s", exc)
     if available:
         context_parts.append(
             f"【可用楼宇（直接使用，无需调用 list_available_buildings）】: "
@@ -305,6 +351,10 @@ async def data_agent_node(state: AgentState) -> dict[str, Any]:
         sub_messages = [ctx_msg] + list(recent)
     else:
         sub_messages = list(recent)
+
+    # 在进入 ReAct 前决定工具集合
+    include_list = not bool(state.get("available_buildings"))
+    agent = _get_data_agent(include_list_available_buildings=include_list)
 
     # injected_count 用于从结果中准确提取新增消息
     injected_count = len(sub_messages)

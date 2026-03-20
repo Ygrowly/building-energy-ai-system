@@ -256,13 +256,12 @@
         <div class="input-toolbar">
           <div class="toolbar-left">
             <button
-              class="tag-btn"
+              class="tool-btn"
               :class="{ active: pickerStore.isPickerActive }"
               @click="pickerStore.togglePicker()"
               title="选择页面元素"
             >
-              <Icon icon="mdi:crosshairs" width="12" />
-              选择元素
+              <Icon icon="mdi:cursor-default-click-outline" width="18" />
             </button>
             <button class="tag-btn" title="RAG 知识库">
               <Icon icon="mdi:database-search" width="12" />
@@ -1133,7 +1132,7 @@ textarea::placeholder { color: var(--text-muted); }
 .toolbar-left {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 0px;
 }
 
 .tag-btn {
@@ -1141,7 +1140,7 @@ textarea::placeholder { color: var(--text-muted); }
   align-items: center;
   gap: 4px;
   background: none;
-  border: 1px solid var(--border);
+  border: none;
   border-radius: 5px;
   color: var(--text-muted);
   font-size: 11px;
@@ -1153,12 +1152,10 @@ textarea::placeholder { color: var(--text-muted); }
 }
 .tag-btn:hover {
   color: var(--text-primary);
-  border-color: var(--accent);
   background: rgba(108, 142, 245, 0.06);
 }
 .tag-btn.active {
   color: var(--accent);
-  border-color: var(--accent);
   background: var(--accent-glow, rgba(96, 165, 250, 0.1));
 }
 

@@ -61,15 +61,15 @@
     </section>
 
     <!-- ── Bento Row 1: EUI Bubble Matrix + HVAC Multi-axis ── -->
-    <div class="bento-row bento-r1">
+    <div class="bento-row bento-r1" v-show="activeBuilding === 'all'">
       <div class="cpanel"
            data-pick-id="chart-eui-bubble"
            data-pick-type="chart"
-           data-pick-title="建筑能效强度（EUI）气泡矩阵"
-           data-pick-subtitle="各楼宇建筑面积与单位能耗效率对比，气泡大小表示总能耗规模">
+           data-pick-title="建筑能耗强度热力象限图"
+           data-pick-subtitle="按 EUI 与面积划分优先级象限，红色=紧急改造，绿色=运行良好">
         <div class="cpanel-hd">
-          <span class="cpanel-title">建筑能效强度（EUI）气泡矩阵</span>
-          <span class="cpanel-sub">各楼宇建筑面积与单位能耗效率对比，气泡大小表示总能耗规模</span>
+          <span class="cpanel-title">建筑能耗强度热力象限图</span>
+          <span class="cpanel-sub">按 EUI 与面积划分优先级象限，红色=紧急改造，绿色=运行良好</span>
         </div>
         <div ref="bubbleEl" class="cpanel-body" style="height:252px;"></div>
       </div>
@@ -312,59 +312,80 @@ async function fetchAnomalies() {
   } catch { /* silent */ }
 }
 
-// ── 1. EUI Bubble Matrix ─────────────────────────────────────
+// ── 1. EUI Bubble Matrix (热力象限图) ────────────────────────
 function renderBubble() {
   if (!bubbleEl.value) return
   const c = gc()
-  const typeColorMap: Record<string, string> = {
-    Office: MC.blue, Teaching: MC.sage, Lab: MC.lav,
-    Library: MC.terra, Dormitory: MC.rose, Gym: MC.teal,
-  }
   const bldStore = buildingStore.buildings
   const ovData: any[] = overviewData.value?.buildings ?? []
 
-  const series = bldStore.map(b => {
-    const ov  = ovData.find(o => o.building_type === b.building_type)
+  // 构建数据: [sqm, eui, energy, name, building_type]
+  const items = bldStore.map(b => {
+    const ov = ovData.find(o => o.building_type === b.building_type)
     const sqm = b.sqm ?? 10000
     const energy = ov?.total_electricity_kwh ?? (50 + Math.random() * 200)
-    const eui    = energy / sqm
-    const color  = typeColorMap[b.building_type] ?? MC.blue
+    const eui = energy / sqm
+    return { sqm, eui, energy, name: b.display_name, type: b.building_type }
+  })
+
+  // 计算 EUI 均值作为象限分界线
+  const avgEui = items.length ? items.reduce((s, i) => s + i.eui, 0) / items.length : 0.2
+  const avgSqm = items.length ? items.reduce((s, i) => s + i.sqm, 0) / items.length : 10000
+  const maxEui = Math.max(...items.map(i => i.eui)) * 1.15
+  const maxSqm = Math.max(...items.map(i => i.sqm)) * 1.15
+
+  // 按优先级着色: 高EUI+大面积=红(P0), 高EUI+小面积=橙(P1), 低EUI+大面积=蓝(P2), 低EUI+小面积=绿(P3)
+  const priorityColor = (eui: number, sqm: number) => {
+    if (eui >= avgEui && sqm >= avgSqm) return { color: '#e05c5c', level: 'P0 紧急', desc: '高能耗+大面积，首要改造' }
+    if (eui >= avgEui && sqm < avgSqm)  return { color: '#e8a64c', level: 'P1 重要', desc: '高能耗，需关注' }
+    if (eui < avgEui && sqm >= avgSqm)  return { color: '#7b9fc7', level: 'P2 观察', desc: '面积大但效率尚可' }
+    return { color: '#5daa87', level: 'P3 良好', desc: '运行效率良好' }
+  }
+
+  const scatterData = items.map(i => {
+    const p = priorityColor(i.eui, i.sqm)
     return {
-      name: b.display_name,
-      type: 'scatter' as const,
-      data: [[sqm, parseFloat(eui.toFixed(5)), parseFloat(energy.toFixed(1)), b.display_name]],
-      symbolSize: (val: any[]) => Math.max(22, Math.sqrt(val[2]) * 0.1),
-      itemStyle: { color, opacity: 0.80, borderColor: color, borderWidth: 1.5 },
-      label: {
-        show: true,
-        formatter: (p: any) => p.data[3],
-        position: 'top',
-        fontSize: 11,
-        color: c.axis,
-      },
+      value: [i.sqm, parseFloat(i.eui.toFixed(5)), parseFloat(i.energy.toFixed(1)), i.name, p.level, p.desc],
+      itemStyle: { color: p.color, opacity: 0.85, borderColor: p.color, borderWidth: 1.5 },
     }
   })
 
   const inst = echarts.init(bubbleEl.value)
   inst.setOption({
     backgroundColor: 'transparent',
-    grid: { top: 16, right: 24, bottom: 46, left: 64 },
+    grid: { top: 20, right: 24, bottom: 46, left: 64 },
     tooltip: {
       trigger: 'item',
       backgroundColor: c.ttBg, borderColor: c.ttBr,
       textStyle: { color: c.ttText, fontSize: 12 },
       formatter: (p: any) => {
-        const d = p.data
-        return `<strong>${d[3]}</strong><br/>建筑面积: ${Number(d[0]).toLocaleString()} ㎡<br/>EUI: ${Number(d[1]).toFixed(5)} kWh/㎡<br/>总用电: ${d[2]} kWh`
+        const d = p.data.value
+        return `<strong>${d[3]}</strong><br/>` +
+          `优先级: <span style="color:${p.data.itemStyle.color};font-weight:600">${d[4]}</span><br/>` +
+          `${d[5]}<br/>` +
+          `建筑面积: ${Number(d[0]).toLocaleString()} ㎡<br/>` +
+          `EUI: ${Number(d[1]).toFixed(5)} kWh/㎡<br/>` +
+          `总用电: ${d[2]} kWh`
       },
     },
-    legend: { bottom: 4, textStyle: { color: c.axis, fontSize: 11 }, itemWidth: 12, itemHeight: 12 },
+    legend: {
+      bottom: 2,
+      textStyle: { color: c.axis, fontSize: 10 },
+      itemWidth: 10, itemHeight: 10,
+      data: [
+        { name: 'P0 紧急', icon: 'circle', itemStyle: { color: '#e05c5c' } },
+        { name: 'P1 重要', icon: 'circle', itemStyle: { color: '#e8a64c' } },
+        { name: 'P2 观察', icon: 'circle', itemStyle: { color: '#7b9fc7' } },
+        { name: 'P3 良好', icon: 'circle', itemStyle: { color: '#5daa87' } },
+      ],
+    },
     xAxis: {
       type: 'value', name: '建筑面积 (㎡)',
       nameLocation: 'middle', nameGap: 28,
       nameTextStyle: { color: c.axis, fontSize: 11 },
       axisLabel: { color: c.axis, fontSize: 10, formatter: (v: number) => `${(v / 1000).toFixed(0)}k` },
       splitLine: { lineStyle: { color: c.grid, type: 'dashed' } },
+      max: maxSqm,
     },
     yAxis: {
       type: 'value', name: 'EUI (kWh/㎡)',
@@ -372,8 +393,68 @@ function renderBubble() {
       nameTextStyle: { color: c.axis, fontSize: 11 },
       axisLabel: { color: c.axis, fontSize: 10 },
       splitLine: { lineStyle: { color: c.grid, type: 'dashed' } },
+      max: maxEui,
     },
-    series,
+    series: [
+      // 背景象限区域
+      {
+        type: 'scatter', data: [], markArea: {
+          silent: true,
+          data: [
+            // 右上: P0 红色区
+            [{ xAxis: avgSqm, yAxis: avgEui, itemStyle: { color: 'rgba(224,92,92,0.06)' } }, { xAxis: maxSqm, yAxis: maxEui }],
+            // 左上: P1 橙色区
+            [{ xAxis: 0, yAxis: avgEui, itemStyle: { color: 'rgba(232,166,76,0.06)' } }, { xAxis: avgSqm, yAxis: maxEui }],
+            // 右下: P2 蓝色区
+            [{ xAxis: avgSqm, yAxis: 0, itemStyle: { color: 'rgba(123,159,199,0.06)' } }, { xAxis: maxSqm, yAxis: avgEui }],
+            // 左下: P3 绿色区
+            [{ xAxis: 0, yAxis: 0, itemStyle: { color: 'rgba(93,170,135,0.06)' } }, { xAxis: avgSqm, yAxis: avgEui }],
+          ],
+        },
+      },
+      // 均值参考线
+      {
+        type: 'scatter', data: [],
+        markLine: {
+          silent: true,
+          symbol: 'none',
+          lineStyle: { color: c.axis, type: 'dashed', width: 1, opacity: 0.4 },
+          label: { fontSize: 9, color: c.axis },
+          data: [
+            { yAxis: avgEui, label: { formatter: `均值 EUI: ${avgEui.toFixed(4)}`, position: 'insideEndTop' } },
+            { xAxis: avgSqm, label: { formatter: `均值面积: ${(avgSqm / 1000).toFixed(1)}k`, position: 'insideEndTop' } },
+          ],
+        },
+      },
+      // P0 紧急
+      {
+        name: 'P0 紧急', type: 'scatter',
+        data: scatterData.filter(d => d.value[4] === 'P0 紧急'),
+        symbolSize: (val: any[]) => Math.max(24, Math.sqrt(val[2]) * 0.12),
+        label: { show: true, formatter: (p: any) => p.data.value[3], position: 'top', fontSize: 11, color: c.axis },
+      },
+      // P1 重要
+      {
+        name: 'P1 重要', type: 'scatter',
+        data: scatterData.filter(d => d.value[4] === 'P1 重要'),
+        symbolSize: (val: any[]) => Math.max(22, Math.sqrt(val[2]) * 0.1),
+        label: { show: true, formatter: (p: any) => p.data.value[3], position: 'top', fontSize: 11, color: c.axis },
+      },
+      // P2 观察
+      {
+        name: 'P2 观察', type: 'scatter',
+        data: scatterData.filter(d => d.value[4] === 'P2 观察'),
+        symbolSize: (val: any[]) => Math.max(22, Math.sqrt(val[2]) * 0.1),
+        label: { show: true, formatter: (p: any) => p.data.value[3], position: 'top', fontSize: 11, color: c.axis },
+      },
+      // P3 良好
+      {
+        name: 'P3 良好', type: 'scatter',
+        data: scatterData.filter(d => d.value[4] === 'P3 良好'),
+        symbolSize: (val: any[]) => Math.max(20, Math.sqrt(val[2]) * 0.08),
+        label: { show: true, formatter: (p: any) => p.data.value[3], position: 'top', fontSize: 11, color: c.axis },
+      },
+    ],
   })
   instances.push(inst)
 }

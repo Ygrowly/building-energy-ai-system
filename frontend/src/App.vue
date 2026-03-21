@@ -44,10 +44,11 @@
       <div class="sidebar-bottom">
         <!-- 我的 -->
         <button
+          ref="avatarBtnRef"
           class="bottom-about"
-          :class="{ active: $route.path === '/me' }"
+          :class="{ active: showUserMenu }"
           title="我的"
-          @click="router.push('/me')"
+          @click.stop="toggleUserMenu"
         >
           <Icon icon="mdi:account-circle-outline" width="16" />
         </button>
@@ -59,7 +60,7 @@
     </nav>
 
     <!-- 中间主工作区 -->
-    <main class="canvas">
+    <main ref="canvasEl" class="canvas" :class="{ scrolling: canvasScrolling }">
       <RouterView />
     </main>
 
@@ -78,6 +79,32 @@
 
     <!-- 元素选择器覆盖层 -->
     <ElementPickerOverlay />
+
+    <!-- 个人中心弹窗 -->
+    <PersonalModal :visible="showPersonalModal" :initial-section="modalSection" @close="showPersonalModal = false" />
+
+    <!-- 用户菜单弹出 + 主题弹出面板（Teleport 到 body） -->
+    <Teleport to="body">
+      <Transition name="picker-fade">
+        <div
+          v-if="showUserMenu"
+          class="user-menu-portal"
+          :style="userMenuStyle"
+          @click.stop
+        >
+          <button
+            v-for="item in USER_MENU_ITEMS"
+            :key="item.id"
+            class="user-menu-item"
+            :class="{ danger: item.id === 'logout' }"
+            @click="handleUserMenuItem(item.id)"
+          >
+            <Icon :icon="item.icon" width="16" />
+            <span>{{ item.label }}</span>
+          </button>
+        </div>
+      </Transition>
+    </Teleport>
 
     <!-- 主题弹出面板（Teleport 到 body，避免被 overflow:hidden 裁剪） -->
     <Teleport to="body">
@@ -109,6 +136,7 @@ import { RouterView, RouterLink, useRouter, useRoute } from 'vue-router'
 import { Icon } from '@iconify/vue'
 import AgentConsole from '@/components/AgentConsole.vue'
 import ElementPickerOverlay from '@/components/ElementPickerOverlay.vue'
+import PersonalModal from '@/components/PersonalModal.vue'
 import { useBuildingStore } from '@/stores/buildingStore'
 import { useAuthStore } from '@/stores/authStore'
 
@@ -119,6 +147,45 @@ const route = useRoute()
 
 /** 认证页单独全屏，不套主布局（避免侧栏 + 对话面板） */
 const isStandaloneAuth = computed(() => route.meta.standaloneAuth === true)
+
+// ── 用户菜单弹出 ──────────────────────────────────
+const showUserMenu = ref(false)
+const avatarBtnRef = ref<HTMLElement | null>(null)
+const userMenuStyle = ref({ top: '0px', left: '0px' })
+
+const USER_MENU_ITEMS = [
+  { id: 'settings',  label: '设置',     icon: 'mdi:cog-outline' },
+  { id: 'messages',  label: '消息中心', icon: 'mdi:bell-outline' },
+  { id: 'help',      label: '帮助中心', icon: 'mdi:help-circle-outline' },
+  { id: 'feedback',  label: '反馈中心', icon: 'mdi:message-reply-text-outline' },
+  { id: 'logout',    label: '退出登录', icon: 'mdi:logout' },
+]
+
+function toggleUserMenu() {
+  if (!showUserMenu.value && avatarBtnRef.value) {
+    const rect = avatarBtnRef.value.getBoundingClientRect()
+    const menuHeight = 212
+    userMenuStyle.value = {
+      top: `${rect.top - menuHeight + 4}px`,
+      left: `${rect.left + 5.5}px`,
+    }
+  }
+  showUserMenu.value = !showUserMenu.value
+}
+
+// ── 个人中心弹窗 ──────────────────────────────────
+const showPersonalModal = ref(false)
+const modalSection = ref('settings')
+
+function handleUserMenuItem(id: string) {
+  showUserMenu.value = false
+  if (id === 'logout') {
+    handleLogout()
+    return
+  }
+  modalSection.value = id
+  showPersonalModal.value = true
+}
 
 async function handleLogout() {
   await authStore.logout()
@@ -156,6 +223,7 @@ function toggleThemePicker() {
 // 点击外部关闭弹窗
 function onDocClick() {
   showThemePicker.value = false
+  showUserMenu.value = false
 }
 
 // ── 导航栏展开逻辑 ────────────────────────────────────
@@ -188,12 +256,28 @@ watch(
   { immediate: true },
 )
 
+// ── 中间主区滚动条：仅滚动时显示 ──
+const canvasEl = ref<HTMLElement | null>(null)
+const canvasScrolling = ref(false)
+let canvasScrollTimer = 0
+
+function onCanvasScroll() {
+  canvasScrolling.value = true
+  clearTimeout(canvasScrollTimer)
+  canvasScrollTimer = window.setTimeout(() => {
+    canvasScrolling.value = false
+  }, 1500)
+}
+
 onMounted(() => {
   document.addEventListener('click', onDocClick)
+  canvasEl.value?.addEventListener('scroll', onCanvasScroll, { passive: true })
 })
 
 onUnmounted(() => {
   document.removeEventListener('click', onDocClick)
+  canvasEl.value?.removeEventListener('scroll', onCanvasScroll)
+  clearTimeout(canvasScrollTimer)
 })
 
 // ── 右侧面板宽度拖拽调整 ──────────────────────────
@@ -575,9 +659,27 @@ function getBuildingIcon(type: string): string {
 .canvas {
   flex: 1;
   min-width: 0;
-  overflow-y: auto;
+  overflow-y: scroll;
   background: var(--bg-dark);
   transition: background 0.25s;
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+.canvas.scrolling {
+  scrollbar-color: rgba(0,0,0,0.1) transparent;
+}
+.canvas::-webkit-scrollbar {
+  width: 4px;
+}
+.canvas::-webkit-scrollbar-track {
+  background: transparent;
+}
+.canvas::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 2px;
+}
+.canvas.scrolling::-webkit-scrollbar-thumb {
+  background: rgba(0,0,0,0.1);
 }
 
 /* ── 拖拽分隔条 ── */
@@ -658,14 +760,108 @@ function getBuildingIcon(type: string): string {
   color: var(--accent);
 }
 
+/* ── 用户菜单弹出（向上弹出，Grok 风格） ── */
+.user-menu-portal {
+  position: fixed;
+  width: 148px;
+  background: #ffffff;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  border-radius: 14px;
+  padding: 6px;
+  box-shadow:
+    0 4px 6px -1px rgba(0, 0, 0, 0.05),
+    0 12px 24px -4px rgba(0, 0, 0, 0.1),
+    0 0 0 1px rgba(0, 0, 0, 0.02);
+  z-index: 9999;
+}
+
+/* 深色模式 */
+[data-theme="dark"] .user-menu-portal {
+  background: #1e2a22;
+  border-color: rgba(255, 255, 255, 0.08);
+  box-shadow:
+    0 4px 6px -1px rgba(0, 0, 0, 0.2),
+    0 12px 24px -4px rgba(0, 0, 0, 0.35),
+    0 0 0 1px rgba(255, 255, 255, 0.04);
+}
+
+.user-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 12px;
+  background: none;
+  border: none;
+  border-radius: 8px;
+  color: #374151;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+  text-align: left;
+  letter-spacing: 0.01em;
+}
+
+[data-theme="dark"] .user-menu-item {
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.user-menu-item:hover {
+  background: #f3f4f6;
+  color: #111827;
+}
+
+[data-theme="dark"] .user-menu-item:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: #fff;
+}
+
+.user-menu-item.danger {
+  color: #dc2626;
+}
+
+[data-theme="dark"] .user-menu-item.danger {
+  color: #f87171;
+}
+
+.user-menu-item.danger:hover {
+  background: #fef2f2;
+  color: #b91c1c;
+}
+
+[data-theme="dark"] .user-menu-item.danger:hover {
+  background: rgba(239, 68, 68, 0.1);
+  color: #fca5a5;
+}
+
+/* 菜单项之间的分隔线（退出登录前） */
+.user-menu-item.danger {
+  margin-top: 2px;
+  position: relative;
+}
+.user-menu-item.danger::before {
+  content: '';
+  position: absolute;
+  top: -3px;
+  left: 12px;
+  right: 12px;
+  height: 1px;
+  background: rgba(0, 0, 0, 0.06);
+}
+
+[data-theme="dark"] .user-menu-item.danger::before {
+  background: rgba(255, 255, 255, 0.06);
+}
+
 /* Teleport Transition 类名需要全局定义 */
 .picker-fade-enter-active,
 .picker-fade-leave-active {
-  transition: opacity 0.15s, transform 0.15s;
+  transition: opacity 0.18s ease, transform 0.18s ease;
 }
 .picker-fade-enter-from,
 .picker-fade-leave-to {
   opacity: 0;
-  transform: translateX(-6px);
+  transform: translateY(8px);
 }
 </style>

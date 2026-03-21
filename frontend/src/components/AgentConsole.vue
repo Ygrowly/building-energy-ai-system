@@ -3,21 +3,32 @@
     <!-- ── Cursor 风格顶栏 ─────────────────────────────────────────── -->
     <div class="top-bar">
       <!-- 会话 Tab 列表（可横向滚动） -->
-      <div class="tab-list" ref="tabListEl">
-        <div
-          v-for="sess in store.openTabs"
-          :key="sess.session_id"
-          class="tab"
-          :class="{ active: sess.session_id === store.currentSessionId }"
-          @click="store.switchSession(sess.session_id)"
-        >
-          <span class="tab-title">{{ sess.title }}</span>
-          <span class="tab-fade"></span>
-          <button
-            class="tab-close"
-            @click.stop="store.removeTab(sess.session_id)"
-            title="关闭"
-          >×</button>
+      <div class="tab-list-wrap" @mouseenter="tabHover = true" @mouseleave="tabHover = false">
+        <div class="tab-list" ref="tabListEl" @scroll="updateScrollThumb">
+          <div
+            v-for="sess in store.openTabs"
+            :key="sess.session_id"
+            class="tab"
+            :class="{ active: sess.session_id === store.currentSessionId }"
+            @click="store.switchSession(sess.session_id)"
+          >
+            <span class="tab-title">{{ sess.title }}</span>
+            <span class="tab-fade"></span>
+            <button
+              class="tab-close"
+              @click.stop="store.removeTab(sess.session_id)"
+              title="关闭"
+            >×</button>
+          </div>
+        </div>
+        <!-- 自定义滚动条（始终占位，hover 才显示滑块） -->
+        <div class="custom-scrollbar" v-if="scrollThumb.show" @click="onTrackClick">
+          <div
+            class="custom-thumb"
+            :class="{ visible: tabHover || tabDragging, dragging: tabDragging }"
+            :style="{ left: scrollThumb.left + '%', width: scrollThumb.width + '%' }"
+            @mousedown.stop="onThumbDown"
+          ></div>
         </div>
       </div>
 
@@ -196,6 +207,40 @@
                 v-if="msg.artifact?.source_info"
                 :source-info="toSourceInfo(msg.artifact.source_info)"
               />
+              <!-- 互动操作栏 -->
+              <div class="msg-actions" v-if="msg.content && !store.isLoading">
+                <button
+                  class="msg-action-btn"
+                  :class="{ copied: copiedMsgId === msg.id }"
+                  @click="copyMessage(msg)"
+                  :title="copiedMsgId === msg.id ? '已复制' : '复制'"
+                >
+                  <Icon :icon="copiedMsgId === msg.id ? 'mdi:check' : 'mdi:content-copy'" width="12" />
+                </button>
+                <button
+                  class="msg-action-btn"
+                  :class="{ active: msg.liked === true }"
+                  @click="toggleLike(msg, true)"
+                  title="有帮助"
+                >
+                  <Icon :icon="msg.liked === true ? 'mdi:thumb-up' : 'mdi:thumb-up-outline'" width="12" />
+                </button>
+                <button
+                  class="msg-action-btn"
+                  :class="{ active: msg.liked === false }"
+                  @click="toggleLike(msg, false)"
+                  title="没帮助"
+                >
+                  <Icon :icon="msg.liked === false ? 'mdi:thumb-down' : 'mdi:thumb-down-outline'" width="12" />
+                </button>
+                <button
+                  class="msg-action-btn"
+                  @click="regenerate(msg)"
+                  title="重新生成"
+                >
+                  <Icon icon="mdi:refresh" width="16" />
+                </button>
+              </div>
             </div>
           </div>
         </template>
@@ -263,7 +308,7 @@
               <Icon icon="mdi:cursor-default-click-outline" width="18" />
             </button>
             <button class="tag-btn" title="MCP 工具">
-              <Icon icon="mdi:puzzle-outline" width="12" />
+              <Icon icon="mdi:puzzle-outline" width="18" />
               MCP
             </button>
             <button class="tag-btn" title="RAG 知识库" @click="router.push('/datacenter?tab=knowledge')">
@@ -306,7 +351,7 @@ import { Icon } from '@iconify/vue'
 import { useRouter } from 'vue-router'
 import { useChatStore } from '@/stores/chatStore'
 import { useElementPickerStore } from '@/stores/elementPickerStore'
-import type { SessionInfo } from '@/stores/chatStore'
+import type { SessionInfo, ChatMessage } from '@/stores/chatStore'
 import ThinkingBubble from '@/generative-ui/ThinkingBubble.vue'
 import DynamicChart from '@/generative-ui/DynamicChart.vue'
 import WorkOrderCard from '@/generative-ui/WorkOrderCard.vue'
@@ -363,11 +408,81 @@ function onDocClick(e: MouseEvent) {
     moreOpen.value = false
   }
 }
+/* 自定义滚动条状态 */
+const tabHover = ref(false)
+const tabDragging = ref(false)
+const scrollThumb = ref({ show: false, left: 0, width: 100 })
+
+function updateScrollThumb() {
+  const el = tabListEl.value
+  if (!el) return
+  const { scrollWidth, clientWidth, scrollLeft } = el
+  if (scrollWidth <= clientWidth) {
+    scrollThumb.value.show = false
+    return
+  }
+  scrollThumb.value.show = true
+  const rawWidth = (clientWidth / scrollWidth) * 100
+  const thumbW = Math.min(rawWidth, 50)
+  scrollThumb.value.width = thumbW
+  const maxScroll = scrollWidth - clientWidth
+  scrollThumb.value.left = maxScroll > 0 ? (scrollLeft / maxScroll) * (100 - thumbW) : 0
+}
+
+/* 横向滚轮滚动 tab 列表 */
+function onTabWheel(e: WheelEvent) {
+  if (!tabListEl.value) return
+  e.preventDefault()
+  tabListEl.value.scrollLeft += e.deltaY || e.deltaX
+}
+
+/* 拖拽自定义滚动条 */
+function onThumbDown(e: MouseEvent) {
+  e.preventDefault()
+  const el = tabListEl.value
+  if (!el) return
+  const bar = (e.target as HTMLElement).parentElement!
+  const barRect = bar.getBoundingClientRect()
+  const ratio = el.scrollWidth / barRect.width
+  tabDragging.value = true
+
+  function onMove(ev: MouseEvent) {
+    const x = ev.clientX - barRect.left
+    el!.scrollLeft = x * ratio - el!.clientWidth / 2
+  }
+  function onUp() {
+    tabDragging.value = false
+    document.removeEventListener('mousemove', onMove)
+    document.removeEventListener('mouseup', onUp)
+  }
+  document.addEventListener('mousemove', onMove)
+  document.addEventListener('mouseup', onUp)
+}
+
+/* 点击滚动条轨道跳转 */
+function onTrackClick(e: MouseEvent) {
+  const el = tabListEl.value
+  if (!el) return
+  const bar = e.currentTarget as HTMLElement
+  const barRect = bar.getBoundingClientRect()
+  const x = e.clientX - barRect.left
+  const ratio = el.scrollWidth / barRect.width
+  el.scrollLeft = x * ratio - el.clientWidth / 2
+}
+
 onMounted(() => {
   store.init()
   document.addEventListener('click', onDocClick, true)
+  tabListEl.value?.addEventListener('wheel', onTabWheel, { passive: false })
+  nextTick(updateScrollThumb)
 })
-onUnmounted(() => document.removeEventListener('click', onDocClick, true))
+onUnmounted(() => {
+  document.removeEventListener('click', onDocClick, true)
+  tabListEl.value?.removeEventListener('wheel', onTabWheel)
+})
+
+/* tab 数量变化时更新滚动条 */
+watch(() => store.openTabs.length, () => nextTick(updateScrollThumb))
 
 // ── 历史记录分组 ────────────────────────────────────────────────────────────
 interface HistoryGroup { label: string; sessions: SessionInfo[] }
@@ -459,6 +574,39 @@ function onCloseChat() {
 function onClearChat() {
   moreOpen.value = false
   store.clearSession()
+}
+
+// ── 消息互动操作 ──────────────────────────────────────────────────────────────
+const copiedMsgId = ref<string | null>(null)
+
+async function copyMessage(msg: ChatMessage) {
+  if (!msg.content) return
+  try {
+    await navigator.clipboard.writeText(msg.content)
+    copiedMsgId.value = msg.id
+    setTimeout(() => { copiedMsgId.value = null }, 2000)
+  } catch {
+    // fallback
+    const ta = document.createElement('textarea')
+    ta.value = msg.content
+    document.body.appendChild(ta)
+    ta.select()
+    document.execCommand('copy')
+    document.body.removeChild(ta)
+    copiedMsgId.value = msg.id
+    setTimeout(() => { copiedMsgId.value = null }, 2000)
+  }
+}
+
+function toggleLike(msg: ChatMessage, liked: boolean) {
+  msg.liked = msg.liked === liked ? null : liked
+}
+
+function regenerate(msg: ChatMessage) {
+  if (store.isLoading) return
+  const idx = store.messages.indexOf(msg)
+  if (idx === -1) return
+  store.regenerateMessage(idx)
 }
 
 // ── 发送消息 ────────────────────────────────────────────────────────────────
@@ -575,17 +723,53 @@ function formatMarkdown(text: string): string {
   min-height: 38px;
 }
 
+/* Tab 列表容器 */
+.tab-list-wrap {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  position: relative;
+}
+
 /* Tab 列表 */
 .tab-list {
   display: flex;
   align-items: center;
-  overflow-x: auto;
+  overflow-x: scroll;
   flex: 1;
-  scrollbar-width: none;
   padding: 0 4px;
   gap: 2px;
+  scrollbar-width: none;           /* Firefox 隐藏原生滚动条 */
 }
-.tab-list::-webkit-scrollbar { display: none; }
+.tab-list::-webkit-scrollbar { display: none; }  /* Chrome 隐藏原生滚动条 */
+
+/* 自定义滚动条 */
+.custom-scrollbar {
+  position: absolute;
+  bottom: 0;
+  left: 4px;
+  right: 4px;
+  height: 3px;
+  cursor: pointer;
+  z-index: 10;
+}
+.custom-thumb {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  background: transparent;
+  border-radius: 2px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.custom-thumb.visible {
+  background: rgba(0, 0, 0, 0.2);
+}
+.custom-thumb.visible:hover,
+.custom-thumb.dragging {
+  background: rgba(0, 0, 0, 0.35);
+}
 
 .tab {
   display: flex;
@@ -611,7 +795,6 @@ function formatMarkdown(text: string): string {
   overflow: hidden;
 }
 .tab:hover {
-  background: rgba(255,255,255,0.06);
   color: var(--text-primary);
 }
 .tab.active {
@@ -622,7 +805,6 @@ function formatMarkdown(text: string): string {
 
 /* light 主题下选中 Tab */
 html[data-theme="light"] .tab:hover {
-  background: rgba(0,0,0,0.05);
 }
 html[data-theme="light"] .tab.active {
   background: rgba(0,0,0,0.08);
@@ -635,71 +817,48 @@ html[data-theme="light"] .tab.active {
   /* 不用 text-overflow ellipsis，由渐变遮罩处理视觉截断 */
 }
 
-/* 渐变遮罩：hover 时从透明→tab背景色，覆盖标题末尾 */
+/* 渐变遮罩：已移除，仅保留关闭按钮覆盖 */
 .tab-fade {
+  display: none;
+}
+
+/* 叉号：绝对定位，默认隐藏，hover 时带底色覆盖标题尾部（Cursor 风格） */
+.tab-close {
   position: absolute;
   right: 0;
   top: 0;
   bottom: 0;
-  width: 0;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.15s, width 0.15s;
-}
-/* 暗色主题：hover 渐变深色遮罩 */
-.tab:hover .tab-fade {
-  opacity: 1;
-  width: 40px;
-  background: linear-gradient(to right, transparent, #15161e);
-}
-.tab.active .tab-fade {
-  /* active 状态常驻渐变，等待 hover */
-  background: linear-gradient(to right, transparent, #1a1b24);
-}
-.tab.active:hover .tab-fade {
-  opacity: 1;
-  width: 40px;
-  background: linear-gradient(to right, transparent, #1a1b24);
-}
-
-/* 亮色主题 */
-html[data-theme="light"] .tab:hover .tab-fade {
-  background: linear-gradient(to right, transparent, #eef0f4);
-}
-html[data-theme="light"] .tab.active .tab-fade {
-  background: linear-gradient(to right, transparent, #e4e7ed);
-}
-html[data-theme="light"] .tab.active:hover .tab-fade {
-  background: linear-gradient(to right, transparent, #e4e7ed);
-}
-
-/* 叉号：绝对定位，默认隐藏，hover 时出现在渐变上层 */
-.tab-close {
-  position: absolute;
-  right: 2px;
-  top: 0;
-  bottom: 0;
   margin: auto 0;
-  background: none;
+  background: var(--bg-card);
   border: none;
   cursor: pointer;
   color: var(--text-secondary);
   font-size: 14px;
   line-height: 16px;
-  padding: 0;
-  border-radius: 4px;
+  padding: 0 2px;
+  border-radius: 0 6px 6px 0;
   display: flex;
   align-items: center;
   justify-content: center;
   width: 16px;
-  height: 16px;
+  height: 100%;
   opacity: 0;
   z-index: 1;
   transition: opacity 0.15s, color 0.12s;
 }
 /* 只在 hover 时显示，active 不自动显示 */
-.tab:hover .tab-close { opacity: 0.7; }
-.tab-close:hover { opacity: 1 !important; color: var(--text-primary); }
+.tab:hover .tab-close { opacity: 1; }
+.tab-close:hover { color: var(--text-primary); }
+
+/* 选中 Tab 的关闭按钮底色要与选中 Tab 背景一致（覆盖区不能露出 bg-card） */
+.tab.active .tab-close {
+  /* dark 主题：bg-card #101118 + rgba(255,255,255,0.1) ≈ #282930 */
+  background: #282930;
+}
+html[data-theme="light"] .tab.active .tab-close {
+  /* light 主题：bg-card #f5f5f5 + rgba(0,0,0,0.08) ≈ #e2e2e2 */
+  background: #e2e2e2;
+}
 
 /* 右侧操作按钮（无左侧边框） */
 .top-actions {
@@ -933,7 +1092,7 @@ html[data-theme="light"] .tab.active:hover .tab-fade {
 .messages {
   flex: 1;
   overflow-y: auto;
-  padding: 16px 12px;
+  padding: 12px 12px;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -1021,7 +1180,7 @@ html[data-theme="light"] .tab.active:hover .tab-fade {
 .ai-content {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 0;
   width: 100%;
   min-width: 0;
 }
@@ -1054,6 +1213,45 @@ html[data-theme="light"] .tab.active:hover .tab-fade {
   animation: blink-cursor 0.9s infinite;
 }
 @keyframes blink-cursor { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+
+/* ── 消息互动操作栏 ──────────────────────────────────────────────────────── */
+.msg-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0px;
+  padding: 0 14px 2px;
+  margin-top: -6px;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+.msg.msg-ai:hover .msg-actions {
+  opacity: 1;
+}
+.msg-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  font-size: 0;
+}
+.msg-action-btn:hover {
+  background: var(--bg-hover, rgba(0,0,0,0.06));
+  color: var(--text-primary);
+}
+.msg-action-btn.active {
+  color: var(--accent);
+}
+.msg-action-btn.copied {
+  color: var(--success, #22c55e);
+}
 
 .typing-indicator { display: flex; gap: 4px; padding: 8px 14px; }
 .typing-indicator span {
@@ -1262,3 +1460,4 @@ textarea::placeholder { color: var(--text-muted); }
 
 .inline-icon { vertical-align: middle; margin-right: 4px; }
 </style>
+

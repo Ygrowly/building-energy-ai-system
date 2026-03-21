@@ -1,7 +1,15 @@
 {
   "permissions": {
     "allow": [
-      "Bash(xargs grep:*)"
+      "Bash(xargs grep:*)",
+      "Bash(npx vite:*)",
+      "Bash(python scripts/search.py \"dashboard energy management popup menu sidebar\" --domain ux -n 5)",
+      "Bash(python scripts/search.py \"popup menu dropdown modal\" --stack vue -n 5)",
+      "Bash(python scripts/search.py \"animation transition micro-interaction hover\" --domain ux -n 5)",
+      "Bash(python scripts/search.py \"settings modal sidebar tabs clean minimal white\" --domain style -n 3)",
+      "Bash(python3 .claude/skills/ui-ux-pro-max/scripts/search.py \"dashboard settings modal dark green energy management\" --design-system -p \"Building Energy Management\")",
+      "Bash(python .claude/skills/ui-ux-pro-max/scripts/search.py \"dashboard settings modal dark green energy management\" --design-system -p \"Building Energy Management\")",
+      "Bash(python .claude/skills/ui-ux-pro-max/scripts/search.py \"modal settings sidebar tabs\" --domain ux -n 5)"
     ]
   }
 }

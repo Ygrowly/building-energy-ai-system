@@ -8,7 +8,7 @@
  *  - onDone 只更新当前会话元数据（延迟 500ms 单次 GET），不重载整个列表
  */
 import { defineStore } from 'pinia'
-import { ref, computed, watch, triggerRef } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { sendChatMessage, approveWorkOrder } from '@/api/stream_client'
 import { apiFetch } from '@/api/http'
 import type { ArtifactEvent } from '@/api/stream_client'
@@ -29,6 +29,7 @@ export interface ChatMessage {
   timestamp: Date
   thinkingSteps?: ThinkingStep[]
   thinkingFinished?: boolean
+  liked?: boolean | null
 }
 
 export interface AgentStatus {
@@ -199,8 +200,15 @@ export const useChatStore = defineStore('chat', () => {
       const tabIds = validIds.length > 0 ? validIds : [sessionList.value[0].session_id]
       openTabIds.value = tabIds
       currentSessionId.value = tabIds[0]
-      messages.value = _msgCache.get(tabIds[0]) ?? []
-      if (!_msgCache.has(tabIds[0])) _loadMessages(tabIds[0])
+      const cached = _msgCache.get(tabIds[0])
+      if (cached) {
+        messages.value = cached
+      } else {
+        const empty: ChatMessage[] = []
+        messages.value = empty
+        _msgCache.set(tabIds[0], empty)
+        _loadMessages(tabIds[0])
+      }
     } else {
       newSession()
     }
@@ -254,8 +262,11 @@ export const useChatStore = defineStore('chat', () => {
     sessionList.value.unshift(tempSession)
     openTabIds.value.unshift(tempId)
     currentSessionId.value = tempId
-    messages.value = []
-    _msgCache.set(tempId, [])
+    // 关键：messages.value 和 _msgCache 共享同一个数组引用
+    // 这样通过 messages.value.push() 的响应式操作会同步到缓存
+    const msgs: ChatMessage[] = []
+    messages.value = msgs
+    _msgCache.set(tempId, msgs)
     _agentStatusBySession.value[tempId] = null
     pendingWorkOrder.value = null
     // 不调用后端，空会话永远不进数据库
@@ -302,7 +313,9 @@ export const useChatStore = defineStore('chat', () => {
       messages.value = cached
     } else {
       // 缓存未命中 → 先清空（防止展示上一个会话消息），后台拉取
-      messages.value = []
+      const empty: ChatMessage[] = []
+      messages.value = empty
+      _msgCache.set(targetId, empty)
       _loadMessages(targetId)
     }
   }
@@ -363,29 +376,21 @@ export const useChatStore = defineStore('chat', () => {
       id: crypto.randomUUID(), role, content, timestamp: new Date(), ...extra,
     }
     const sid = targetSessionId ?? currentSessionId.value
-    if (sid) {
-      // 写入对应会话的缓存数组
-      let cache = _msgCache.get(sid)
-      if (!cache) {
-        cache = []
-        _msgCache.set(sid, cache)
-      }
-      cache.push(msg)
-      // 如果目标会话就是当前显示的会话，同步到 messages.value
-      if (sid === currentSessionId.value) {
-        if (messages.value !== cache) {
-          messages.value = cache
-        }
-        // cache.push 绕过了 Vue 的 Proxy，手动触发响应式更新
-        triggerRef(messages)
-      }
-      // artifact 消息额外持久化到 localStorage
-      if (role === 'artifact') {
-        _saveArtifactToStorage(sid, msg)
-      }
-    } else {
-      // 兜底：无会话 ID 时直接写当前显示
+    if (sid && sid === currentSessionId.value) {
+      // ★ 当前会话：直接通过 messages.value（Reactive Proxy）push
+      //   Vue 自动感知变化，同时底层 raw 数组（= _msgCache 引用）也自动更新
       messages.value.push(msg)
+    } else if (sid) {
+      // 非当前会话：写入后台缓存，不触发 UI
+      let cache = _msgCache.get(sid)
+      if (!cache) { cache = []; _msgCache.set(sid, cache) }
+      cache.push(msg)
+    } else {
+      messages.value.push(msg)
+    }
+    // artifact 消息额外持久化到 localStorage
+    if (role === 'artifact' && sid) {
+      _saveArtifactToStorage(sid, msg)
     }
   }
 
@@ -417,24 +422,9 @@ export const useChatStore = defineStore('chat', () => {
 
     // 立即创建 AI 占位消息（在异步操作之前，让 UI 立刻显示思考状态）
     const aiMsgId = crypto.randomUUID()
-    const aiMsg: ChatMessage = {
-      id: aiMsgId, role: 'ai', content: '', timestamp: new Date(),
-      thinkingSteps: [], thinkingFinished: false,
-    }
-    {
-      let cache = _msgCache.get(originSessionId)
-      if (!cache) {
-        cache = []
-        _msgCache.set(originSessionId, cache)
-      }
-      cache.push(aiMsg)
-      if (currentSessionId.value === originSessionId) {
-        if (messages.value !== cache) {
-          messages.value = cache
-        }
-        triggerRef(messages)
-      }
-    }
+    _addMsg('ai', '', {
+      id: aiMsgId, thinkingSteps: [], thinkingFinished: false,
+    }, originSessionId)
 
     // 如果当前是临时会话，先向后端创建真实会话
     if (originSessionId.startsWith('temp-')) {
@@ -453,8 +443,16 @@ export const useChatStore = defineStore('chat', () => {
 
     let textStarted = false
 
-    /** 从目标会话缓存中查找 AI 气泡（不依赖 messages.value） */
+    /**
+     * 查找 AI 气泡：
+     *  - 当前会话 → 通过 messages.value（Proxy）查找，返回 Proxy 对象
+     *    后续对 m.content / m.thinkingSteps 的修改自动触发 Vue 响应式
+     *  - 已切走 → 通过 _msgCache 查找（不需要响应式）
+     */
     function findAiMsg(): ChatMessage | undefined {
+      if (currentSessionId.value === originSessionId) {
+        return messages.value.find(x => x.id === aiMsgId)
+      }
       const cache = _msgCache.get(originSessionId)
       return cache?.find(x => x.id === aiMsgId)
     }
@@ -518,6 +516,98 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
+  // ── 重新生成（原地替换 AI 回复） ──────────────────────────────────────────
+  async function regenerateMessage(aiMsgIndex: number) {
+    const originSessionId = currentSessionId.value
+    if (!originSessionId) return
+
+    // 找到 AI 消息前面最近的用户消息
+    let userText = ''
+    for (let i = aiMsgIndex - 1; i >= 0; i--) {
+      if (messages.value[i].role === 'user') {
+        userText = messages.value[i].content
+        break
+      }
+    }
+    if (!userText) return
+
+    if (_loadingBySession.value[originSessionId]) return
+    _loadingBySession.value[originSessionId] = true
+
+    // 删除从 AI 消息开始到后续连续的 artifact/error 消息
+    let removeEnd = aiMsgIndex + 1
+    while (removeEnd < messages.value.length) {
+      const r = messages.value[removeEnd].role
+      if (r === 'artifact' || r === 'error') removeEnd++
+      else break
+    }
+    messages.value.splice(aiMsgIndex, removeEnd - aiMsgIndex)
+
+    // 同步缓存
+    _msgCache.set(originSessionId, messages.value)
+
+    // 创建新的 AI 占位消息
+    const aiMsgId = crypto.randomUUID()
+    _addMsg('ai', '', {
+      id: aiMsgId, thinkingSteps: [], thinkingFinished: false,
+    }, originSessionId)
+
+    let textStarted = false
+
+    function findAiMsg(): ChatMessage | undefined {
+      if (currentSessionId.value === originSessionId) {
+        return messages.value.find(x => x.id === aiMsgId)
+      }
+      const cache = _msgCache.get(originSessionId)
+      return cache?.find(x => x.id === aiMsgId)
+    }
+
+    try {
+      await sendChatMessage(userText, originSessionId, {
+        onThinking(e) {
+          const label = agentLabelMap[e.agent] ?? e.agent
+          _agentStatusBySession.value[originSessionId] = { name: e.agent, label, status: 'thinking', message: e.message }
+          const m = findAiMsg()
+          if (m) {
+            if (!m.thinkingSteps) m.thinkingSteps = []
+            m.thinkingSteps.push({ id: crypto.randomUUID(), agent: e.agent, message: e.message })
+          }
+        },
+        onText(e) {
+          const m = findAiMsg()
+          if (m) {
+            m.content += e.content
+            if (!textStarted) { textStarted = true; m.thinkingFinished = true }
+          }
+          if (e.is_final) _agentStatusBySession.value[originSessionId] = null
+        },
+        onArtifact(e) {
+          _addMsg('artifact', e.title ?? '生成式组件', { artifact: e }, originSessionId)
+          if (e.component_type === 'WorkOrderCard' || e.widget === 'WorkOrderCard') {
+            pendingWorkOrder.value = e
+          }
+        },
+        onError(e) {
+          _addMsg('error', e.message, undefined, originSessionId)
+          _agentStatusBySession.value[originSessionId] = { name: '', label: '错误', status: 'error', message: e.message }
+        },
+        onDone() {
+          _loadingBySession.value[originSessionId] = false
+          _agentStatusBySession.value[originSessionId] = null
+          const m = findAiMsg()
+          if (m && !m.thinkingFinished) m.thinkingFinished = true
+        },
+        onNetworkError(err) {
+          _addMsg('error', `网络错误：${err.message}`, undefined, originSessionId)
+          _loadingBySession.value[originSessionId] = false
+        },
+      }, webSearchEnabled.value)
+    } catch (err) {
+      _addMsg('error', `请求失败：${(err as Error).message}`, undefined, originSessionId)
+      _loadingBySession.value[originSessionId] = false
+    }
+  }
+
   // ── 后台刷新指定会话元数据（仅更新标题等，不清消息） ─────────────────────
   async function _refreshSession(sid: string) {
     if (!sid || sid.startsWith('temp-')) return
@@ -567,9 +657,10 @@ export const useChatStore = defineStore('chat', () => {
   // ── 清除当前会话消息（前端清屏） ──────────────────────────────────────────
   function clearSession() {
     const sid = currentSessionId.value
-    messages.value = []
+    const empty: ChatMessage[] = []
+    messages.value = empty
     if (sid) {
-      _msgCache.set(sid, [])
+      _msgCache.set(sid, empty)
       _loadingBySession.value[sid] = false
       _agentStatusBySession.value[sid] = null
     }
@@ -582,6 +673,6 @@ export const useChatStore = defineStore('chat', () => {
     messages, isLoading, currentAgentStatus, pendingWorkOrder, hasMessages,
     webSearchEnabled,
     init, loadSessionList, newSession, switchSession, removeTab, closeSession,
-    sendMessage, approveOrder, clearSession, renameSession, toggleWebSearch,
+    sendMessage, regenerateMessage, approveOrder, clearSession, renameSession, toggleWebSearch,
   }
 })

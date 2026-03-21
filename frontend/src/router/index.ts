@@ -49,12 +49,6 @@ const router = createRouter({
       component: () => import('@/views/QueryStats.vue'),
       meta: { title: '查询统计', requiresAuth: true },
     },
-    {
-      path: '/me',
-      name: 'PersonalCenter',
-      component: () => import('@/views/PersonalCenter.vue'),
-      meta: { title: '个人中心', requiresAuth: true },
-    },
   ],
 })
 

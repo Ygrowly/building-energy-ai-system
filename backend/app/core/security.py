@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
@@ -65,6 +66,11 @@ def hash_password(plain_password: str) -> str:
     return bcrypt.hashpw(pw, salt).decode("ascii")
 
 
+async def hash_password_async(plain_password: str) -> str:
+    """异步版本：在线程池中执行 bcrypt 哈希，避免阻塞 event loop。"""
+    return await asyncio.to_thread(hash_password, plain_password)
+
+
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """校验明文密码是否与哈希值匹配。"""
     try:
@@ -74,6 +80,11 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
         return bcrypt.checkpw(pw, hashed_password.encode("ascii"))
     except (ValueError, TypeError):
         return False
+
+
+async def verify_password_async(plain_password: str, hashed_password: str) -> bool:
+    """异步版本：在线程池中执行 bcrypt 校验，避免阻塞 event loop。"""
+    return await asyncio.to_thread(verify_password, plain_password, hashed_password)
 
 
 # ---------------------------------------------------------------------------

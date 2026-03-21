@@ -41,10 +41,7 @@ export const useAuthStore = defineStore('auth', () => {
     const data = await apiLogin(username, password)
     accessToken.value = data.access_token
     _saveRT(data.refresh_token)
-    // 登录后也拉取用户信息（TokenResponse 不含用户信息，需额外请求）
-    // 用 import 避免循环依赖：auth.ts → authStore.ts，authStore.ts ← http.ts 需要 auth 注入完成
-    // 故此处用原始 fetch，authProvider 注入后会由路由守卫触发，此时 AT 已就绪
-    await _fetchMe()
+    user.value = data.user
   }
 
   // ── 注册 ─────────────────────────────────────────────────

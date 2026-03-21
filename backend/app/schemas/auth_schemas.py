@@ -119,6 +119,11 @@ class UserResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class LoginResponse(TokenResponse):
+    """登录响应：在 TokenResponse 基础上附带用户信息，省去前端额外请求 /me。"""
+    user: UserResponse
+
+
 class RegisterResponse(BaseModel):
     user: UserResponse
     access_token: str

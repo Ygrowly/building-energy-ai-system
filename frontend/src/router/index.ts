@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import { useAuthStore } from '@/stores/authStore'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -60,10 +61,7 @@ const router = createRouter({
 
 // ── 全局路由守卫 ──────────────────────────────────────────
 router.beforeEach(async (to) => {
-  // 延迟导入，避免 Pinia 初始化前的循环依赖
-  const { useAuthStore } = await import('@/stores/authStore')
   const authStore = useAuthStore()
-
   const requiresAuth = to.meta.requiresAuth !== false
 
   if (requiresAuth && !authStore.isLoggedIn) {

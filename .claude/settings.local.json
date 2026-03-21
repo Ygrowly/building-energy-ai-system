@@ -21,7 +21,8 @@
       "Bash(python skills/ui-ux-pro-max/scripts/search.py \"energy management dashboard dark green professional\" --design-system -f markdown)",
       "Bash(python \"e:/27_fwwb_A08/project/.claude/skills/ui-ux-pro-max/scripts/search.py\" \"energy management dashboard dark green professional\" --design-system -f markdown)",
       "Bash(grep -A 5 -B 5 \"Eagle_public_Henry\\\\|Bobcat_office\" /e/27_fwwb_A08/project/docs/数据库设计文档*)",
-      "Bash(find /e/27_fwwb_A08/project -name *seed* -o -name *init* -o -name *fixture* -type f)"
+      "Bash(find /e/27_fwwb_A08/project -name *seed* -o -name *init* -o -name *fixture* -type f)",
+      "Bash(npx vue-tsc:*)"
     ]
   }
 }

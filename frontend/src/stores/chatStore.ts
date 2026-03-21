@@ -8,7 +8,7 @@
  *  - onDone 只更新当前会话元数据（延迟 500ms 单次 GET），不重载整个列表
  */
 import { defineStore } from 'pinia'
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, triggerRef } from 'vue'
 import { sendChatMessage, approveWorkOrder } from '@/api/stream_client'
 import { apiFetch } from '@/api/http'
 import type { ArtifactEvent } from '@/api/stream_client'
@@ -111,8 +111,18 @@ export const useChatStore = defineStore('chat', () => {
   const sessionListLoading = ref(false)
   const currentSessionId = ref<string | null>(null)
   const messages = ref<ChatMessage[]>([])
-  const isLoading = ref(false)
-  const currentAgentStatus = ref<AgentStatus | null>(null)
+  // per-session 加载状态（key = session_id），实现会话间请求隔离
+  const _loadingBySession = ref<Record<string, boolean>>({})
+  const isLoading = computed(() => {
+    const sid = currentSessionId.value
+    return sid ? (_loadingBySession.value[sid] ?? false) : false
+  })
+  // per-session agent 状态（key = session_id）
+  const _agentStatusBySession = ref<Record<string, AgentStatus | null>>({})
+  const currentAgentStatus = computed(() => {
+    const sid = currentSessionId.value
+    return sid ? (_agentStatusBySession.value[sid] ?? null) : null
+  })
   const pendingWorkOrder = ref<ArtifactEvent | null>(null)
 
   // per-session 联网搜索开关（key = session_id），防止跨 Tab 相互干扰
@@ -164,12 +174,27 @@ export const useChatStore = defineStore('chat', () => {
   }, { deep: true })
 
   // ── 初始化 ─────────────────────────────────────────────────────────────────
+  let _inited = false
   async function init() {
+    if (_inited) return          // 防止多次 mount 导致重复初始化
+    _inited = true
     await loadSessionList()
     if (sessionList.value.length > 0) {
       // 尝试从 localStorage 恢复上次打开的 Tab
       const saved = JSON.parse(localStorage.getItem(TAB_STORAGE_KEY) ?? '[]') as string[]
-      const validIds = saved.filter(id => sessionList.value.some(s => s.session_id === id))
+      // 去重：同一个 session_id 只保留一次
+      let validIds = [...new Set(saved)].filter(id => sessionList.value.some(s => s.session_id === id))
+
+      // 多个空会话（message_count === 0）只保留第一个，避免刷新后出现多个"新对话"Tab
+      const seenEmpty = new Set<boolean>()
+      validIds = validIds.filter(id => {
+        const sess = sessionList.value.find(s => s.session_id === id)
+        if (sess && sess.message_count === 0) {
+          if (seenEmpty.has(true)) return false
+          seenEmpty.add(true)
+        }
+        return true
+      })
 
       const tabIds = validIds.length > 0 ? validIds : [sessionList.value[0].session_id]
       openTabIds.value = tabIds
@@ -231,7 +256,7 @@ export const useChatStore = defineStore('chat', () => {
     currentSessionId.value = tempId
     messages.value = []
     _msgCache.set(tempId, [])
-    currentAgentStatus.value = null
+    _agentStatusBySession.value[tempId] = null
     pendingWorkOrder.value = null
     // 不调用后端，空会话永远不进数据库
   }
@@ -269,7 +294,6 @@ export const useChatStore = defineStore('chat', () => {
     }
 
     currentSessionId.value = targetId
-    currentAgentStatus.value = null
     pendingWorkOrder.value = null
 
     // 缓存命中 → 立即显示
@@ -288,6 +312,8 @@ export const useChatStore = defineStore('chat', () => {
     openTabIds.value = openTabIds.value.filter(tid => tid !== id)
     _msgCache.delete(id)
     delete _webSearchBySession.value[id]
+    delete _loadingBySession.value[id]
+    delete _agentStatusBySession.value[id]
     if (currentSessionId.value === id) {
       if (openTabIds.value.length > 0) {
         switchSession(openTabIds.value[0])
@@ -310,6 +336,8 @@ export const useChatStore = defineStore('chat', () => {
     _msgCache.delete(id)
     _deleteArtifactsFromStorage(id)
     delete _webSearchBySession.value[id]
+    delete _loadingBySession.value[id]
+    delete _agentStatusBySession.value[id]
 
     if (currentSessionId.value === id) {
       if (openTabIds.value.length > 0) {
@@ -329,105 +357,145 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
-  // ── 内部：追加消息 ─────────────────────────────────────────────────────────
-  function _addMsg(role: MessageRole, content: string, extra?: Partial<ChatMessage>) {
+  // ── 内部：追加消息（支持指定目标会话 ID，实现跨 Tab 写入隔离） ──────────────
+  function _addMsg(role: MessageRole, content: string, extra?: Partial<ChatMessage>, targetSessionId?: string) {
     const msg: ChatMessage = {
       id: crypto.randomUUID(), role, content, timestamp: new Date(), ...extra,
     }
-    messages.value.push(msg)
-    // 同步缓存（仅当缓存与 messages.value 不是同一数组时才额外 push，避免重复）
-    const sid = currentSessionId.value
+    const sid = targetSessionId ?? currentSessionId.value
     if (sid) {
-      const cache = _msgCache.get(sid)
+      // 写入对应会话的缓存数组
+      let cache = _msgCache.get(sid)
       if (!cache) {
-        _msgCache.set(sid, messages.value)
-      } else if (cache !== messages.value) {
-        cache.push(msg)
+        cache = []
+        _msgCache.set(sid, cache)
       }
-      // artifact 消息额外持久化到 localStorage，确保切换会话后仍可恢复
+      cache.push(msg)
+      // 如果目标会话就是当前显示的会话，同步到 messages.value
+      if (sid === currentSessionId.value) {
+        if (messages.value !== cache) {
+          messages.value = cache
+        }
+        // cache.push 绕过了 Vue 的 Proxy，手动触发响应式更新
+        triggerRef(messages)
+      }
+      // artifact 消息额外持久化到 localStorage
       if (role === 'artifact') {
         _saveArtifactToStorage(sid, msg)
       }
+    } else {
+      // 兜底：无会话 ID 时直接写当前显示
+      messages.value.push(msg)
     }
   }
 
   // ── 发送消息 ───────────────────────────────────────────────────────────────
   async function sendMessage(userText: string) {
-    if (!userText.trim() || isLoading.value) return
-    isLoading.value = true                       // 立即上锁，防止 await 期间重复调用
+    if (!userText.trim()) return
     if (!currentSessionId.value) newSession()
 
-    // 如果当前是临时会话，先向后端创建真实会话
-    if (currentSessionId.value!.startsWith('temp-')) {
-      try {
-        await _persistTempSession(currentSessionId.value!)
-      } catch (e) {
-        _addMsg('error', `创建会话失败：${(e as Error).message}`)
-        isLoading.value = false
-        return
+    // 锁定发起会话的 ID，后续所有回调都写入该会话，不受 Tab 切换影响
+    let originSessionId = currentSessionId.value!
+
+    // 按会话维度上锁，允许不同 Tab 各自独立请求
+    if (_loadingBySession.value[originSessionId]) return
+    _loadingBySession.value[originSessionId] = true
+
+    // 先添加用户消息，让 UI 立即显示发送内容
+    _addMsg('user', userText, undefined, originSessionId)
+
+    // 首条消息时用用户输入作为临时标题
+    {
+      const idx = sessionList.value.findIndex(s => s.session_id === originSessionId)
+      if (idx !== -1 && sessionList.value[idx].title === '新对话') {
+        sessionList.value[idx] = {
+          ...sessionList.value[idx],
+          title: userText.length > 20 ? userText.slice(0, 20) + '…' : userText,
+        }
       }
     }
 
-    _addMsg('user', userText)
-
+    // 立即创建 AI 占位消息（在异步操作之前，让 UI 立刻显示思考状态）
     const aiMsgId = crypto.randomUUID()
     const aiMsg: ChatMessage = {
       id: aiMsgId, role: 'ai', content: '', timestamp: new Date(),
       thinkingSteps: [], thinkingFinished: false,
     }
-    messages.value.push(aiMsg)
-    // 同步缓存（仅当缓存与 messages.value 不是同一数组时才额外 push，避免重复）
-    const _sid = currentSessionId.value
-    if (_sid) {
-      const cache = _msgCache.get(_sid)
+    {
+      let cache = _msgCache.get(originSessionId)
       if (!cache) {
-        _msgCache.set(_sid, messages.value)
-      } else if (cache !== messages.value) {
-        cache.push(aiMsg)
+        cache = []
+        _msgCache.set(originSessionId, cache)
+      }
+      cache.push(aiMsg)
+      if (currentSessionId.value === originSessionId) {
+        if (messages.value !== cache) {
+          messages.value = cache
+        }
+        triggerRef(messages)
+      }
+    }
+
+    // 如果当前是临时会话，先向后端创建真实会话
+    if (originSessionId.startsWith('temp-')) {
+      const tempId = originSessionId
+      try {
+        originSessionId = await _persistTempSession(tempId)
+        // 迁移 loading / agent 状态到新 ID
+        delete _loadingBySession.value[tempId]
+        _loadingBySession.value[originSessionId] = true
+      } catch (e) {
+        _addMsg('error', `创建会话失败：${(e as Error).message}`, undefined, tempId)
+        _loadingBySession.value[tempId] = false
+        return
       }
     }
 
     let textStarted = false
-    const sessionIdAtStart = currentSessionId.value!
+
+    /** 从目标会话缓存中查找 AI 气泡（不依赖 messages.value） */
+    function findAiMsg(): ChatMessage | undefined {
+      const cache = _msgCache.get(originSessionId)
+      return cache?.find(x => x.id === aiMsgId)
+    }
 
     try {
-      const newBackendId = await sendChatMessage(userText, sessionIdAtStart, {
+      await sendChatMessage(userText, originSessionId, {
         onThinking(e) {
           const label = agentLabelMap[e.agent] ?? e.agent
-          currentAgentStatus.value = { name: e.agent, label, status: 'thinking', message: e.message }
-          const m = messages.value.find(x => x.id === aiMsgId)
+          _agentStatusBySession.value[originSessionId] = { name: e.agent, label, status: 'thinking', message: e.message }
+          const m = findAiMsg()
           if (m) {
             if (!m.thinkingSteps) m.thinkingSteps = []
             m.thinkingSteps.push({ id: crypto.randomUUID(), agent: e.agent, message: e.message })
           }
         },
         onText(e) {
-          const m = messages.value.find(x => x.id === aiMsgId)
+          const m = findAiMsg()
           if (m) {
             m.content += e.content
             if (!textStarted) { textStarted = true; m.thinkingFinished = true }
           }
-          if (e.is_final) currentAgentStatus.value = null
+          if (e.is_final) _agentStatusBySession.value[originSessionId] = null
         },
         onArtifact(e) {
-          _addMsg('artifact', e.title ?? '生成式组件', { artifact: e })
+          _addMsg('artifact', e.title ?? '生成式组件', { artifact: e }, originSessionId)
           if (e.component_type === 'WorkOrderCard' || e.widget === 'WorkOrderCard') {
             pendingWorkOrder.value = e
           }
         },
         onError(e) {
-          _addMsg('error', e.message)
-          currentAgentStatus.value = { name: '', label: '错误', status: 'error', message: e.message }
+          _addMsg('error', e.message, undefined, originSessionId)
+          _agentStatusBySession.value[originSessionId] = { name: '', label: '错误', status: 'error', message: e.message }
         },
         onDone() {
-          isLoading.value = false
-          currentAgentStatus.value = null
-          const m = messages.value.find(x => x.id === aiMsgId)
+          _loadingBySession.value[originSessionId] = false
+          _agentStatusBySession.value[originSessionId] = null
+          const m = findAiMsg()
           if (m && !m.thinkingFinished) m.thinkingFinished = true
 
-          // 乐观更新当前会话元数据
-          const sid = currentSessionId.value
-          const idx = sid ? sessionList.value.findIndex(s => s.session_id === sid) : -1
+          // 乐观更新目标会话元数据（用 originSessionId 而非 currentSessionId）
+          const idx = sessionList.value.findIndex(s => s.session_id === originSessionId)
           if (idx !== -1) {
             sessionList.value[idx] = {
               ...sessionList.value[idx],
@@ -436,24 +504,22 @@ export const useChatStore = defineStore('chat', () => {
               updated_at: new Date().toISOString(),
             }
           }
-          // 延迟 600ms 拉一次单条会话信息（后端此时已写完标题）
-          setTimeout(() => _refreshCurrentSession(), 600)
+          // 延迟 600ms 拉一次该会话信息（后端此时已写完标题）
+          setTimeout(() => _refreshSession(originSessionId), 600)
         },
         onNetworkError(err) {
-          _addMsg('error', `网络错误：${err.message}`)
-          isLoading.value = false
+          _addMsg('error', `网络错误：${err.message}`, undefined, originSessionId)
+          _loadingBySession.value[originSessionId] = false
         },
       }, webSearchEnabled.value)
-      void newBackendId // session_id 已在 _persistTempSession 中迁移
     } catch (err) {
-      _addMsg('error', `请求失败：${(err as Error).message}`)
-      isLoading.value = false
+      _addMsg('error', `请求失败：${(err as Error).message}`, undefined, originSessionId)
+      _loadingBySession.value[originSessionId] = false
     }
   }
 
-  // ── 后台刷新当前会话元数据（仅更新标题等，不清消息） ─────────────────────
-  async function _refreshCurrentSession() {
-    const sid = currentSessionId.value
+  // ── 后台刷新指定会话元数据（仅更新标题等，不清消息） ─────────────────────
+  async function _refreshSession(sid: string) {
     if (!sid || sid.startsWith('temp-')) return
     try {
       const updated = await apiFetch<SessionInfo>(`/api/chat/sessions/${sid}`)
@@ -502,9 +568,11 @@ export const useChatStore = defineStore('chat', () => {
   function clearSession() {
     const sid = currentSessionId.value
     messages.value = []
-    if (sid) _msgCache.set(sid, [])
-    isLoading.value = false
-    currentAgentStatus.value = null
+    if (sid) {
+      _msgCache.set(sid, [])
+      _loadingBySession.value[sid] = false
+      _agentStatusBySession.value[sid] = null
+    }
     pendingWorkOrder.value = null
   }
 

@@ -593,7 +593,7 @@ function formatMarkdown(text: string): string {
   gap: 0;
   /* 内容自适应宽度，最大 160px */
   width: fit-content;
-  min-width: 0;
+  min-width: 48px;
   max-width: 160px;
   height: 24px;
   padding: 0 10px;
@@ -676,22 +676,23 @@ html[data-theme="light"] .tab.active:hover .tab-fade {
 /* 叉号：绝对定位，默认隐藏，hover 时出现在渐变上层 */
 .tab-close {
   position: absolute;
-  right: 0;
-  top: 50%;
-  transform: translateY(-50%);
+  right: 2px;
+  top: 0;
+  bottom: 0;
+  margin: auto 0;
   background: none;
   border: none;
   cursor: pointer;
   color: var(--text-secondary);
-  font-size: 18px;
-  line-height: 1;
+  font-size: 14px;
+  line-height: 16px;
   padding: 0;
   border-radius: 4px;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 26px;
+  width: 16px;
+  height: 16px;
   opacity: 0;
   z-index: 1;
   transition: opacity 0.15s, color 0.12s;

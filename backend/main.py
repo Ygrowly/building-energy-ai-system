@@ -18,8 +18,6 @@ from app.api.routes_data import router as data_router
 from app.api.routes_datacenter import router as datacenter_router
 from app.api.routes_report import router as report_router
 from app.api.routes_workorder import router as workorder_router
-from app.api.routes_devices import router as devices_router
-from app.api.routes_admin import router as admin_router
 from app.core.config import get_settings
 
 settings = get_settings()
@@ -73,22 +71,14 @@ async def lifespan(app: FastAPI):
     from app.graph.workflow import get_graph
     get_graph()
 
-    # 启动异常检测服务：
-    #   - initial_scan：首次全量扫描历史数据（或增量补齐），写入 anomaly_events
-    #   - start_periodic_scan：此后每小时增量扫描一次
-    from app.services.anomaly_detector import initial_scan, start_periodic_scan
-    asyncio.create_task(initial_scan())
-    periodic_task = asyncio.create_task(start_periodic_scan(interval_seconds=3600))
-
     # 定期清理过期/已吊销的 refresh token（每 24 小时一次）
     token_cleanup_task = asyncio.create_task(_cleanup_refresh_tokens(interval_seconds=86400))
 
     yield
 
     # 关闭时取消定期任务
-    periodic_task.cancel()
     token_cleanup_task.cancel()
-    for task in (periodic_task, token_cleanup_task):
+    for task in (token_cleanup_task,):
         try:
             await task
         except asyncio.CancelledError:
@@ -162,8 +152,6 @@ app.include_router(data_router, prefix="/api")
 app.include_router(datacenter_router, prefix="/api")
 app.include_router(workorder_router, prefix="/api")
 app.include_router(report_router, prefix="/api")
-app.include_router(devices_router, prefix="/api")
-app.include_router(admin_router, prefix="/api")
 
 
 # ---------------------------------------------------------------------------

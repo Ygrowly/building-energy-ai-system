@@ -44,7 +44,6 @@ from app.schemas.mcp_schemas import (
     OperationStatus,
     RatedActualRecord,
 )
-from app.services.gb_simulator import calculate_rated_values
 
 # ---------------------------------------------------------------------------
 # 物理常量
@@ -180,139 +179,10 @@ async def detect_energy_anomalies(
     inp: DetectEnergyAnomaliesInput,
     session: AsyncSession,
 ) -> DetectEnergyAnomaliesOutput | MCPError:
-    """
-    基于国标（GB）双阈值物理规则检测异常，严禁让大模型自己做阈值判断。
-
-    规则白名单（GB 物理规则，v2）：
-      water_leak           → 水耗偏差 > 20% 且 > 1.0 m³（管网漏水）
-      electricity_overload → 总电耗偏差 > 15% 且 > 期望的 10%（异常高电耗）
-      hvac_overconsumption → 空调偏差 > 20% 且 > 20 kWh（空调系统过耗）
-    每条记录的期望值由 gb_simulator.calculate_rated_values() 实时计算，
-    基于国标物理模型，取代旧版"批次均值"统计基线。
-    """
-    meter_id, actual_bid = await get_building_info(session, inp.building_id)
-    if actual_bid is None:
-        return MCPError(
-            error=f"未找到建筑类型 '{inp.building_id}'，请先调用 list_available_buildings 确认合法值",
-            error_code="BUILDING_NOT_FOUND",
-            tool_name="detect_energy_anomalies",
-        )
-
-    # 同时查询 buildings 表获取 sqm 和 primary_space_usage
-    bld_result = await session.execute(
-        select(Building.sqm, Building.primary_space_usage)
-        .where(Building.building_id == actual_bid)
-    )
-    bld_row = bld_result.fetchone()
-    sqm = (bld_row[0] or 1000.0) if bld_row else 1000.0
-    usage = (bld_row[1] or "Office") if bld_row else "Office"
-
-    result = await session.execute(
-        select(EnergyData)
-        .where(EnergyData.building_id == actual_bid)
-        .where(EnergyData.timestamp >= inp.time_range.start)
-        .where(EnergyData.timestamp <= inp.time_range.end)
-        .order_by(EnergyData.timestamp.asc())
-    )
-    rows: list[EnergyData] = list(result.scalars().all())
-
-    if not rows:
-        return MCPError(
-            error=f"建筑 '{inp.building_id}' 在指定时段内无数据",
-            error_code="NO_DATA_FOUND",
-            tool_name="detect_energy_anomalies",
-        )
-
-    anomalies: list[AnomalyRecord] = []
-    eps = 1e-6
-
-    for row in rows:
-        ts: datetime = row.timestamp
-        hour_local = ts.hour
-        dow_local = ts.isoweekday()
-
-        # 计算国标期望值
-        try:
-            rated = calculate_rated_values(
-                sqm=sqm,
-                primary_space_usage=usage,
-                hour=hour_local,
-                dayofweek=dow_local,
-                air_temp=row.air_temp_c or 20.0,
-                dew_temp=row.dew_temp_c or 10.0,
-            )
-        except Exception:
-            continue
-
-        # ── 规则 1：水耗异常 ──────────────────────────────────────────────
-        if (
-            AnomalyRule.WATER_LEAK in inp.rules
-            and row.water_m3 is not None
-            and rated.rated_water_m3 > eps
-        ):
-            delta_w = row.water_m3 - rated.rated_water_m3
-            rel_w = delta_w / rated.rated_water_m3
-            if rel_w > _WATER_REL_THR and delta_w > _WATER_ABS_THR:
-                anomalies.append(AnomalyRecord(
-                    timestamp=ts,
-                    building_id=inp.building_id,
-                    meter_device_id=meter_id or "",
-                    rule_triggered=AnomalyRule.WATER_LEAK,
-                    actual_value=row.water_m3,
-                    threshold_value=round(rated.rated_water_m3 * (1 + _WATER_REL_THR), 4),
-                    expected_value=rated.rated_water_m3,
-                    deviation_pct=round(rel_w * 100, 2),
-                ))
-
-        # ── 规则 2：总电耗异常 ────────────────────────────────────────────
-        if (
-            AnomalyRule.ELECTRICITY_OVERLOAD in inp.rules
-            and row.electricity_kwh is not None
-            and rated.rated_electricity_kwh > eps
-        ):
-            delta_e = row.electricity_kwh - rated.rated_electricity_kwh
-            rel_e = delta_e / rated.rated_electricity_kwh
-            if rel_e > _ELEC_REL_THR and delta_e > _ELEC_ABS_THR:
-                anomalies.append(AnomalyRecord(
-                    timestamp=ts,
-                    building_id=inp.building_id,
-                    meter_device_id=meter_id or "",
-                    rule_triggered=AnomalyRule.ELECTRICITY_OVERLOAD,
-                    actual_value=row.electricity_kwh,
-                    threshold_value=round(rated.rated_electricity_kwh * (1 + _ELEC_REL_THR), 2),
-                    expected_value=rated.rated_electricity_kwh,
-                    deviation_pct=round(rel_e * 100, 2),
-                ))
-
-        # ── 规则 3：空调能耗异常（含第二层根因诊断）─────────────────────
-        if (
-            AnomalyRule.HVAC_OVERCONSUMPTION in inp.rules
-            and row.hac_energy is not None
-            and rated.rated_hac_energy > eps
-        ):
-            delta_h = row.hac_energy - rated.rated_hac_energy
-            rel_h = delta_h / rated.rated_hac_energy
-            if rel_h > _HAC_REL_THR and delta_h > _HAC_ABS_THR:
-                # 根因诊断
-                root_cause = _diagnose_hvac(row, rated)
-                anomalies.append(AnomalyRecord(
-                    timestamp=ts,
-                    building_id=inp.building_id,
-                    meter_device_id=meter_id or "",
-                    rule_triggered=AnomalyRule.HVAC_OVERCONSUMPTION,
-                    actual_value=row.hac_energy,
-                    threshold_value=round(rated.rated_hac_energy * (1 + _HAC_REL_THR), 2),
-                    expected_value=rated.rated_hac_energy,
-                    deviation_pct=round(rel_h * 100, 2),
-                    hvac_root_cause=root_cause,
-                ))
-
-    return DetectEnergyAnomaliesOutput(
-        anomalies=anomalies,
-        total_anomalies=len(anomalies),
-        building_id=inp.building_id,
-        period_start=inp.time_range.start,
-        period_end=inp.time_range.end,
+    return MCPError(
+        error="异常监测模块已下线，等待重新开发。",
+        error_code="ANOMALY_MODULE_DISABLED",
+        tool_name="detect_energy_anomalies",
     )
 
 
@@ -348,111 +218,8 @@ async def get_building_rated_values(
     inp: GetBuildingRatedValuesInput,
     session: AsyncSession,
 ) -> GetBuildingRatedValuesOutput | MCPError:
-    """
-    查询指定建筑在时间段内每小时的国标（GB）期望值，并与数据库中的实际值并排返回。
-
-    用途：
-      1. 诊断智能体（Diagnose Agent）调用此工具，获取"应该是多少"的物理基线，
-         向用户解释"为什么说这个数值是异常的"。
-      2. 前端可直接用 records 渲染"实际 vs 期望"对比折线图，无需额外聚合。
-      3. anomaly_hours 字段给出异常时段统计，帮助 Agent 快速定位高峰告警窗口。
-
-    物理模型：gb_simulator.calculate_rated_values()，基于 5 项 GB 国家标准。
-    """
-    _meter_id, actual_bid = await get_building_info(session, inp.building_id)
-    if actual_bid is None:
-        return MCPError(
-            error=f"未找到建筑类型 '{inp.building_id}'，请先调用 list_available_buildings 确认合法值",
-            error_code="BUILDING_NOT_FOUND",
-            tool_name="get_building_rated_values",
-        )
-
-    # 取建筑元数据
-    bld_result = await session.execute(
-        select(Building.sqm, Building.primary_space_usage)
-        .where(Building.building_id == actual_bid)
-    )
-    bld_row = bld_result.fetchone()
-    sqm = (bld_row[0] or 1000.0) if bld_row else 1000.0
-    usage = (bld_row[1] or "Office") if bld_row else "Office"
-
-    # 取时段内所有实际数据
-    result = await session.execute(
-        select(EnergyData)
-        .where(EnergyData.building_id == actual_bid)
-        .where(EnergyData.timestamp >= inp.time_range.start)
-        .where(EnergyData.timestamp <= inp.time_range.end)
-        .order_by(EnergyData.timestamp.asc())
-    )
-    rows: list[EnergyData] = list(result.scalars().all())
-
-    if not rows:
-        return MCPError(
-            error=f"建筑 '{inp.building_id}' 在指定时段内无数据",
-            error_code="NO_DATA_FOUND",
-            tool_name="get_building_rated_values",
-        )
-
-    records: list[RatedActualRecord] = []
-    anomaly_hours = 0
-    eps = 1e-6
-
-    for row in rows:
-        ts: datetime = row.timestamp
-
-        try:
-            rated = calculate_rated_values(
-                sqm=sqm,
-                primary_space_usage=usage,
-                hour=ts.hour,
-                dayofweek=ts.isoweekday(),
-                air_temp=row.air_temp_c or 20.0,
-                dew_temp=row.dew_temp_c or 10.0,
-            )
-        except Exception:
-            continue
-
-        # 计算各项偏差百分比
-        def _dev_pct(actual: float | None, rated_val: float) -> float | None:
-            if actual is None or rated_val < eps:
-                return None
-            return round((actual - rated_val) / rated_val * 100, 2)
-
-        w_dev = _dev_pct(row.water_m3, rated.rated_water_m3)
-        e_dev = _dev_pct(row.electricity_kwh, rated.rated_electricity_kwh)
-        h_dev = _dev_pct(row.hac_energy, rated.rated_hac_energy)
-
-        # 判断该小时是否存在异常偏差（任意一项超过 15%）
-        devs = [d for d in (w_dev, e_dev, h_dev) if d is not None]
-        if any(abs(d) > _ANOMALY_REL_THR * 100 for d in devs):
-            anomaly_hours += 1
-
-        records.append(RatedActualRecord(
-            timestamp=ts,
-            hvac_mode=rated.hvac_mode,
-            schedule_factor=rated.schedule_factor,
-            rated_water_m3=rated.rated_water_m3,
-            rated_electricity_kwh=rated.rated_electricity_kwh,
-            rated_hac_energy=rated.rated_hac_energy,
-            expected_supply_temp=rated.expected_supply_temp,
-            expected_return_temp=rated.expected_return_temp,
-            actual_water_m3=row.water_m3,
-            actual_electricity_kwh=row.electricity_kwh,
-            actual_hac_energy=row.hac_energy,
-            actual_supply_temp=row.sim_supply_temp_c,
-            actual_return_temp=row.sim_return_temp_c,
-            water_deviation_pct=w_dev if "water" in inp.metrics else None,
-            electricity_deviation_pct=e_dev if "electricity" in inp.metrics else None,
-            hac_deviation_pct=h_dev if "hac_energy" in inp.metrics else None,
-        ))
-
-    return GetBuildingRatedValuesOutput(
-        building_id=inp.building_id,
-        primary_space_usage=usage,
-        sqm=sqm,
-        records=records,
-        total_hours=len(records),
-        anomaly_hours=anomaly_hours,
-        period_start=inp.time_range.start,
-        period_end=inp.time_range.end,
+    return MCPError(
+        error="额定期望值模块已下线，等待重新开发。",
+        error_code="RATED_VALUE_MODULE_DISABLED",
+        tool_name="get_building_rated_values",
     )

@@ -217,7 +217,7 @@ function rulePriority(rule: string): 'high' | 'medium' {
 }
 
 function ruleUnit(rule: string): string {
-  if (rule === 'water_leak') return 'm³'
+  if (rule === 'water_leak') return 'L'
   return 'kWh'
 }
 

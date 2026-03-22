@@ -246,7 +246,7 @@ watch(() => props.activeBuildingType, (v) => {
 // ── 指标配置 ─────────────────────────────────────────────────────────────────
 const metricOptions = [
   { key: 'electricity', label: '总电耗',   icon: 'mdi:lightning-bolt',   unit: 'kWh', gbRef: 'Notebook 仿真 / GB/T 51161' },
-  { key: 'water',       label: '用水量',   icon: 'mdi:water',            unit: 'm³',  gbRef: 'Notebook 仿真 / GB 50015-2019' },
+  { key: 'water',       label: '用水量',   icon: 'mdi:water',            unit: 'L',   gbRef: 'Notebook 仿真 / GB 50015-2019' },
   { key: 'hac_energy',  label: '空调能耗', icon: 'mdi:air-conditioner',  unit: 'kWh', gbRef: 'Notebook 仿真 / GB 50189-2015' },
 ]
 

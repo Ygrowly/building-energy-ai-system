@@ -51,16 +51,20 @@ async def ensure_auth_schema_compat() -> None:
     """
     兼容旧库结构：确保 users.role 字段存在。
     历史库可能未执行 012_add_user_role.sql，登录查询会因缺列报错。
+    连接失败时仅记录警告，不阻断服务启动（连接池预热后下次请求会自动重连）。
     """
-    async with engine.begin() as conn:
-        await conn.execute(
-            text(
-                """
-                ALTER TABLE users
-                ADD COLUMN IF NOT EXISTS role VARCHAR(20) NOT NULL DEFAULT 'resident'
-                """
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    """
+                    ALTER TABLE users
+                    ADD COLUMN IF NOT EXISTS role VARCHAR(20) NOT NULL DEFAULT 'resident'
+                    """
+                )
             )
-        )
+    except Exception as exc:
+        logger.warning("ensure_auth_schema_compat 失败，已跳过（不影响启动）: %s", exc)
 
 
 async def ensure_daily_energy_summary_view() -> None:
@@ -69,18 +73,29 @@ async def ensure_daily_energy_summary_view() -> None:
 
     如果数据库还没执行 migrations/007_create_daily_energy_summary.sql，
     会导致 query_daily_energy_summary 的 day 粒度查询抛 UndefinedTableError。
-    """
-    async with engine.begin() as conn:
-        try:
-            await conn.execute(text('SELECT 1 FROM daily_energy_summary LIMIT 1'))
-            return
-        except Exception as exc:
-            msg = str(exc).lower()
-            if "daily_energy_summary" not in msg:
-                raise
 
-        # 视图缺失：尝试创建（创建失败则仅记录警告，后续由工具层降级兜底）
-        try:
+    注意：使用两个独立的 engine.begin() 事务块，避免在同一事务内捕获并吞掉异常后
+    context manager 的 __aexit__ 仍尝试 COMMIT 导致 PendingRollbackError。
+    """
+    # ── Step 1：检查视图是否已存在（独立事务，失败时干净回滚）────────────────
+    view_exists = False
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(text('SELECT 1 FROM daily_energy_summary LIMIT 1'))
+            view_exists = True
+    except Exception as exc:
+        msg = str(exc).lower()
+        if "daily_energy_summary" not in msg:
+            # 非预期错误（连接问题、权限等）：记录警告并跳过，后续工具层降级兜底
+            logger.warning("检查 daily_energy_summary 时发生意外错误，已跳过: %s", exc)
+            return
+
+    if view_exists:
+        return
+
+    # ── Step 2：视图缺失时尝试创建（独立事务）────────────────────────────────
+    try:
+        async with engine.begin() as conn:
             await conn.execute(
                 text(
                     """
@@ -100,8 +115,7 @@ async def ensure_daily_energy_summary_view() -> None:
                     """
                 )
             )
-            # 即使创建语句里带 WITH DATA，这里也再 refresh 一次，确保数据是最新的。
             await conn.execute(text('REFRESH MATERIALIZED VIEW daily_energy_summary'))
-            logger.info("已确保 daily_energy_summary 物化视图可用")
-        except Exception as exc:
-            logger.warning("创建/刷新 daily_energy_summary 失败，仍将使用工具降级。error=%s", exc)
+        logger.info("已确保 daily_energy_summary 物化视图可用")
+    except Exception as exc:
+        logger.warning("创建/刷新 daily_energy_summary 失败，仍将使用工具降级。error=%s", exc)

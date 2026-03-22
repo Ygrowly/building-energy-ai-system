@@ -19,26 +19,36 @@
           @click="activeBuilding = opt.key"
         >{{ opt.label }}</button>
       </div>
-      <div class="weather-widget"
-           data-pick-id="weather"
-           data-pick-type="weather"
-           data-pick-title="天气信息"
-           :data-pick-subtitle="`温度 ${weatherTemp != null ? Number(weatherTemp).toFixed(1) + '°C' : '--'}，湿度 ${weatherHumi ?? '--'}%`">
-        <div class="weather-date">
-          <Icon icon="mdi:calendar-month" width="14" />
-          <span>{{ dataDate || '加载中...' }}</span>
-        </div>
-        <div class="weather-divider"></div>
-        <div class="weather-metrics">
-          <div class="weather-item">
-            <Icon icon="mdi:thermometer" width="15" class="weather-icon temp-icon" />
-            <span class="weather-val">{{ weatherTemp != null ? Number(weatherTemp).toFixed(1) : '--' }}<small>°C</small></span>
+      <!-- 右侧：天气 + 铃铛 合并卡片 -->
+      <div class="header-right-group">
+        <div class="weather-widget"
+             data-pick-id="weather"
+             data-pick-type="weather"
+             data-pick-title="天气信息"
+             :data-pick-subtitle="`温度 ${weatherTemp != null ? Number(weatherTemp).toFixed(1) + '°C' : '--'}，湿度 ${weatherHumi ?? '--'}%`">
+          <div class="weather-date">
+            <Icon icon="mdi:calendar-month" width="13" />
+            <span>{{ dataDate || '...' }}</span>
           </div>
-          <div class="weather-item">
-            <Icon icon="mdi:water-percent" width="15" class="weather-icon humi-icon" />
-            <span class="weather-val">{{ weatherHumi ?? '--' }}<small>%</small></span>
+          <div class="weather-divider"></div>
+          <div class="weather-metrics">
+            <div class="weather-item">
+              <Icon icon="mdi:thermometer" width="14" class="weather-icon temp-icon" />
+              <span class="weather-val">{{ weatherTemp != null ? Number(weatherTemp).toFixed(1) : '--' }}<small>°C</small></span>
+            </div>
+            <div class="weather-item">
+              <Icon icon="mdi:water-percent" width="14" class="weather-icon humi-icon" />
+              <span class="weather-val">{{ weatherHumi ?? '--' }}<small>%</small></span>
+            </div>
           </div>
         </div>
+
+        <div class="header-group-divider"></div>
+
+        <button class="home-bell-btn" @click="notifStore.requestOpenMessages()" aria-label="消息中心">
+          <Icon icon="mdi:bell-outline" width="17" />
+          <span v-if="notifStore.unreadCount > 0" class="home-bell-dot"></span>
+        </button>
       </div>
     </header>
 
@@ -179,9 +189,11 @@ import * as echarts from 'echarts'
 import { apiFetch } from '@/api/http'
 import { useBuildingStore } from '@/stores/buildingStore'
 import { useAuthStore } from '@/stores/authStore'
+import { useNotificationStore } from '@/stores/notificationStore'
 
 const buildingStore = useBuildingStore()
 const authStore     = useAuthStore()
+const notifStore    = useNotificationStore()
 
 // 优先显示用户名，未登录时兜底
 const displayName = computed(() => authStore.user?.username ?? '访客')
@@ -907,14 +919,56 @@ onUnmounted(() => {
   color: var(--text-secondary);
   font-weight: 400;
 }
+/* ── 右侧天气+铃铛整体容器 ── */
+.header-right-group {
+  display: flex;
+  align-items: center;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 0;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.header-group-divider {
+  width: 1px;
+  height: 22px;
+  background: var(--border);
+  flex-shrink: 0;
+}
+
+/* ── 消息铃铛 ── */
+.home-bell-btn {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 38px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.18s ease, color 0.18s ease;
+}
+.home-bell-dot {
+  position: absolute;
+  top: 7px;
+  right: 8px;
+  width: 7px;
+  height: 7px;
+  background: #e53e3e;
+  border-radius: 50%;
+  border: none;
+}
+
 .weather-widget {
   display: flex;
   align-items: center;
   gap: 10px;
-  background: var(--bg-panel);
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  padding: 8px 16px;
+  background: transparent;
+  padding: 8px 14px;
   flex-shrink: 0;
 }
 .weather-date {
@@ -1234,7 +1288,7 @@ onUnmounted(() => {
   .home-page { padding: 10px 8px 16px; gap: 8px; }
   .pg-title  { font-size: 16px; }
   .pg-sub    { display: none; }
-  .weather-widget  { display: none; }
+  .header-right-group { display: none; }
   .bento-row { gap: 8px; }
   .bento-r1 .cpanel-body { height: 220px !important; }
   .cpanel-col .cpanel-body { height: 130px !important; }
@@ -1256,9 +1310,12 @@ html[data-theme="light"] .cpanel {
   background: #ffffff;
   border-color: #e2e8e4;
 }
-html[data-theme="light"] .weather-widget {
+html[data-theme="light"] .header-right-group {
   background: #ffffff;
   border-color: #e2e8e4;
+}
+html[data-theme="light"] .header-group-divider {
+  background: #e2e8e4;
 }
 html[data-theme="light"] .weather-date {
   color: #666;

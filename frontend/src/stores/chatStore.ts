@@ -249,50 +249,26 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
-  // ── 新建会话（仅本地，不写后端；发第一条消息时再真正创建） ──────────────────
+  // ── 新建会话（纯本地，直接用真实 UUID，无需预先写后端）────────────────────
+  // 会话记录在首条消息发送时由后端懒加载创建，彻底消除新建会话时的 DB 等待。
   function newSession(title = '新对话') {
-    const tempId = `temp-${crypto.randomUUID()}`
+    const sessionId = crypto.randomUUID()
     const now = new Date().toISOString()
 
-    const tempSession: SessionInfo = {
-      session_id: tempId, title, created_at: now, updated_at: now,
+    const newSess: SessionInfo = {
+      session_id: sessionId, title, created_at: now, updated_at: now,
       message_count: 0, last_message: null, building_id: null,
       is_archived: false, has_pending_action: false,
     }
-    sessionList.value.unshift(tempSession)
-    openTabIds.value.unshift(tempId)
-    currentSessionId.value = tempId
-    // 关键：messages.value 和 _msgCache 共享同一个数组引用
-    // 这样通过 messages.value.push() 的响应式操作会同步到缓存
+    sessionList.value.unshift(newSess)
+    openTabIds.value.unshift(sessionId)
+    currentSessionId.value = sessionId
+    // messages.value 和 _msgCache 共享同一数组引用，保证响应式同步
     const msgs: ChatMessage[] = []
     messages.value = msgs
-    _msgCache.set(tempId, msgs)
-    _agentStatusBySession.value[tempId] = null
+    _msgCache.set(sessionId, msgs)
+    _agentStatusBySession.value[sessionId] = null
     pendingWorkOrder.value = null
-    // 不调用后端，空会话永远不进数据库
-  }
-
-  // ── 内部：将临时会话提交到后端，返回真实 session_id ──────────────────────
-  async function _persistTempSession(tempId: string): Promise<string> {
-    const sess = sessionList.value.find(s => s.session_id === tempId)
-    const info = await apiFetch<SessionInfo>('/api/chat/sessions', {
-      method: 'POST',
-      body: JSON.stringify({ title: sess?.title ?? '新对话' }),
-    })
-    // 替换 sessionList 中的临时条目
-    const idx = sessionList.value.findIndex(s => s.session_id === tempId)
-    if (idx !== -1) sessionList.value[idx] = info
-    // 替换 openTabIds
-    const tabIdx = openTabIds.value.indexOf(tempId)
-    if (tabIdx !== -1) openTabIds.value[tabIdx] = info.session_id
-    // 迁移消息缓存
-    const cached = _msgCache.get(tempId) ?? []
-    _msgCache.delete(tempId)
-    _msgCache.set(info.session_id, cached)
-    if (currentSessionId.value === tempId) currentSessionId.value = info.session_id
-    // 迁移 artifact localStorage 缓存（temp-id → 真实 session_id）
-    _migrateArtifactStorage(tempId, info.session_id)
-    return info.session_id
   }
 
   // ── 切换会话（缓存命中即刻显示，未命中后台加载；从历史打开时自动加入 Tab） ─
@@ -362,12 +338,10 @@ export const useChatStore = defineStore('chat', () => {
       }
     }
 
-    // 2. 后台删除（不阻塞；临时会话未写后端，跳过）
-    if (!id.startsWith('temp-')) {
-      apiFetch(`/api/chat/sessions/${id}`, { method: 'DELETE' }).catch(e =>
-        console.warn('[chatStore] 删除会话失败:', e)
-      )
-    }
+    // 2. 后台删除（不阻塞；若会话从未发过消息则 DB 中不存在，404 静默忽略）
+    apiFetch(`/api/chat/sessions/${id}`, { method: 'DELETE' }).catch(e =>
+      console.warn('[chatStore] 删除会话失败（可能是空会话）:', e)
+    )
   }
 
   // ── 内部：追加消息（支持指定目标会话 ID，实现跨 Tab 写入隔离） ──────────────
@@ -420,27 +394,13 @@ export const useChatStore = defineStore('chat', () => {
       }
     }
 
-    // 立即创建 AI 占位消息（在异步操作之前，让 UI 立刻显示思考状态）
+    // 立即创建 AI 占位消息（在任何异步操作之前，让 UI 立刻显示思考状态）
     const aiMsgId = crypto.randomUUID()
     _addMsg('ai', '', {
       id: aiMsgId, thinkingSteps: [], thinkingFinished: false,
     }, originSessionId)
 
-    // 如果当前是临时会话，先向后端创建真实会话
-    if (originSessionId.startsWith('temp-')) {
-      const tempId = originSessionId
-      try {
-        originSessionId = await _persistTempSession(tempId)
-        // 迁移 loading / agent 状态到新 ID
-        delete _loadingBySession.value[tempId]
-        _loadingBySession.value[originSessionId] = true
-      } catch (e) {
-        _addMsg('error', `创建会话失败：${(e as Error).message}`, undefined, tempId)
-        _loadingBySession.value[tempId] = false
-        return
-      }
-    }
-
+    // 会话已使用真实 UUID，无需等待预创建，直接进入流式请求
     let textStarted = false
 
     /**
@@ -610,11 +570,18 @@ export const useChatStore = defineStore('chat', () => {
 
   // ── 后台刷新指定会话元数据（仅更新标题等，不清消息） ─────────────────────
   async function _refreshSession(sid: string) {
-    if (!sid || sid.startsWith('temp-')) return
+    if (!sid) return
     try {
       const updated = await apiFetch<SessionInfo>(`/api/chat/sessions/${sid}`)
       const idx = sessionList.value.findIndex(s => s.session_id === sid)
-      if (idx !== -1) sessionList.value[idx] = updated
+      if (idx !== -1) {
+        // 防止后端异步持久化未完成时，DB 返回的旧 message_count 覆盖本地乐观更新值
+        const localCount = sessionList.value[idx].message_count
+        if (updated.message_count < localCount) {
+          updated.message_count = localCount
+        }
+        sessionList.value[idx] = updated
+      }
     } catch { /* 忽略 */ }
   }
 

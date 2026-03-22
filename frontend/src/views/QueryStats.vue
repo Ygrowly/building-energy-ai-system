@@ -9,11 +9,26 @@
             <Icon icon="mdi:office-building-outline" width="13" class="label-icon" />
             楼宇
           </label>
-          <div class="input-wrap">
-            <Icon icon="mdi:chevron-down" width="14" class="select-arrow" />
-            <select v-model="selectedBuilding" class="filter-select">
-              <option v-for="b in buildingOptions" :key="b.key" :value="b.key">{{ b.label }}</option>
-            </select>
+          <div
+            class="qs-dropdown"
+            :class="{ 'qs-dropdown--open': dropdownBuildingOpen }"
+            @click.stop="dropdownBuildingOpen = !dropdownBuildingOpen; dropdownChartOpen = false"
+          >
+            <span class="qs-dropdown-value">{{ buildingOptions.find(b => b.key === selectedBuilding)?.label }}</span>
+            <Icon icon="mdi:chevron-down" width="14" class="qs-dropdown-arrow" :class="{ 'qs-dropdown-arrow--open': dropdownBuildingOpen }" />
+            <Transition name="qs-drop">
+              <div v-if="dropdownBuildingOpen" class="qs-dropdown-list" @click.stop>
+                <div
+                  v-for="b in buildingOptions" :key="b.key"
+                  class="qs-dropdown-item"
+                  :class="{ 'qs-dropdown-item--selected': selectedBuilding === b.key }"
+                  @click="selectedBuilding = b.key; dropdownBuildingOpen = false"
+                >
+                  <Icon v-if="selectedBuilding === b.key" icon="mdi:check" width="13" class="qs-item-check" />
+                  <span>{{ b.label }}</span>
+                </div>
+              </div>
+            </Transition>
           </div>
         </div>
         <div class="filter-item">
@@ -35,13 +50,26 @@
             <Icon icon="mdi:chart-box-outline" width="13" class="label-icon" />
             图表类型
           </label>
-          <div class="input-wrap">
-            <Icon icon="mdi:chevron-down" width="14" class="select-arrow" />
-            <select v-model="chartType" class="filter-select">
-              <option value="line">折线图</option>
-              <option value="bar">柱状图</option>
-              <option value="mixed">混合（折线+柱状）</option>
-            </select>
+          <div
+            class="qs-dropdown"
+            :class="{ 'qs-dropdown--open': dropdownChartOpen }"
+            @click.stop="dropdownChartOpen = !dropdownChartOpen; dropdownBuildingOpen = false"
+          >
+            <span class="qs-dropdown-value">{{ CHART_OPTIONS.find(c => c.value === chartType)?.label }}</span>
+            <Icon icon="mdi:chevron-down" width="14" class="qs-dropdown-arrow" :class="{ 'qs-dropdown-arrow--open': dropdownChartOpen }" />
+            <Transition name="qs-drop">
+              <div v-if="dropdownChartOpen" class="qs-dropdown-list" @click.stop>
+                <div
+                  v-for="opt in CHART_OPTIONS" :key="opt.value"
+                  class="qs-dropdown-item"
+                  :class="{ 'qs-dropdown-item--selected': chartType === opt.value }"
+                  @click="chartType = opt.value; dropdownChartOpen = false"
+                >
+                  <Icon v-if="chartType === opt.value" icon="mdi:check" width="13" class="qs-item-check" />
+                  <span>{{ opt.label }}</span>
+                </div>
+              </div>
+            </Transition>
           </div>
         </div>
         <button class="query-btn" @click="handleQuery" :disabled="loading" aria-label="查询数据">
@@ -199,10 +227,23 @@ const buildingOptions = [
   { key: 'Office', label: '办公楼' },
   { key: 'Public services', label: '公共楼' },
 ]
+const CHART_OPTIONS = [
+  { value: 'line',  label: '折线图' },
+  { value: 'bar',   label: '柱状图' },
+  { value: 'mixed', label: '混合（折线+柱状）' },
+]
 const selectedBuilding = ref('Office')
 const startDate = ref('2016-04-01')
 const endDate = ref('2016-05-02')
 const chartType = ref('mixed')
+
+// ── 自定义下拉状态 ──
+const dropdownBuildingOpen = ref(false)
+const dropdownChartOpen    = ref(false)
+function closeQsDropdowns() {
+  dropdownBuildingOpen.value = false
+  dropdownChartOpen.value    = false
+}
 const loading = ref(false)
 const queryResult = ref<any>(null)
 const viewMode = ref<'data' | 'analysis'>('data')
@@ -407,8 +448,15 @@ function renderChart(data: any, params: typeof allParams) {
 
 function onResize() { chart?.resize() }
 
-onMounted(() => { window.addEventListener('resize', onResize) })
-onUnmounted(() => { window.removeEventListener('resize', onResize); chart?.dispose() })
+onMounted(() => {
+  window.addEventListener('resize', onResize)
+  document.addEventListener('click', closeQsDropdowns)
+})
+onUnmounted(() => {
+  window.removeEventListener('resize', onResize)
+  document.removeEventListener('click', closeQsDropdowns)
+  chart?.dispose()
+})
 </script>
 
 <style scoped>
@@ -457,19 +505,6 @@ onUnmounted(() => { window.removeEventListener('resize', onResize); chart?.dispo
 
 .label-icon { color: #b0b6be; }
 
-.input-wrap { position: relative; }
-
-.select-arrow {
-  position: absolute;
-  right: 10px;
-  top: 50%;
-  transform: translateY(-50%);
-  color: #b0b6be;
-  pointer-events: none;
-  z-index: 1;
-}
-
-.filter-select,
 .filter-input {
   width: 100%;
   height: 38px;
@@ -483,25 +518,82 @@ onUnmounted(() => { window.removeEventListener('resize', onResize); chart?.dispo
   transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
 }
 
-.filter-select {
-  appearance: none;
-  -webkit-appearance: none;
-  padding-right: 30px;
-  cursor: pointer;
-}
-
-.filter-select:hover,
-.filter-input:hover {
-  border-color: #c8cdd3;
-  background: #fff;
-}
-
-.filter-select:focus,
+.filter-input:hover { border-color: #c8cdd3; background: #fff; }
 .filter-input:focus {
   border-color: #4caf50;
   background: #fff;
   box-shadow: 0 0 0 3px rgba(76, 175, 80, 0.1);
 }
+
+/* ── 自定义下拉 ── */
+.qs-dropdown {
+  position: relative;
+  display: flex;
+  align-items: center;
+  height: 38px;
+  padding: 0 10px 0 12px;
+  border: 1px solid #e2e5e9;
+  border-radius: 8px;
+  background: #fafbfc;
+  cursor: pointer;
+  user-select: none;
+  transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
+}
+.qs-dropdown:hover { border-color: #c8cdd3; background: #fff; }
+.qs-dropdown--open {
+  border-color: #4caf50;
+  background: #fff;
+  box-shadow: 0 0 0 3px rgba(76, 175, 80, 0.1);
+}
+.qs-dropdown-value {
+  flex: 1;
+  font-size: 13px;
+  color: #2d3239;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.qs-dropdown-arrow {
+  color: #b0b6be;
+  flex-shrink: 0;
+  margin-left: 4px;
+  transition: transform 0.2s ease, color 0.2s;
+}
+.qs-dropdown-arrow--open { transform: rotate(180deg); color: #4caf50; }
+
+.qs-dropdown-list {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0; right: 0;
+  background: #fff;
+  border: 1.5px solid #e2e5e9;
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.10), 0 2px 8px rgba(0,0,0,0.06);
+  overflow: hidden;
+  z-index: 200;
+  padding: 4px;
+}
+.qs-dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 7px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #374151;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.qs-dropdown-item:hover { background: #f0fdf4; color: #15803d; }
+.qs-dropdown-item--selected { background: #dcfce7; color: #16a34a; font-weight: 600; }
+.qs-dropdown-item--selected:hover { background: #bbf7d0; }
+.qs-item-check { color: #22c55e; flex-shrink: 0; }
+
+.qs-drop-enter-active { transition: opacity 0.15s ease, transform 0.15s ease; }
+.qs-drop-leave-active { transition: opacity 0.1s ease, transform 0.1s ease; }
+.qs-drop-enter-from  { opacity: 0; transform: translateY(-6px) scale(0.97); }
+.qs-drop-leave-to    { opacity: 0; transform: translateY(-4px) scale(0.98); }
 
 .query-btn {
   display: flex;

@@ -135,6 +135,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { storeToRefs } from 'pinia'
 import { RouterView, RouterLink, useRouter, useRoute } from 'vue-router'
 import { Icon } from '@iconify/vue'
 import AgentConsole from '@/components/AgentConsole.vue'
@@ -154,6 +155,15 @@ const route         = useRoute()
 watch(() => authStore.user?.id, (id) => {
   notifStore.loadAvatar(id)
 }, { immediate: true })
+
+// Home 页铃铛触发：监听消息请求标志
+const { messagesRequested } = storeToRefs(notifStore)
+watch(messagesRequested, (val) => {
+  if (val) {
+    openMessages()
+    notifStore.consumeMessagesRequest()
+  }
+})
 
 /** 认证页单独全屏，不套主布局（避免侧栏 + 对话面板） */
 const isStandaloneAuth = computed(() => route.meta.standaloneAuth === true)

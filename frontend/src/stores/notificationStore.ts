@@ -26,7 +26,7 @@ export const useNotificationStore = defineStore('notification', () => {
 
   async function refresh() {
     try {
-      const data = await apiFetch<{ total: number }>('/api/anomalies/recent?hours=24')
+      const data = await apiFetch<{ total?: number }>('/api/anomalies/recent?hours=8760')
       unreadCount.value = data?.total ?? 0
     } catch {
       // 静默失败，不影响主业务
@@ -52,5 +52,14 @@ export const useNotificationStore = defineStore('notification', () => {
     }
   }
 
-  return { unreadCount, sidebarAvatarUrl, loadAvatar, saveAvatar, refresh, clearBadge, startPolling, stopPolling }
+  /** Home 页铃铛触发打开消息面板，App.vue 监听此标志 */
+  const messagesRequested = ref(false)
+  function requestOpenMessages() {
+    messagesRequested.value = true
+  }
+  function consumeMessagesRequest() {
+    messagesRequested.value = false
+  }
+
+  return { unreadCount, sidebarAvatarUrl, loadAvatar, saveAvatar, refresh, clearBadge, startPolling, stopPolling, messagesRequested, requestOpenMessages, consumeMessagesRequest }
 })

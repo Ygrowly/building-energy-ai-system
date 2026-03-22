@@ -7,6 +7,7 @@ Router Agent（智能前台）节点。
 3. 从对话中提取实体（建筑 ID、时间、设备 ID）
 4. 死循环熔断：hop_count > 5 强制终止
 5. 路由分发到 data_agent / diagnose_agent / end
+6. 关键词快速通道：对常见问候/闲聊直接回复，跳过 LLM 调用
 """
 from __future__ import annotations
 
@@ -127,6 +128,64 @@ CONFIDENCE_THRESHOLD = 0.7
 # 死循环熔断阈值
 MAX_HOPS = 5
 
+# ---------------------------------------------------------------------------
+# 关键词快速通道（跳过 LLM，直接回复常见问候/闲聊）
+# 格式：(编译好的正则, 回复文字)
+# 仅在消息长度 <= 30 字符时生效，防止误匹配含关键词的业务问题
+# ---------------------------------------------------------------------------
+_FAST_PATH_RULES: list[tuple[re.Pattern[str], str]] = [
+    (
+        re.compile(r'^(你好|您好|hi|hello|哈喽|嗨|hey)\s*[!！。.,]*\s*$', re.IGNORECASE),
+        "你好！我是楼宇能耗管理系统的智能运维助手。\n\n"
+        "我可以帮您：\n"
+        "• 查询各楼宇能耗数据（电、水、冷量）\n"
+        "• 分析设备异常与故障诊断\n"
+        "• 生成维修工单\n"
+        "• 导出能耗报表\n\n"
+        "有什么可以帮助您的吗？",
+    ),
+    (
+        re.compile(r'^(谢谢|感谢|谢了|多谢|thx|thanks|thank\s*you)\s*[!！。.,~～]*\s*$', re.IGNORECASE),
+        "不客气！如还有其他问题，随时可以向我提问。",
+    ),
+    (
+        re.compile(r'^(再见|拜拜|bye|goodbye|晚安|回头见|下次再聊)\s*[!！。.,~～]*\s*$', re.IGNORECASE),
+        "再见！有能耗管理相关问题欢迎随时回来咨询。",
+    ),
+    (
+        re.compile(r'^(你是谁|你是什么|介绍一下你自己|你叫什么|你能做什么|你有什么功能)\s*[?？!！。]*\s*$', re.IGNORECASE),
+        "我是楼宇能耗管理系统的 AI 运维助手，基于多智能体架构（Router + 数据分析 + 故障诊断）构建。\n\n"
+        "**我能做的事：**\n"
+        "• **数据查询** — 任意楼宇、任意时段的电 / 水 / 冷量数据\n"
+        "• **趋势对比** — 多楼宇横向对比、同比环比分析\n"
+        "• **故障诊断** — 异常能耗识别、设备健康评估\n"
+        "• **COP 计算** — 空调系统制冷能效比分析\n"
+        "• **工单生成** — 自动创建并推送维修工单\n"
+        "• **报表导出** — 生成 CSV 能耗报表\n\n"
+        "直接用自然语言提问即可，例如：「教学楼昨天用了多少电？」",
+    ),
+    (
+        re.compile(r'^(好的?|好的好的|ok|okay|嗯|嗯嗯|明白|收到|了解)\s*[!！。.,~～]*\s*$', re.IGNORECASE),
+        "好的，如果有其他问题随时告诉我！",
+    ),
+]
+
+_FAST_PATH_MAX_LEN = 30  # 超过此长度不走快速通道，避免误匹配
+
+
+def _try_fast_path(message: str) -> str | None:
+    """
+    检查消息是否匹配关键词快速通道。
+    匹配则返回直接回复字符串；否则返回 None，走正常 LLM 路径。
+    """
+    msg = message.strip()
+    if len(msg) > _FAST_PATH_MAX_LEN:
+        return None
+    for pattern, reply in _FAST_PATH_RULES:
+        if pattern.match(msg):
+            return reply
+    return None
+
 
 _cached_router_llm: ChatOpenAI | None = None
 _router_llm_lock: Any = None
@@ -206,8 +265,24 @@ async def router_node(state: AgentState) -> dict[str, Any]:
             "confidence": 0.0,
         }
 
-    # ── 准备历史消息 ──
+    # ── 关键词快速通道（跳过 LLM，零延迟回复常见问候/闲聊）──────────────────
     history = state.get("messages", [])
+    last_human = next(
+        (m for m in reversed(history) if isinstance(m, HumanMessage)), None
+    )
+    if last_human:
+        fast_reply = _try_fast_path(str(last_human.content))
+        if fast_reply is not None:
+            logger.debug("Router 快速通道命中: %r", str(last_human.content)[:40])
+            return {
+                "messages": [AIMessage(content=fast_reply)],
+                "current_agent": "end",
+                "intent": "general_chat",
+                "confidence": 1.0,
+                "hop_count": hop_count,
+            }
+
+    # ── 准备历史消息（history 已在快速通道处取出）──
     # 全局 messages 已只含 Human + 最终 AI，取最近 6 条（3 轮）即可
     recent_history = history[-6:] if len(history) > 6 else history
 

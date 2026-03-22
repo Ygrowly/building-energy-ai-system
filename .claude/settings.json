@@ -9,7 +9,9 @@
       "Bash(python scripts/search.py \"settings modal sidebar tabs clean minimal white\" --domain style -n 3)",
       "Bash(python3 .claude/skills/ui-ux-pro-max/scripts/search.py \"dashboard settings modal dark green energy management\" --design-system -p \"Building Energy Management\")",
       "Bash(python .claude/skills/ui-ux-pro-max/scripts/search.py \"dashboard settings modal dark green energy management\" --design-system -p \"Building Energy Management\")",
-      "Bash(python .claude/skills/ui-ux-pro-max/scripts/search.py \"modal settings sidebar tabs\" --domain ux -n 5)"
+      "Bash(python .claude/skills/ui-ux-pro-max/scripts/search.py \"modal settings sidebar tabs\" --domain ux -n 5)",
+      "Bash(find /e/27_fwwb_A08/project/frontend/src -type f \\\\\\(-iname *statistic* -o -iname *analysis* \\\\\\))",
+      "Bash(python skills/ui-ux-pro-max/scripts/search.py \"dashboard header weather widget notification bell SaaS\" --design-system)"
     ]
   }
 }

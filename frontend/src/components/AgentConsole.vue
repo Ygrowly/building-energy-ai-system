@@ -334,9 +334,9 @@
               <Icon icon="mdi:image-plus-outline" width="16" />
             </button>
             <input ref="fileInputEl" type="file" accept="image/*" style="display:none" @change="onFileChange" />
-            <button class="send-icon-btn" @click="handleSend" :disabled="store.isLoading || !inputText.trim()" title="发送">
+            <button class="send-icon-btn" :class="{ active: inputText.trim() }" @click="handleSend" :disabled="store.isLoading || !inputText.trim()" title="发送">
               <Icon v-if="store.isLoading" icon="mdi:timer-sand" width="16" />
-              <Icon v-else icon="mdi:arrow-up" width="16" />
+              <Icon v-else icon="mdi:arrow-up" width="16" style="transform: scaleY(1.3)" />
             </button>
           </div>
         </div>
@@ -389,7 +389,11 @@ const moreWrapEl = ref<HTMLElement>()
 
 function toggleHistory() {
   historyOpen.value = !historyOpen.value
-  if (historyOpen.value) moreOpen.value = false
+  if (historyOpen.value) {
+    moreOpen.value = false
+    // 每次打开历史面板时从后端刷新会话列表，保持与数据库同步
+    store.loadSessionList()
+  }
 }
 
 function closeAllDropdowns() {
@@ -1439,17 +1443,22 @@ textarea::placeholder { color: var(--text-muted); }
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--accent);
+  background: none;
   border: none;
   border-radius: 50%;
+  color: #999;
+  cursor: default;
+  transition: background 0.2s, color 0.2s, opacity 0.15s;
+  flex-shrink: 0;
+  margin-left: 2px;
+}
+.send-icon-btn.active {
+  background: var(--accent);
   color: #fff;
   cursor: pointer;
-  transition: opacity 0.15s;
-  flex-shrink: 0;
-  margin-left: 6px;
 }
-.send-icon-btn:hover { opacity: 0.85; }
-.send-icon-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+.send-icon-btn.active:hover { opacity: 0.85; }
+.send-icon-btn:disabled { opacity: 0.6; cursor: not-allowed; }
 
 /* ── 通用过渡动画 ───────────────────────────────────────────────────────── */
 .fade-enter-active, .fade-leave-active { transition: all 0.3s; }

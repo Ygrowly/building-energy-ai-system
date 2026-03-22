@@ -7,9 +7,10 @@
 """
 from __future__ import annotations
 
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import bcrypt
 import jwt
@@ -187,6 +188,25 @@ def decode_refresh_token(token: str) -> tuple[str, str]:
 
 
 # ---------------------------------------------------------------------------
+# 用户对象内存缓存（key=user_id，避免每次请求都查 DB）
+# TTL 5 分钟；用户被禁用时下次登录会拿到新 token，旧缓存条目 5 分钟内自然过期。
+# ---------------------------------------------------------------------------
+_USER_CACHE_TTL = 300  # 秒
+_user_cache: dict[str, tuple[Any, float]] = {}  # user_id -> (user_obj, cached_at)
+
+
+def _get_cached_user(user_id: str) -> Any | None:
+    entry = _user_cache.get(user_id)
+    if entry and (time.monotonic() - entry[1]) < _USER_CACHE_TTL:
+        return entry[0]
+    return None
+
+
+def _set_cached_user(user_id: str, user: Any) -> None:
+    _user_cache[user_id] = (user, time.monotonic())
+
+
+# ---------------------------------------------------------------------------
 # FastAPI 依赖：获取当前登录用户
 # ---------------------------------------------------------------------------
 
@@ -197,7 +217,7 @@ async def get_current_user(
 ) -> "User":
     """
     从 Bearer token 中解析并返回当前用户 ORM 对象。
-    复用路由层注入的同一个 DB Session，避免每次请求多建一条连接。
+    命中缓存（TTL=5min）时跳过 DB 查询。
     """
     from app.db.models import User as UserModel
 
@@ -209,6 +229,10 @@ async def get_current_user(
         )
 
     user_id = decode_access_token(token)
+
+    cached = _get_cached_user(user_id)
+    if cached is not None:
+        return cached
 
     result = await db.execute(
         select(UserModel).where(UserModel.id == user_id)
@@ -225,6 +249,7 @@ async def get_current_user(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="账户已被禁用",
         )
+    _set_cached_user(user_id, user)
     return user
 
 
@@ -242,6 +267,8 @@ async def get_current_user_optional(
     """
     可选认证依赖：有有效 Token 时返回当前用户，否则返回 None（不抛异常）。
     用于对话等接口：开发环境可不带 Token，生产环境由路由层校验非空并拒绝请求。
+
+    性能优化：命中内存缓存（TTL=5min）时跳过 DB 查询，避免每次请求都查 Supabase。
     """
     from app.db.models import User as UserModel
 
@@ -251,10 +278,18 @@ async def get_current_user_optional(
         user_id = decode_access_token(token)
     except HTTPException:
         return None
+
+    # ── 缓存命中：直接返回，不查 DB ──────────────────────────────────────────
+    cached = _get_cached_user(user_id)
+    if cached is not None:
+        return cached
+
+    # ── 缓存未命中：查 DB 并写入缓存 ────────────────────────────────────────
     result = await db.execute(
         select(UserModel).where(UserModel.id == user_id)
     )
     user = result.scalar_one_or_none()
     if user is None or not user.is_active:
         return None
+    _set_cached_user(user_id, user)
     return user

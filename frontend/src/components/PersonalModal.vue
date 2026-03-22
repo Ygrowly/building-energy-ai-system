@@ -266,43 +266,69 @@
               </div>
 
               <!-- ── 筛选栏 ── -->
-              <div class="msg-filter-bar">
-                <div class="filter-group">
-                  <span class="filter-label">
-                    <Icon icon="mdi:office-building-outline" width="11" />
-                    建筑
-                  </span>
-                  <div class="filter-value-row">
-                    <select v-model="filterBuilding" class="filter-select">
-                      <option v-for="opt in BUILDING_OPTIONS" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
-                    </select>
-                    <Icon icon="mdi:chevron-down" width="13" class="filter-chevron" />
+              <div class="msg-filter-bar" @click.self="closeDropdowns">
+                <div class="filter-fields">
+                  <!-- 建筑下拉 -->
+                  <div class="filter-pill" :class="{ 'filter-pill--active': filterBuilding !== 'all', 'filter-pill--open': dropdownBuildingOpen }" @click.stop="dropdownBuildingOpen = !dropdownBuildingOpen; dropdownTimeOpen = false">
+                    <Icon icon="mdi:office-building-outline" width="14" class="pill-icon" />
+                    <div class="pill-inner">
+                      <span class="pill-label">建筑</span>
+                      <span class="pill-value">{{ BUILDING_OPTIONS.find(o => o.value === filterBuilding)?.label }}</span>
+                    </div>
+                    <Icon icon="mdi:chevron-down" width="14" class="pill-chevron" :class="{ 'pill-chevron--open': dropdownBuildingOpen }" />
+                    <!-- 下拉列表 -->
+                    <Transition name="dropdown">
+                      <div v-if="dropdownBuildingOpen" class="custom-dropdown" @click.stop>
+                        <div
+                          v-for="opt in BUILDING_OPTIONS"
+                          :key="opt.value"
+                          class="dropdown-item"
+                          :class="{ 'dropdown-item--selected': filterBuilding === opt.value }"
+                          @click="selectBuilding(opt.value)"
+                        >
+                          <Icon v-if="filterBuilding === opt.value" icon="mdi:check" width="14" class="item-check" />
+                          <span>{{ opt.label }}</span>
+                        </div>
+                      </div>
+                    </Transition>
+                  </div>
+
+                  <!-- 时间范围下拉 -->
+                  <div class="filter-pill" :class="{ 'filter-pill--active': filterHours !== 0, 'filter-pill--open': dropdownTimeOpen }" @click.stop="dropdownTimeOpen = !dropdownTimeOpen; dropdownBuildingOpen = false">
+                    <Icon icon="mdi:clock-outline" width="14" class="pill-icon" />
+                    <div class="pill-inner">
+                      <span class="pill-label">时间范围</span>
+                      <span class="pill-value">{{ TIME_OPTIONS.find(o => o.value === filterHours)?.label }}</span>
+                    </div>
+                    <Icon icon="mdi:chevron-down" width="14" class="pill-chevron" :class="{ 'pill-chevron--open': dropdownTimeOpen }" />
+                    <!-- 下拉列表 -->
+                    <Transition name="dropdown">
+                      <div v-if="dropdownTimeOpen" class="custom-dropdown" @click.stop>
+                        <div
+                          v-for="opt in TIME_OPTIONS"
+                          :key="opt.value"
+                          class="dropdown-item"
+                          :class="{ 'dropdown-item--selected': filterHours === opt.value }"
+                          @click="selectTime(opt.value)"
+                        >
+                          <Icon v-if="filterHours === opt.value" icon="mdi:check" width="14" class="item-check" />
+                          <span>{{ opt.label }}</span>
+                        </div>
+                      </div>
+                    </Transition>
                   </div>
                 </div>
 
-                <div class="filter-divider"></div>
-
-                <div class="filter-group">
-                  <span class="filter-label">
-                    <Icon icon="mdi:clock-time-four-outline" width="11" />
-                    时间范围
-                  </span>
-                  <div class="filter-value-row">
-                    <select v-model.number="filterHours" class="filter-select">
-                      <option v-for="opt in TIME_OPTIONS" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
-                    </select>
-                    <Icon icon="mdi:chevron-down" width="13" class="filter-chevron" />
-                  </div>
+                <div class="filter-actions">
+                  <button v-if="hasActiveFilter" class="filter-btn filter-btn--reset" @click="resetFilters()">
+                    <Icon icon="mdi:close" width="13" />
+                    重置
+                  </button>
+                  <button class="filter-btn filter-btn--apply" :class="{ 'filter-btn--active': hasActiveFilter }">
+                    <Icon icon="mdi:filter-outline" width="14" />
+                    筛选
+                  </button>
                 </div>
-
-                <button
-                  class="filter-action-btn"
-                  :class="hasActiveFilter ? 'filter-action-reset' : 'filter-action-apply'"
-                  @click="hasActiveFilter ? resetFilters() : undefined"
-                >
-                  <Icon :icon="hasActiveFilter ? 'mdi:close' : 'mdi:filter-outline'" width="14" />
-                  {{ hasActiveFilter ? '重置' : '筛选' }}
-                </button>
               </div>
 
               <!-- ── Tab: 待审批工单 ── -->
@@ -485,7 +511,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, reactive, watch, onMounted } from 'vue'
+import { ref, computed, reactive, watch, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { Icon } from '@iconify/vue'
 import { useAuthStore } from '@/stores/authStore'
@@ -696,6 +722,21 @@ const msgTab = ref<'workorder' | 'anomaly' | 'warning'>('workorder')
 // ── 筛选状态 ──────────────────────────────────
 const filterBuilding = ref<string>('all')
 const filterHours    = ref<number>(0)
+const dropdownBuildingOpen = ref(false)
+const dropdownTimeOpen     = ref(false)
+
+function selectBuilding(val: string) {
+  filterBuilding.value = val
+  dropdownBuildingOpen.value = false
+}
+function selectTime(val: number) {
+  filterHours.value = val
+  dropdownTimeOpen.value = false
+}
+function closeDropdowns() {
+  dropdownBuildingOpen.value = false
+  dropdownTimeOpen.value = false
+}
 
 const BUILDING_OPTIONS = [
   { value: 'all',       label: '全部建筑' },
@@ -899,6 +940,11 @@ function formatDate(dateStr?: string | null): string {
 onMounted(() => {
   if (chatStore.sessionList.length === 0) chatStore.loadSessionList()
   loadAnomalies()
+  document.addEventListener('click', closeDropdowns)
+})
+
+onUnmounted(() => {
+  document.removeEventListener('click', closeDropdowns)
 })
 </script>
 
@@ -1352,56 +1398,119 @@ onMounted(() => {
 
 /* ── 筛选栏 ── */
 .msg-filter-bar {
-  display: flex; align-items: stretch;
-  background: #fff;
-  border: 1px solid rgba(0, 0, 0, 0.08);
-  border-radius: 12px;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.05);
-  overflow: hidden;
+  display: flex; align-items: center; gap: 10px;
   margin-bottom: 16px;
 }
-.filter-group {
-  flex: 1; display: flex; flex-direction: column;
-  padding: 9px 14px; cursor: pointer; position: relative;
-  transition: background 0.15s ease;
+.filter-fields {
+  display: flex; flex: 1; gap: 8px;
 }
-.filter-group:hover { background: rgba(0, 0, 0, 0.02); }
-.filter-label {
-  display: flex; align-items: center; gap: 4px;
+.filter-pill {
+  flex: 1; display: flex; align-items: center; gap: 9px;
+  padding: 8px 12px;
+  background: #fff;
+  border: 1.5px solid #e5e7eb;
+  border-radius: 10px;
+  cursor: pointer;
+  position: relative;
+  user-select: none;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+}
+.filter-pill:hover {
+  border-color: #86efac;
+  box-shadow: 0 0 0 3px rgba(80, 200, 120, 0.08);
+}
+.filter-pill--active {
+  border-color: #50c878;
+  background: #f0fdf4;
+  box-shadow: 0 0 0 3px rgba(80, 200, 120, 0.1);
+}
+.filter-pill--open {
+  border-color: #50c878;
+  box-shadow: 0 0 0 3px rgba(80, 200, 120, 0.15);
+}
+.pill-icon {
+  color: #9ca3af; flex-shrink: 0; transition: color 0.2s;
+}
+.filter-pill--active .pill-icon,
+.filter-pill--open .pill-icon { color: #22c55e; }
+.pill-inner {
+  flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0;
+}
+.pill-label {
   font-size: 10px; font-weight: 600; color: #9ca3af;
-  text-transform: uppercase; letter-spacing: 0.07em;
-  margin-bottom: 4px; pointer-events: none;
+  text-transform: uppercase; letter-spacing: 0.06em;
+  line-height: 1; transition: color 0.2s;
 }
-.filter-value-row {
-  display: flex; align-items: center; gap: 4px;
+.filter-pill--active .pill-label,
+.filter-pill--open .pill-label { color: #16a34a; }
+.pill-value {
+  font-size: 13px; font-weight: 500; color: #111827; line-height: 1.2;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.filter-select {
-  flex: 1; border: none; background: transparent; outline: none;
-  font-size: 13px; font-weight: 500; color: #111827;
-  appearance: none; -webkit-appearance: none;
-  cursor: pointer; font-family: inherit;
-  padding: 0;
+.filter-pill--active .pill-value { color: #15803d; }
+.pill-chevron {
+  color: #d1d5db; flex-shrink: 0;
+  transition: color 0.2s, transform 0.2s ease;
 }
-.filter-chevron { color: #c4c9d4; flex-shrink: 0; pointer-events: none; }
-.filter-divider {
-  width: 1px; background: rgba(0, 0, 0, 0.07);
-  margin: 8px 0; flex-shrink: 0;
+.filter-pill--active .pill-chevron { color: #86efac; }
+.pill-chevron--open { transform: rotate(180deg); color: #50c878 !important; }
+
+/* 自定义下拉列表 */
+.custom-dropdown {
+  position: absolute;
+  top: calc(100% + 6px); left: 0; right: 0;
+  background: #fff;
+  border: 1.5px solid #e5e7eb;
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.10), 0 2px 8px rgba(0, 0, 0, 0.06);
+  overflow: hidden;
+  z-index: 100;
+  padding: 4px;
 }
-.filter-action-btn {
-  display: flex; align-items: center; justify-content: center; gap: 6px;
-  padding: 0 20px; border: none; cursor: pointer;
-  font-size: 13px; font-weight: 600; font-family: inherit;
-  flex-shrink: 0; white-space: nowrap;
+.dropdown-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 10px;
+  border-radius: 7px;
+  font-size: 13px; font-weight: 500; color: #374151;
+  cursor: pointer;
   transition: background 0.15s ease, color 0.15s ease;
 }
-.filter-action-apply {
+.dropdown-item:hover {
+  background: #f0fdf4; color: #15803d;
+}
+.dropdown-item--selected {
+  background: #dcfce7; color: #16a34a; font-weight: 600;
+}
+.dropdown-item--selected:hover { background: #bbf7d0; }
+.item-check { color: #22c55e; flex-shrink: 0; }
+
+/* 下拉动画 */
+.dropdown-enter-active { transition: opacity 0.15s ease, transform 0.15s ease; }
+.dropdown-leave-active { transition: opacity 0.1s ease, transform 0.1s ease; }
+.dropdown-enter-from  { opacity: 0; transform: translateY(-6px) scale(0.97); }
+.dropdown-leave-to    { opacity: 0; transform: translateY(-4px) scale(0.98); }
+.filter-actions {
+  display: flex; align-items: center; gap: 6px; flex-shrink: 0;
+}
+.filter-btn {
+  display: flex; align-items: center; gap: 5px;
+  padding: 8px 14px; border: none; border-radius: 9px;
+  font-size: 13px; font-weight: 600; font-family: inherit;
+  cursor: pointer; white-space: nowrap;
+  transition: all 0.2s ease;
+}
+.filter-btn--apply {
   background: #50c878; color: #fff;
+  box-shadow: 0 2px 8px rgba(80, 200, 120, 0.3);
 }
-.filter-action-apply:hover { background: #45b86e; }
-.filter-action-reset {
-  background: rgba(239, 68, 68, 0.08); color: #dc2626;
+.filter-btn--apply:hover { background: #3db86a; box-shadow: 0 3px 12px rgba(80, 200, 120, 0.4); transform: translateY(-1px); }
+.filter-btn--apply:active { transform: translateY(0); box-shadow: 0 1px 4px rgba(80, 200, 120, 0.3); }
+.filter-btn--apply.filter-btn--active { background: #22c55e; }
+.filter-btn--reset {
+  background: rgba(239, 68, 68, 0.07); color: #dc2626;
+  border: 1.5px solid rgba(239, 68, 68, 0.15);
 }
-.filter-action-reset:hover { background: rgba(239, 68, 68, 0.14); }
+.filter-btn--reset:hover { background: rgba(239, 68, 68, 0.13); border-color: rgba(239, 68, 68, 0.3); }
 
 .msg-tab-content { animation: tabFadeIn 0.18s ease; }
 @keyframes tabFadeIn {

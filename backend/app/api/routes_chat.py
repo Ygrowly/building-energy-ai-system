@@ -42,6 +42,7 @@ from app.db.session import AsyncSessionLocal
 from app.db.session_store import session_store
 from app.graph.state import initial_state
 from app.graph.workflow import get_graph
+from app.graph.nodes.router_agent import _try_fast_path as _router_fast_path
 from app.mcp.tools.data_query import list_available_buildings
 from app.services.web_search import tavily_search
 from app.schemas.genui_protocol import (
@@ -315,6 +316,25 @@ async def _stream_graph(
     enable_web_search：若为 True，先调用 Tavily 搜索，将结果注入为上下文。
     """
     request_id = request_id or str(uuid.uuid4())
+
+    # ── 路由层快速通道（第一时间推流，跳过所有 DB 调用和 LangGraph）───────────
+    # 对"你好"/"谢谢"等简单问候，立即推流回复，DB 持久化放到后台任务。
+    if not enable_web_search:
+        fast_reply = _router_fast_path(user_message)
+        if fast_reply is not None:
+            yield _text_event(fast_reply, is_final=True)
+            yield _done_event(session_id, hop_count=1, request_id=request_id)
+            # 后台补齐 DB 会话记录（不阻塞响应）
+            asyncio.create_task(_ensure_fast_session(
+                session_id=session_id,
+                user_message=user_message,
+                reply=fast_reply,
+                user_id=user_id,
+            ))
+            return
+
+    # ── 常规路径：先做 DB 初始化，再走 LangGraph ────────────────────────────
+    # 注意：DB 查询在此处阻塞。对非快速通道消息属正常，因需要加载历史上下文。
     state = await _get_or_create_state(session_id)
 
     # 确保 DB 中存在该会话记录（首次发送消息时自动创建）
@@ -533,6 +553,36 @@ async def _stream_graph(
     _persist_task.add_done_callback(_on_persist_done)
 
     yield _done_event(session_id, hop_count=hop, request_id=request_id)
+
+
+async def _ensure_fast_session(
+    session_id: str,
+    user_message: str,
+    reply: str,
+    user_id: str | None,
+) -> None:
+    """
+    快速通道命中时的后台 DB 补齐任务。
+    将会话记录和本轮消息写入数据库，不阻塞 SSE 响应。
+    """
+    try:
+        db_row = await session_store.get(session_id)
+        if db_row is None:
+            auto_title = user_message[:30] + ("…" if len(user_message) > 30 else "")
+            await session_store.create(session_id, title=auto_title, user_id=user_id)
+        state = await _get_or_create_state(session_id)
+        state["messages"] = list(state.get("messages", [])) + [
+            HumanMessage(content=user_message),
+            AIMessage(content=reply),
+        ]
+        _sessions[session_id] = state
+        await session_store.save_state(
+            session_id=session_id,
+            state=state,
+            last_message=user_message,
+        )
+    except Exception as exc:
+        logger.error("快速通道后台持久化失败 %s: %s", session_id, exc)
 
 
 async def _persist_session(

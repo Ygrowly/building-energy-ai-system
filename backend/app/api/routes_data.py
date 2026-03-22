@@ -837,6 +837,110 @@ async def get_anomaly_sankey(
 
 
 # ---------------------------------------------------------------------------
+# 实时风险预警（预警通知 Tab 数据源）
+# ---------------------------------------------------------------------------
+
+_BUILDING_DISPLAY: dict[str, str] = {
+    "Education": "教学楼",
+    "Office":    "办公楼",
+    "Public":    "图书馆",
+    "Public services": "图书馆",
+}
+
+_HVAC_MODE_LABEL: dict[str, str] = {
+    "Cooling":     "制冷",
+    "Heating":     "供暖",
+    "Ventilation": "通风",
+}
+
+
+@router.get("/buildings/risk-now", summary="当前各楼宇实时能耗风险评估")
+async def get_risk_now(db: AsyncSession = Depends(get_db_session)):
+    """
+    对所有楼宇调用 gb_simulator，返回当前时刻的实时风险等级。
+    取各建筑最新一条 energy_data 中的天气数据，计算期望值后与实际比较。
+    风险等级：high(偏差>30%) / medium(15-30%) / low(0-15%) / normal(无偏差或节能)
+    """
+    now = datetime.now(timezone.utc)
+
+    buildings_result = await db.execute(select(Building))
+    buildings = buildings_result.scalars().all()
+
+    risk_items: list[dict] = []
+
+    for building in buildings:
+        latest_result = await db.execute(
+            select(EnergyData)
+            .where(EnergyData.building_id == building.building_id)
+            .order_by(EnergyData.timestamp.desc())
+            .limit(1)
+        )
+        latest: EnergyData | None = latest_result.scalar_one_or_none()
+        if not latest:
+            continue
+
+        air_temp  = latest.air_temp_c  or 20.0
+        dew_temp  = latest.dew_temp_c  or 10.0
+
+        rated = calculate_rated_values(
+            sqm=building.sqm or 1000.0,
+            primary_space_usage=building.primary_space_usage or "Office",
+            hour=now.hour,
+            dayofweek=now.isoweekday(),
+            air_temp=air_temp,
+            dew_temp=dew_temp,
+        )
+
+        actual_hac = latest.hac_energy
+        risk_level = "normal"
+        deviation_pct: float | None = None
+        risk_desc = "运行在期望范围内"
+
+        if actual_hac is not None and rated.rated_hac_energy > 0.5:
+            dev = (actual_hac - rated.rated_hac_energy) / rated.rated_hac_energy * 100
+            deviation_pct = round(dev, 1)
+            if dev >= 30:
+                risk_level = "high"
+                risk_desc  = f"空调能耗超预测值 {dev:.0f}%，建议立即检查"
+            elif dev >= 15:
+                risk_level = "medium"
+                risk_desc  = f"空调能耗偏高 {dev:.0f}%，请关注运行状态"
+            elif dev > 0:
+                risk_level = "low"
+                risk_desc  = f"空调能耗略高于预测 {dev:.0f}%"
+            else:
+                risk_level = "normal"
+                risk_desc  = "运行在期望范围内"
+        elif rated.schedule_factor <= 0.05:
+            risk_desc = "当前为非工作时段，低负荷运行"
+
+        risk_items.append({
+            "building_id":          building.building_id,
+            "building_name":        _BUILDING_DISPLAY.get(
+                                        building.primary_space_usage or "",
+                                        building.building_id,
+                                    ),
+            "building_type":        building.primary_space_usage,
+            "hvac_mode":            rated.hvac_mode,
+            "hvac_mode_label":      _HVAC_MODE_LABEL.get(rated.hvac_mode, rated.hvac_mode),
+            "expected_hac":         round(rated.rated_hac_energy, 2),
+            "expected_supply_temp": rated.expected_supply_temp,
+            "schedule_factor":      rated.schedule_factor,
+            "air_temp":             air_temp,
+            "risk_level":           risk_level,
+            "deviation_pct":        deviation_pct,
+            "risk_desc":            risk_desc,
+            "data_timestamp":       latest.timestamp.isoformat(),
+        })
+
+    # 高风险排最前
+    _order = {"high": 0, "medium": 1, "low": 2, "normal": 3}
+    risk_items.sort(key=lambda x: _order.get(x["risk_level"], 9))
+
+    return {"risks": risk_items, "evaluated_at": now.isoformat()}
+
+
+# ---------------------------------------------------------------------------
 # 调试：列出 MCP 工具
 # ---------------------------------------------------------------------------
 @router.get("/tools", summary="列出所有 MCP 工具（调试）")

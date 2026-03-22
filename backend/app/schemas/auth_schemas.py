@@ -78,8 +78,16 @@ class ChangePasswordRequest(BaseModel):
 
 
 class UpdateProfileRequest(BaseModel):
+    username: Optional[str] = Field(None, min_length=2, max_length=50)
     email: Optional[str] = Field(None, max_length=254)
     phone: Optional[str] = Field(None, max_length=20)
+
+    @field_validator("username")
+    @classmethod
+    def username_format(cls, v: Optional[str]) -> Optional[str]:
+        if v and not re.match(r"^[\w\u4e00-\u9fa5\-\.]{2,50}$", v):
+            raise ValueError("用户名只能包含字母、数字、中文、下划线、连字符和点，长度 2-50 位")
+        return v
 
     @field_validator("email")
     @classmethod

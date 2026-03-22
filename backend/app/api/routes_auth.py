@@ -331,6 +331,8 @@ async def update_me(
     if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="用户不存在")
 
+    if body.username is not None and body.username.strip():
+        user.username = body.username.strip()
     if body.email is not None:
         user.email = body.email or None
     if body.phone is not None:
@@ -342,7 +344,7 @@ async def update_me(
         await db.rollback()
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="邮箱已被其他账号使用",
+            detail="用户名或邮箱已被其他账号使用",
         )
     await db.refresh(user)
     logger.info("用户资料已更新: user_id=%s", current_user.id)

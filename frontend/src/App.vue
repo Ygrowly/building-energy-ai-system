@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <!-- 登录/注册：全屏独立页，无侧栏、无 Agent 面板 -->
   <div v-if="isStandaloneAuth" class="auth-shell">
     <RouterView />
@@ -50,7 +50,10 @@
           title="我的"
           @click.stop="toggleUserMenu"
         >
-          <Icon icon="mdi:account-circle-outline" width="16" />
+          <span v-if="notifStore.sidebarAvatarUrl" class="sidebar-avatar">
+            <img :src="notifStore.sidebarAvatarUrl" alt="头像" />
+          </span>
+          <Icon v-else icon="mdi:account-circle-outline" width="16" />
         </button>
         <!-- 主题选择（仅展开时显示） -->
         <div ref="themeItemRef" class="bottom-theme" title="主题" @click.stop="toggleThemePicker">
@@ -139,11 +142,18 @@ import ElementPickerOverlay from '@/components/ElementPickerOverlay.vue'
 import PersonalModal from '@/components/PersonalModal.vue'
 import { useBuildingStore } from '@/stores/buildingStore'
 import { useAuthStore } from '@/stores/authStore'
+import { useNotificationStore } from '@/stores/notificationStore'
 
 const buildingStore = useBuildingStore()
-const authStore = useAuthStore()
-const router = useRouter()
-const route = useRoute()
+const authStore     = useAuthStore()
+const notifStore    = useNotificationStore()
+const router        = useRouter()
+const route         = useRoute()
+
+// 用户登录后同步头像到侧边栏
+watch(() => authStore.user?.id, (id) => {
+  notifStore.loadAvatar(id)
+}, { immediate: true })
 
 /** 认证页单独全屏，不套主布局（避免侧栏 + 对话面板） */
 const isStandaloneAuth = computed(() => route.meta.standaloneAuth === true)
@@ -269,15 +279,24 @@ function onCanvasScroll() {
   }, 1500)
 }
 
+function openMessages() {
+  showUserMenu.value = false
+  modalSection.value = 'messages'
+  showPersonalModal.value = true
+  notifStore.clearBadge()
+}
+
 onMounted(() => {
   document.addEventListener('click', onDocClick)
   canvasEl.value?.addEventListener('scroll', onCanvasScroll, { passive: true })
+  notifStore.startPolling()
 })
 
 onUnmounted(() => {
   document.removeEventListener('click', onDocClick)
   canvasEl.value?.removeEventListener('scroll', onCanvasScroll)
   clearTimeout(canvasScrollTimer)
+  notifStore.stopPolling()
 })
 
 // ── 右侧面板宽度拖拽调整 ──────────────────────────
@@ -587,6 +606,23 @@ function getBuildingIcon(type: string): string {
 }
 .bottom-about:hover {
   color: var(--text-primary);
+}
+
+.sidebar-avatar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.sidebar-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
 }
 .bottom-about.active {
   background: var(--accent-glow);

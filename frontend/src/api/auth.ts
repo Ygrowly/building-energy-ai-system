@@ -92,7 +92,7 @@ export async function apiChangePassword(
 
 export async function apiUpdateProfile(
   accessToken: string,
-  profile: { email?: string; phone?: string },
+  profile: { username?: string; email?: string; phone?: string },
 ): Promise<UserInfo> {
   const res = await fetch(`${API_BASE}/api/auth/me`, {
     method: 'PATCH',

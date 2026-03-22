@@ -35,46 +35,105 @@
 
                 <!-- 个人资料 -->
                 <template v-if="settingsTab === 'profile'">
-                  <!-- 用户卡片 -->
-                  <div class="grok-row user-row">
-                    <div class="user-avatar">
-                      <span class="avatar-text">{{ avatarInitials }}</span>
+                  <!-- 个人信息头部 -->
+                  <div class="profile-header">
+                    <div
+                      class="profile-avatar-wrap"
+                      @click="triggerAvatarUpload"
+                      title="点击更换头像"
+                    >
+                      <img v-if="avatarUrl" :src="avatarUrl" class="profile-avatar-img" alt="头像" />
+                      <div v-else class="profile-avatar-placeholder">
+                        <span class="avatar-initials">{{ avatarInitials }}</span>
+                      </div>
+                      <div class="avatar-overlay">
+                        <Icon icon="mdi:camera-outline" width="16" />
+                        <span>更换</span>
+                      </div>
                     </div>
+                    <div class="profile-header-info">
+                      <div class="profile-name-row">
+                        <p class="profile-username">{{ user?.username ?? '—' }}</p>
+                        <span class="role-badge" :class="'role-' + (user?.role ?? 'resident')">
+                          {{ ROLE_LABELS[user?.role ?? 'resident'] ?? user?.role }}
+                        </span>
+                      </div>
+                      <p class="profile-email-hint">{{ user?.email || '未设置邮箱' }}</p>
+                    </div>
+                    <input
+                      ref="avatarInputRef"
+                      type="file"
+                      accept="image/*"
+                      class="avatar-file-input"
+                      @change="onAvatarChange"
+                    />
+                  </div>
+                  <div class="profile-section-divider"></div>
+
+                  <!-- 用户名 -->
+                  <div class="grok-row">
                     <div class="grok-row-info">
-                      <p class="grok-row-title">{{ user?.username ?? '—' }}</p>
-                      <p class="grok-row-sub">{{ user?.email || '未设置邮箱' }}</p>
+                      <p class="grok-row-title">用户名</p>
+                      <p class="grok-row-sub">{{ profileForm.username || '未设置' }}</p>
                     </div>
-                    <span class="role-badge" :class="'role-' + (user?.role ?? 'resident')">
-                      {{ ROLE_LABELS[user?.role ?? 'resident'] ?? user?.role }}
-                    </span>
+                    <div class="row-btns">
+                      <button v-if="editingField === 'username'" class="btn-primary sm" @click="saveProfile" :disabled="profileSaving">
+                        <Icon :icon="profileSaving ? 'mdi:loading' : 'mdi:check'" width="13" :class="{ spin: profileSaving }" />
+                        {{ profileSaving ? '保存中...' : '保存' }}
+                      </button>
+                      <button class="btn-action" @click="editingField = editingField === 'username' ? '' : 'username'">
+                        {{ editingField === 'username' ? '取消' : '更改' }}
+                      </button>
+                    </div>
+                  </div>
+                  <div v-if="editingField === 'username'" class="grok-edit-area">
+                    <input v-model="profileForm.username" type="text" class="setting-input" placeholder="请输入用户名（2-50位，支持中英文）" />
+                    <span v-if="profileMsg && editingField === 'username'" class="form-msg" :class="profileMsgType">{{ profileMsg }}</span>
                   </div>
 
+                  <!-- 邮箱 -->
                   <div class="grok-row">
                     <div class="grok-row-info">
                       <p class="grok-row-title">邮箱</p>
                       <p class="grok-row-sub">{{ profileForm.email || '未设置' }}</p>
                     </div>
-                    <button class="btn-action" @click="editingField = editingField === 'email' ? '' : 'email'">
-                      {{ editingField === 'email' ? '取消' : '更改' }}
-                    </button>
+                    <div class="row-btns">
+                      <button v-if="editingField === 'email'" class="btn-primary sm" @click="saveProfile" :disabled="profileSaving">
+                        <Icon :icon="profileSaving ? 'mdi:loading' : 'mdi:check'" width="13" :class="{ spin: profileSaving }" />
+                        {{ profileSaving ? '保存中...' : '保存' }}
+                      </button>
+                      <button class="btn-action" @click="editingField = editingField === 'email' ? '' : 'email'">
+                        {{ editingField === 'email' ? '取消' : '更改' }}
+                      </button>
+                    </div>
                   </div>
                   <div v-if="editingField === 'email'" class="grok-edit-area">
                     <input v-model="profileForm.email" type="email" class="setting-input" placeholder="请输入邮箱" />
+                    <span v-if="profileMsg && editingField === 'email'" class="form-msg" :class="profileMsgType">{{ profileMsg }}</span>
                   </div>
 
+                  <!-- 手机号 -->
                   <div class="grok-row">
                     <div class="grok-row-info">
                       <p class="grok-row-title">手机号</p>
                       <p class="grok-row-sub">{{ profileForm.phone || '未设置' }}</p>
                     </div>
-                    <button class="btn-action" @click="editingField = editingField === 'phone' ? '' : 'phone'">
-                      {{ editingField === 'phone' ? '取消' : '更改' }}
-                    </button>
+                    <div class="row-btns">
+                      <button v-if="editingField === 'phone'" class="btn-primary sm" @click="saveProfile" :disabled="profileSaving">
+                        <Icon :icon="profileSaving ? 'mdi:loading' : 'mdi:check'" width="13" :class="{ spin: profileSaving }" />
+                        {{ profileSaving ? '保存中...' : '保存' }}
+                      </button>
+                      <button class="btn-action" @click="editingField = editingField === 'phone' ? '' : 'phone'">
+                        {{ editingField === 'phone' ? '取消' : '更改' }}
+                      </button>
+                    </div>
                   </div>
                   <div v-if="editingField === 'phone'" class="grok-edit-area">
                     <input v-model="profileForm.phone" type="tel" class="setting-input" placeholder="请输入手机号" />
+                    <span v-if="profileMsg && editingField === 'phone'" class="form-msg" :class="profileMsgType">{{ profileMsg }}</span>
                   </div>
 
+                  <!-- 注册时间（只读） -->
                   <div class="grok-row">
                     <div class="grok-row-info">
                       <p class="grok-row-title">注册时间</p>
@@ -83,15 +142,6 @@
                   </div>
 
                   <p class="grok-id">{{ user?.id }}</p>
-
-                  <div v-if="editingField" class="setting-actions">
-                    <button class="btn-primary" @click="saveProfile" :disabled="profileSaving">
-                      <Icon :icon="profileSaving ? 'mdi:loading' : 'mdi:content-save-outline'" width="14"
-                        :class="{ spin: profileSaving }" />
-                      {{ profileSaving ? '保存中...' : '保存' }}
-                    </button>
-                    <span v-if="profileMsg" class="form-msg" :class="profileMsgType">{{ profileMsg }}</span>
-                  </div>
                 </template>
 
                 <!-- 账号安全 -->
@@ -181,81 +231,220 @@
 
             <!-- ═══════════ 消息中心 ═══════════ -->
             <template v-if="activeSection === 'messages'">
-              <!-- 待审批工单 -->
-              <div class="msg-block">
-                <p class="block-label">
-                  <Icon icon="mdi:clipboard-clock-outline" width="14" />
-                  待审批工单
-                  <span v-if="pendingSessions.length > 0" class="count-badge">{{ pendingSessions.length }}</span>
-                </p>
-                <div v-if="chatStore.sessionList.length === 0" class="empty-state">
-                  <Icon icon="mdi:chat-outline" width="28" class="empty-icon" />
-                  <p>暂无 AI 会话</p>
-                </div>
-                <div v-else-if="pendingSessions.length === 0" class="empty-state ok">
-                  <Icon icon="mdi:check-circle-outline" width="28" class="empty-icon" />
-                  <p>暂无待审批工单</p>
-                </div>
-                <div v-else class="msg-list">
-                  <div
-                    v-for="sess in pendingSessions"
-                    :key="sess.session_id"
-                    class="msg-item"
-                    @click="gotoWorkOrder(sess.session_id)"
+
+              <!-- ── 胶囊切换 ── -->
+              <div class="msg-capsule-wrap">
+                <div class="msg-capsule">
+                  <button
+                    class="capsule-btn"
+                    :class="{ active: msgTab === 'workorder' }"
+                    @click="switchMsgTab('workorder')"
                   >
-                    <div class="msg-icon"><Icon icon="mdi:wrench-clock" width="16" /></div>
-                    <div class="msg-body">
-                      <p class="msg-title">{{ sess.title || '未命名会话' }}</p>
-                      <p class="msg-sub">{{ formatDate(sess.updated_at) }}</p>
+                    <Icon icon="mdi:clipboard-clock-outline" width="13" />
+                    待审批工单
+                    <span v-if="pendingSessions.length > 0" class="capsule-dot ok">{{ pendingSessions.length }}</span>
+                  </button>
+                  <button
+                    class="capsule-btn"
+                    :class="{ active: msgTab === 'anomaly' }"
+                    @click="switchMsgTab('anomaly')"
+                  >
+                    <Icon icon="mdi:bell-ring-outline" width="13" />
+                    异常告警
+                    <span v-if="anomalies.length > 0" class="capsule-dot">{{ anomalies.length > 99 ? '99+' : anomalies.length }}</span>
+                  </button>
+                  <button
+                    class="capsule-btn"
+                    :class="{ active: msgTab === 'warning' }"
+                    @click="switchMsgTab('warning')"
+                  >
+                    <Icon icon="mdi:lightning-bolt-outline" width="13" />
+                    预警通知
+                    <span v-if="riskHighCount > 0" class="capsule-dot warn">{{ riskHighCount }}</span>
+                  </button>
+                </div>
+              </div>
+
+              <!-- ── 筛选栏 ── -->
+              <div class="msg-filter-bar">
+                <div class="filter-group">
+                  <span class="filter-label">
+                    <Icon icon="mdi:office-building-outline" width="11" />
+                    建筑
+                  </span>
+                  <div class="filter-value-row">
+                    <select v-model="filterBuilding" class="filter-select">
+                      <option v-for="opt in BUILDING_OPTIONS" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+                    </select>
+                    <Icon icon="mdi:chevron-down" width="13" class="filter-chevron" />
+                  </div>
+                </div>
+
+                <div class="filter-divider"></div>
+
+                <div class="filter-group">
+                  <span class="filter-label">
+                    <Icon icon="mdi:clock-time-four-outline" width="11" />
+                    时间范围
+                  </span>
+                  <div class="filter-value-row">
+                    <select v-model.number="filterHours" class="filter-select">
+                      <option v-for="opt in TIME_OPTIONS" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+                    </select>
+                    <Icon icon="mdi:chevron-down" width="13" class="filter-chevron" />
+                  </div>
+                </div>
+
+                <button
+                  class="filter-action-btn"
+                  :class="hasActiveFilter ? 'filter-action-reset' : 'filter-action-apply'"
+                  @click="hasActiveFilter ? resetFilters() : undefined"
+                >
+                  <Icon :icon="hasActiveFilter ? 'mdi:close' : 'mdi:filter-outline'" width="14" />
+                  {{ hasActiveFilter ? '重置' : '筛选' }}
+                </button>
+              </div>
+
+              <!-- ── Tab: 待审批工单 ── -->
+              <div v-if="msgTab === 'workorder'" class="msg-tab-content">
+                <div class="msg-block">
+                  <p class="block-label">
+                    <Icon icon="mdi:clipboard-clock-outline" width="13" />
+                    待审批工单
+                    <span v-if="pendingSessions.length > 0" class="count-badge">{{ pendingSessions.length }}</span>
+                  </p>
+                  <div v-if="pendingSessions.length === 0" class="empty-state ok">
+                    <Icon icon="mdi:check-circle-outline" width="26" class="empty-icon" />
+                    <p>暂无待审批工单</p>
+                  </div>
+                  <div v-else class="msg-list">
+                    <div
+                      v-for="sess in pendingSessions"
+                      :key="sess.session_id"
+                      class="msg-item clickable"
+                      @click="gotoWorkOrder(sess.session_id)"
+                    >
+                      <div class="msg-icon workorder">
+                        <Icon icon="mdi:wrench-clock" width="15" />
+                      </div>
+                      <div class="msg-body">
+                        <p class="msg-title">{{ sess.title || '未命名会话' }}</p>
+                        <p class="msg-sub">{{ formatDate(sess.updated_at) }}</p>
+                      </div>
+                      <span class="msg-tag pending">待审批</span>
+                      <Icon icon="mdi:chevron-right" width="14" class="msg-chevron" />
                     </div>
-                    <span class="msg-tag pending">待审批</span>
                   </div>
                 </div>
               </div>
 
-              <!-- 异常告警 -->
-              <div class="msg-block">
-                <p class="block-label">
-                  <Icon icon="mdi:alert-circle-outline" width="14" />
-                  近期异常告警
-                  <button class="refresh-btn" @click="loadAnomalies" :disabled="anomalyLoading">
-                    <Icon :icon="anomalyLoading ? 'mdi:loading' : 'mdi:refresh'" width="13"
-                      :class="{ spin: anomalyLoading }" />
-                  </button>
-                </p>
-                <div v-if="anomalyLoading && anomalies.length === 0" class="empty-state">
-                  <Icon icon="mdi:loading" width="24" class="empty-icon spin" />
-                  <p>加载中...</p>
-                </div>
-                <div v-else-if="anomalyError" class="empty-state error">
-                  <Icon icon="mdi:alert" width="24" class="empty-icon" />
-                  <p>{{ anomalyError }}</p>
-                </div>
-                <div v-else-if="anomalies.length === 0" class="empty-state ok">
-                  <Icon icon="mdi:check-all" width="28" class="empty-icon" />
-                  <p>近期无异常告警</p>
-                </div>
-                <div v-else class="msg-list">
-                  <div
-                    v-for="anom in anomalies"
-                    :key="anom.id ?? anom.detected_at"
-                    class="msg-item"
-                    :class="'sev-' + (anom.severity ?? 'medium').toLowerCase()"
-                  >
-                    <div class="msg-icon anom"><Icon icon="mdi:alert-outline" width="16" /></div>
-                    <div class="msg-body">
-                      <p class="msg-title">{{ anom.anomaly_type ?? '未知异常' }}</p>
-                      <p class="msg-sub">
-                        楼宇 {{ anom.building_id }} · 设备 {{ anom.device_id ?? '—' }}
-                        · {{ formatDate(anom.detected_at) }}
-                      </p>
+              <!-- ── Tab: 异常告警 ── -->
+              <div v-if="msgTab === 'anomaly'" class="msg-tab-content">
+                <div class="msg-block">
+                  <p class="block-label">
+                    <Icon icon="mdi:alert-circle-outline" width="13" />
+                    已发生异常
+                    <button class="refresh-btn" @click="loadAnomalies" :disabled="anomalyLoading" title="刷新">
+                      <Icon :icon="anomalyLoading ? 'mdi:loading' : 'mdi:refresh'" width="12" :class="{ spin: anomalyLoading }" />
+                    </button>
+                  </p>
+                  <div v-if="anomalyLoading && anomalies.length === 0" class="empty-state">
+                    <Icon icon="mdi:loading" width="24" class="empty-icon spin" />
+                    <p>加载中...</p>
+                  </div>
+                  <div v-else-if="anomalyError" class="empty-state error">
+                    <Icon icon="mdi:alert" width="24" class="empty-icon" />
+                    <p>{{ anomalyError }}</p>
+                  </div>
+                  <div v-else-if="filteredAnomalies.length === 0" class="empty-state ok">
+                    <Icon icon="mdi:check-all" width="26" class="empty-icon" />
+                    <p>{{ hasActiveFilter ? '当前筛选条件下无异常记录' : '近期无异常告警' }}</p>
+                  </div>
+                  <div v-else class="msg-list">
+                    <div
+                      v-for="(anom, idx) in filteredAnomalies"
+                      :key="anom.timestamp + idx"
+                      class="msg-item"
+                      :class="'sev-' + deviationSeverity(anom.deviation_pct)"
+                    >
+                      <div class="msg-icon anom">
+                        <Icon :icon="ruleIcon(anom.rule)" width="15" />
+                      </div>
+                      <div class="msg-body">
+                        <p class="msg-title">{{ ruleLabel(anom.rule) }}</p>
+                        <p class="msg-sub">
+                          {{ buildingLabel(anom.building_type) }}
+                          <template v-if="anom.deviation_pct != null">
+                            · <span :class="'dev-' + deviationSeverity(anom.deviation_pct)">{{ anom.deviation_pct > 0 ? '+' : '' }}{{ anom.deviation_pct.toFixed(1) }}%</span>
+                          </template>
+                          · {{ formatDate(anom.timestamp) }}
+                        </p>
+                        <p v-if="anom.message" class="msg-detail">{{ anom.message }}</p>
+                      </div>
+                      <span class="msg-tag" :class="'tag-' + deviationSeverity(anom.deviation_pct)">
+                        {{ { high: '严重', medium: '警告', low: '提示' }[deviationSeverity(anom.deviation_pct)] }}
+                      </span>
                     </div>
-                    <span class="msg-tag" :class="'tag-' + (anom.severity ?? 'medium').toLowerCase()">
-                      {{ anom.severity ?? 'medium' }}
-                    </span>
                   </div>
                 </div>
               </div>
+
+              <!-- ── Tab: 预警通知 ── -->
+              <div v-if="msgTab === 'warning'" class="msg-tab-content">
+                <div class="msg-block">
+                  <p class="block-label">
+                    <Icon icon="mdi:lightning-bolt-outline" width="13" />
+                    实时能耗风险评估
+                    <button class="refresh-btn" @click="loadRisks" :disabled="riskLoading" title="刷新">
+                      <Icon :icon="riskLoading ? 'mdi:loading' : 'mdi:refresh'" width="12" :class="{ spin: riskLoading }" />
+                    </button>
+                    <span class="block-label-hint">基于当前天气实时计算</span>
+                  </p>
+                  <div v-if="riskLoading && risks.length === 0" class="empty-state">
+                    <Icon icon="mdi:loading" width="24" class="empty-icon spin" />
+                    <p>正在评估中...</p>
+                  </div>
+                  <div v-else-if="riskError" class="empty-state error">
+                    <Icon icon="mdi:alert" width="24" class="empty-icon" />
+                    <p>{{ riskError }}</p>
+                  </div>
+                  <div v-else-if="filteredRisks.length === 0" class="empty-state ok">
+                    <Icon icon="mdi:check-circle-outline" width="26" class="empty-icon" />
+                    <p>{{ hasActiveFilter ? '该建筑运行正常' : '所有楼宇运行正常' }}</p>
+                  </div>
+                  <div v-else class="msg-list">
+                    <div
+                      v-for="risk in filteredRisks"
+                      :key="risk.building_id"
+                      class="risk-card"
+                      :class="'risk-' + risk.risk_level"
+                    >
+                      <div class="risk-card-left">
+                        <div class="risk-icon">
+                          <Icon :icon="risk.risk_level === 'high' ? 'mdi:alert' : risk.risk_level === 'medium' ? 'mdi:alert-circle-outline' : risk.risk_level === 'low' ? 'mdi:information-outline' : 'mdi:check-circle-outline'" width="16" />
+                        </div>
+                        <div class="risk-info">
+                          <div class="risk-header">
+                            <span class="risk-name">{{ risk.building_name }}</span>
+                            <span class="risk-mode-badge">{{ risk.hvac_mode_label }}</span>
+                          </div>
+                          <p class="risk-desc">{{ risk.risk_desc }}</p>
+                          <p class="risk-meta">
+                            室外 {{ Number(risk.air_temp).toFixed(1) }}℃ · 期望 {{ risk.expected_hac }} kWh
+                            <template v-if="risk.deviation_pct != null">
+                              · 偏差 <span :class="'dev-' + risk.risk_level">{{ risk.deviation_pct > 0 ? '+' : '' }}{{ risk.deviation_pct }}%</span>
+                            </template>
+                          </p>
+                        </div>
+                      </div>
+                      <span class="risk-level-badge" :class="'rlv-' + risk.risk_level">
+                        {{ { high: '高风险', medium: '警告', low: '偏高', normal: '正常' }[risk.risk_level] }}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
             </template>
 
             <!-- ═══════════ 帮助中心 ═══════════ -->
@@ -341,7 +530,6 @@ const SETTINGS_TABS = [
 ]
 
 const settingsTab = ref('profile')
-const editingField = ref('')
 const showPwdForm = ref(false)
 
 // ── 角色元数据 ──────────────────────────────────
@@ -358,33 +546,82 @@ const avatarInitials = computed(() => {
   return name.slice(0, 2).toUpperCase()
 })
 
+// ── 头像上传（本地 localStorage 存储）──────────────────────────
+const avatarInputRef = ref<HTMLInputElement | null>(null)
+
+const avatarUrl = ref<string>(
+  localStorage.getItem(`avatar_${user.value?.id ?? 'guest'}`) ?? ''
+)
+
+// 用户 id 加载后同步头像
+watch(user, (u) => {
+  if (u?.id) {
+    avatarUrl.value = localStorage.getItem(`avatar_${u.id}`) ?? ''
+  }
+}, { immediate: true })
+
+function triggerAvatarUpload() {
+  avatarInputRef.value?.click()
+}
+
+function onAvatarChange(e: Event) {
+  const file = (e.target as HTMLInputElement).files?.[0]
+  if (!file) return
+  const reader = new FileReader()
+  reader.onload = async (ev) => {
+    const dataUrl = ev.target?.result as string
+    avatarUrl.value = dataUrl
+    const { useNotificationStore } = await import('@/stores/notificationStore')
+    useNotificationStore().saveAvatar(user.value?.id ?? 'guest', dataUrl)
+  }
+  reader.readAsDataURL(file)
+  if (avatarInputRef.value) avatarInputRef.value.value = ''
+}
+
 // ── 个人资料表单 ──────────────────────────────────
+const editingField = ref('')
+
 const profileForm = reactive({
-  email: user.value?.email ?? '',
-  phone: user.value?.phone ?? '',
+  username: user.value?.username ?? '',
+  email:    user.value?.email    ?? '',
+  phone:    user.value?.phone    ?? '',
 })
 
 watch(user, (u) => {
   if (u) {
-    profileForm.email = u.email ?? ''
-    profileForm.phone = u.phone ?? ''
+    profileForm.username = u.username ?? ''
+    profileForm.email    = u.email    ?? ''
+    profileForm.phone    = u.phone    ?? ''
   }
 }, { immediate: true })
 
-const profileSaving = ref(false)
-const profileMsg = ref('')
+const profileSaving  = ref(false)
+const profileMsg     = ref('')
 const profileMsgType = ref<'ok' | 'err'>('ok')
+
+function cancelEdit() {
+  const u = user.value
+  if (u) {
+    profileForm.username = u.username ?? ''
+    profileForm.email    = u.email    ?? ''
+    profileForm.phone    = u.phone    ?? ''
+  }
+  editingField.value = ''
+}
 
 async function saveProfile() {
   if (!authStore.accessToken) return
   profileSaving.value = true
   profileMsg.value = ''
   try {
-    const updated = await apiUpdateProfile(authStore.accessToken, {
-      email: profileForm.email || undefined,
-      phone: profileForm.phone || undefined,
-    })
+    const payload: { username?: string; email?: string; phone?: string } = {}
+    if (editingField.value === 'username') payload.username = profileForm.username || undefined
+    if (editingField.value === 'email')    payload.email    = profileForm.email    || undefined
+    if (editingField.value === 'phone')    payload.phone    = profileForm.phone    || undefined
+
+    const updated = await apiUpdateProfile(authStore.accessToken, payload)
     authStore.user = updated
+    editingField.value = ''
     profileMsg.value = '保存成功'
     profileMsgType.value = 'ok'
   } catch (e: unknown) {
@@ -454,9 +691,59 @@ function saveWebSearchPref() {
 }
 
 // ── 消息中心 ──────────────────────────────────
+const msgTab = ref<'workorder' | 'anomaly' | 'warning'>('workorder')
+
+// ── 筛选状态 ──────────────────────────────────
+const filterBuilding = ref<string>('all')
+const filterHours    = ref<number>(0)
+
+const BUILDING_OPTIONS = [
+  { value: 'all',       label: '全部建筑' },
+  { value: 'Education', label: '教学楼' },
+  { value: 'Office',    label: '办公楼' },
+  { value: 'Public',    label: '图书馆' },
+]
+const TIME_OPTIONS = [
+  { value: 0,    label: '全部时间' },
+  { value: 24,   label: '近 24 小时' },
+  { value: 168,  label: '近 7 天' },
+  { value: 720,  label: '近 30 天' },
+]
+
+const hasActiveFilter = computed(
+  () => filterBuilding.value !== 'all' || filterHours.value !== 0
+)
+
+function resetFilters() {
+  filterBuilding.value = 'all'
+  filterHours.value    = 0
+}
+
+const filteredAnomalies = computed(() => {
+  let list = anomalies.value
+  if (filterBuilding.value !== 'all')
+    list = list.filter(a => a.building_type === filterBuilding.value)
+  if (filterHours.value > 0) {
+    const cutoff = Date.now() - filterHours.value * 3600 * 1000
+    list = list.filter(a => new Date(a.timestamp).getTime() >= cutoff)
+  }
+  return list
+})
+
+const filteredRisks = computed(() =>
+  filterBuilding.value === 'all'
+    ? risks.value
+    : risks.value.filter(r => r.building_type === filterBuilding.value)
+)
+
 const pendingSessions = computed(() =>
   chatStore.sessionList.filter(s => s.has_pending_action)
 )
+
+function switchMsgTab(tab: 'workorder' | 'anomaly' | 'warning') {
+  msgTab.value = tab
+  if (tab === 'warning' && risks.value.length === 0) loadRisks()
+}
 
 function gotoWorkOrder(sessionId: string) {
   chatStore.switchSession(sessionId)
@@ -466,12 +753,56 @@ function gotoWorkOrder(sessionId: string) {
 
 // ── 异常告警 ──────────────────────────────────
 interface AnomalyItem {
-  id?: string
-  detected_at: string
-  anomaly_type?: string
-  severity?: string
-  device_id?: string
+  timestamp: string
   building_id?: string | number
+  building_type?: string
+  meter_device_id?: string
+  rule?: string
+  message?: string
+  actual_value?: number
+  expected_value?: number
+  deviation_pct?: number
+}
+
+const RULE_LABELS: Record<string, string> = {
+  electricity_overload:  '电耗超标',
+  water_leak:            '水耗异常',
+  hvac_overconsumption:  '空调能耗超标',
+  A_low_efficiency:      '主机效能衰退',
+  B_small_deltaT:        '水力失调（大流量小温差）',
+  C_unexpected_on:       '非预期开机',
+}
+
+const RULE_ICONS: Record<string, string> = {
+  electricity_overload:  'mdi:lightning-bolt',
+  water_leak:            'mdi:water-alert',
+  hvac_overconsumption:  'mdi:air-conditioner',
+  A_low_efficiency:      'mdi:gauge-low',
+  B_small_deltaT:        'mdi:waves-arrow-right',
+  C_unexpected_on:       'mdi:clock-alert-outline',
+}
+
+function ruleLabel(rule?: string) {
+  return RULE_LABELS[rule ?? ''] ?? rule ?? '未知异常'
+}
+
+function ruleIcon(rule?: string) {
+  return RULE_ICONS[rule ?? ''] ?? 'mdi:alert-outline'
+}
+
+function deviationSeverity(pct?: number): 'high' | 'medium' | 'low' {
+  const abs = Math.abs(pct ?? 0)
+  if (abs >= 30) return 'high'
+  if (abs >= 15) return 'medium'
+  return 'low'
+}
+
+function buildingLabel(type?: string) {
+  const map: Record<string, string> = {
+    Office: '办公楼', Education: '教学楼',
+    'Public services': '图书馆', Public: '图书馆',
+  }
+  return map[type ?? ''] ?? type ?? '—'
 }
 
 const anomalies = ref<AnomalyItem[]>([])
@@ -482,12 +813,49 @@ async function loadAnomalies() {
   anomalyLoading.value = true
   anomalyError.value = ''
   try {
-    const data = await apiFetch<AnomalyItem[]>('/api/anomalies/recent?hours=168&limit=20')
-    anomalies.value = data
+    const data = await apiFetch<{ anomalies: AnomalyItem[] }>('/api/anomalies/recent?hours=168')
+    anomalies.value = data?.anomalies ?? []
+    // 刷新后清除角标
+    const { useNotificationStore } = await import('@/stores/notificationStore')
+    useNotificationStore().clearBadge()
   } catch (e: unknown) {
     anomalyError.value = (e as Error).message ?? '加载失败'
   } finally {
     anomalyLoading.value = false
+  }
+}
+
+// ── 预警通知 ──────────────────────────────────
+interface RiskItem {
+  building_id: string
+  building_name: string
+  building_type?: string
+  hvac_mode: string
+  hvac_mode_label: string
+  expected_hac: number
+  air_temp: number
+  risk_level: 'high' | 'medium' | 'low' | 'normal'
+  deviation_pct?: number | null
+  risk_desc: string
+}
+
+const risks        = ref<RiskItem[]>([])
+const riskLoading  = ref(false)
+const riskError    = ref('')
+const riskHighCount = computed(() =>
+  risks.value.filter(r => r.risk_level === 'high' || r.risk_level === 'medium').length
+)
+
+async function loadRisks() {
+  riskLoading.value = true
+  riskError.value = ''
+  try {
+    const data = await apiFetch<{ risks: RiskItem[] }>('/api/buildings/risk-now')
+    risks.value = data?.risks ?? []
+  } catch (e: unknown) {
+    riskError.value = (e as Error).message ?? '加载失败'
+  } finally {
+    riskLoading.value = false
   }
 }
 
@@ -550,8 +918,9 @@ onMounted(() => {
 /* ── 弹窗主体 ── */
 .pm-dialog {
   width: 640px;
-  max-width: 92vw;
-  max-height: 80vh;
+  max-width: 94vw;
+  height: 520px;
+  max-height: 94vh;
   background: #ffffff;
   border: 1px solid rgba(0, 0, 0, 0.06);
   border-radius: 18px;
@@ -562,6 +931,8 @@ onMounted(() => {
   flex-direction: column;
   overflow: hidden;
 }
+
+.pm-dialog.section-messages { width: 720px; height: 680px; }
 
 :deep([data-theme="dark"]) .pm-dialog,
 :root[data-theme="dark"] .pm-dialog {
@@ -733,7 +1104,116 @@ onMounted(() => {
 .status-dot.ok { background: #34d399; box-shadow: 0 0 6px rgba(52, 211, 153, 0.4); }
 .status-dot.warn { background: #ef4444; box-shadow: 0 0 6px rgba(239, 68, 68, 0.3); }
 
-/* ── 用户头像 ── */
+/* ── 个人信息头部 ── */
+.profile-header {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 4px 0 20px;
+}
+
+.profile-avatar-wrap {
+  position: relative;
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.profile-avatar-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 50%;
+  display: block;
+}
+
+.profile-avatar-placeholder {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #6ee7a0, #50c878);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.avatar-initials {
+  color: #fff;
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  user-select: none;
+}
+
+.avatar-overlay {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 500;
+  opacity: 0;
+  transition: opacity 0.18s ease;
+}
+
+.profile-avatar-wrap:hover .avatar-overlay {
+  opacity: 1;
+}
+
+.avatar-file-input {
+  display: none;
+}
+
+.profile-header-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.profile-name-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.profile-username {
+  font-size: 17px;
+  font-weight: 700;
+  color: #111827;
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.profile-email-hint {
+  font-size: 12px;
+  color: #9ca3af;
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.profile-section-divider {
+  height: 1px;
+  background: rgba(0, 0, 0, 0.06);
+  margin: 0 0 4px;
+}
+
+/* 旧版小头像兼容保留 */
 .user-avatar {
   width: 42px;
   height: 42px;
@@ -776,6 +1256,21 @@ onMounted(() => {
 }
 
 .setting-actions { display: flex; align-items: center; gap: 14px; padding-top: 14px; }
+
+.row-btns {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.btn-primary.sm {
+  padding: 5px 12px;
+  font-size: 12px;
+  height: auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
 
 .coming-soon {
   font-size: 10px; font-weight: 500;
@@ -824,12 +1319,106 @@ onMounted(() => {
 
 /* ── 消息中心 ── */
 .body-desc { font-size: 13px; color: #9ca3af; margin: 0 0 16px; line-height: 1.65; }
-.msg-block { margin-bottom: 22px; }
+
+/* 胶囊切换 */
+.msg-capsule-wrap {
+  display: flex; justify-content: flex-start; margin-bottom: 18px;
+}
+.msg-capsule {
+  display: inline-flex; align-items: center; gap: 2px;
+  background: #f3f4f6; border-radius: 100px; padding: 3px;
+}
+.capsule-btn {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 6px 13px; border-radius: 100px; border: none;
+  font-size: 12px; font-weight: 500; cursor: pointer;
+  color: #6b7280; background: transparent;
+  transition: background 0.18s ease, color 0.18s ease, box-shadow 0.18s ease;
+  position: relative; white-space: nowrap;
+}
+.capsule-btn:hover { color: #374151; }
+.capsule-btn.active {
+  background: #fff; color: #111827; font-weight: 600;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.1), 0 0 0 1px rgba(0,0,0,0.04);
+}
+.capsule-dot {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 16px; height: 16px; border-radius: 20px; padding: 0 4px;
+  font-size: 10px; font-weight: 700; line-height: 1;
+  background: #ef4444; color: #fff;
+}
+.capsule-dot.warn { background: #f59e0b; }
+.capsule-dot.ok   { background: #50c878; }
+
+/* ── 筛选栏 ── */
+.msg-filter-bar {
+  display: flex; align-items: stretch;
+  background: #fff;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 12px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.05);
+  overflow: hidden;
+  margin-bottom: 16px;
+}
+.filter-group {
+  flex: 1; display: flex; flex-direction: column;
+  padding: 9px 14px; cursor: pointer; position: relative;
+  transition: background 0.15s ease;
+}
+.filter-group:hover { background: rgba(0, 0, 0, 0.02); }
+.filter-label {
+  display: flex; align-items: center; gap: 4px;
+  font-size: 10px; font-weight: 600; color: #9ca3af;
+  text-transform: uppercase; letter-spacing: 0.07em;
+  margin-bottom: 4px; pointer-events: none;
+}
+.filter-value-row {
+  display: flex; align-items: center; gap: 4px;
+}
+.filter-select {
+  flex: 1; border: none; background: transparent; outline: none;
+  font-size: 13px; font-weight: 500; color: #111827;
+  appearance: none; -webkit-appearance: none;
+  cursor: pointer; font-family: inherit;
+  padding: 0;
+}
+.filter-chevron { color: #c4c9d4; flex-shrink: 0; pointer-events: none; }
+.filter-divider {
+  width: 1px; background: rgba(0, 0, 0, 0.07);
+  margin: 8px 0; flex-shrink: 0;
+}
+.filter-action-btn {
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 0 20px; border: none; cursor: pointer;
+  font-size: 13px; font-weight: 600; font-family: inherit;
+  flex-shrink: 0; white-space: nowrap;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.filter-action-apply {
+  background: #50c878; color: #fff;
+}
+.filter-action-apply:hover { background: #45b86e; }
+.filter-action-reset {
+  background: rgba(239, 68, 68, 0.08); color: #dc2626;
+}
+.filter-action-reset:hover { background: rgba(239, 68, 68, 0.14); }
+
+.msg-tab-content { animation: tabFadeIn 0.18s ease; }
+@keyframes tabFadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.msg-block { margin-bottom: 20px; }
 .msg-block:last-child { margin-bottom: 0; }
 .block-label {
   display: flex; align-items: center; gap: 7px;
   font-size: 11px; font-weight: 600; color: #9ca3af;
   text-transform: uppercase; letter-spacing: 0.08em; margin: 0 0 10px;
+}
+.block-label-hint {
+  font-size: 10px; font-weight: 400; color: #c4c9d4;
+  text-transform: none; letter-spacing: 0;
 }
 .count-badge {
   background: #50c878; color: #fff; font-size: 10px;
@@ -856,22 +1445,23 @@ onMounted(() => {
 
 .msg-list { display: flex; flex-direction: column; gap: 6px; }
 .msg-item {
-  display: flex; align-items: center; gap: 12px; padding: 12px 14px;
+  display: flex; align-items: center; gap: 11px; padding: 11px 13px;
   background: #f9fafb; border: 1px solid rgba(0, 0, 0, 0.04);
-  border-radius: 12px; cursor: pointer;
+  border-radius: 12px;
   transition: background 0.15s ease, border-color 0.15s ease;
 }
-.msg-item:hover {
-  border-color: rgba(80, 200, 120, 0.2);
+.msg-item.clickable { cursor: pointer; }
+.msg-item.clickable:hover {
+  border-color: rgba(80, 200, 120, 0.25);
   background: rgba(80, 200, 120, 0.04);
 }
 
 .msg-icon {
-  flex-shrink: 0; width: 34px; height: 34px; border-radius: 10px;
+  flex-shrink: 0; width: 32px; height: 32px; border-radius: 9px;
   display: flex; align-items: center; justify-content: center;
-  background: rgba(80, 200, 120, 0.08); color: #50c878;
 }
-.msg-icon.anom { background: rgba(239, 68, 68, 0.06); color: #ef4444; }
+.msg-icon.workorder { background: rgba(80, 200, 120, 0.1); color: #50c878; }
+.msg-icon.anom      { background: rgba(239, 68, 68, 0.08); color: #ef4444; }
 .sev-high .msg-icon.anom   { background: rgba(239, 68, 68, 0.1); color: #ef4444; }
 .sev-medium .msg-icon.anom { background: rgba(251, 191, 36, 0.08); color: #f59e0b; }
 .sev-low .msg-icon.anom    { background: rgba(80, 200, 120, 0.08); color: #34d399; }
@@ -882,11 +1472,60 @@ onMounted(() => {
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .msg-sub { font-size: 11px; color: #9ca3af; margin: 0; }
+.msg-detail { font-size: 11px; color: #6b7280; margin: 3px 0 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.msg-chevron { color: #d1d5db; flex-shrink: 0; }
 .msg-tag { font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 20px; flex-shrink: 0; }
-.msg-tag.pending { background: rgba(80, 200, 120, 0.08); color: #34d399; }
-.msg-tag.tag-high   { background: rgba(239, 68, 68, 0.08); color: #ef4444; }
-.msg-tag.tag-medium { background: rgba(251, 191, 36, 0.08); color: #f59e0b; }
-.msg-tag.tag-low    { background: rgba(80, 200, 120, 0.08); color: #34d399; }
+.msg-tag.pending { background: rgba(80, 200, 120, 0.1); color: #16a34a; }
+.msg-tag.tag-high   { background: rgba(239, 68, 68, 0.1); color: #dc2626; }
+.msg-tag.tag-medium { background: rgba(251, 191, 36, 0.1); color: #d97706; }
+.msg-tag.tag-low    { background: rgba(80, 200, 120, 0.1); color: #16a34a; }
+
+/* 偏差高亮 */
+.dev-high   { color: #dc2626; font-weight: 600; }
+.dev-medium { color: #d97706; font-weight: 600; }
+.dev-low    { color: #16a34a; font-weight: 600; }
+
+/* ── 预警风险卡片 ── */
+.risk-card {
+  display: flex; align-items: center; gap: 10px; padding: 13px 14px;
+  background: #f9fafb; border: 1px solid rgba(0, 0, 0, 0.05);
+  border-radius: 13px; margin-bottom: 7px;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.risk-card:last-child { margin-bottom: 0; }
+.risk-card.risk-high   { border-left: 3px solid #ef4444; background: rgba(239,68,68,0.02); }
+.risk-card.risk-medium { border-left: 3px solid #f59e0b; background: rgba(245,158,11,0.02); }
+.risk-card.risk-low    { border-left: 3px solid #34d399; background: rgba(52,211,153,0.02); }
+.risk-card.risk-normal { border-left: 3px solid #d1fae5; }
+
+.risk-card-left { display: flex; align-items: flex-start; gap: 10px; flex: 1; min-width: 0; }
+.risk-icon {
+  flex-shrink: 0; width: 32px; height: 32px; border-radius: 9px;
+  display: flex; align-items: center; justify-content: center; margin-top: 1px;
+}
+.risk-high .risk-icon   { background: rgba(239,68,68,0.1); color: #ef4444; }
+.risk-medium .risk-icon { background: rgba(245,158,11,0.1); color: #f59e0b; }
+.risk-low .risk-icon    { background: rgba(52,211,153,0.1); color: #34d399; }
+.risk-normal .risk-icon { background: rgba(52,211,153,0.08); color: #34d399; }
+
+.risk-info { flex: 1; min-width: 0; }
+.risk-header { display: flex; align-items: center; gap: 7px; margin-bottom: 3px; }
+.risk-name { font-size: 13px; font-weight: 600; color: #111827; }
+.risk-mode-badge {
+  font-size: 10px; font-weight: 500; padding: 1px 7px; border-radius: 10px;
+  background: rgba(80,200,120,0.1); color: #16a34a;
+}
+.risk-desc { font-size: 12px; color: #374151; margin: 0 0 3px; }
+.risk-meta { font-size: 11px; color: #9ca3af; margin: 0; }
+
+.risk-level-badge {
+  flex-shrink: 0; font-size: 10px; font-weight: 700; padding: 3px 10px;
+  border-radius: 20px; align-self: center;
+}
+.rlv-high   { background: rgba(239,68,68,0.1); color: #dc2626; }
+.rlv-medium { background: rgba(245,158,11,0.1); color: #d97706; }
+.rlv-low    { background: rgba(52,211,153,0.1); color: #059669; }
+.rlv-normal { background: rgba(52,211,153,0.08); color: #16a34a; }
 
 /* ── FAQ ── */
 .faq-list { display: flex; flex-direction: column; gap: 6px; }
@@ -930,6 +1569,11 @@ onMounted(() => {
 :root[data-theme="dark"] .sidebar-tab:hover { background: rgba(255,255,255,0.06); color: rgba(255,255,255,0.8); }
 :root[data-theme="dark"] .sidebar-tab.active { background: rgba(80,200,120,0.1); color: #6ee7a0; }
 
+/* 个人信息头部深色 */
+:root[data-theme="dark"] .profile-username { color: rgba(255,255,255,0.9); }
+:root[data-theme="dark"] .profile-email-hint { color: rgba(255,255,255,0.35); }
+:root[data-theme="dark"] .profile-section-divider { background: rgba(255,255,255,0.06); }
+
 /* Grok 风格行 */
 :root[data-theme="dark"] .grok-row { border-color: rgba(255,255,255,0.04); }
 :root[data-theme="dark"] .grok-row.clickable:hover { background: rgba(255,255,255,0.04); }
@@ -945,12 +1589,36 @@ onMounted(() => {
 :root[data-theme="dark"] .toggle-track { background: rgba(255,255,255,0.15); }
 :root[data-theme="dark"] .body-desc { color: rgba(255,255,255,0.4); }
 
-/* 消息中心 */
+/* 消息中心 深色 */
+:root[data-theme="dark"] .msg-filter-bar { background: rgba(255,255,255,0.04); border-color: rgba(255,255,255,0.08); box-shadow: none; }
+:root[data-theme="dark"] .filter-group:hover { background: rgba(255,255,255,0.04); }
+:root[data-theme="dark"] .filter-label { color: rgba(255,255,255,0.3); }
+:root[data-theme="dark"] .filter-select { color: rgba(255,255,255,0.85); }
+:root[data-theme="dark"] .filter-chevron { color: rgba(255,255,255,0.2); }
+:root[data-theme="dark"] .filter-divider { background: rgba(255,255,255,0.08); }
+:root[data-theme="dark"] .filter-select option { background: #1a2420; color: #f3f4f6; }
+
+:root[data-theme="dark"] .msg-capsule { background: rgba(255,255,255,0.06); }
+:root[data-theme="dark"] .capsule-btn { color: rgba(255,255,255,0.4); }
+:root[data-theme="dark"] .capsule-btn:hover { color: rgba(255,255,255,0.75); }
+:root[data-theme="dark"] .capsule-btn.active { background: rgba(255,255,255,0.09); color: #f3f4f6; box-shadow: 0 1px 4px rgba(0,0,0,0.3), 0 0 0 1px rgba(255,255,255,0.07); }
+
 :root[data-theme="dark"] .empty-state { background: rgba(255,255,255,0.03); border-color: rgba(255,255,255,0.04); }
 :root[data-theme="dark"] .msg-item { background: rgba(255,255,255,0.03); border-color: rgba(255,255,255,0.04); }
-:root[data-theme="dark"] .msg-item:hover { background: rgba(80,200,120,0.06); border-color: rgba(80,200,120,0.15); }
+:root[data-theme="dark"] .msg-item.clickable:hover { background: rgba(80,200,120,0.06); border-color: rgba(80,200,120,0.15); }
 :root[data-theme="dark"] .msg-title { color: #f3f4f6; }
 :root[data-theme="dark"] .block-label { color: rgba(255,255,255,0.35); }
+:root[data-theme="dark"] .block-label-hint { color: rgba(255,255,255,0.2); }
+:root[data-theme="dark"] .msg-chevron { color: rgba(255,255,255,0.15); }
+
+:root[data-theme="dark"] .risk-card { background: rgba(255,255,255,0.03); border-color: rgba(255,255,255,0.04); }
+:root[data-theme="dark"] .risk-card.risk-high   { background: rgba(239,68,68,0.04); }
+:root[data-theme="dark"] .risk-card.risk-medium { background: rgba(245,158,11,0.04); }
+:root[data-theme="dark"] .risk-card.risk-low    { background: rgba(52,211,153,0.03); }
+:root[data-theme="dark"] .risk-name { color: rgba(255,255,255,0.9); }
+:root[data-theme="dark"] .risk-desc { color: rgba(255,255,255,0.6); }
+:root[data-theme="dark"] .risk-meta { color: rgba(255,255,255,0.3); }
+:root[data-theme="dark"] .risk-mode-badge { background: rgba(80,200,120,0.12); color: #6ee7a0; }
 
 /* FAQ */
 :root[data-theme="dark"] .faq-question { background: rgba(255,255,255,0.03); border-color: rgba(255,255,255,0.04); color: rgba(255,255,255,0.8); }

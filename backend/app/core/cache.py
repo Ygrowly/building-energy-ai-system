@@ -127,7 +127,7 @@ async def close_redis_client() -> None:
         if _redis_client is None:
             return
         try:
-            await _redis_client.close()
+            await _redis_client.aclose()
         except Exception:
             logger.exception("Redis client close 异常")
         finally:
@@ -149,7 +149,8 @@ async def _get_local_cache() -> LocalTTLCache:
     if _local_cache is None:
         # 理论上 init_redis_client 会初始化；但为了更稳健，这里兜底
         await init_redis_client()
-    assert _local_cache is not None
+    if _local_cache is None:
+        raise RuntimeError("LocalTTLCache 未初始化，请确认 init_redis_client() 已在应用启动时调用")
     return _local_cache
 
 
@@ -159,9 +160,9 @@ async def _get_from_redis(key: str) -> Optional[Any]:
     try:
         raw = await _redis_client.get(key)
         if raw is None:
-            logger.info("[cache] miss redis key=%s", key)
+            logger.debug("[cache] miss redis key=%s", key)
             return None
-        logger.info("[cache] hit redis key=%s", key)
+        logger.debug("[cache] hit redis key=%s", key)
         return json.loads(raw)
     except Exception:
         logger.debug("Redis get 失败，回退本地：key=%s", key, exc_info=True)
@@ -189,7 +190,7 @@ async def _set_to_redis(key: str, value: Any, ttl_seconds: int) -> None:
             default=_json_default,
         )
         await _redis_client.set(key, raw, ex=ttl_seconds)
-        logger.info("[cache] set redis key=%s ttl=%ss", key, ttl_seconds)
+        logger.debug("[cache] set redis key=%s ttl=%ss", key, ttl_seconds)
     except Exception:
         logger.debug("Redis set 失败，忽略：key=%s", key, exc_info=True)
 
@@ -264,16 +265,16 @@ async def _get_from_local(key: str) -> Optional[Any]:
     cache = await _get_local_cache()
     value = await cache.get(key)
     if value is None:
-        logger.info("[cache] miss local key=%s", key)
+        logger.debug("[cache] miss local key=%s", key)
     else:
-        logger.info("[cache] hit local key=%s", key)
+        logger.debug("[cache] hit local key=%s", key)
     return value
 
 
 async def _set_to_local(key: str, value: Any, ttl_seconds: int) -> None:
     cache = await _get_local_cache()
     await cache.set(key, value, ttl_seconds=ttl_seconds)
-    logger.info("[cache] set local key=%s ttl=%ss", key, ttl_seconds)
+    logger.debug("[cache] set local key=%s ttl=%ss", key, ttl_seconds)
 
 
 async def get_or_compute_json(
@@ -299,7 +300,19 @@ async def get_or_compute_json(
         await _set_to_local(cache_key, redis_hit, ttl_seconds=ttl_seconds)
         return redis_hit  # type: ignore[return-value]
 
-    # miss：回源计算前尝试 stampede control
+    # miss：Redis 可用时走分布式锁；不可用时降级为本地锁（避免 1s 全局等待 + thundering herd）
+    if _redis_client is None:
+        logger.debug("[cache] redis unavailable, fallback local lock key=%s", cache_key)
+        local_lock = await _local_key_lock(cache_key)
+        async with local_lock:
+            local_hit2 = await _get_from_local(cache_key)
+            if local_hit2 is not None:
+                return local_hit2  # type: ignore[return-value]
+            logger.info("[cache] recompute (local-lock) key=%s", cache_key)
+            value = await compute()
+            await _set_to_local(cache_key, value, ttl_seconds=ttl_seconds)
+            return value
+
     lock_key = f"lock:{cache_key}"
     lock_value = uuid.uuid4().hex
 
@@ -354,7 +367,8 @@ async def get_or_compute_local_json(
     if local_hit is not None:
         return local_hit  # type: ignore[return-value]
 
-    async with _local_key_lock(cache_key):
+    lock = await _local_key_lock(cache_key)
+    async with lock:
         # double-check（防并发）
         local_hit2 = await _get_from_local(cache_key)
         if local_hit2 is not None:

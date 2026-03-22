@@ -14,6 +14,8 @@ pip install -r requirements.txt
 # 若日志里 buildings.meter_device_id does not exist：在库里执行 migrations/005_buildings_meter_device_id.sql
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
 
+docker compose up -d --build
+
 ```
 
 RAG 端到端测试（上传 PDF → 向量化 → 对话引用知识库）

@@ -176,25 +176,16 @@ class DailyEnergySummary(Base):
 class AnomalyEvent(Base):
     """
     异常事件记录表（业务闭环层）。
-    由 anomaly_detector 后台服务扫描 energy_data 后写入，是所有异常展示的唯一来源。
+    v2：事件由 notebook 检测链路从 kpi_anomaly_flags 汇总写入；
+        旧版 anomaly_detector 后台扫描器保留为 legacy fallback。
 
-    设计要点：
-    - UUID 主键 + 复合唯一约束 (data_timestamp, building_id, rule_triggered) 保证幂等性
-    - 外键 CASCADE 保证删楼宇时自动清理相关告警
-    - is_resolved 支持运维闭环工作台的处理状态追踪
-    - meter_device_id 关联 devices 表，但使用软引用（STRING）避免强 FK 阻碍批量写入
+    rule_triggered 取值：
+      water_leak / electricity_overload / hvac_overconsumption（旧）
+      flag_water / flag_electricity / flag_hvac_energy /
+      flag_supply_deviation / flag_return_deviation（notebook v2）
 
-    rule_triggered 取值（双阈值 GB 物理规则）：
-      water_leak            → 水耗偏差 > 20% 且 > 1.0 m³（管网漏水）
-      electricity_overload  → 总电耗偏差 > 15% 且 > 期望的 10%（异常高电耗）
-      hvac_overconsumption  → 空调能耗偏差 > 20% 且 > 20 kWh（空调系统过耗）
-      db_flagged            → energy_data.anomaly_status = 'Anomaly'（存量标注兜底）
-
-    hvac_root_cause 取值（仅 hvac_overconsumption 触发时非 NULL）：
-      A_low_efficiency  → 主机效能衰退（供水温度偏离期望 > 1.5℃）
-      B_small_deltaT    → 水力失调/大流量小温差（供回水温差 < 3℃）
-      C_unexpected_on   → 非预期开机/排程失效（设计负荷率 ≤ 0.05 但空调仍运行）
-      other_hvac        → 空调能耗异常但无法归类
+    event_source：notebook / legacy_scanner / realtime_fallback
+    anomaly_phase：ramp / full（notebook 阶段标签）
     """
     __tablename__ = "anomaly_events"
 
@@ -219,6 +210,11 @@ class AnomalyEvent(Base):
     hvac_root_cause: str = Column(String, nullable=True)
     message: str = Column(String, nullable=True)
     is_resolved: bool = Column(Boolean, nullable=False, default=False)
+    # notebook v2 新增字段（迁移 013）
+    anomaly_phase: str = Column(String, nullable=True)
+    symptom_flags_json: str = Column(Text, nullable=True)
+    event_source: str = Column(String, nullable=True, default="notebook")
+    severity: str = Column(String, nullable=True, default="warning")
 
     __table_args__ = (
         UniqueConstraint(
@@ -232,6 +228,191 @@ class AnomalyEvent(Base):
             "data_timestamp",
             postgresql_where=Column("is_resolved") == False,  # noqa: E712
         ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# kpi_expected_hourly — notebook 基线期望值表（迁移 013）
+# ---------------------------------------------------------------------------
+
+class KpiExpectedHourly(Base):
+    """
+    每楼每小时的 notebook 仿真基线期望值。
+    主键：(building_id, timestamp)，与 energy_data 完全对齐。
+    """
+    __tablename__ = "kpi_expected_hourly"
+
+    timestamp = Column(TIMESTAMP(timezone=True), primary_key=True, nullable=False)
+    building_id: str = Column(
+        String,
+        ForeignKey("buildings.building_id", ondelete="CASCADE"),
+        primary_key=True,
+        nullable=False,
+    )
+    building_usage: str = Column(String, nullable=True)
+    schedule_factor: float = Column(Float, nullable=True)
+    hvac_mode: str = Column(String, nullable=True)
+    source_version: str = Column(String, nullable=False, default="notebook_v1")
+
+    water_m3_expected: float = Column(Float, nullable=True)
+    electricity_kwh_expected: float = Column(Float, nullable=True)
+    hac_energy_expected: float = Column(Float, nullable=True)
+    sim_supply_temp_c_expected: float = Column(Float, nullable=True)
+    sim_return_temp_c_expected: float = Column(Float, nullable=True)
+    humidity_rh_pct_expected: float = Column(Float, nullable=True)
+
+    __table_args__ = (
+        Index("idx_kpi_expected_ts", "timestamp"),
+        Index("idx_kpi_expected_building_ts", "building_id", "timestamp"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# kpi_anomaly_flags — notebook 检测细粒度 flags 表（迁移 013）
+# ---------------------------------------------------------------------------
+
+class KpiAnomalyFlag(Base):
+    """每楼每小时的 notebook 症状检测结果。"""
+    __tablename__ = "kpi_anomaly_flags"
+
+    timestamp = Column(TIMESTAMP(timezone=True), primary_key=True, nullable=False)
+    building_id: str = Column(
+        String,
+        ForeignKey("buildings.building_id", ondelete="CASCADE"),
+        primary_key=True,
+        nullable=False,
+    )
+    flag_water: bool = Column(Boolean, nullable=False, default=False)
+    flag_electricity: bool = Column(Boolean, nullable=False, default=False)
+    flag_hvac_energy: bool = Column(Boolean, nullable=False, default=False)
+    flag_supply_deviation: bool = Column(Boolean, nullable=False, default=False)
+    flag_return_deviation: bool = Column(Boolean, nullable=False, default=False)
+    flag_symptom_soft_any: bool = Column(Boolean, nullable=False, default=False)
+    flag_symptom_union_any: bool = Column(Boolean, nullable=False, default=False)
+
+    anomaly_phase: str = Column(String, nullable=True)
+    hvac_diagnosis: str = Column(String, nullable=True)
+    detection_mode: str = Column(String, nullable=False, default="union")
+    source_version: str = Column(String, nullable=False, default="notebook_v1")
+    evidence_json: str = Column(Text, nullable=True)
+
+    __table_args__ = (
+        Index("idx_kpi_flags_ts", "timestamp"),
+        Index("idx_kpi_flags_building_ts", "building_id", "timestamp"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# device_telemetry_hourly — 设备级小时遥测（迁移 013）
+# ---------------------------------------------------------------------------
+
+class DeviceTelemetryHourly(Base):
+    """设备历史状态事实表，支持运行状态查询与趋势分析。"""
+    __tablename__ = "device_telemetry_hourly"
+
+    device_id: str = Column(
+        String,
+        ForeignKey("devices.device_id", ondelete="CASCADE"),
+        primary_key=True,
+        nullable=False,
+    )
+    timestamp = Column(TIMESTAMP(timezone=True), primary_key=True, nullable=False)
+    building_id: str = Column(
+        String,
+        ForeignKey("buildings.building_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    device_type: str = Column(String, nullable=False)
+
+    online_status: str = Column(String, nullable=True)
+    running_state: str = Column(String, nullable=True)
+    health_status: str = Column(String, nullable=True)
+
+    power_kw: float = Column(Float, nullable=True)
+    flow_rate: float = Column(Float, nullable=True)
+    valve_open_pct: float = Column(Float, nullable=True)
+    frequency_hz: float = Column(Float, nullable=True)
+    supply_temp_c: float = Column(Float, nullable=True)
+    return_temp_c: float = Column(Float, nullable=True)
+    ambient_temp_c: float = Column(Float, nullable=True)
+    metric_payload_json: str = Column(Text, nullable=True)
+    source: str = Column(String, nullable=True)
+
+    __table_args__ = (
+        Index("idx_device_telemetry_building_ts", "building_id", "timestamp"),
+        Index("idx_device_telemetry_device_ts", "device_id", "timestamp"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# device_status_latest — 设备当前状态快照（迁移 013）
+# ---------------------------------------------------------------------------
+
+class DeviceStatusLatest(Base):
+    """设备最新状态快照，前端设备列表页优先查此表。"""
+    __tablename__ = "device_status_latest"
+
+    device_id: str = Column(
+        String,
+        ForeignKey("devices.device_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    building_id: str = Column(
+        String,
+        ForeignKey("buildings.building_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    device_type: str = Column(String, nullable=False)
+
+    last_seen_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    online_status: str = Column(String, nullable=True)
+    running_state: str = Column(String, nullable=True)
+    health_status: str = Column(String, nullable=True)
+
+    latest_power_kw: float = Column(Float, nullable=True)
+    latest_flow_rate: float = Column(Float, nullable=True)
+    latest_supply_temp_c: float = Column(Float, nullable=True)
+    latest_return_temp_c: float = Column(Float, nullable=True)
+    latest_payload_json: str = Column(Text, nullable=True)
+
+    __table_args__ = (
+        Index("idx_device_status_building", "building_id"),
+        Index("idx_device_status_type", "device_type"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# anomaly_device_attributions — 楼级异常归因到设备（迁移 013）
+# ---------------------------------------------------------------------------
+
+class AnomalyDeviceAttribution(Base):
+    """一条楼级异常事件可对应多条设备归因。"""
+    __tablename__ = "anomaly_device_attributions"
+
+    id: str = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    building_id: str = Column(
+        String,
+        ForeignKey("buildings.building_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    timestamp = Column(TIMESTAMP(timezone=True), nullable=False)
+    event_id: str = Column(String, nullable=True)  # 软关联 anomaly_events.id
+    device_id: str = Column(
+        String,
+        ForeignKey("devices.device_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    device_type: str = Column(String, nullable=False)
+
+    attribution_role: str = Column(String, nullable=True)   # primary / secondary / supporting
+    attribution_score: float = Column(Float, nullable=True)
+    attribution_reason: str = Column(String, nullable=True)
+    evidence_json: str = Column(Text, nullable=True)
+
+    __table_args__ = (
+        Index("idx_attr_building_ts", "building_id", "timestamp"),
+        Index("idx_attr_device_ts", "device_id", "timestamp"),
+        Index("idx_attr_event", "event_id"),
     )
 
 

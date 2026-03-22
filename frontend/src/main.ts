@@ -3,6 +3,7 @@ import { createPinia } from 'pinia'
 import App from './App.vue'
 import router from './router'
 import './style.css'
+import './styles/home-dashboard.css'
 
 import { setAuthProvider } from '@/api/http'
 import { setStreamAuthProvider } from '@/api/stream_client'

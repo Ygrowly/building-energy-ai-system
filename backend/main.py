@@ -18,6 +18,8 @@ from app.api.routes_data import router as data_router
 from app.api.routes_datacenter import router as datacenter_router
 from app.api.routes_report import router as report_router
 from app.api.routes_workorder import router as workorder_router
+from app.api.routes_devices import router as devices_router
+from app.api.routes_admin import router as admin_router
 from app.core.config import get_settings
 
 settings = get_settings()
@@ -160,6 +162,8 @@ app.include_router(data_router, prefix="/api")
 app.include_router(datacenter_router, prefix="/api")
 app.include_router(workorder_router, prefix="/api")
 app.include_router(report_router, prefix="/api")
+app.include_router(devices_router, prefix="/api")
+app.include_router(admin_router, prefix="/api")
 
 
 # ---------------------------------------------------------------------------

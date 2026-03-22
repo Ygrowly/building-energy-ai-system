@@ -5,6 +5,8 @@
   GET /api/buildings                       — 获取所有建筑列表
   GET /api/buildings/{building_type}/status — 获取建筑最新设备状态（按 building_type）
   GET /api/buildings/{building_type}/energy — 获取建筑每日能耗趋势（按 building_type）
+  GET /api/buildings/{building_type}/load-profile — 按小时/星期聚合负荷曲线
+  GET /api/buildings/{building_type}/peak-valley-stats — 峰谷与夜间高耗统计
   GET /api/overview                         — 获取 Dashboard KPI 汇总（全局总览）
   GET /api/anomalies/sankey                  — 异常根因桑基图聚合数据
   GET /api/tools                            — 列出所有可用 MCP 工具（调试用）
@@ -13,6 +15,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date, datetime, timedelta, timezone
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select, text
@@ -260,19 +263,25 @@ async def get_rated_vs_actual(
     db: AsyncSession = Depends(get_db_session),
 ):
     """
-    逐小时返回指定建筑的"实际值 vs 国标 GB 期望值"对比数据。
+    逐小时返回指定建筑的"实际值 vs 仿真基线期望值"对比数据。
 
-    期望值由 gb_simulator 实时计算（基于 GB/T 51161、GB 50034、GB 50189、
-    GB 50736、GB 50015 五项国标），不依赖外部存储。
+    数据来源优先级：
+    1. kpi_expected_hourly（notebook 仿真基线，来自迁移 013）
+    2. gb_simulator 实时计算（兼容回退，仅在新表无数据时触发）
 
-    返回字段：
-      timestamp        — ISO 8601 时间戳（UTC）
-      actual           — 实际值（来自 energy_data 表）
-      rated            — 国标期望值
-      deviation_pct    — 偏差百分比（正数=超标，负数=低于期望）
-      hvac_mode        — 当前 HVAC 工况（Cooling / Heating / Ventilation）
-      schedule_factor  — 当前小时建筑负荷率 S
-      is_anomaly       — 是否异常（|偏差| > 15% 且满足绝对值阈值）
+    返回字段（v2 扩展）：
+      timestamp           — ISO 8601 时间戳（UTC）
+      actual              — 实际值（来自 energy_data 表）
+      rated               — 期望基线值（notebook 或 GB）
+      deviation_pct       — 偏差百分比
+      hvac_mode           — 当前 HVAC 工况
+      schedule_factor     — 当前小时建筑负荷率 S
+      is_anomaly          — 是否异常
+      anomaly_phase       — ramp / full（来自 kpi_anomaly_flags，notebook only）
+      hvac_diagnosis      — A_low_efficiency / B_small_deltaT / C_unexpected_on
+      supply_dev_c        — 供水温度偏差（℃）
+      return_dev_c        — 回水温度偏差（℃）
+      expected_source     — notebook_baseline / gb_realtime（期望值来源标记）
     """
     if start_date > end_date:
         raise HTTPException(status_code=400, detail="start_date 不能晚于 end_date")
@@ -298,59 +307,82 @@ async def get_rated_vs_actual(
     building_id, sqm, usage = bld_row
     sqm = sqm or 1000.0
 
-    # 查时段内所有小时记录
-    result = await db.execute(
-        select(
-            EnergyData.timestamp,
-            EnergyData.electricity_kwh,
-            EnergyData.water_m3,
-            EnergyData.hac_energy,
-            EnergyData.sim_supply_temp_c,
-            EnergyData.sim_return_temp_c,
-            EnergyData.air_temp_c,
-            EnergyData.dew_temp_c,
-        )
-        .where(EnergyData.building_id == building_id)
-        .where(EnergyData.timestamp >= start_date)
-        .where(EnergyData.timestamp < end_date + timedelta(days=1))
-        .order_by(EnergyData.timestamp.asc())
-    )
-    rows = result.fetchall()
+    # 主查询：energy_data LEFT JOIN kpi_expected_hourly LEFT JOIN kpi_anomaly_flags
+    main_rows = (await db.execute(text("""
+        SELECT
+            e.timestamp,
+            e.electricity_kwh, e.water_m3, e.hac_energy,
+            e.sim_supply_temp_c, e.sim_return_temp_c,
+            e.air_temp_c, e.dew_temp_c,
+            x.electricity_kwh_expected, x.water_m3_expected, x.hac_energy_expected,
+            x.sim_supply_temp_c_expected, x.sim_return_temp_c_expected,
+            x.schedule_factor, x.hvac_mode,
+            f.anomaly_phase, f.hvac_diagnosis,
+            f.flag_supply_deviation, f.flag_return_deviation,
+            f.evidence_json
+        FROM energy_data e
+        LEFT JOIN kpi_expected_hourly x
+            ON x.building_id = e.building_id AND x.timestamp = e.timestamp
+        LEFT JOIN kpi_anomaly_flags f
+            ON f.building_id = e.building_id AND f.timestamp = e.timestamp
+        WHERE e.building_id = :bid
+          AND e.timestamp >= :start_dt
+          AND e.timestamp < :end_dt
+        ORDER BY e.timestamp ASC
+    """), {
+        "bid": building_id,
+        "start_dt": start_date.isoformat(),
+        "end_dt": (end_date + timedelta(days=1)).isoformat(),
+    })).fetchall()
 
     records = []
     anomaly_count = 0
     eps = 1e-6
+    import json as _json
 
-    for ts, elec, water, hac, supply, ret, air_t, dew_t in rows:
-        try:
-            rated = calculate_rated_values(
-                sqm=sqm,
-                primary_space_usage=usage or "Office",
-                hour=ts.hour,
-                dayofweek=ts.isoweekday(),
-                air_temp=air_t or 20.0,
-                dew_temp=dew_t or 10.0,
-            )
-        except Exception:
+    for row in main_rows:
+        (ts, elec, water, hac, supply, ret, air_t, dew_t,
+         e_exp, w_exp, h_exp, s_exp, r_exp,
+         sched_f, hvac_mode_nb,
+         anom_phase, hvac_diag,
+         flag_supply, flag_return,
+         evid_json) = row
+
+        # 期望值来源：优先 notebook，回退 gb_simulator
+        expected_source = "gb_realtime"
+        if e_exp is not None or w_exp is not None or h_exp is not None:
+            expected_source = "notebook_baseline"
+            e_exp_final = e_exp
+            w_exp_final = w_exp
+            h_exp_final = h_exp
+            hvac_mode_final = hvac_mode_nb or "transition"
+            sched_factor_final = sched_f
+        else:
+            try:
+                rated_gb = calculate_rated_values(
+                    sqm=sqm, primary_space_usage=usage or "Office",
+                    hour=ts.hour, dayofweek=ts.isoweekday(),
+                    air_temp=air_t or 20.0, dew_temp=dew_t or 10.0,
+                )
+                e_exp_final = rated_gb.rated_electricity_kwh
+                w_exp_final = rated_gb.rated_water_m3
+                h_exp_final = rated_gb.rated_hac_energy
+                hvac_mode_final = rated_gb.hvac_mode
+                sched_factor_final = rated_gb.schedule_factor
+            except Exception:
+                continue
+
+        actual_val: float | None = {"electricity": elec, "water": water, "hac_energy": hac}[metric]
+        rated_val: float | None = {"electricity": e_exp_final, "water": w_exp_final, "hac_energy": h_exp_final}[metric]
+
+        if rated_val is None:
             continue
-
-        actual_val: float | None = {
-            "electricity": elec,
-            "water":       water,
-            "hac_energy":  hac,
-        }[metric]
-        rated_val: float = {
-            "electricity": rated.rated_electricity_kwh,
-            "water":       rated.rated_water_m3,
-            "hac_energy":  rated.rated_hac_energy,
-        }[metric]
 
         dev_pct: float | None = None
         is_anomaly = False
         if actual_val is not None and rated_val > eps:
             delta = actual_val - rated_val
             dev_pct = round(delta / rated_val * 100, 2)
-            # 异常判定：满足相对阈值 AND 绝对阈值（电耗只用相对阈值）
             if abs_thr is None:
                 is_anomaly = dev_pct > rel_thr * 100
             else:
@@ -359,14 +391,29 @@ async def get_rated_vs_actual(
         if is_anomaly:
             anomaly_count += 1
 
+        ts_iso = (ts.replace(tzinfo=timezone.utc) if ts.tzinfo is None else ts.astimezone(timezone.utc)).isoformat()
+
+        # 供回水温度偏差
+        evid = _json.loads(evid_json) if evid_json else {}
+        supply_dev = evid.get("supply_dev_c")
+        return_dev = evid.get("return_dev_c")
+
         records.append({
-            "timestamp":       ts_utc.isoformat(),
-            "actual":          round(actual_val, 4) if actual_val is not None else None,
-            "rated":           round(rated_val, 4),
-            "deviation_pct":   dev_pct,
-            "hvac_mode":       rated.hvac_mode,
-            "schedule_factor": rated.schedule_factor,
-            "is_anomaly":      is_anomaly,
+            "timestamp":         ts_iso,
+            "actual":            round(actual_val, 4) if actual_val is not None else None,
+            "rated":             round(rated_val, 4),
+            "deviation_pct":     dev_pct,
+            "hvac_mode":         hvac_mode_final,
+            "schedule_factor":   sched_factor_final,
+            "is_anomaly":        is_anomaly,
+            # notebook v2 扩展字段
+            "anomaly_phase":     anom_phase,
+            "hvac_diagnosis":    hvac_diag,
+            "flag_supply_deviation": bool(flag_supply),
+            "flag_return_deviation": bool(flag_return),
+            "supply_dev_c":      supply_dev,
+            "return_dev_c":      return_dev,
+            "expected_source":   expected_source,
         })
 
     return {
@@ -383,6 +430,294 @@ async def get_rated_vs_actual(
             "anomaly_hours":    anomaly_count,
             "anomaly_rate_pct": round(anomaly_count / len(records) * 100, 1) if records else 0,
         },
+    }
+
+
+# ---------------------------------------------------------------------------
+# 负荷曲线：按小时 / 按星期聚合（首页节律热力图、工作时段图等）
+# ---------------------------------------------------------------------------
+_LOAD_PROFILE_METRICS: dict[str, str] = {
+    "electricity": "electricity_kwh",
+    "water": "water_m3",
+    "hac_energy": "hac_energy",
+    "air_temp": "air_temp_c",
+    "humidity": "humidity_rh_pct",
+}
+
+_PEAK_VALLEY_METRICS: frozenset[str] = frozenset({
+    "electricity",
+    "water",
+    "hac_energy",
+})
+
+_WD_LABELS: dict[int, str] = {
+    1: "周一",
+    2: "周二",
+    3: "周三",
+    4: "周四",
+    5: "周五",
+    6: "周六",
+    7: "周日",
+}
+
+
+@router.get(
+    "/buildings/{building_type}/load-profile",
+    summary="按小时与星期聚合负荷曲线",
+)
+async def get_load_profile(
+    building_type: str,
+    metric: str = Query(
+        "electricity",
+        description="指标：electricity | water | hac_energy",
+    ),
+    days: int = Query(14, ge=1, le=90, description="回溯天数，以库内最新时间为终点"),
+    db: AsyncSession = Depends(get_db_session),
+):
+    """从 energy_data 聚合小时均值与星期均值，供首页节律类图表使用。"""
+    if metric not in _LOAD_PROFILE_METRICS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"metric 只能为：{list(_LOAD_PROFILE_METRICS.keys())}",
+        )
+
+    col = _LOAD_PROFILE_METRICS[metric]
+
+    bld_result = await db.execute(
+        select(Building.building_id).where(
+            Building.primary_space_usage == building_type
+        )
+    )
+    building_id = bld_result.scalar_one_or_none()
+    if not building_id:
+        raise HTTPException(status_code=404, detail=f"建筑类型 {building_type} 不存在")
+
+    max_row = await db.execute(
+        select(func.max(EnergyData.timestamp)).where(
+            EnergyData.building_id == building_id
+        )
+    )
+    max_ts = max_row.scalar()
+    if max_ts is None:
+        return {
+            "building_type": building_type,
+            "building_id": building_id,
+            "metric": metric,
+            "days": days,
+            "window_end": None,
+            "window_start": None,
+            "hourly_profile": [],
+            "weekday_profile": [],
+        }
+
+    if max_ts.tzinfo is None:
+        end_dt = max_ts.replace(tzinfo=timezone.utc)
+    else:
+        end_dt = max_ts.astimezone(timezone.utc)
+    start_dt = end_dt - timedelta(days=days)
+
+    hourly_sql = text(
+        f"""
+        SELECT EXTRACT(HOUR FROM e.timestamp)::int AS hr,
+               AVG(e.{col})::float AS avg_val,
+               COUNT(*)::int AS n
+          FROM energy_data e
+         WHERE e.building_id = :bid
+           AND e.timestamp >= :t0
+           AND e.timestamp <= :t1
+         GROUP BY hr
+         ORDER BY hr
+        """
+    )
+    h_result = await db.execute(
+        hourly_sql, {"bid": building_id, "t0": start_dt, "t1": end_dt}
+    )
+    hourly_map: dict[int, tuple[float, int]] = {}
+    for hr, avg_val, n in h_result.fetchall():
+        if hr is None:
+            continue
+        hourly_map[int(hr)] = (float(avg_val or 0), int(n or 0))
+
+    hourly_profile = []
+    for h in range(24):
+        av, n = hourly_map.get(h, (0.0, 0))
+        hourly_profile.append({
+            "hour": h,
+            "avg_value": round(av, 4),
+            "sample_count": n,
+            "anomaly_count": 0,
+        })
+
+    wd_sql = text(
+        f"""
+        SELECT EXTRACT(ISODOW FROM e.timestamp)::int AS wd,
+               AVG(e.{col})::float AS avg_val,
+               COUNT(*)::int AS n
+          FROM energy_data e
+         WHERE e.building_id = :bid
+           AND e.timestamp >= :t0
+           AND e.timestamp <= :t1
+         GROUP BY wd
+         ORDER BY wd
+        """
+    )
+    wd_result = await db.execute(
+        wd_sql, {"bid": building_id, "t0": start_dt, "t1": end_dt}
+    )
+    wd_map: dict[int, tuple[float, int]] = {}
+    for wd, avg_val, n in wd_result.fetchall():
+        if wd is None:
+            continue
+        wd_map[int(wd)] = (float(avg_val or 0), int(n or 0))
+
+    weekday_profile = []
+    for wd in range(1, 8):
+        av, n = wd_map.get(wd, (0.0, 0))
+        weekday_profile.append({
+            "weekday": wd,
+            "label": _WD_LABELS.get(wd, str(wd)),
+            "avg_value": round(av, 4),
+            "sample_count": n,
+        })
+
+    return {
+        "building_type": building_type,
+        "building_id": building_id,
+        "metric": metric,
+        "days": days,
+        "window_end": end_dt.isoformat(),
+        "window_start": start_dt.isoformat(),
+        "hourly_profile": hourly_profile,
+        "weekday_profile": weekday_profile,
+    }
+
+
+# ---------------------------------------------------------------------------
+# 峰谷统计：按日汇总后的峰值、谷值、峰谷比、夜间异常小时数
+# ---------------------------------------------------------------------------
+@router.get(
+    "/buildings/{building_type}/peak-valley-stats",
+    summary="峰谷与夜间高耗统计",
+)
+async def get_peak_valley_stats(
+    building_type: str,
+    metric: str = Query("electricity", description="指标：electricity | water | hac_energy"),
+    days: int = Query(7, ge=1, le=90),
+    night_threshold: float = Query(
+        50.0,
+        description="夜间单小时判定阈值（电 kWh；水/暖通按同列数值）",
+    ),
+    db: AsyncSession = Depends(get_db_session),
+):
+    if metric not in _PEAK_VALLEY_METRICS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"峰谷统计 metric 只能为：{sorted(_PEAK_VALLEY_METRICS)}",
+        )
+    col = _LOAD_PROFILE_METRICS[metric]
+
+    bld_result = await db.execute(
+        select(Building.building_id).where(
+            Building.primary_space_usage == building_type
+        )
+    )
+    building_id = bld_result.scalar_one_or_none()
+    if not building_id:
+        raise HTTPException(status_code=404, detail=f"建筑类型 {building_type} 不存在")
+
+    max_row = await db.execute(
+        select(func.max(EnergyData.timestamp)).where(
+            EnergyData.building_id == building_id
+        )
+    )
+    max_ts = max_row.scalar()
+    if max_ts is None:
+        return {
+            "building_type": building_type,
+            "building_id": building_id,
+            "metric": metric,
+            "days": days,
+            "peak_value": None,
+            "valley_value": None,
+            "avg_value": None,
+            "peak_valley_ratio": None,
+            "night_abnormal_hours": 0,
+            "daily_totals": [],
+        }
+
+    if max_ts.tzinfo is None:
+        end_dt = max_ts.replace(tzinfo=timezone.utc)
+    else:
+        end_dt = max_ts.astimezone(timezone.utc)
+    start_dt = end_dt - timedelta(days=days)
+
+    daily_sql = text(
+        f"""
+        SELECT date_trunc('day', e.timestamp AT TIME ZONE 'UTC')::date AS d,
+               SUM(e.{col})::float AS total
+          FROM energy_data e
+         WHERE e.building_id = :bid
+           AND e.timestamp >= :t0
+           AND e.timestamp <= :t1
+         GROUP BY d
+         ORDER BY d
+        """
+    )
+    d_result = await db.execute(
+        daily_sql, {"bid": building_id, "t0": start_dt, "t1": end_dt}
+    )
+    daily_rows = d_result.fetchall()
+    daily_totals: list[dict[str, Any]] = []
+    totals: list[float] = []
+    for d, total in daily_rows:
+        t = float(total or 0)
+        totals.append(t)
+        day_str = d.isoformat() if hasattr(d, "isoformat") else str(d)
+        daily_totals.append({"day": day_str, "total": round(t, 4)})
+
+    if not totals:
+        peak = valley = avg = None
+        ratio = None
+    else:
+        peak = max(totals)
+        valley = min(totals)
+        avg = sum(totals) / len(totals)
+        ratio = round(peak / valley, 3) if valley and valley > 1e-9 else None
+        peak = round(peak, 4)
+        valley = round(valley, 4)
+        avg = round(avg, 4)
+
+    night_sql = text(
+        f"""
+        SELECT COUNT(*)::int
+          FROM energy_data e
+         WHERE e.building_id = :bid
+           AND e.timestamp >= :t0
+           AND e.timestamp <= :t1
+           AND (MOD((EXTRACT(HOUR FROM e.timestamp AT TIME ZONE 'UTC')::int + 8), 24)) < 6
+           AND e.{col} > :thr
+        """
+    )
+    n_result = await db.execute(
+        night_sql,
+        {"bid": building_id, "t0": start_dt, "t1": end_dt, "thr": night_threshold},
+    )
+    night_abnormal_hours = int(n_result.scalar() or 0)
+
+    return {
+        "building_type": building_type,
+        "building_id": building_id,
+        "metric": metric,
+        "days": days,
+        "night_threshold": night_threshold,
+        "window_end": end_dt.isoformat(),
+        "window_start": start_dt.isoformat(),
+        "peak_value": peak,
+        "valley_value": valley,
+        "avg_value": avg,
+        "peak_valley_ratio": ratio,
+        "night_abnormal_hours": night_abnormal_hours,
+        "daily_totals": daily_totals,
     }
 
 
@@ -645,6 +980,16 @@ async def get_recent_anomalies(
                     "expected_value": ev.expected_value,
                     "deviation_pct": ev.deviation_pct,
                     "anomaly_status": "Anomaly",
+                    # notebook v2 新增字段
+                    "anomaly_phase": getattr(ev, "anomaly_phase", None),
+                    "hvac_diagnosis": ev.hvac_root_cause,
+                    "symptom_flags": (
+                        __import__("json").loads(ev.symptom_flags_json)
+                        if getattr(ev, "symptom_flags_json", None)
+                        else None
+                    ),
+                    "event_source": getattr(ev, "event_source", "notebook"),
+                    "severity": getattr(ev, "severity", "warning"),
                 }
                 for ev, usage in rows[:100]
             ]
@@ -799,11 +1144,18 @@ async def _fallback_realtime_anomalies(
 # 异常根因桑基图（Sankey）聚合数据
 # ---------------------------------------------------------------------------
 _RULE_LABEL = {
+    # 旧版规则（兼容）
     "water_leak": "水耗异常",
     "electricity_overload": "电耗超标",
     "hvac_overconsumption": "空调过耗",
     "db_flagged": "标注异常",
     "night_high_power": "夜间高耗",
+    # notebook v2 规则
+    "flag_water": "水耗偏高",
+    "flag_electricity": "总电耗偏高",
+    "flag_hvac_energy": "空调能耗偏高",
+    "flag_supply_deviation": "供水温度偏离",
+    "flag_return_deviation": "回水温度偏离",
 }
 
 _ROOT_CAUSE_LABEL = {

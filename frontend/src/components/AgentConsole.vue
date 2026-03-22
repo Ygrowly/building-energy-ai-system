@@ -193,6 +193,8 @@
             v-if="msg.thinkingSteps && msg.thinkingSteps.length > 0"
             :steps="msg.thinkingSteps"
             :is-finished="msg.thinkingFinished ?? false"
+            :duration="msg.thinkingDuration"
+            :start-time="msg.thinkingStartTime"
           />
           <div
             class="msg msg-ai"
@@ -200,8 +202,11 @@
           >
             <div class="ai-content">
               <div class="ai-bubble">
-                <span v-if="msg.content" v-html="formatMarkdown(msg.content)"></span>
-                <span v-else class="stream-cursor"></span>
+                <span v-if="msg.content" v-html="formatMarkdown(msg.content)"></span><span
+                  v-if="store.isLoading && msg.id === lastAiMsgId"
+                  class="stream-cursor"
+                ></span>
+                <span v-if="!msg.content && !store.isLoading" class="stream-cursor"></span>
               </div>
               <EvidenceLink
                 v-if="msg.artifact?.source_info"
@@ -487,6 +492,14 @@ onUnmounted(() => {
 
 /* tab 数量变化时更新滚动条 */
 watch(() => store.openTabs.length, () => nextTick(updateScrollThumb))
+
+// ── 最后一条 AI 消息 ID（用于流式光标定位）────────────────────────────────────
+const lastAiMsgId = computed(() => {
+  for (let i = store.messages.length - 1; i >= 0; i--) {
+    if (store.messages[i].role === 'ai') return store.messages[i].id
+  }
+  return null
+})
 
 // ── 历史记录分组 ────────────────────────────────────────────────────────────
 interface HistoryGroup { label: string; sessions: SessionInfo[] }

@@ -29,6 +29,8 @@ export interface ChatMessage {
   timestamp: Date
   thinkingSteps?: ThinkingStep[]
   thinkingFinished?: boolean
+  thinkingStartTime?: number   // performance.now() 时间戳，用于计算思考时长
+  thinkingDuration?: number    // 思考耗时（秒），完成时写入
   liked?: boolean | null
 }
 
@@ -396,8 +398,10 @@ export const useChatStore = defineStore('chat', () => {
 
     // 立即创建 AI 占位消息（在任何异步操作之前，让 UI 立刻显示思考状态）
     const aiMsgId = crypto.randomUUID()
+    const thinkingStart = performance.now()
     _addMsg('ai', '', {
       id: aiMsgId, thinkingSteps: [], thinkingFinished: false,
+      thinkingStartTime: thinkingStart,
     }, originSessionId)
 
     // 会话已使用真实 UUID，无需等待预创建，直接进入流式请求
@@ -432,7 +436,11 @@ export const useChatStore = defineStore('chat', () => {
           const m = findAiMsg()
           if (m) {
             m.content += e.content
-            if (!textStarted) { textStarted = true; m.thinkingFinished = true }
+            if (!textStarted) {
+              textStarted = true
+              m.thinkingFinished = true
+              m.thinkingDuration = Math.round((performance.now() - thinkingStart) / 1000)
+            }
           }
           if (e.is_final) _agentStatusBySession.value[originSessionId] = null
         },
@@ -450,7 +458,12 @@ export const useChatStore = defineStore('chat', () => {
           _loadingBySession.value[originSessionId] = false
           _agentStatusBySession.value[originSessionId] = null
           const m = findAiMsg()
-          if (m && !m.thinkingFinished) m.thinkingFinished = true
+          if (m) {
+            if (!m.thinkingFinished) m.thinkingFinished = true
+            if (!m.thinkingDuration) {
+              m.thinkingDuration = Math.round((performance.now() - thinkingStart) / 1000)
+            }
+          }
 
           // 乐观更新目标会话元数据（用 originSessionId 而非 currentSessionId）
           const idx = sessionList.value.findIndex(s => s.session_id === originSessionId)
@@ -508,8 +521,10 @@ export const useChatStore = defineStore('chat', () => {
 
     // 创建新的 AI 占位消息
     const aiMsgId = crypto.randomUUID()
+    const regenThinkingStart = performance.now()
     _addMsg('ai', '', {
       id: aiMsgId, thinkingSteps: [], thinkingFinished: false,
+      thinkingStartTime: regenThinkingStart,
     }, originSessionId)
 
     let textStarted = false
@@ -537,7 +552,11 @@ export const useChatStore = defineStore('chat', () => {
           const m = findAiMsg()
           if (m) {
             m.content += e.content
-            if (!textStarted) { textStarted = true; m.thinkingFinished = true }
+            if (!textStarted) {
+              textStarted = true
+              m.thinkingFinished = true
+              m.thinkingDuration = Math.round((performance.now() - regenThinkingStart) / 1000)
+            }
           }
           if (e.is_final) _agentStatusBySession.value[originSessionId] = null
         },
@@ -555,7 +574,12 @@ export const useChatStore = defineStore('chat', () => {
           _loadingBySession.value[originSessionId] = false
           _agentStatusBySession.value[originSessionId] = null
           const m = findAiMsg()
-          if (m && !m.thinkingFinished) m.thinkingFinished = true
+          if (m) {
+            if (!m.thinkingFinished) m.thinkingFinished = true
+            if (!m.thinkingDuration) {
+              m.thinkingDuration = Math.round((performance.now() - regenThinkingStart) / 1000)
+            }
+          }
         },
         onNetworkError(err) {
           _addMsg('error', `网络错误：${err.message}`, undefined, originSessionId)

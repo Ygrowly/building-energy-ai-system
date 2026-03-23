@@ -175,14 +175,145 @@ async def calculate_system_cop(
 # Tool 6：detect_energy_anomalies
 # ===========================================================================
 
+# 检测规则到 kpi_anomaly_flags 列名的映射
+_RULE_TO_FLAG_COL = {
+    AnomalyRule.WATER_LEAK:           "flag_water",
+    AnomalyRule.ELECTRICITY_OVERLOAD: "flag_electricity",
+    AnomalyRule.HVAC_OVERCONSUMPTION: "flag_hvac_energy",
+}
+
+# kpi_anomaly_flags 中的实际值列（对应 energy_data）
+_FLAG_TO_ACTUAL_COL = {
+    "flag_water":      ("water_m3",        "water_m3_expected"),
+    "flag_electricity": ("electricity_kwh", "electricity_kwh_expected"),
+    "flag_hvac_energy": ("hac_energy",      "hac_energy_expected"),
+}
+
+
 async def detect_energy_anomalies(
     inp: DetectEnergyAnomaliesInput,
     session: AsyncSession,
 ) -> DetectEnergyAnomaliesOutput | MCPError:
-    return MCPError(
-        error="异常监测模块已下线，等待重新开发。",
-        error_code="ANOMALY_MODULE_DISABLED",
-        tool_name="detect_energy_anomalies",
+    """
+    从预计算的 kpi_anomaly_flags 表读取异常记录，格式化为 DetectEnergyAnomaliesOutput。
+    如果 kpi_anomaly_flags 没有数据，返回 MCPError 提示先调用 /api/admin/rebuild-all。
+    """
+    from sqlalchemy import text as sqla_text
+
+    _meter_id, actual_bid = await get_building_info(session, inp.building_id)
+    if actual_bid is None:
+        return MCPError(
+            error=f"未找到建筑类型 '{inp.building_id}'，请先调用 list_available_buildings 确认合法值",
+            error_code="BUILDING_NOT_FOUND",
+            tool_name="detect_energy_anomalies",
+        )
+
+    # 检查 kpi_anomaly_flags 是否有数据
+    check_result = await session.execute(
+        sqla_text("SELECT COUNT(*) FROM kpi_anomaly_flags WHERE building_id = :bid"),
+        {"bid": actual_bid},
+    )
+    if (check_result.scalar() or 0) == 0:
+        return MCPError(
+            error=(
+                f"建筑 '{inp.building_id}' 的 kpi_anomaly_flags 表尚无数据。"
+                "请先调用 POST /api/admin/rebuild-all 触发期望值计算和异常检测。"
+            ),
+            error_code="ANOMALY_FLAGS_EMPTY",
+            tool_name="detect_energy_anomalies",
+        )
+
+    # 决定哪些 flag 列要查
+    requested_rules = {r for r in inp.rules if r in _RULE_TO_FLAG_COL}
+    if not requested_rules:
+        return MCPError(
+            error="当前支持的规则为 water_leak / electricity_overload / hvac_overconsumption",
+            error_code="UNSUPPORTED_RULES",
+            tool_name="detect_energy_anomalies",
+        )
+
+    # 构建 WHERE 条件（只返回至少一项请求规则触发的行）
+    flag_conditions = " OR ".join(
+        f"f.{_RULE_TO_FLAG_COL[r]}" for r in requested_rules
+    )
+
+    rows_result = await session.execute(sqla_text(f"""
+        SELECT
+            f.timestamp,
+            f.flag_water,
+            f.flag_electricity,
+            f.flag_hvac_energy,
+            f.hvac_diagnosis,
+            e.water_m3,
+            e.electricity_kwh,
+            e.hac_energy,
+            x.water_m3_expected,
+            x.electricity_kwh_expected,
+            x.hac_energy_expected
+        FROM kpi_anomaly_flags f
+        JOIN energy_data e ON e.building_id = f.building_id AND e.timestamp = f.timestamp
+        LEFT JOIN kpi_expected_hourly x ON x.building_id = f.building_id AND x.timestamp = f.timestamp
+        WHERE f.building_id = :bid
+          AND f.timestamp >= :t0
+          AND f.timestamp <= :t1
+          AND ({flag_conditions})
+        ORDER BY f.timestamp ASC
+        LIMIT 500
+    """), {"bid": actual_bid, "t0": inp.time_range.start, "t1": inp.time_range.end})
+    rows = rows_result.fetchall()
+
+    if not rows:
+        return DetectEnergyAnomaliesOutput(
+            anomalies=[],
+            total_anomalies=0,
+            building_id=inp.building_id,
+            period_start=inp.time_range.start,
+            period_end=inp.time_range.end,
+        )
+
+    anomaly_records: list[AnomalyRecord] = []
+    for row in rows:
+        (ts, fw, fe, fh, hvac_diag,
+         water, elec, hac,
+         water_e, elec_e, hac_e) = row
+
+        if hasattr(ts, "tzinfo") and ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+
+        flag_map = {
+            AnomalyRule.WATER_LEAK:           (fw, water,  water_e,  1000.0 * 1.20),
+            AnomalyRule.ELECTRICITY_OVERLOAD: (fe, elec,   elec_e,   (elec_e or 0) * 1.15 if elec_e else None),
+            AnomalyRule.HVAC_OVERCONSUMPTION: (fh, hac,    hac_e,    (hac_e or 0) * 1.20 if hac_e else None),
+        }
+        for rule, (triggered, actual_v, expected_v, threshold_v) in flag_map.items():
+            if rule not in requested_rules or not triggered:
+                continue
+            if actual_v is None:
+                continue
+
+            dev_pct: float | None = None
+            if expected_v is not None and abs(expected_v) > 1e-9:
+                dev_pct = round((actual_v - expected_v) / abs(expected_v) * 100, 2)
+
+            anomaly_records.append(AnomalyRecord(
+                timestamp=ts,
+                building_id=inp.building_id,
+                meter_device_id=_meter_id or actual_bid,
+                rule_triggered=rule,
+                actual_value=round(float(actual_v), 4),
+                threshold_value=round(float(threshold_v), 4) if threshold_v is not None else 0.0,
+                expected_value=round(float(expected_v), 4) if expected_v is not None else None,
+                deviation_pct=dev_pct,
+                hvac_root_cause=hvac_diag if rule == AnomalyRule.HVAC_OVERCONSUMPTION else None,
+                anomaly_status=OperationStatus.ANOMALY,
+            ))
+
+    return DetectEnergyAnomaliesOutput(
+        anomalies=anomaly_records,
+        total_anomalies=len(anomaly_records),
+        building_id=inp.building_id,
+        period_start=inp.time_range.start,
+        period_end=inp.time_range.end,
     )
 
 
@@ -218,8 +349,130 @@ async def get_building_rated_values(
     inp: GetBuildingRatedValuesInput,
     session: AsyncSession,
 ) -> GetBuildingRatedValuesOutput | MCPError:
-    return MCPError(
-        error="额定期望值模块已下线，等待重新开发。",
-        error_code="RATED_VALUE_MODULE_DISABLED",
-        tool_name="get_building_rated_values",
+    """
+    从 energy_data JOIN kpi_expected_hourly 读取实际值和期望值，
+    格式化为 GetBuildingRatedValuesOutput。
+    """
+    from sqlalchemy import text as sqla_text
+
+    _meter_id, actual_bid = await get_building_info(session, inp.building_id)
+    if actual_bid is None:
+        return MCPError(
+            error=f"未找到建筑类型 '{inp.building_id}'，请先调用 list_available_buildings 确认合法值",
+            error_code="BUILDING_NOT_FOUND",
+            tool_name="get_building_rated_values",
+        )
+
+    # 检查 kpi_expected_hourly 是否有数据
+    check_result = await session.execute(
+        sqla_text("SELECT COUNT(*) FROM kpi_expected_hourly WHERE building_id = :bid"),
+        {"bid": actual_bid},
+    )
+    if (check_result.scalar() or 0) == 0:
+        return MCPError(
+            error=(
+                f"建筑 '{inp.building_id}' 的 kpi_expected_hourly 表尚无数据。"
+                "请先调用 POST /api/admin/rebuild-all 触发期望值计算。"
+            ),
+            error_code="EXPECTED_HOURLY_EMPTY",
+            tool_name="get_building_rated_values",
+        )
+
+    bld_result = await session.execute(
+        select(Building.sqm, Building.primary_space_usage)
+        .where(Building.building_id == actual_bid)
+    )
+    bld_row = bld_result.fetchone()
+    sqm = float(bld_row[0] or 0) if bld_row else 0.0
+    primary_usage = (bld_row[1] or inp.building_id) if bld_row else inp.building_id
+
+    rows_result = await session.execute(sqla_text("""
+        SELECT
+            e.timestamp,
+            e.water_m3,
+            e.electricity_kwh,
+            e.hac_energy,
+            e.sim_supply_temp_c,
+            e.sim_return_temp_c,
+            x.water_m3_expected,
+            x.electricity_kwh_expected,
+            x.hac_energy_expected,
+            x.sim_supply_temp_c_expected,
+            x.sim_return_temp_c_expected,
+            x.hvac_mode,
+            x.schedule_factor
+        FROM energy_data e
+        JOIN kpi_expected_hourly x
+            ON x.building_id = e.building_id AND x.timestamp = e.timestamp
+        WHERE e.building_id = :bid
+          AND e.timestamp >= :t0
+          AND e.timestamp <= :t1
+        ORDER BY e.timestamp ASC
+        LIMIT 500
+    """), {"bid": actual_bid, "t0": inp.time_range.start, "t1": inp.time_range.end})
+    rows = rows_result.fetchall()
+
+    if not rows:
+        return MCPError(
+            error=f"建筑 '{inp.building_id}' 在指定时段内 energy_data JOIN kpi_expected_hourly 无结果",
+            error_code="NO_DATA_IN_RANGE",
+            tool_name="get_building_rated_values",
+        )
+
+    records: list[RatedActualRecord] = []
+    anomaly_hours = 0
+    _EPS = 1e-9
+
+    for row in rows:
+        (ts, water, elec, hac, supply, ret,
+         water_e, elec_e, hac_e, supply_e, return_e,
+         hvac_mode, sched_f) = row
+
+        if hasattr(ts, "tzinfo") and ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+
+        def _dev(actual, expected):
+            if actual is None or expected is None or abs(expected) < _EPS:
+                return None
+            return round((actual - expected) / abs(expected) * 100, 2)
+
+        w_dev = _dev(water, water_e)
+        e_dev = _dev(elec, elec_e)
+        h_dev = _dev(hac, hac_e)
+
+        is_anomaly = any(
+            v is not None and abs(v) > 15.0
+            for v in (w_dev, e_dev, h_dev)
+        )
+        if is_anomaly:
+            anomaly_hours += 1
+
+        records.append(RatedActualRecord(
+            timestamp=ts,
+            hvac_mode=hvac_mode or "Unknown",
+            schedule_factor=round(float(sched_f), 4) if sched_f is not None else 0.5,
+            rated_water_m3=round(float(water_e), 4) if water_e is not None else 0.0,
+            rated_electricity_kwh=round(float(elec_e), 4) if elec_e is not None else 0.0,
+            rated_hac_energy=round(float(hac_e), 4) if hac_e is not None else 0.0,
+            expected_supply_temp=round(float(supply_e), 4) if supply_e is not None else 0.0,
+            expected_return_temp=round(float(return_e), 4) if return_e is not None else 0.0,
+            actual_water_m3=round(float(water), 4) if water is not None else None,
+            actual_electricity_kwh=round(float(elec), 4) if elec is not None else None,
+            actual_hac_energy=round(float(hac), 4) if hac is not None else None,
+            actual_supply_temp=round(float(supply), 4) if supply is not None else None,
+            actual_return_temp=round(float(ret), 4) if ret is not None else None,
+            water_deviation_pct=w_dev,
+            electricity_deviation_pct=e_dev,
+            hac_deviation_pct=h_dev,
+        ))
+
+    return GetBuildingRatedValuesOutput(
+        building_id=inp.building_id,
+        primary_space_usage=primary_usage,
+        sqm=sqm,
+        records=records,
+        total_hours=len(records),
+        anomaly_hours=anomaly_hours,
+        period_start=inp.time_range.start,
+        period_end=inp.time_range.end,
     )

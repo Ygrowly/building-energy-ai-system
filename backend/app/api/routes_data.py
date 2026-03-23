@@ -246,10 +246,11 @@ async def get_building_energy_trend(
 # 实际 vs 国标期望逐小时对比（供前端"实际 vs 期望"折线图使用）
 # ---------------------------------------------------------------------------
 _METRIC_COLS = {
-    "electricity": ("electricity_kwh", "kWh"),
-    "water":       ("water_m3",        "L"),
-    "hac_energy":  ("hac_energy",      "kWh"),
+    "electricity": ("electricity_kwh",  "electricity_kwh_expected",  "kWh"),
+    "water":       ("water_m3",         "water_m3_expected",         "L"),
+    "hac_energy":  ("hac_energy",       "hac_energy_expected",       "kWh"),
 }
+
 @router.get(
     "/buildings/{building_type}/rated-vs-actual",
     summary="获取建筑逐小时实际 vs 国标期望值对比",
@@ -263,17 +264,99 @@ async def get_rated_vs_actual(
 ):
     if metric not in _METRIC_COLS:
         raise HTTPException(status_code=400, detail=f"metric 只能为：{list(_METRIC_COLS.keys())}")
-    _, unit = _METRIC_COLS[metric]
+    actual_col, expected_col, unit = _METRIC_COLS[metric]
+
+    bld_result = await db.execute(
+        select(Building.building_id).where(Building.primary_space_usage == building_type)
+    )
+    building_id = bld_result.scalar_one_or_none()
+    if not building_id:
+        raise HTTPException(status_code=404, detail=f"建筑类型 {building_type} 不存在")
+
+    start_dt = datetime(start_date.year, start_date.month, start_date.day, tzinfo=timezone.utc)
+    end_dt   = datetime(end_date.year,   end_date.month,   end_date.day,   tzinfo=timezone.utc) + timedelta(days=1)
+
+    rows_result = await db.execute(text(f"""
+        SELECT
+            e.timestamp,
+            e.{actual_col}   AS actual_val,
+            x.{expected_col} AS rated_val,
+            x.hvac_mode,
+            x.schedule_factor,
+            f.flag_water OR f.flag_electricity OR f.flag_hvac_energy
+                OR f.flag_supply_deviation OR f.flag_return_deviation AS is_anomaly,
+            f.anomaly_phase,
+            f.hvac_diagnosis
+        FROM energy_data e
+        LEFT JOIN kpi_expected_hourly x
+            ON x.building_id = e.building_id AND x.timestamp = e.timestamp
+        LEFT JOIN kpi_anomaly_flags f
+            ON f.building_id = e.building_id AND f.timestamp = e.timestamp
+        WHERE e.building_id = :bid
+          AND e.timestamp >= :t0
+          AND e.timestamp < :t1
+        ORDER BY e.timestamp ASC
+    """), {"bid": building_id, "t0": start_dt, "t1": end_dt})
+    rows = rows_result.fetchall()
+
+    if not rows:
+        return {
+            "building_type": building_type,
+            "building_id": building_id,
+            "metric": metric,
+            "unit": unit,
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat(),
+            "records": [],
+            "summary": {"total_hours": 0, "anomaly_hours": 0, "anomaly_rate_pct": 0.0},
+            "module_status": "no_data",
+            "message": "查询范围内暂无数据。",
+        }
+
+    # Check if expected values are populated
+    has_expected = any(r[2] is not None for r in rows)
+
+    records = []
+    anomaly_count = 0
+    for row in rows:
+        ts, actual, rated, hvac_mode, sched_f, is_anom, phase, hvac_diag = row
+        ts_str = ts.isoformat() if ts else None
+        dev_pct: float | None = None
+        if actual is not None and rated is not None and rated > 1e-9:
+            dev_pct = round((actual - rated) / rated * 100, 2)
+        if is_anom:
+            anomaly_count += 1
+        records.append({
+            "timestamp": ts_str,
+            "actual": round(float(actual), 4) if actual is not None else None,
+            "rated": round(float(rated), 4) if rated is not None else None,
+            "deviation_pct": dev_pct,
+            "hvac_mode": hvac_mode,
+            "schedule_factor": round(float(sched_f), 4) if sched_f is not None else None,
+            "is_anomaly": bool(is_anom) if is_anom is not None else False,
+            "anomaly_phase": phase,
+            "hvac_diagnosis": hvac_diag,
+            "expected_source": "notebook_baseline",
+        })
+
+    total = len(records)
+    anom_rate = round(anomaly_count / total * 100, 2) if total > 0 else 0.0
+
     return {
         "building_type": building_type,
+        "building_id": building_id,
         "metric": metric,
         "unit": unit,
         "start_date": start_date.isoformat(),
         "end_date": end_date.isoformat(),
-        "records": [],
-        "summary": {"total_hours": 0, "anomaly_hours": 0, "anomaly_rate_pct": 0},
-        "module_status": "disabled",
-        "message": "额定期望值模块已下线，等待重新开发。",
+        "records": records,
+        "summary": {
+            "total_hours": total,
+            "anomaly_hours": anomaly_count,
+            "anomaly_rate_pct": anom_rate,
+        },
+        "module_status": "ok" if has_expected else "no_expected_data",
+        "message": None if has_expected else "kpi_expected_hourly 暂无数据，请先调用 /api/admin/rebuild-all",
     }
 
 
@@ -749,17 +832,102 @@ async def get_recent_anomalies(
     building_type: str | None = Query(None, description="按建筑类型过滤"),
     db: AsyncSession = Depends(get_db_session),
 ):
+    # 以 anomaly_events 表中最新数据时间戳为窗口终点（数据集是历史数据）
+    max_ts_result = await db.execute(text("SELECT MAX(data_timestamp) FROM anomaly_events"))
+    max_ts = max_ts_result.scalar()
+
+    if max_ts is None:
+        return {
+            "anomalies": [],
+            "total": 0,
+            "check_period": {"start": None, "end": None, "hours": hours},
+            "source": "anomaly_events",
+            "module_status": "no_data",
+            "message": "anomaly_events 暂无数据，请先调用 /api/admin/rebuild-all",
+        }
+
+    if hasattr(max_ts, "tzinfo") and max_ts.tzinfo is None:
+        max_ts = max_ts.replace(tzinfo=timezone.utc)
+
+    window_start = max_ts - timedelta(hours=hours)
+
+    # 可选：按建筑类型过滤
+    building_filter = ""
+    params: dict[str, Any] = {"t0": window_start, "t1": max_ts}
+    if building_type:
+        bld_result = await db.execute(
+            select(Building.building_id).where(Building.primary_space_usage == building_type)
+        )
+        bid = bld_result.scalar_one_or_none()
+        if bid:
+            building_filter = " AND ae.building_id = :bid"
+            params["bid"] = bid
+
+    anomaly_result = await db.execute(text(f"""
+        SELECT
+            ae.id,
+            ae.detected_at,
+            ae.data_timestamp,
+            ae.building_id,
+            ae.meter_device_id,
+            ae.rule_triggered,
+            ae.actual_value,
+            ae.threshold_value,
+            ae.expected_value,
+            ae.deviation_pct,
+            ae.hvac_root_cause,
+            ae.message,
+            ae.is_resolved,
+            ae.anomaly_phase,
+            ae.symptom_flags_json,
+            ae.event_source,
+            ae.severity
+        FROM anomaly_events ae
+        WHERE ae.data_timestamp >= :t0
+          AND ae.data_timestamp <= :t1
+          AND ae.is_resolved = false
+          {building_filter}
+        ORDER BY ae.data_timestamp DESC
+        LIMIT 200
+    """), params)
+
+    rows = anomaly_result.fetchall()
+    anomalies = []
+    for idx, row in enumerate(rows):
+        (ev_id, det_at, data_ts, bid, meter_id, rule, actual, threshold,
+         expected, dev_pct, hvac_rc, msg, is_res, phase, sym_flags,
+         src, severity) = row
+        anomalies.append({
+            "idx": idx,
+            "id": ev_id,
+            "detected_at": det_at.isoformat() if det_at else None,
+            "data_timestamp": data_ts.isoformat() if data_ts else None,
+            "building_id": bid,
+            "meter_device_id": meter_id,
+            "rule_triggered": rule,
+            "actual_value": actual,
+            "threshold_value": threshold,
+            "expected_value": expected,
+            "deviation_pct": dev_pct,
+            "message": msg,
+            "is_resolved": is_res,
+            "hvac_root_cause": hvac_rc,
+            "anomaly_phase": phase,
+            "symptom_flags_json": sym_flags,
+            "event_source": src,
+            "severity": severity,
+        })
+
     return {
-        "anomalies": [],
-        "total": 0,
+        "anomalies": anomalies,
+        "total": len(anomalies),
         "check_period": {
-            "start": None,
-            "end": None,
+            "start": window_start.isoformat(),
+            "end": max_ts.isoformat(),
             "hours": hours,
         },
-        "source": "disabled",
-        "module_status": "disabled",
-        "message": "异常监测模块已下线，等待重新开发。",
+        "source": "anomaly_events",
+        "module_status": "ok",
     }
 
 
@@ -793,11 +961,55 @@ _ROOT_CAUSE_LABEL = {
 async def get_anomaly_sankey(
     db: AsyncSession = Depends(get_db_session),
 ):
+    """
+    从 anomaly_events 聚合桑基图数据：
+      异常规则  →  HVAC 根因（仅 hvac_overconsumption 有根因）
+    非 HVAC 类规则直接作为终点节点。
+    """
+    agg_result = await db.execute(text("""
+        SELECT
+            rule_triggered,
+            hvac_root_cause,
+            COUNT(*) AS cnt
+        FROM anomaly_events
+        WHERE is_resolved = false
+        GROUP BY rule_triggered, hvac_root_cause
+        ORDER BY cnt DESC
+    """))
+    rows = agg_result.fetchall()
+
+    if not rows:
+        return {
+            "nodes": [],
+            "links": [],
+            "module_status": "no_data",
+            "message": "anomaly_events 暂无数据，请先调用 /api/admin/rebuild-all",
+        }
+
+    # 收集节点名称（去重）
+    node_set: list[str] = []
+    def _node_idx(name: str) -> int:
+        if name not in node_set:
+            node_set.append(name)
+        return node_set.index(name)
+
+    links: list[dict[str, Any]] = []
+    for rule, root_cause, cnt in rows:
+        rule_label = _RULE_LABEL.get(rule, rule)
+        if root_cause:
+            cause_label = _ROOT_CAUSE_LABEL.get(root_cause, root_cause)
+        else:
+            cause_label = rule_label + "(直接)"
+
+        src_idx = _node_idx(rule_label)
+        tgt_idx = _node_idx(cause_label)
+        links.append({"source": src_idx, "target": tgt_idx, "value": int(cnt)})
+
+    nodes = [{"name": n} for n in node_set]
     return {
-        "nodes": [],
-        "links": [],
-        "module_status": "disabled",
-        "message": "异常监测模块已下线，等待重新开发。",
+        "nodes": nodes,
+        "links": links,
+        "module_status": "ok",
     }
 
 

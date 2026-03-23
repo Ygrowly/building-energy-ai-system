@@ -14,7 +14,6 @@ const props = defineProps<{
 const BT = 'Office'
 
 const workEl  = ref<HTMLElement | null>(null)
-const euiEl   = ref<HTMLElement | null>(null)
 const trendEl = ref<HTMLElement | null>(null)
 const sparkEl = ref<HTMLElement | null>(null)
 const rankEl  = ref<HTMLElement | null>(null)
@@ -30,6 +29,48 @@ const euiRatio = computed(() => {
   const base = EUI_BASELINE[BT] ?? 75
   if (!inten || !base) return null
   return (inten * 365) / base
+})
+
+// EUI 年化强度 kWh/㎡
+const euiAnnualIntensity = computed(() => {
+  const b = props.overviewData?.buildings?.find((x: any) => x.building_type === BT)
+  const inten = Number(b?.energy_intensity_kwh_per_sqm ?? 0)
+  return inten > 0 ? +(inten * 365).toFixed(1) : null
+})
+
+// EUI 状态文字 / 颜色 class
+const euiStatusText = computed(() => {
+  const r = euiRatio.value
+  if (r == null) return '--'
+  if (r >= 1.5) return '严重超标'
+  if (r >= 1.0) return '轻度超标'
+  if (r >= 0.8) return '达标'
+  return '优秀'
+})
+
+const euiStatusClass = computed(() => {
+  const r = euiRatio.value
+  if (r == null) return 'eui-neutral'
+  if (r >= 1.5) return 'eui-danger'
+  if (r >= 1.0) return 'eui-warn'
+  return 'eui-ok'
+})
+
+// 指针位置（0–100%，量程 0–2.0×）
+const euiNeedlePos = computed(() => {
+  const r = euiRatio.value
+  if (r == null) return '0%'
+  return `${Math.min(r / 2.0 * 100, 100).toFixed(1)}%`
+})
+
+// 超额说明
+const euiExcessText = computed(() => {
+  const r  = euiRatio.value
+  const v  = euiAnnualIntensity.value
+  const base = EUI_BASELINE[BT] ?? 75
+  if (r == null || v == null) return '--'
+  if (r < 1.0) return `节约 ${(base - v).toFixed(1)} kWh/㎡`
+  return `超额 +${(v - base).toFixed(1)} kWh/㎡`
 })
 
 const miniCards = computed(() => {
@@ -139,64 +180,6 @@ function renderWorkBand(hourly: { hour: number; avg_value: number }[]) {
   instances.push(inst)
 }
 
-// ── EUI 合规仪表 ──────────────────────────────────────────────────────────────
-function renderEuiGauge(ratio: number | null) {
-  if (!euiEl.value) return
-  const c = gc()
-  const r = ratio == null ? 0 : Math.min(Math.max(ratio, 0), 2.2)
-
-  const colorBands: [number, string][] = [
-    [0.5, '#22c55e'],   // 绿：<1.0×
-    [0.75, '#f59e0b'],  // 橙：1.0–1.5×
-    [1.0, '#ef4444'],   // 红：>1.5×
-  ]
-
-  const inst = echarts.init(euiEl.value)
-  inst.setOption({
-    backgroundColor: 'transparent',
-    series: [
-      {
-        type: 'gauge',
-        center: ['50%', '60%'],
-        radius: '85%',
-        min: 0,
-        max: 2,
-        splitNumber: 4,
-        axisLine: {
-          lineStyle: {
-            width: 16,
-            color: colorBands,
-          },
-        },
-        pointer: { width: 5, length: '68%', itemStyle: { color: MC.blue } },
-        axisTick: { show: false },
-        splitLine: { show: false },
-        axisLabel: {
-          color: c.axis,
-          fontSize: 10,
-          distance: 14,
-          formatter: (v: number) => `${v.toFixed(1)}×`,
-        },
-        title: {
-          show: true,
-          offsetCenter: [0, '82%'],
-          color: c.axis,
-          fontSize: 11,
-        },
-        detail: {
-          valueAnimation: true,
-          formatter: (v: number) => (ratio == null ? '--' : `${v.toFixed(2)}×`),
-          color: c.ttText,
-          fontSize: 20,
-          fontWeight: 700,
-          offsetCenter: [0, '30%'],
-        },
-        data: [{ value: r, name: 'EUI 相对国标' }],
-      },
-    ],
-  })
-  instances.push(inst)
-}
 
 // ── 近 7 天趋势 + 气温 ─────────────────────────────────────────────────────────
 function renderTrend(records: any[]) {
@@ -419,7 +402,6 @@ async function loadAll() {
 
     disposeAll()
     renderWorkBand(lp.hourly_profile || [])
-    renderEuiGauge(euiRatio.value)
     renderTrend(en.records || [])
     renderSparkline(pv.daily_totals || [])
     renderRank(pv.daily_totals || [])
@@ -496,7 +478,49 @@ onUnmounted(() => {
           <span class="cpanel-title">EUI 合规偏离</span>
           <span class="cpanel-sub">建筑能源利用强度相对国标 75 kWh/㎡·年 的倍率，1.0× 为合规基准</span>
         </div>
-        <div ref="euiEl" class="cpanel-body" style="height: 260px" />
+        <!-- 水平进度条指示器 -->
+        <div class="eui-card">
+          <!-- 主数值 + 状态标签 -->
+          <div class="eui-top">
+            <span class="eui-ratio-val" :class="euiStatusClass">
+              {{ euiRatio != null ? euiRatio.toFixed(2) : '--' }}×
+            </span>
+            <span class="eui-badge" :class="euiStatusClass">{{ euiStatusText }}</span>
+          </div>
+
+          <!-- 颜色轨道 + 指针 -->
+          <div class="eui-track-wrap">
+            <div class="eui-track">
+              <div class="eui-seg eui-seg-green"  style="width:50%"></div>
+              <div class="eui-seg eui-seg-orange" style="width:25%"></div>
+              <div class="eui-seg eui-seg-red"    style="width:25%"></div>
+              <div class="eui-needle" :style="{ left: euiNeedlePos }"></div>
+            </div>
+            <div class="eui-ticks">
+              <span>0×</span><span>0.5×</span><span>1.0×</span><span>1.5×</span><span>2.0×</span>
+            </div>
+          </div>
+
+          <!-- 数值详情网格 -->
+          <div class="eui-grid">
+            <div class="eui-grid-item">
+              <span class="eui-gl">年化估算强度</span>
+              <span class="eui-gv">{{ euiAnnualIntensity != null ? euiAnnualIntensity : '--' }} kWh/㎡</span>
+            </div>
+            <div class="eui-grid-item">
+              <span class="eui-gl">国标基准</span>
+              <span class="eui-gv">{{ EUI_BASELINE[BT] ?? 75 }} kWh/㎡·年</span>
+            </div>
+            <div class="eui-grid-item eui-grid-span">
+              <span class="eui-gl">与国标差值</span>
+              <span class="eui-gv" :class="euiStatusClass">{{ euiExcessText }}</span>
+            </div>
+          </div>
+
+          <p class="eui-note">
+            基于当日强度年化估算；超过 1.0× 表明用能高于国标，建议审查空调、照明运行计划
+          </p>
+        </div>
       </div>
     </div>
 
@@ -515,7 +539,7 @@ onUnmounted(() => {
             <span class="cpanel-title">峰谷效率</span>
             <span class="cpanel-sub">近期日总能耗走势（kWh），反映日间用能波动</span>
           </div>
-          <div ref="sparkEl" class="cpanel-body" style="height: 110px" />
+          <div ref="sparkEl" class="cpanel-body" style="height: 150px" />
         </div>
         <HomeActionCards
           tab="Office"
@@ -528,3 +552,121 @@ onUnmounted(() => {
 
   </div>
 </template>
+
+<style scoped>
+/* ── EUI 水平进度条指示器 ── */
+.eui-card {
+  padding: 20px 20px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  height: 260px;
+  box-sizing: border-box;
+}
+
+.eui-top {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.eui-ratio-val {
+  font-size: 2.4rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.eui-badge {
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 99px;
+}
+
+.eui-ok    { color: #22c55e; }
+.eui-warn  { color: #f59e0b; }
+.eui-danger{ color: #ef4444; }
+.eui-neutral{ color: var(--color-text-2, #888); }
+
+.eui-badge.eui-ok     { background: #22c55e22; }
+.eui-badge.eui-warn   { background: #f59e0b22; }
+.eui-badge.eui-danger { background: #ef444422; }
+
+.eui-track-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.eui-track {
+  position: relative;
+  height: 14px;
+  border-radius: 7px;
+  overflow: visible;
+  display: flex;
+}
+
+.eui-seg {
+  height: 100%;
+}
+
+.eui-seg:first-child { border-radius: 7px 0 0 7px; }
+.eui-seg:last-child  { border-radius: 0 7px 7px 0; }
+
+.eui-seg-green  { background: #22c55e; opacity: .75; }
+.eui-seg-orange { background: #f59e0b; opacity: .75; }
+.eui-seg-red    { background: #ef4444; opacity: .75; }
+
+.eui-needle {
+  position: absolute;
+  top: -4px;
+  width: 3px;
+  height: 22px;
+  background: #fff;
+  border-radius: 2px;
+  box-shadow: 0 0 4px rgba(0,0,0,.4);
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.eui-ticks {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.68rem;
+  color: var(--color-text-3, #aaa);
+}
+
+.eui-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 12px;
+}
+
+.eui-grid-span {
+  grid-column: 1 / -1;
+}
+
+.eui-grid-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.eui-gl {
+  font-size: 0.68rem;
+  color: var(--color-text-3, #aaa);
+}
+
+.eui-gv {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--color-text-1, #ddd);
+}
+
+.eui-note {
+  font-size: 0.68rem;
+  color: var(--color-text-3, #aaa);
+  margin: 0;
+  line-height: 1.5;
+}
+</style>

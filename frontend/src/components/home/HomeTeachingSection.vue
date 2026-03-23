@@ -322,6 +322,24 @@ function renderHvacTriplet(
       backgroundColor: c.ttBg,
       borderColor: c.ttBr,
       textStyle: { color: c.ttText },
+      formatter: (params: any[]) => {
+        const hour = params[0]?.axisValue ?? ''
+        const lines: string[] = [`<b>${hour}</b>`]
+        let supplyVal: number | null = null
+        let retVal: number | null = null
+        for (const p of params) {
+          if (p.value == null) continue
+          lines.push(`<span style="color:${p.color}">●</span> ${p.seriesName}：${Number(p.value).toFixed(1)} °C`)
+          if (p.seriesName === '供水') supplyVal = Number(p.value)
+          if (p.seriesName === '回水') retVal   = Number(p.value)
+        }
+        if (supplyVal != null && retVal != null) {
+          const dt = Math.abs(supplyVal - retVal).toFixed(1)
+          const color = Math.abs(supplyVal - retVal) < 5 ? '#f97316' : '#10d980'
+          lines.push(`<span style="color:${color}">ΔT 供回水温差：${dt} °C</span>`)
+        }
+        return lines.join('<br/>')
+      },
     },
     legend: {
       top: 4,

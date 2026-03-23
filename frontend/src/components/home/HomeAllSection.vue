@@ -29,12 +29,12 @@ const COMPARE_METRICS: { key: CompareMetric; label: string }[] = [
   { key: 'hac', label: '当日暖通' },
 ]
 
-const bubbleEl = ref<HTMLElement | null>(null)
-const hvacEl = ref<HTMLElement | null>(null)
+const radarEl   = ref<HTMLElement | null>(null)
+const hvacEl    = ref<HTMLElement | null>(null)
 const compareEl = ref<HTMLElement | null>(null)
-const riskEl = ref<HTMLElement | null>(null)
-const sankeyEl = ref<HTMLElement | null>(null)
-const scatterEl = ref<HTMLElement | null>(null)
+const riskEl    = ref<HTMLElement | null>(null)
+const sankeyEl  = ref<HTMLElement | null>(null)
+const anomalyEl = ref<HTMLElement | null>(null)
 
 let instances: echarts.ECharts[] = []
 
@@ -106,189 +106,95 @@ function disposeAll() {
   instances = []
 }
 
-function renderBubble() {
-  if (!bubbleEl.value) return
+function renderRadar() {
+  if (!radarEl.value) return
   const c = gc()
+  const blds: any[] = props.overviewData?.buildings ?? []
   const bldStore = buildingStore.buildings
-  const ovData: any[] = props.overviewData?.buildings ?? []
 
-  const items = bldStore.map((b) => {
-    const ov = ovData.find((o) => o.building_type === b.building_type)
-    const sqm = b.sqm ?? 10000
-    const energy = ov?.total_electricity_kwh ?? 50
-    const eui = energy / sqm
-    const baseline = EUI_BASELINE[b.building_type] ?? 70
-    const ratio = (eui * 365) / baseline
-    return { sqm, eui, energy, name: b.display_name, type: b.building_type, baseline, ratio }
-  })
+  const keys  = ['Education', 'Office', 'Public services']
+  const names = ['教学楼', '办公楼', '公共楼']
+  const colors = [MC.blue, MC.sage, MC.terra]
 
-  const sqmValues = items.map((i) => i.sqm)
-  const maxSqm = sqmValues.length ? Math.max(...sqmValues) * 1.15 : 25000
-  const ratioValues = items.map((i) => i.ratio)
-  const maxRatio = ratioValues.length ? Math.max(...ratioValues, 1.3) * 1.15 : 2
+  // 五维：用电、用水、暖通、EUI偏离、告警数 — 各项归一化到 0-100
+  const maxElec    = Math.max(...blds.map((b) => Number(b.total_electricity_kwh ?? 0)), 1)
+  const maxWater   = Math.max(...blds.map((b) => Number(b.total_water_m3 ?? 0)), 1)
+  const maxHac     = Math.max(...blds.map((b) => Number(b.total_hac_energy_kwh ?? 0)), 1)
+  const maxAnomaly = Math.max(...keys.map((k) => props.anomalyData.filter((a: any) => a.building_type === k).length), 1)
 
-  const deviationColor = (ratio: number) => {
-    if (ratio >= 1.2)
-      return { color: '#e05c5c', level: '严重超标', desc: '偏离基准 ≥20%，需紧急改造' }
-    if (ratio >= 1.0)
-      return { color: '#e8a64c', level: '轻度超标', desc: '偏离基准 0~20%，需关注优化' }
-    if (ratio >= 0.8)
-      return { color: '#7b9fc7', level: '达标', desc: '低于基准，运行正常' }
-    return { color: '#5daa87', level: '优秀', desc: '远低于基准，节能表现优秀' }
-  }
+  const seriesData = keys.map((k, i) => {
+    const b    = blds.find((x) => x.building_type === k)
+    const meta = bldStore.find((x) => x.building_type === k)
+    const sqm  = meta?.sqm ?? 10000
+    const elec = Number(b?.total_electricity_kwh ?? 0)
+    const water = Number(b?.total_water_m3 ?? 0)
+    const hac  = Number(b?.total_hac_energy_kwh ?? 0)
+    const intensity = elec / sqm
+    const baseline  = EUI_BASELINE[k] ?? 70
+    const euiRatio  = baseline > 0 ? Math.min((intensity * 365) / baseline, 2.5) : 0
+    const anomalyCnt = props.anomalyData.filter((a: any) => a.building_type === k).length
 
-  const scatterData = items.map((i) => {
-    const d = deviationColor(i.ratio)
     return {
+      name: names[i],
       value: [
-        i.sqm,
-        parseFloat(i.ratio.toFixed(3)),
-        parseFloat(i.energy.toFixed(1)),
-        i.name,
-        d.level,
-        d.desc,
-        parseFloat((i.eui * 365).toFixed(2)),
-        i.baseline,
+        +(elec  / maxElec    * 100).toFixed(1),
+        +(water / maxWater   * 100).toFixed(1),
+        +(hac   / maxHac     * 100).toFixed(1),
+        +(euiRatio / 2.5     * 100).toFixed(1),
+        +(anomalyCnt / maxAnomaly * 100).toFixed(1),
       ],
-      itemStyle: { color: d.color, opacity: 0.85, borderColor: d.color, borderWidth: 1.5 },
+      lineStyle:  { color: colors[i], width: 2 },
+      itemStyle:  { color: colors[i] },
+      areaStyle:  { color: colors[i], opacity: 0.10 },
     }
   })
 
-  const inst = echarts.init(bubbleEl.value)
+  const inst = echarts.init(radarEl.value)
   inst.setOption({
     backgroundColor: 'transparent',
-    grid: { top: 36, right: 20, bottom: 46, left: 56 },
     tooltip: {
-      trigger: 'item',
       backgroundColor: c.ttBg,
       borderColor: c.ttBr,
-      textStyle: { color: c.ttText, fontSize: 12 },
+      textStyle: { color: c.ttText, fontSize: 11 },
       formatter: (p: any) => {
-        const d = p.data.value
-        return (
-          `<strong>${d[3]}</strong><br/>` +
-          `状态: <span style="color:${p.data.itemStyle.color};font-weight:600">${d[4]}</span><br/>` +
-          `${d[5]}<br/>` +
-          `偏离比: ${d[1]}<br/>` +
-          `年化 EUI: ${d[6]} kWh/㎡<br/>` +
-          `国标基准: ${d[7]} kWh/㎡·年<br/>` +
-          `建筑面积: ${Number(d[0]).toLocaleString()} ㎡`
-        )
+        const v = p.data.value as number[]
+        const lines = [
+          `<b>${p.data.name}</b>`,
+          `用电占比：${v[0]}`,
+          `用水占比：${v[1]}`,
+          `暖通占比：${v[2]}`,
+          `EUI 偏离：${v[3]}`,
+          `告警占比：${v[4]}`,
+        ]
+        return lines.join('<br/>')
       },
     },
     legend: {
       top: 4,
-      left: 'center',
       textStyle: { color: c.axis, fontSize: 10 },
-      itemWidth: 8,
-      itemHeight: 8,
-      itemGap: 12,
-      data: [
-        { name: '严重超标', icon: 'circle', itemStyle: { color: '#e05c5c' } },
-        { name: '轻度超标', icon: 'circle', itemStyle: { color: '#e8a64c' } },
-        { name: '达标', icon: 'circle', itemStyle: { color: '#7b9fc7' } },
-        { name: '优秀', icon: 'circle', itemStyle: { color: '#5daa87' } },
+      itemStyle: { borderWidth: 0 },
+    },
+    radar: {
+      indicator: [
+        { name: '用电', max: 100 },
+        { name: '用水', max: 100 },
+        { name: '暖通', max: 100 },
+        { name: 'EUI\n偏离', max: 100 },
+        { name: '告警数', max: 100 },
       ],
-    },
-    xAxis: {
-      type: 'value',
-      name: '建筑面积 (㎡)',
-      nameLocation: 'middle',
-      nameGap: 28,
-      nameTextStyle: { color: c.axis, fontSize: 11 },
-      axisLabel: { color: c.axis, fontSize: 10, formatter: (v: number) => `${(v / 1000).toFixed(0)}k` },
-      splitLine: { lineStyle: { color: c.grid, type: 'dashed' } },
-      max: maxSqm,
-    },
-    yAxis: {
-      type: 'value',
-      name: '偏离比（实际/基准）',
-      nameLocation: 'middle',
-      nameGap: 42,
-      nameTextStyle: { color: c.axis, fontSize: 10 },
-      axisLabel: { color: c.axis, fontSize: 10, formatter: (v: number) => v.toFixed(1) },
-      splitLine: { lineStyle: { color: c.grid, type: 'dashed' } },
-      max: maxRatio,
-      min: 0,
+      center: ['50%', '54%'],
+      radius: '65%',
+      axisLine:  { lineStyle: { color: c.grid } },
+      splitLine: { lineStyle: { color: c.grid } },
+      splitArea: { show: false },
+      axisName:  { color: c.axis, fontSize: 10 },
     },
     series: [
       {
-        type: 'scatter',
-        data: [],
-        markLine: {
-          silent: true,
-          symbol: 'none',
-          lineStyle: { color: '#e05c5c', type: 'dashed', width: 1.5, opacity: 0.6 },
-          label: { fontSize: 10, color: '#e05c5c', opacity: 0.8 },
-          data: [{ yAxis: 1, label: { formatter: '国标基准线', position: 'insideEndTop' } }],
-        },
-      },
-      {
-        type: 'scatter',
-        data: [],
-        markArea: {
-          silent: true,
-          data: [
-            [{ yAxis: 1, itemStyle: { color: 'rgba(224,92,92,0.04)' } }, { yAxis: maxRatio }],
-            [{ yAxis: 0, itemStyle: { color: 'rgba(93,170,135,0.04)' } }, { yAxis: 1 }],
-          ],
-        },
-      },
-      {
-        name: '严重超标',
-        type: 'scatter',
-        data: scatterData.filter((d) => d.value[4] === '严重超标'),
-        symbolSize: (val: any[]) => Math.min(50, Math.max(20, Math.sqrt(val[2]) * 0.1)),
-        label: {
-          show: true,
-          formatter: (p: any) => p.data.value[3],
-          position: 'top',
-          fontSize: 11,
-          color: c.axis,
-          distance: 6,
-        },
-      },
-      {
-        name: '轻度超标',
-        type: 'scatter',
-        data: scatterData.filter((d) => d.value[4] === '轻度超标'),
-        symbolSize: (val: any[]) => Math.min(46, Math.max(18, Math.sqrt(val[2]) * 0.09)),
-        label: {
-          show: true,
-          formatter: (p: any) => p.data.value[3],
-          position: 'top',
-          fontSize: 11,
-          color: c.axis,
-          distance: 6,
-        },
-      },
-      {
-        name: '达标',
-        type: 'scatter',
-        data: scatterData.filter((d) => d.value[4] === '达标'),
-        symbolSize: (val: any[]) => Math.min(42, Math.max(16, Math.sqrt(val[2]) * 0.08)),
-        label: {
-          show: true,
-          formatter: (p: any) => p.data.value[3],
-          position: 'top',
-          fontSize: 11,
-          color: c.axis,
-          distance: 6,
-        },
-      },
-      {
-        name: '优秀',
-        type: 'scatter',
-        data: scatterData.filter((d) => d.value[4] === '优秀'),
-        symbolSize: (val: any[]) => Math.min(38, Math.max(14, Math.sqrt(val[2]) * 0.07)),
-        label: {
-          show: true,
-          formatter: (p: any) => p.data.value[3],
-          position: 'top',
-          fontSize: 11,
-          color: c.axis,
-          distance: 6,
-        },
+        type: 'radar',
+        symbol: 'circle',
+        symbolSize: 5,
+        data: seriesData,
       },
     ],
   })
@@ -426,7 +332,7 @@ function renderHvac() {
         z: 3,
       },
       {
-        name: '仿真最优能耗',
+        name: '节能基准估算',
         type: 'line',
         yAxisIndex: 0,
         data: simOptHvac,
@@ -567,8 +473,15 @@ function renderRisk() {
         name: '待处理条数',
         type: 'bar',
         data: counts,
+        barMaxWidth: 24,
         itemStyle: {
-          color: (p: any) => [MC.blue, MC.terra, MC.teal][p.dataIndex] ?? MC.lav,
+          borderRadius: [0, 3, 3, 0],
+          color: (p: any) => {
+            const v = counts[p.dataIndex]
+            if (v === 0) return '#22c55e'   // 绿：无告警
+            if (v <= 3)  return MC.terra    // 橙：轻微
+            return '#ef4444'                // 红：需重点关注
+          },
         },
         label: { show: true, position: 'right', color: c.axis, fontSize: 10 },
       },
@@ -632,24 +545,25 @@ function renderSankey() {
   instances.push(inst)
 }
 
-function renderScatter() {
-  if (!scatterEl.value) return
+function renderAnomalyDist() {
+  if (!anomalyEl.value) return
   const c = gc()
-  const resolved: [number, number][] = []
-  const unresolved: [number, number][] = []
-  if (props.anomalyData.length > 0) {
-    props.anomalyData.slice(0, 30).forEach((a: any, i: number) => {
-      // deviation_pct 缺失时用固定默认值 10，不使用随机数
-      const dev = a.deviation_pct != null ? Number(a.deviation_pct) : 10
-      if (a.anomaly_status === 'Anomaly' || a.operation_status === 'Anomaly')
-        unresolved.push([i, parseFloat(dev.toFixed(1))])
-      else resolved.push([i, parseFloat(dev.toFixed(1))])
-    })
-  }
+  const keys   = ['Education', 'Office', 'Public services']
+  const labels = ['教学楼', '办公楼', '公共楼']
 
-  const inst = echarts.init(scatterEl.value)
+  const isUnresolved = (a: any) =>
+    a.anomaly_status === 'Anomaly' || a.operation_status === 'Anomaly'
 
-  if (resolved.length === 0 && unresolved.length === 0) {
+  const unresolvedCnts = keys.map((k) =>
+    props.anomalyData.filter((a: any) => a.building_type === k && isUnresolved(a)).length,
+  )
+  const resolvedCnts = keys.map((k) =>
+    props.anomalyData.filter((a: any) => a.building_type === k && !isUnresolved(a)).length,
+  )
+
+  const inst = echarts.init(anomalyEl.value)
+
+  if (props.anomalyData.length === 0) {
     inst.setOption({
       backgroundColor: 'transparent',
       title: { text: '暂无异常事件', left: 'center', top: 'middle', textStyle: { color: c.axis, fontSize: 12 } },
@@ -660,43 +574,64 @@ function renderScatter() {
 
   inst.setOption({
     backgroundColor: 'transparent',
-    grid: { top: 12, right: 14, bottom: 28, left: 44 },
+    grid: { top: 28, right: 16, bottom: 28, left: 52 },
     tooltip: {
       trigger: 'axis',
-      axisPointer: { type: 'cross' },
+      axisPointer: { type: 'shadow' },
       backgroundColor: c.ttBg,
       borderColor: c.ttBr,
       textStyle: { color: c.ttText, fontSize: 11 },
     },
-    legend: { top: 2, textStyle: { color: c.axis, fontSize: 10 }, itemWidth: 10, itemHeight: 10 },
+    legend: { top: 4, textStyle: { color: c.axis, fontSize: 10 }, itemStyle: { borderWidth: 0 } },
     xAxis: {
-      type: 'value',
-      name: '事件编号',
-      nameTextStyle: { color: c.axis, fontSize: 10 },
+      type: 'category',
+      data: labels,
       axisLabel: { color: c.axis, fontSize: 10 },
-      splitLine: { lineStyle: { color: c.grid, type: 'dashed' } },
+      axisLine: { lineStyle: { color: c.grid } },
+      axisTick: { show: false },
     },
     yAxis: {
       type: 'value',
-      name: '偏离度 %',
+      name: '条',
       nameTextStyle: { color: c.axis, fontSize: 10 },
       axisLabel: { color: c.axis, fontSize: 10 },
       splitLine: { lineStyle: { color: c.grid, type: 'dashed' } },
+      axisLine: { show: false },
+      minInterval: 1,
     },
     series: [
       {
-        name: '已解决',
-        type: 'scatter',
-        data: resolved,
-        symbolSize: 8,
-        itemStyle: { color: MC.sage, opacity: 0.85 },
+        name: '待处理',
+        type: 'bar',
+        stack: 'total',
+        data: unresolvedCnts,
+        barMaxWidth: 36,
+        itemStyle: { color: MC.lav },
+        label: {
+          show: true,
+          position: 'inside',
+          color: '#fff',
+          fontSize: 10,
+          formatter: (p: any) => (p.value > 0 ? String(p.value) : ''),
+        },
       },
       {
-        name: '待处理',
-        type: 'scatter',
-        data: unresolved,
-        symbolSize: 10,
-        itemStyle: { color: MC.terra, opacity: 0.9 },
+        name: '已解决',
+        type: 'bar',
+        stack: 'total',
+        data: resolvedCnts,
+        barMaxWidth: 36,
+        itemStyle: { color: MC.sage, borderRadius: [4, 4, 0, 0] },
+        label: {
+          show: true,
+          position: 'top',
+          color: c.axis,
+          fontSize: 10,
+          formatter: (p: any) => {
+            const total = unresolvedCnts[p.dataIndex] + resolvedCnts[p.dataIndex]
+            return total > 0 ? `共${total}` : ''
+          },
+        },
       },
     ],
   })
@@ -736,12 +671,12 @@ async function loadMergedHeatmap() {
 
 function renderAll() {
   disposeAll()
-  renderBubble()
+  renderRadar()
   renderHvac()
   renderPie()
   renderRisk()
   renderSankey()
-  renderScatter()
+  renderAnomalyDist()
   nextTick(() => instances.forEach((i) => i.resize()))
 }
 
@@ -789,16 +724,16 @@ onUnmounted(() => {
     <div class="bento-row bento-r1">
       <div
         class="cpanel"
-        data-pick-id="chart-eui-bubble"
+        data-pick-id="chart-eui-radar"
         data-pick-type="chart"
-        data-pick-title="建筑能耗定额偏离分析"
-        data-pick-subtitle="偏离比 = 实际EUI / 国标基准值"
+        data-pick-title="楼宇多维能耗对比"
+        data-pick-subtitle="用电、用水、暖通、EUI偏离、告警数五维标准化（各维最大值=100）"
       >
         <div class="cpanel-hd">
-          <span class="cpanel-title">建筑能耗定额偏离分析</span>
-          <span class="cpanel-sub">偏离比 = 实际EUI / 国标基准值，气泡大小反映总用电量</span>
+          <span class="cpanel-title">楼宇多维能耗对比</span>
+          <span class="cpanel-sub">用电 · 用水 · 暖通 · EUI 偏离 · 告警数 五维标准化（各维最大值=100）</span>
         </div>
-        <div ref="bubbleEl" class="cpanel-body" style="height: 300px" />
+        <div ref="radarEl" class="cpanel-body" style="height: 300px" />
       </div>
       <div
         class="cpanel"
@@ -809,7 +744,7 @@ onUnmounted(() => {
       >
         <div class="cpanel-hd">
           <span class="cpanel-title">HVAC 虚实映射分析</span>
-          <span class="cpanel-sub">实际暖通能耗与仿真最优值对比，背景为室外温度</span>
+          <span class="cpanel-sub">实际暖通能耗（实线）与节能基准估算（虚线，实际×0.85）对比，背景为室外温度</span>
         </div>
         <div ref="hvacEl" class="cpanel-body" style="height: 300px" />
       </div>
@@ -891,14 +826,14 @@ onUnmounted(() => {
             <span class="cpanel-title">异常根因桑基图</span>
             <span class="cpanel-sub">规则流向根因类型</span>
           </div>
-          <div ref="sankeyEl" class="cpanel-body" style="height: 172px" />
+          <div ref="sankeyEl" class="cpanel-body" style="height: 230px" />
         </div>
         <div class="cpanel">
           <div class="cpanel-hd">
-            <span class="cpanel-title">健康偏离度散点</span>
-            <span class="cpanel-sub">事件偏离程度分布</span>
+            <span class="cpanel-title">异常事件楼宇分布</span>
+            <span class="cpanel-sub">近 7 天各楼宇待处理与已解决异常条数</span>
           </div>
-          <div ref="scatterEl" class="cpanel-body" style="height: 138px" />
+          <div ref="anomalyEl" class="cpanel-body" style="height: 138px" />
         </div>
       </div>
       <HomeActionCards tab="all" :anomalies="anomalyData" />

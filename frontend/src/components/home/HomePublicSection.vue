@@ -77,7 +77,7 @@ function renderDual(records: any[]) {
   const inst = echarts.init(dualEl.value)
   inst.setOption({
     backgroundColor: 'transparent',
-    grid: { top: 40, right: 56, bottom: 32, left: 56 },
+    grid: { top: 40, right: 56, bottom: 54, left: 56 },
     tooltip: {
       trigger: 'axis',
       backgroundColor: c.ttBg,
@@ -96,6 +96,22 @@ function renderDual(records: any[]) {
       axisLine: { lineStyle: { color: c.grid } },
       axisTick: { show: false },
     },
+    dataZoom: [
+      {
+        type: 'slider',
+        bottom: 6,
+        height: 16,
+        start: days.length > 14 ? Math.round((1 - 14 / days.length) * 100) : 0,
+        end: 100,
+        borderColor: 'transparent',
+        backgroundColor: c.grid,
+        fillerColor: `${MC.blue}30`,
+        handleStyle: { color: MC.blue, borderColor: MC.blue },
+        textStyle: { color: c.axis, fontSize: 9 },
+        showDataShadow: false,
+      },
+      { type: 'inside', start: days.length > 14 ? Math.round((1 - 14 / days.length) * 100) : 0, end: 100 },
+    ],
     yAxis: [
       {
         type: 'value',

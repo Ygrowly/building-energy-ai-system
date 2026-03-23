@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import * as echarts from 'echarts'
+import { Icon } from '@iconify/vue'
 import { apiFetch } from '@/api/http'
 import { MC, gc, isoDate } from '@/utils/homeCharts'
 import HomeActionCards from './HomeActionCards.vue'
@@ -12,18 +13,19 @@ const props = defineProps<{
 
 const BT = 'Public services'
 
-const dualEl = ref<HTMLElement | null>(null)
+const dualEl    = ref<HTMLElement | null>(null)
 const profileEl = ref<HTMLElement | null>(null)
 const comfortEl = ref<HTMLElement | null>(null)
 let instances: echarts.ECharts[] = []
 
-const statusSnap = ref<any>(null)
-const anomalies = ref<any[]>([])
+const statusSnap  = ref<any>(null)
+const anomalies   = ref<any[]>([])
 const ratedSummary = ref<any>(null)
 
+// ── 舒适度评分（基于实时快照温湿度阈值规则）─────────────────────────────────
 const comfortScore = computed(() => {
   const s = statusSnap.value
-  if (!s) return { text: '--', sub: '无快照' }
+  if (!s) return { score: null, text: '--', temp: null, humidity: null }
   const t = Number(s.air_temp_c)
   const h = Number(s.humidity_rh_pct)
   let score = 100
@@ -32,81 +34,152 @@ const comfortScore = computed(() => {
   if (h < 35 || h > 65) score -= 20
   else if (h < 40 || h > 60) score -= 8
   const text = score >= 80 ? '良好' : score >= 60 ? '一般' : '关注'
-  return { text: `${score} · ${text}`, sub: `T ${t.toFixed(1)}°C  RH ${h.toFixed(0)}%` }
+  return { score, text, temp: t, humidity: h }
 })
 
-const miniCards = computed(() => [
-  { label: '舒适度', value: comfortScore.value.text },
-  { label: '快照', value: comfortScore.value.sub.slice(0, 18) },
-])
+const miniCards = computed(() => {
+  const cs = comfortScore.value
+  return [
+    {
+      label: '舒适度评分',
+      value: cs.score != null ? String(cs.score) : '--',
+      unit: '分',
+      desc: '综合温湿度判定室内舒适程度：≥80 良好，60–79 一般，<60 需关注',
+    },
+    {
+      label: '当前温度',
+      value: cs.temp != null ? cs.temp.toFixed(2) : '--',
+      unit: '°C',
+      desc: '舒适区间 20–26°C，超出范围时得分降低',
+    },
+    {
+      label: '当前湿度',
+      value: cs.humidity != null ? cs.humidity.toFixed(2) : '--',
+      unit: '%RH',
+      desc: '舒适区间 40–60%，过高或过低均影响舒适度',
+    },
+  ]
+})
 
 function disposeAll() {
   instances.forEach((c) => c.dispose())
   instances = []
 }
 
+// ── 水电综合双轴趋势 ──────────────────────────────────────────────────────────
 function renderDual(records: any[]) {
   if (!dualEl.value) return
   const c = gc()
-  const days = records.map((r: any) => (r.day || '').slice(5))
-  const elec = records.map((r: any) => Number(r.total_electricity_kwh ?? 0))
-  const water = records.map((r: any) => Number(r.total_water_m3 ?? 0))
+  const days  = records.map((r: any) => (r.day || '').slice(5))
+  const elec  = records.map((r: any) => r.total_electricity_kwh != null ? Number(r.total_electricity_kwh) : null)
+  const water = records.map((r: any) => r.total_water_m3 != null ? Number(r.total_water_m3) : null)
 
   const inst = echarts.init(dualEl.value)
   inst.setOption({
     backgroundColor: 'transparent',
-    grid: { top: 36, right: 48, bottom: 28, left: 52 },
-    tooltip: { trigger: 'axis', backgroundColor: c.ttBg, borderColor: c.ttBr, textStyle: { color: c.ttText } },
-    legend: { top: 4, textStyle: { color: c.axis, fontSize: 10 } },
+    grid: { top: 40, right: 56, bottom: 32, left: 56 },
+    tooltip: {
+      trigger: 'axis',
+      backgroundColor: c.ttBg,
+      borderColor: c.ttBr,
+      textStyle: { color: c.ttText },
+    },
+    legend: {
+      top: 6,
+      textStyle: { color: c.axis, fontSize: 10 },
+      itemStyle: { borderWidth: 0 },
+    },
     xAxis: {
       type: 'category',
       data: days,
-      axisLabel: { color: c.axis, fontSize: 9, rotate: 35 },
+      axisLabel: { color: c.axis, fontSize: 9, rotate: 30 },
       axisLine: { lineStyle: { color: c.grid } },
+      axisTick: { show: false },
     },
     yAxis: [
       {
         type: 'value',
-        name: '电 kWh',
-        nameTextStyle: { color: c.axis, fontSize: 10 },
-        axisLabel: { color: c.axis, fontSize: 10 },
+        name: 'kWh',
+        nameTextStyle: { color: MC.sage, fontSize: 10 },
+        axisLabel: { color: MC.sage, fontSize: 10 },
         splitLine: { lineStyle: { color: c.grid, type: 'dashed' } },
+        axisLine: { show: false },
       },
       {
         type: 'value',
-        name: '水 m³',
-        nameTextStyle: { color: c.axis, fontSize: 10 },
-        axisLabel: { color: c.axis, fontSize: 10 },
+        name: 'm³',
+        nameTextStyle: { color: MC.blue, fontSize: 10 },
+        axisLabel: { color: MC.blue, fontSize: 10 },
         splitLine: { show: false },
+        axisLine: { show: false },
       },
     ],
     series: [
-      { name: '用电', type: 'bar', data: elec, itemStyle: { color: MC.sage } },
-      { name: '用水', type: 'line', yAxisIndex: 1, data: water, smooth: true, symbol: 'none', lineStyle: { color: MC.blue, width: 2 } },
+      {
+        name: '用电(kWh)',
+        type: 'bar',
+        data: elec,
+        barMaxWidth: 24,
+        itemStyle: {
+          color: {
+            type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
+            colorStops: [
+              { offset: 0, color: MC.sage },
+              { offset: 1, color: `${MC.sage}70` },
+            ],
+          },
+          borderRadius: [3, 3, 0, 0],
+        },
+      },
+      {
+        name: '用水(m³)',
+        type: 'line',
+        yAxisIndex: 1,
+        data: water,
+        smooth: true,
+        symbol: 'circle',
+        symbolSize: 5,
+        connectNulls: false,
+        lineStyle: { color: MC.blue, width: 2.5 },
+        itemStyle: { color: MC.blue },
+      },
     ],
   })
   instances.push(inst)
 }
 
+// ── 全天候用电剖面（24h 逐时均值）────────────────────────────────────────────
 function renderProfile(hourly: { hour: number; avg_value: number }[]) {
   if (!profileEl.value) return
   const c = gc()
-  const cats = Array.from({ length: 24 }, (_, i) => `${i}h`)
+  const cats = Array.from({ length: 24 }, (_, i) => `${i}`)
   const data = cats.map((_, h) => {
     const row = hourly.find((x) => x.hour === h)
-    return Number(row?.avg_value ?? 0)
+    return row?.avg_value != null ? Number(row.avg_value) : null
   })
 
   const inst = echarts.init(profileEl.value)
   inst.setOption({
     backgroundColor: 'transparent',
-    grid: { top: 28, right: 16, bottom: 28, left: 48 },
-    tooltip: { trigger: 'axis', backgroundColor: c.ttBg, borderColor: c.ttBr, textStyle: { color: c.ttText } },
+    grid: { top: 32, right: 16, bottom: 32, left: 52 },
+    tooltip: {
+      trigger: 'axis',
+      backgroundColor: c.ttBg,
+      borderColor: c.ttBr,
+      textStyle: { color: c.ttText },
+      formatter: (params: any[]) => {
+        const p = params[0]
+        return `${p.axisValue}:00&nbsp;&nbsp;<b>${p.value != null ? Number(p.value).toFixed(2) : '--'} kWh/h</b>`
+      },
+    },
     xAxis: {
       type: 'category',
       data: cats,
+      name: '时',
+      nameTextStyle: { color: c.axis, fontSize: 10 },
       axisLabel: { color: c.axis, fontSize: 9, interval: 3 },
       axisLine: { lineStyle: { color: c.grid } },
+      axisTick: { show: false },
     },
     yAxis: {
       type: 'value',
@@ -114,61 +187,131 @@ function renderProfile(hourly: { hour: number; avg_value: number }[]) {
       nameTextStyle: { color: c.axis, fontSize: 10 },
       axisLabel: { color: c.axis, fontSize: 10 },
       splitLine: { lineStyle: { color: c.grid, type: 'dashed' } },
+      axisLine: { show: false },
     },
     series: [
       {
-        name: '用电',
+        name: '逐时均值',
         type: 'line',
         data,
         smooth: true,
         symbol: 'none',
-        areaStyle: { color: 'rgba(16,185,129,0.15)' },
-        lineStyle: { color: '#10b981', width: 2 },
+        connectNulls: false,
+        lineStyle: { color: MC.sage, width: 2.5 },
+        areaStyle: {
+          color: {
+            type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
+            colorStops: [
+              { offset: 0, color: `${MC.sage}35` },
+              { offset: 1, color: `${MC.sage}05` },
+            ],
+          },
+        },
       },
     ],
   })
   instances.push(inst)
 }
 
-function renderComfort(hourlyT: number[], hourlyH: number[]) {
+// ── 舒适度趋势（典型日：温度 + 湿度双轴）────────────────────────────────────
+function renderComfort(hourlyT: (number | null)[], hourlyH: (number | null)[]) {
   if (!comfortEl.value) return
   const c = gc()
-  const cats = Array.from({ length: 24 }, (_, i) => `${i}h`)
+  const cats = Array.from({ length: 24 }, (_, i) => `${i}`)
+
+  const hasT = hourlyT.some((v) => v !== null)
+  const hasH = hourlyH.some((v) => v !== null)
+
+  const series: any[] = []
+  if (hasT) {
+    series.push({
+      name: '温度',
+      type: 'line',
+      data: hourlyT,
+      smooth: true,
+      symbol: 'none',
+      connectNulls: false,
+      lineStyle: { color: MC.terra, width: 2.5 },
+      areaStyle: {
+        color: {
+          type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
+          colorStops: [
+            { offset: 0, color: `${MC.terra}28` },
+            { offset: 1, color: `${MC.terra}05` },
+          ],
+        },
+      },
+    })
+  }
+  if (hasH) {
+    series.push({
+      name: '湿度',
+      type: 'line',
+      yAxisIndex: 1,
+      data: hourlyH,
+      smooth: true,
+      symbol: 'none',
+      connectNulls: false,
+      lineStyle: { color: MC.blue, width: 2.5, type: 'dashed' },
+    })
+  }
 
   const inst = echarts.init(comfortEl.value)
   inst.setOption({
     backgroundColor: 'transparent',
-    grid: { top: 32, right: 44, bottom: 28, left: 48 },
-    tooltip: { trigger: 'axis', backgroundColor: c.ttBg, borderColor: c.ttBr, textStyle: { color: c.ttText } },
-    legend: { top: 4, textStyle: { color: c.axis, fontSize: 10 } },
+    grid: { top: 36, right: 52, bottom: 32, left: 48 },
+    tooltip: {
+      trigger: 'axis',
+      backgroundColor: c.ttBg,
+      borderColor: c.ttBr,
+      textStyle: { color: c.ttText },
+    },
+    legend: {
+      top: 6,
+      textStyle: { color: c.axis, fontSize: 10 },
+      itemStyle: { borderWidth: 0 },
+    },
     xAxis: {
       type: 'category',
       data: cats,
+      name: '时',
+      nameTextStyle: { color: c.axis, fontSize: 10 },
       axisLabel: { color: c.axis, fontSize: 9, interval: 3 },
       axisLine: { lineStyle: { color: c.grid } },
+      axisTick: { show: false },
     },
     yAxis: [
       {
         type: 'value',
         name: '°C',
-        nameTextStyle: { color: c.axis, fontSize: 10 },
-        axisLabel: { color: c.axis, fontSize: 10 },
+        nameTextStyle: { color: MC.terra, fontSize: 10 },
+        axisLabel: { color: MC.terra, fontSize: 10 },
         splitLine: { lineStyle: { color: c.grid, type: 'dashed' } },
+        axisLine: { show: false },
+        // 舒适区视觉参考带
+        markLine: hasT ? {
+          silent: true,
+          lineStyle: { type: 'dashed', color: `${MC.terra}60`, width: 1 },
+          data: [{ yAxis: 20, name: '下限 20°C' }, { yAxis: 26, name: '上限 26°C' }],
+          label: { show: true, fontSize: 9, color: `${MC.terra}99` },
+        } : undefined,
       },
       {
         type: 'value',
-        name: '%',
-        nameTextStyle: { color: c.axis, fontSize: 10 },
-        axisLabel: { color: c.axis, fontSize: 10 },
+        name: '%RH',
+        nameTextStyle: { color: MC.blue, fontSize: 10 },
+        axisLabel: { color: MC.blue, fontSize: 10 },
         splitLine: { show: false },
+        axisLine: { show: false },
       },
     ],
-    series: [
-      { name: '温度', type: 'line', data: hourlyT, smooth: true, symbol: 'none', lineStyle: { color: MC.terra, width: 2 } },
-      { name: '湿度', type: 'line', yAxisIndex: 1, data: hourlyH, smooth: true, symbol: 'none', lineStyle: { color: MC.blue, width: 2 } },
-    ],
+    series,
   })
   instances.push(inst)
+}
+
+function fmtTime(iso: string) {
+  return (iso || '').replace('T', ' ').slice(0, 16)
 }
 
 async function loadAll() {
@@ -183,31 +326,27 @@ async function loadAll() {
 
   try {
     const [en, lpE, lpT, lpH, ax, rv] = await Promise.all([
-      apiFetch<any>(
-        `/api/buildings/${encodeURIComponent(BT)}/energy?start_date=${sd}&end_date=${ed}&include_water=true`,
-      ),
+      apiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/energy?start_date=${sd}&end_date=${ed}&include_water=true`),
       apiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/load-profile?metric=electricity&days=14`),
-      apiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/load-profile?metric=air_temp&days=14`),
-      apiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/load-profile?metric=humidity&days=14`),
+      apiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/load-profile?metric=air_temp&days=14`).catch(() => ({ hourly_profile: [] })),
+      apiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/load-profile?metric=humidity&days=14`).catch(() => ({ hourly_profile: [] })),
       apiFetch<any>(`/api/anomalies/recent?hours=168&building_type=${encodeURIComponent(BT)}`),
-      apiFetch<any>(
-        `/api/buildings/${encodeURIComponent(BT)}/rated-vs-actual?start_date=${sds}&end_date=${ed}&metric=electricity`,
-      ).catch(() => null),
+      apiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/rated-vs-actual?start_date=${sds}&end_date=${ed}&metric=electricity`).catch(() => null),
     ])
 
     const st = await apiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/status`).catch(() => null)
-    statusSnap.value = st
-    anomalies.value = ax?.anomalies ?? []
+    statusSnap.value  = st
+    anomalies.value   = ax?.anomalies ?? []
     ratedSummary.value = rv?.summary ?? null
 
-    const hourlyT = Array.from({ length: 24 }, (_, h) => {
-      const row = lpT.hourly_profile?.find((x: any) => x.hour === h)
-      return Number(row?.avg_value ?? 22)
-    })
-    const hourlyH = Array.from({ length: 24 }, (_, h) => {
-      const row = lpH.hourly_profile?.find((x: any) => x.hour === h)
-      return Number(row?.avg_value ?? 50)
-    })
+    const toHourly = (profile: any[]) =>
+      Array.from({ length: 24 }, (_, h) => {
+        const row = profile?.find((x: any) => x.hour === h)
+        return row?.avg_value != null ? Number(row.avg_value) : null
+      })
+
+    const hourlyT = toHourly(lpT.hourly_profile)
+    const hourlyH = toHourly(lpH.hourly_profile)
 
     disposeAll()
     renderDual(en.records || [])
@@ -219,10 +358,7 @@ async function loadAll() {
   }
 }
 
-watch(
-  () => props.dataDate,
-  () => loadAll(),
-)
+watch(() => props.dataDate, () => loadAll())
 
 function onResize() {
   instances.forEach((c) => c.resize())
@@ -246,63 +382,75 @@ onUnmounted(() => {
   ro?.disconnect()
   ro = null
 })
-
-function fmtTime(iso: string) {
-  return (iso || '').replace('T', ' ').slice(0, 16)
-}
 </script>
 
 <template>
   <div class="home-public-section">
-    <div class="bento-row bento-r1">
-      <div class="cpanel">
-        <div class="cpanel-hd">
-          <span class="cpanel-title">水电综合双轴趋势</span>
-          <span class="cpanel-sub">近 30 日日用电与日用水</span>
-        </div>
-        <div ref="dualEl" class="cpanel-body" style="height: 300px" />
-      </div>
-      <div class="cpanel">
-        <div class="cpanel-hd">
-          <span class="cpanel-title">全天候用电剖面</span>
-          <span class="cpanel-sub">逐时平均（近两周）</span>
-        </div>
-        <div ref="profileEl" class="cpanel-body" style="height: 300px" />
-      </div>
-    </div>
 
+    <!-- 第一行：舒适区评分 + 异常事件时间轴 -->
     <div class="bento-row bento-r1">
-      <div class="cpanel">
-        <div class="cpanel-hd">
-          <span class="cpanel-title">舒适度趋势（典型日）</span>
-          <span class="cpanel-sub">逐时均温与均湿度</span>
-        </div>
-        <div ref="comfortEl" class="cpanel-body" style="height: 260px" />
-      </div>
       <div class="cpanel">
         <div class="cpanel-hd">
           <span class="cpanel-title">舒适区评分</span>
-          <span class="cpanel-sub">基于最新快照与阈值规则</span>
+          <span class="cpanel-sub">基于最新温湿度快照判定室内热舒适程度，满分 100 分</span>
         </div>
         <div style="padding: 12px 14px 16px">
           <HomeMiniMetricCards :cards="miniCards" />
         </div>
       </div>
-    </div>
-
-    <div class="bento-row bento-r2">
       <div class="cpanel">
         <div class="cpanel-hd">
           <span class="cpanel-title">异常事件时间轴</span>
-          <span class="cpanel-sub">近期未解决告警</span>
+          <span class="cpanel-sub">近 7 天内检测到的异常用能事件，按时间倒序排列</span>
         </div>
         <div class="home-timeline">
-          <div v-for="(a, i) in anomalies.slice(0, 14)" :key="i" class="home-timeline-item">
-            <strong>{{ fmtTime(a.timestamp) }}</strong>
-            {{ (a.message || a.rule || '异常').toString().slice(0, 100) }}
+          <div
+            v-for="(a, i) in anomalies.slice(0, 10)"
+            :key="i"
+            class="home-timeline-item"
+          >
+            <span class="tl-dot">
+              <Icon icon="mdi:alert-circle" width="13" class="tl-icon" />
+            </span>
+            <div class="tl-body">
+              <span class="tl-time">{{ fmtTime(a.timestamp) }}</span>
+              <span class="tl-msg">{{ (a.message || a.rule || '异常').toString().slice(0, 60) }}</span>
+            </div>
           </div>
-          <div v-if="!anomalies.length" class="home-timeline-item">近期无未解决告警</div>
+          <div v-if="!anomalies.length" class="home-timeline-empty">
+            <Icon icon="mdi:check-circle-outline" width="16" />
+            近期无未解决告警，持续监测中
+          </div>
         </div>
+      </div>
+    </div>
+
+    <!-- 第二行：水电综合双轴趋势 + 全天候用电剖面 -->
+    <div class="bento-row bento-r1">
+      <div class="cpanel">
+        <div class="cpanel-hd">
+          <span class="cpanel-title">水电综合双轴趋势</span>
+          <span class="cpanel-sub">近 30 日日总用电量（柱/kWh）与日总用水量（折线/m³）双轴对比</span>
+        </div>
+        <div ref="dualEl" class="cpanel-body" style="height: 260px" />
+      </div>
+      <div class="cpanel">
+        <div class="cpanel-hd">
+          <span class="cpanel-title">全天候用电剖面</span>
+          <span class="cpanel-sub">24 小时逐时平均用电强度（kWh/h），反映一天中的用电规律</span>
+        </div>
+        <div ref="profileEl" class="cpanel-body" style="height: 260px" />
+      </div>
+    </div>
+
+    <!-- 第三行：舒适度趋势 + 建议动作 -->
+    <div class="bento-row bento-r1">
+      <div class="cpanel">
+        <div class="cpanel-hd">
+          <span class="cpanel-title">舒适度趋势（典型日）</span>
+          <span class="cpanel-sub">室内逐时均温（°C，实线）与均湿度（%RH，虚线），参考线为舒适区边界</span>
+        </div>
+        <div ref="comfortEl" class="cpanel-body" style="height: 260px" />
       </div>
       <HomeActionCards
         tab="Public services"
@@ -310,5 +458,80 @@ function fmtTime(iso: string) {
         :rated-anomaly-hours="ratedSummary?.anomaly_hours ?? null"
       />
     </div>
+
   </div>
 </template>
+
+<style scoped>
+/* ── 时间轴 ─────────────────────────────────────────────────────────────────── */
+.home-timeline {
+  padding: 8px 14px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.home-timeline-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--border);
+}
+.home-timeline-item:last-child { border-bottom: none; }
+
+.tl-dot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: rgba(249, 115, 22, 0.12);
+  color: #f97316;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.tl-icon { display: block; }
+
+.tl-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.tl-time {
+  font-size: 10px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.tl-msg {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+  word-break: break-all;
+}
+
+.home-timeline-empty {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 16px 0;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+/* Light theme */
+html[data-theme="light"] .tl-dot {
+  background: rgba(249, 115, 22, 0.08);
+}
+html[data-theme="light"] .tl-msg {
+  color: #374151;
+}
+</style>

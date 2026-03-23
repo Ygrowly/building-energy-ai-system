@@ -79,13 +79,13 @@ const miniCards = computed(() => {
     },
     {
       label: '供回水温差',
-      value: deltaTSupplyReturn.value != null ? deltaTSupplyReturn.value.toFixed(1) : '--',
+      value: deltaTSupplyReturn.value != null ? deltaTSupplyReturn.value.toFixed(2) : '--',
       unit: '°C',
       desc: '供水与回水温差，≤5°C 建议检查水力平衡',
     },
     {
       label: '用电偏差率',
-      value: devRate != null ? String(devRate) : '--',
+      value: devRate != null ? Number(devRate).toFixed(2) : '--',
       unit: '%',
       desc: '异常小时占总小时比，衡量整体合规程度',
     },
@@ -106,6 +106,8 @@ function renderRated(records: any[]) {
   const labels = records.map((r: any) => r.timestamp?.slice(11, 16) ?? '')
 
   const inst = echarts.init(ratedEl.value)
+
+  // 实际线：鲜蓝实线 + 浅蓝填充
   const series: any[] = [
     {
       name: '实际',
@@ -114,9 +116,20 @@ function renderRated(records: any[]) {
       smooth: true,
       symbol: 'none',
       connectNulls: false,
-      lineStyle: { color: MC.blue, width: 2 },
+      lineStyle: { color: MC.blue, width: 2.5 },
+      areaStyle: {
+        color: {
+          type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
+          colorStops: [
+            { offset: 0, color: `${MC.blue}30` },
+            { offset: 1, color: `${MC.blue}05` },
+          ],
+        },
+      },
     },
   ]
+
+  // 国标期望线：鲜翠绿长虚线，明显区别于蓝色实线
   if (hasRated) {
     series.push({
       name: '国标期望',
@@ -125,7 +138,8 @@ function renderRated(records: any[]) {
       smooth: true,
       symbol: 'none',
       connectNulls: false,
-      lineStyle: { color: MC.sage, width: 1.5, type: 'dashed' },
+      lineStyle: { color: MC.sage, width: 2, type: 'dashed' },
+      z: 2,
     })
   }
 
@@ -150,13 +164,23 @@ function renderRated(records: any[]) {
     backgroundColor: 'transparent',
     grid: { top: 32, right: 16, bottom: 40, left: 52 },
     graphic,
-    tooltip: { trigger: 'axis', backgroundColor: c.ttBg, borderColor: c.ttBr, textStyle: { color: c.ttText } },
-    legend: { top: 4, textStyle: { color: c.axis, fontSize: 10 } },
+    tooltip: {
+      trigger: 'axis',
+      backgroundColor: c.ttBg,
+      borderColor: c.ttBr,
+      textStyle: { color: c.ttText },
+    },
+    legend: {
+      top: 4,
+      textStyle: { color: c.axis, fontSize: 10 },
+      itemStyle: { borderWidth: 0 },
+    },
     xAxis: {
       type: 'category',
       data: labels,
       axisLabel: { color: c.axis, fontSize: 9, interval: Math.floor(labels.length / 8) },
       axisLine: { lineStyle: { color: c.grid } },
+      axisTick: { show: false },
     },
     yAxis: {
       type: 'value',
@@ -164,6 +188,7 @@ function renderRated(records: any[]) {
       nameTextStyle: { color: c.axis, fontSize: 10 },
       axisLabel: { color: c.axis, fontSize: 10 },
       splitLine: { lineStyle: { color: c.grid, type: 'dashed' } },
+      axisLine: { show: false },
     },
     series,
   })
@@ -176,16 +201,34 @@ function renderWeekday(weekly: { weekday: number; label?: string; avg_value: num
   const labels = weekly.map((w) => w.label || `周${w.weekday}`)
   const vals = weekly.map((w) => w.avg_value)
 
+  // 工作日用鲜蓝，周末用青色，圆角柱形，颜色差异明显
+  const styledVals = vals.map((v, i) => ({
+    value: v,
+    itemStyle: {
+      color: i < 5
+        ? { type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
+            colorStops: [{ offset: 0, color: MC.blue }, { offset: 1, color: `${MC.blue}90` }] }
+        : { type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
+            colorStops: [{ offset: 0, color: MC.teal }, { offset: 1, color: `${MC.teal}90` }] },
+    },
+  }))
+
   const inst = echarts.init(weekdayEl.value)
   inst.setOption({
     backgroundColor: 'transparent',
-    grid: { top: 28, right: 12, bottom: 28, left: 40 },
-    tooltip: { trigger: 'axis', backgroundColor: c.ttBg, borderColor: c.ttBr, textStyle: { color: c.ttText } },
+    grid: { top: 28, right: 12, bottom: 28, left: 44 },
+    tooltip: {
+      trigger: 'axis',
+      backgroundColor: c.ttBg,
+      borderColor: c.ttBr,
+      textStyle: { color: c.ttText },
+    },
     xAxis: {
       type: 'category',
       data: labels,
-      axisLabel: { color: c.axis, fontSize: 10, rotate: 30 },
+      axisLabel: { color: c.axis, fontSize: 10 },
       axisLine: { lineStyle: { color: c.grid } },
+      axisTick: { show: false },
     },
     yAxis: {
       type: 'value',
@@ -193,15 +236,15 @@ function renderWeekday(weekly: { weekday: number; label?: string; avg_value: num
       nameTextStyle: { color: c.axis, fontSize: 10 },
       axisLabel: { color: c.axis, fontSize: 10 },
       splitLine: { lineStyle: { color: c.grid, type: 'dashed' } },
+      axisLine: { show: false },
     },
     series: [
       {
         name: '用电',
         type: 'bar',
-        data: vals,
-        itemStyle: {
-          color: (p: any) => (p.dataIndex < 5 ? MC.blue : MC.teal),
-        },
+        data: styledVals,
+        barMaxWidth: 32,
+        itemStyle: { borderRadius: [3, 3, 0, 0] },
       },
     ],
   })
@@ -220,51 +263,77 @@ function renderHvacTriplet(
   const hasSupply = hourlySupply.some((v) => v !== null)
   const hasRet = hourlyRet.some((v) => v !== null)
 
+  // 室外温度：琥珀橙实线，带底部渐变填充，视觉"贴地"
   const series: any[] = [
     {
-      name: '室外(逐时均)',
+      name: '室外',
       type: 'line',
       data: hourlyAir,
       smooth: true,
       symbol: 'none',
       connectNulls: false,
-      lineStyle: { color: MC.terra, width: 2 },
+      lineStyle: { color: MC.terra, width: 2.5 },
+      areaStyle: {
+        color: {
+          type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
+          colorStops: [
+            { offset: 0, color: `${MC.terra}28` },
+            { offset: 1, color: `${MC.terra}05` },
+          ],
+        },
+      },
     },
   ]
+
+  // 供水：鲜蓝虚线（长划），线条粗且颜色饱和
   if (hasSupply) {
     series.push({
-      name: '供水(逐时均)',
+      name: '供水',
       type: 'line',
       data: hourlySupply,
       smooth: true,
       symbol: 'none',
       connectNulls: false,
-      lineStyle: { color: MC.blue, width: 1.5, type: 'dashed' },
+      lineStyle: { color: MC.blue, width: 2.5, type: 'dashed' },
+      z: 3,
     })
   }
+
+  // 回水：橙红虚线（短划+点），与供水蓝形成冷暖强对比
   if (hasRet) {
     series.push({
-      name: '回水(逐时均)',
+      name: '回水',
       type: 'line',
       data: hourlyRet,
       smooth: true,
       symbol: 'none',
       connectNulls: false,
-      lineStyle: { color: MC.lav, width: 1.5, type: 'dashed' },
+      lineStyle: { color: MC.lav, width: 2.5, type: 'dotted' },
+      z: 3,
     })
   }
 
   const inst = echarts.init(hvacEl.value)
   inst.setOption({
     backgroundColor: 'transparent',
-    grid: { top: 28, right: 16, bottom: 32, left: 48 },
-    tooltip: { trigger: 'axis', backgroundColor: c.ttBg, borderColor: c.ttBr, textStyle: { color: c.ttText } },
-    legend: { top: 2, textStyle: { color: c.axis, fontSize: 9 } },
+    grid: { top: 30, right: 16, bottom: 28, left: 46 },
+    tooltip: {
+      trigger: 'axis',
+      backgroundColor: c.ttBg,
+      borderColor: c.ttBr,
+      textStyle: { color: c.ttText },
+    },
+    legend: {
+      top: 4,
+      textStyle: { color: c.axis, fontSize: 9 },
+      itemStyle: { borderWidth: 0 },
+    },
     xAxis: {
       type: 'category',
       data: hours,
       axisLabel: { color: c.axis, fontSize: 9, interval: 3 },
       axisLine: { lineStyle: { color: c.grid } },
+      axisTick: { show: false },
     },
     yAxis: {
       type: 'value',
@@ -272,6 +341,7 @@ function renderHvacTriplet(
       nameTextStyle: { color: c.axis, fontSize: 10 },
       axisLabel: { color: c.axis, fontSize: 10 },
       splitLine: { lineStyle: { color: c.grid, type: 'dashed' } },
+      axisLine: { show: false },
     },
     series,
   })

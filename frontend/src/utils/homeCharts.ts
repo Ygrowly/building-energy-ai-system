@@ -1,21 +1,22 @@
 /** 首页大屏 ECharts 主题与公共常量 */
 
+/** 主色板 — 高饱和、明确对比、深浅主题均可辨 */
 export const MC = {
-  blue: '#7b9fc7',
-  sage: '#7aaa8e',
-  terra: '#c4956a',
-  lav: '#9b8fc4',
-  rose: '#c4909a',
-  teal: '#7abcb3',
+  blue:  '#4b9ef5',  // 鲜蓝  — 实际用电 / 供水
+  sage:  '#10d980',  // 鲜翠绿 — 国标期望
+  terra: '#f59e0b',  // 琥珀橙 — 室外温度
+  lav:   '#f97316',  // 橙红   — 回水（与供水蓝形成冷暖对比）
+  rose:  '#f472b6',  // 玫红   — 预留
+  teal:  '#22d3ee',  // 青色   — 周末柱 / 预留
 }
 
 export function gc() {
   const dark = document.documentElement.dataset.theme !== 'light'
   return {
-    grid: dark ? '#1a1c28' : '#d0e8d8',
-    axis: dark ? '#6b7a9a' : '#6a8c72',
-    ttBg: dark ? '#101118' : '#ffffff',
-    ttBr: dark ? '#1a1c28' : '#d0e8d8',
+    grid:   dark ? '#252836' : '#e2ece5',
+    axis:   dark ? '#7a8aaa' : '#5a7a64',
+    ttBg:   dark ? '#101118' : '#ffffff',
+    ttBr:   dark ? '#252836' : '#d0e8d8',
     ttText: dark ? '#dde3f0' : '#0f2818',
     dark,
   }

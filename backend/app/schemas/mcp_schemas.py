@@ -47,7 +47,7 @@ class BuildingID(str, Enum):
     """
     EDUCATION = "Education"
     OFFICE = "Office"
-    PUBLIC = "Public"
+    PUBLIC = "Public services"
 
 
 class MetricType(str, Enum):
@@ -148,12 +148,12 @@ class MCPError(BaseModel):
 class QueryEnergyMetricsInput(BaseModel):
     """
     查询 energy_data 超表中指定建筑、时间段、指标的原始读数。
-    building_id 为 buildings.building_type 的值（如 'Education'/'Office'/'Public'），
+    building_id 为 buildings.building_type 的值（如 'Education'/'Office'/'Public services'），
     由数据库层动态校验，新增楼宇无需修改代码。
     """
     building_id: str = Field(
         min_length=1,
-        description="建筑类型名称，如 'Education'、'Office'、'Public'，由数据库动态校验"
+        description="建筑类型名称，如 'Education'、'Office'、'Public services'，由数据库动态校验"
     )
     time_range: TimeRange
     metrics: list[MetricType] = Field(min_length=1, description="至少指定一个指标")
@@ -188,7 +188,7 @@ class GetDeviceLiveStatusInput(BaseModel):
     """
     building_type: str = Field(
         min_length=1,
-        description="建筑类型名称，如 'Education'、'Office'、'Public'，由数据库动态校验"
+        description="建筑类型名称，如 'Education'、'Office'、'Public services'，由数据库动态校验"
     )
 
 
@@ -218,7 +218,7 @@ class CalculateSystemCOPInput(BaseModel):
     """
     building_id: str = Field(
         min_length=1,
-        description="建筑类型名称，如 'Education'、'Office'、'Public'，由数据库动态校验"
+        description="建筑类型名称，如 'Education'、'Office'、'Public services'，由数据库动态校验"
     )
     time_range: TimeRange
 
@@ -259,7 +259,7 @@ class GetBuildingRatedValuesInput(BaseModel):
     """
     building_id: str = Field(
         min_length=1,
-        description="建筑类型名称，如 'Education'、'Office'、'Public'，由数据库动态校验"
+        description="建筑类型名称，如 'Education'、'Office'、'Public services'，由数据库动态校验"
     )
     time_range: TimeRange
     metrics: list[Literal["water", "electricity", "hac_energy"]] = Field(
@@ -315,7 +315,7 @@ class QueryDailyEnergySummaryInput(BaseModel):
     """
     building_id: str = Field(
         min_length=1,
-        description="建筑类型名称，如 'Education'、'Office'、'Public'，由数据库动态校验"
+        description="建筑类型名称，如 'Education'、'Office'、'Public services'，由数据库动态校验"
     )
     date_range: TimeRange
     granularity: Literal["day", "week", "month"] = Field(
@@ -413,7 +413,7 @@ class DetectEnergyAnomaliesInput(BaseModel):
     """
     building_id: str = Field(
         min_length=1,
-        description="建筑类型名称，如 'Education'、'Office'、'Public'，由数据库动态校验"
+        description="建筑类型名称，如 'Education'、'Office'、'Public services'，由数据库动态校验"
     )
     time_range: TimeRange
     rules: list[AnomalyRule] = Field(
@@ -511,7 +511,7 @@ class CreateWorkOrderDraftInput(BaseModel):
     )
     building_id: str = Field(
         min_length=1,
-        description="建筑类型名称，如 'Education'、'Office'、'Public'，由数据库动态校验"
+        description="建筑类型名称，如 'Education'、'Office'、'Public services'，由数据库动态校验"
     )
     issue_description: str = Field(min_length=10, description="故障描述，至少 10 字")
     suggested_action: str = Field(min_length=5, description="建议处置动作")
@@ -637,7 +637,7 @@ class CompareTimePeriodsInput(BaseModel):
     """
     building_id: str = Field(
         min_length=1,
-        description="建筑类型名称，如 'Education'、'Office'、'Public'"
+        description="建筑类型名称，如 'Education'、'Office'、'Public services'"
     )
     metric: MetricType
     period_a: TimeRange = Field(description="当期（较新的时间段，如本周）")

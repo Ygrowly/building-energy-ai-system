@@ -804,6 +804,76 @@ async def get_overview(
                 "latest_water_m3": latest_w,
             })
 
+        # ---------- 昨日数据对比，计算变化百分比 ----------
+        yesterday_start = day_start - timedelta(days=1)
+        yesterday_end = day_start  # 即 today 的 day_start
+
+        yesterday_result = await db.execute(
+            text("""
+                SELECT
+                    b.primary_space_usage,
+                    SUM(e.electricity_kwh)  AS total_electricity_kwh,
+                    SUM(e.water_m3)         AS total_water_m3,
+                    SUM(e.hac_energy)       AS total_hac_energy
+                FROM energy_data e
+                JOIN buildings b ON e.building_id = b.building_id
+                WHERE e."timestamp" >= :yday_start
+                  AND e."timestamp" <  :yday_end
+                GROUP BY b.primary_space_usage
+            """),
+            {"yday_start": yesterday_start, "yday_end": yesterday_end},
+        )
+        yesterday_rows = yesterday_result.fetchall()
+
+        def _pct(today_val: float, yest_val: float) -> float | None:
+            if yest_val and yest_val > 0:
+                return round((today_val - yest_val) / yest_val * 100, 1)
+            return None
+
+        # 按楼宇类型汇总昨日数据
+        yest_by_type: dict[str, dict] = {}
+        yest_total_elec = 0.0
+        yest_total_water = 0.0
+        yest_total_hac = 0.0
+        for yr in yesterday_rows:
+            usage, y_elec, y_water, y_hac = yr
+            y_elec_f = float(y_elec or 0)
+            y_water_f = float(y_water or 0)
+            y_hac_f = float(y_hac or 0)
+            yest_total_elec += y_elec_f
+            yest_total_water += y_water_f
+            yest_total_hac += y_hac_f
+            yest_by_type[usage] = {
+                "electricity": y_elec_f,
+                "water": y_water_f,
+                "hac": y_hac_f,
+            }
+
+        # 为每栋楼添加变化百分比
+        for bd in buildings_detail:
+            bt = bd["building_type"]
+            yd = yest_by_type.get(bt)
+            if yd:
+                bd["electricity_change_pct"] = _pct(bd["total_electricity_kwh"], yd["electricity"])
+                bd["water_change_pct"] = _pct(bd["total_water_m3"], yd["water"])
+                bd["hac_change_pct"] = _pct(bd["total_hac_energy_kwh"], yd["hac"])
+                bd_carbon_today = bd["total_electricity_kwh"] * 0.5703
+                bd_carbon_yest = yd["electricity"] * 0.5703
+                bd["carbon_change_pct"] = _pct(bd_carbon_today, bd_carbon_yest)
+            else:
+                bd["electricity_change_pct"] = None
+                bd["water_change_pct"] = None
+                bd["hac_change_pct"] = None
+                bd["carbon_change_pct"] = None
+
+        # 全局变化百分比
+        kpis_change = {
+            "total_electricity_pct": _pct(total_electricity, yest_total_elec),
+            "total_water_pct": _pct(total_water, yest_total_water),
+            "total_hac_pct": _pct(total_hac, yest_total_hac),
+            "total_carbon_pct": _pct(total_electricity * 0.5703, yest_total_elec * 0.5703),
+        }
+
         return {
             "data_date": target_day.isoformat() if hasattr(target_day, "isoformat") else str(target_day),
             "kpis": {
@@ -813,6 +883,7 @@ async def get_overview(
                 "total_carbon_kg": round(total_electricity * 0.5703, 2),
                 "anomaly_count": len(anomaly_building_ids),
             },
+            "kpis_change": kpis_change,
             "weather": {
                 "temperature": global_avg_temp,
                 "humidity": global_avg_humidity,

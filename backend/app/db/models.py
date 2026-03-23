@@ -42,7 +42,7 @@ class Base(DeclarativeBase):
 class Building(Base):
     """
     建筑物静态信息表（多租户顶层实体）。
-    primary_space_usage 对应原 building_type（'Education'/'Office'/'Public'）。
+    primary_space_usage 对应原 building_type（'Education'/'Office'/'Public services'）。
     """
     __tablename__ = "buildings"
 

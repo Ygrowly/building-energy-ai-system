@@ -75,7 +75,7 @@
         <div class="kpi-right">
           <span class="kpi-tag" :style="{ color: k.color, background: k.bg }">{{ k.tag }}</span>
           <span v-if="k.change != null" class="kpi-trend" :class="k.change >= 0 ? 'up' : 'down'">
-            <Icon :icon="k.change >= 0 ? 'mdi:trending-up' : 'mdi:trending-down'" width="12" />
+            <Icon :icon="k.change >= 0 ? 'mdi:trending-up' : 'mdi:trending-down'" width="14" />
             {{ k.change >= 0 ? '+' : '' }}{{ k.change }}%
           </span>
         </div>
@@ -642,22 +642,29 @@ onMounted(async () => {
   white-space: nowrap;
 }
 .kpi-trend {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 3px;
+  gap: 2px;
   font-size: 11px;
   font-weight: 600;
-  padding: 2px 6px;
+  padding: 2px 8px;
   border-radius: 20px;
   white-space: nowrap;
+  margin-top: 2px;
+}
+.kpi-trend-label {
+  font-weight: 400;
+  opacity: 0.7;
+  margin-left: 2px;
+  font-size: 10px;
 }
 .kpi-trend.up {
-  color: #16a34a;
-  background: rgba(22, 163, 74, 0.1);
+  color: #e65100;
+  background: rgba(230, 81, 0, 0.08);
 }
 .kpi-trend.down {
-  color: #dc2626;
-  background: rgba(220, 38, 38, 0.1);
+  color: #16a34a;
+  background: rgba(22, 163, 74, 0.08);
 }
 
 @container (max-width: 899px) {

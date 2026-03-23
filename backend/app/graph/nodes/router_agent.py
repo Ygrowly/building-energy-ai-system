@@ -100,7 +100,7 @@ def build_router_system_prompt(building_types: list[str] | None = None) -> str:
     building_types 为 None 时使用内置默认值（降级保护）。
     """
     if not building_types:
-        building_types = ["Education", "Office", "Public"]
+        building_types = ["Education", "Office", "Public services"]
     building_list = "\n".join(f"- {b}" for b in building_types)
     return _ROUTER_SYSTEM_PROMPT_TEMPLATE.format(building_list=building_list)
 

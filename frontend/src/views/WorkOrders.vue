@@ -6,7 +6,7 @@
     </header>
 
     <!-- 无 Session 警告：审批需要 AI 会话 -->
-    <div class="session-warn" v-if="!chatStore.sessionId">
+    <div class="session-warn" v-if="!chatStore.currentSessionId">
       <span class="warn-icon"><Icon icon="mdi:alert" width="18" /></span>
       <div>
         <p class="warn-title">审批功能需要先建立 AI 会话</p>
@@ -80,7 +80,7 @@
 
             <!-- 审批操作（仅 pending_approval 状态显示） -->
             <div class="action-bar" v-if="wo.status === 'pending_approval'">
-              <div v-if="!chatStore.sessionId" class="action-no-session">
+              <div v-if="!chatStore.currentSessionId" class="action-no-session">
                 <Icon icon="mdi:alert" width="14" class="bar-icon" /> 需先在 AI 控制台建立会话才能审批
               </div>
               <template v-else>
@@ -229,7 +229,7 @@ function startReject(id: string) {
 
 // ── 审批 ──────────────────────────────────────────
 async function approve(ticketId: string, approved: boolean) {
-  if (!chatStore.sessionId) return
+  if (!chatStore.currentSessionId) return
 
   approving.value = ticketId
   actionResult.value = { ...actionResult.value, [ticketId]: undefined as any }
@@ -238,7 +238,7 @@ async function approve(ticketId: string, approved: boolean) {
     const result = await apiFetch<any>('/api/work-orders/approve', {
       method: 'POST',
       body: JSON.stringify({
-        session_id: chatStore.sessionId,
+        session_id: chatStore.currentSessionId,
         ticket_id: ticketId,
         approved,
         reason: approved ? undefined : (rejectReason.value || undefined),
@@ -313,7 +313,7 @@ function detailRows(wo: any) {
     { label: '状态',     value: STATUS_LABELS[wo.status] ?? wo.status },
     { label: '创建时间', value: formatTime(wo.created_at),    cls: 'muted' },
     wo.reject_reason ? { label: '驳回原因', value: wo.reject_reason, cls: 'danger-text' } : null,
-  ].filter(Boolean)
+  ].filter((r): r is NonNullable<typeof r> => r != null)
 }
 </script>
 

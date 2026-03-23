@@ -73,6 +73,7 @@ export async function sendChatMessage(
   sessionId: string | null,
   handlers: StreamHandlers,
   enableWebSearch = false,
+  signal?: AbortSignal,
 ): Promise<string> {
   const token = _getToken()
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
@@ -82,6 +83,7 @@ export async function sendChatMessage(
     method: 'POST',
     headers,
     body: JSON.stringify({ message, session_id: sessionId, enable_web_search: enableWebSearch }),
+    signal,
   })
 
   if (!response.ok) {

@@ -147,8 +147,8 @@
     <!-- Agent 状态条 -->
     <Transition name="fade">
       <div class="agent-status-bar" v-if="store.currentAgentStatus">
-        <span class="status-dot"></span>
-        <span class="status-label">{{ store.currentAgentStatus.label }}</span>
+        <span class="status-dot" :style="{ background: agentDotColor(store.currentAgentStatus.name) }"></span>
+        <span class="status-label" :style="{ color: agentDotColor(store.currentAgentStatus.name) }">{{ store.currentAgentStatus.label }}</span>
         <span class="status-msg">{{ store.currentAgentStatus.message }}</span>
       </div>
     </Transition>
@@ -190,7 +190,7 @@
         <!-- AI 文字回复 -->
         <template v-else-if="msg.role === 'ai'">
           <ThinkingBubble
-            v-if="msg.thinkingSteps && msg.thinkingSteps.length > 0"
+            v-if="msg.thinkingSteps && (msg.thinkingSteps.length > 0 || msg.thinkingFinished === false)"
             :steps="msg.thinkingSteps"
             :is-finished="msg.thinkingFinished ?? false"
             :duration="msg.thinkingDuration"
@@ -253,13 +253,13 @@
         <!-- Artifact：图表 -->
         <DynamicChart
           v-else-if="msg.role === 'artifact' && isChart(msg.artifact)"
-          :artifact="msg.artifact"
+          :artifact="ensureArtifact(msg.artifact)"
         />
 
         <!-- Artifact：工单卡片 -->
         <WorkOrderCard
           v-else-if="msg.role === 'artifact' && isWorkOrder(msg.artifact)"
-          :artifact="msg.artifact"
+          :artifact="ensureArtifact(msg.artifact)"
           :is-processing="store.isLoading"
           @approve="store.approveOrder(true)"
           @reject="(reason) => store.approveOrder(false, reason)"
@@ -268,7 +268,7 @@
         <!-- Artifact：报表下载卡片 -->
         <ReportDownload
           v-else-if="msg.role === 'artifact' && isReportDownload(msg.artifact)"
-          :artifact="msg.artifact"
+          :artifact="ensureArtifact(msg.artifact)"
         />
 
         <!-- 错误消息 -->
@@ -339,9 +339,23 @@
               <Icon icon="mdi:image-plus-outline" width="16" />
             </button>
             <input ref="fileInputEl" type="file" accept="image/*" style="display:none" @change="onFileChange" />
-            <button class="send-icon-btn" :class="{ active: inputText.trim() }" @click="handleSend" :disabled="store.isLoading || !inputText.trim()" title="发送">
-              <Icon v-if="store.isLoading" icon="mdi:timer-sand" width="16" />
-              <Icon v-else icon="mdi:arrow-up" width="16" style="transform: scaleY(1.3)" />
+            <button
+              v-if="store.isLoading"
+              class="send-icon-btn stop-btn"
+              @click="store.stopGeneration()"
+              title="终止生成"
+            >
+              <Icon icon="mdi:stop" width="16" />
+            </button>
+            <button
+              v-else
+              class="send-icon-btn"
+              :class="{ active: inputText.trim() }"
+              @click="handleSend"
+              :disabled="!inputText.trim()"
+              title="发送"
+            >
+              <Icon icon="mdi:arrow-up" width="16" style="transform: scaleY(1.3)" />
             </button>
           </div>
         </div>
@@ -367,6 +381,21 @@ import type { ArtifactEvent } from '@/api/stream_client'
 const router = useRouter()
 const store = useChatStore()
 const pickerStore = useElementPickerStore()
+
+/** agent 类型 → 语义配色 */
+const _agentColors: Record<string, string> = {
+  router:         '#3B82C4',  // 信息蓝
+  data_agent:     '#259468',  // 数据绿
+  diagnose_agent: '#D4782C',  // 警示橙
+  tool:           '#7C5CB8',  // 执行紫
+  tools:          '#7C5CB8',  // 执行紫
+  agent:          '#8A7B96',  // 思考灰紫
+  web_search:     '#3B82C4',  // 信息蓝
+}
+function agentDotColor(name: string): string {
+  return _agentColors[name] ?? '#8A7B96'
+}
+
 const inputText = ref('')
 const inputFocused = ref(false)
 const messagesEl = ref<HTMLElement>()
@@ -674,6 +703,10 @@ watch(() => store.currentSessionId, async () => {
 })
 
 // ── Artifact 类型判断 ────────────────────────────────────────────────────────
+function ensureArtifact(a: ArtifactEvent | undefined): ArtifactEvent {
+  return a!
+}
+
 function isChart(artifact?: ArtifactEvent): boolean {
   if (!artifact) return false
   const t = artifact.component_type ?? artifact.widget ?? ''
@@ -703,7 +736,7 @@ function formatMarkdown(text: string): string {
     .replace(/^### (.+)$/gm,
       '<span style="display:block;font-size:12px;font-weight:700;color:var(--accent);margin:6px 0 2px">$1</span>')
     .replace(/^## (.+)$/gm,
-      '<span style="display:block;font-size:13px;font-weight:700;color:var(--text-primary);margin:7px 0 3px;border-bottom:1px solid var(--border);padding-bottom:2px">$1</span>')
+      '<span style="display:block;font-size:13px;font-weight:700;color:var(--text-primary);margin:8px 0 3px;border-bottom:1px solid var(--border);padding-bottom:2px">$1</span>')
     .replace(/^# (.+)$/gm,
       '<span style="display:block;font-size:14px;font-weight:700;color:var(--text-primary);margin:8px 0 3px">$1</span>')
     .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
@@ -711,10 +744,10 @@ function formatMarkdown(text: string): string {
     .replace(/`([^`]+)`/g,
       '<code style="background:rgba(108,142,245,0.15);padding:1px 5px;border-radius:3px;font-family:monospace;font-size:0.9em">$1</code>')
     .replace(/^[ \t]*[-*] (.+)$/gm,
-      '<span style="display:block;padding-left:14px;margin:1px 0;position:relative"><span style="position:absolute;left:4px;color:var(--accent)">•</span>$1</span>')
+      '<span style="display:block;padding-left:14px;margin:2px 0;position:relative"><span style="position:absolute;left:4px;color:var(--accent)">•</span>$1</span>')
     .replace(/^[ \t]*(\d+)\. (.+)$/gm,
-      '<span style="display:block;padding-left:20px;margin:1px 0;position:relative"><span style="position:absolute;left:4px;color:var(--text-secondary)">$1.</span>$2</span>')
-    .replace(/\n{2,}/g, '<br/>')
+      '<span style="display:block;padding-left:20px;margin:2px 0;position:relative"><span style="position:absolute;left:4px;color:var(--text-secondary)">$1.</span>$2</span>')
+    .replace(/\n{2,}/g, '<div style="margin:4px 0"></div>')
     .replace(/\n/g, '<br/>')
 }
 </script>
@@ -1097,12 +1130,15 @@ html[data-theme="light"] .tab.active .tab-close {
 .status-dot {
   width: 8px; height: 8px;
   border-radius: 50%;
-  background: var(--thinking-color);
-  animation: blink 1s infinite;
+  /* 颜色由 inline style 动态设置 */
+  animation: status-breathe 1.6s ease-in-out infinite;
 }
-@keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+@keyframes status-breathe {
+  0%, 100% { transform: scale(1);   opacity: 0.7; }
+  50%      { transform: scale(1.4); opacity: 1; }
+}
 
-.status-label { color: var(--thinking-color); font-weight: 600; }
+.status-label { font-weight: 600; /* 颜色由 inline style 动态设置 */ }
 .status-msg { color: var(--text-secondary); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ── 消息区 ─────────────────────────────────────────────────────────────── */
@@ -1209,9 +1245,10 @@ html[data-theme="light"] .tab.active .tab-close {
   border: none;
   border-radius: 0;
   max-width: 100%;
-  padding: 10px 14px;
-  font-size: 13px;
-  line-height: 1.6;
+  padding: 12px 14px;
+  font-size: 13.5px;
+  line-height: 1.8;
+  letter-spacing: 0.01em;
 }
 
 .error-bubble {
@@ -1472,6 +1509,19 @@ textarea::placeholder { color: var(--text-muted); }
 }
 .send-icon-btn.active:hover { opacity: 0.85; }
 .send-icon-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+.send-icon-btn.stop-btn {
+  background: #e53e3e;
+  color: #fff;
+  cursor: pointer;
+  animation: stop-pulse 1.5s ease-in-out infinite;
+}
+.send-icon-btn.stop-btn:hover {
+  background: #c53030;
+}
+@keyframes stop-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(229, 62, 62, 0.4); }
+  50% { box-shadow: 0 0 0 4px rgba(229, 62, 62, 0); }
+}
 
 /* ── 通用过渡动画 ───────────────────────────────────────────────────────── */
 .fade-enter-active, .fade-leave-active { transition: all 0.3s; }

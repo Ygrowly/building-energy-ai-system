@@ -84,7 +84,7 @@ function _loadArtifactsFromStorage(sessionId: string): ChatMessage[] {
     if (!stored) return []
     const parsed = JSON.parse(stored) as Record<string, Record<string, unknown>>
     return Object.values(parsed).map(m => ({
-      ...(m as ChatMessage),
+      ...(m as unknown as ChatMessage),
       timestamp: new Date(m.timestamp as string),
     }))
   } catch {
@@ -129,6 +129,9 @@ export const useChatStore = defineStore('chat', () => {
     return sid ? (_agentStatusBySession.value[sid] ?? null) : null
   })
   const pendingWorkOrder = ref<ArtifactEvent | null>(null)
+
+  // per-session AbortController（key = session_id），用于终止生成
+  const _abortBySession: Record<string, AbortController> = {}
 
   // per-session 联网搜索开关（key = session_id），防止跨 Tab 相互干扰
   const _webSearchBySession = ref<Record<string, boolean>>({})
@@ -384,6 +387,10 @@ export const useChatStore = defineStore('chat', () => {
     if (_loadingBySession.value[originSessionId]) return
     _loadingBySession.value[originSessionId] = true
 
+    // 创建 AbortController 供终止使用
+    const abortCtrl = new AbortController()
+    _abortBySession[originSessionId] = abortCtrl
+
     // 先添加用户消息，让 UI 立即显示发送内容
     _addMsg('user', userText, undefined, originSessionId)
 
@@ -483,6 +490,7 @@ export const useChatStore = defineStore('chat', () => {
         },
         onDone() {
           _loadingBySession.value[originSessionId] = false
+          delete _abortBySession[originSessionId]
           _agentStatusBySession.value[originSessionId] = null
           const m = findAiMsg()
           if (m) {
@@ -506,20 +514,26 @@ export const useChatStore = defineStore('chat', () => {
           setTimeout(() => _refreshSession(originSessionId), 600)
         },
         onNetworkError(err) {
+          // 被用户主动终止时不显示错误
+          if (abortCtrl.signal.aborted) return
           _addMsg('error', `网络错误：${err.message}`, undefined, originSessionId)
           _loadingBySession.value[originSessionId] = false
+          delete _abortBySession[originSessionId]
         },
-      }, webSearchEnabled.value)
+      }, webSearchEnabled.value, abortCtrl.signal)
     } catch (err) {
+      // 被用户主动终止时不显示错误
+      if (abortCtrl.signal.aborted) return
       _addMsg('error', `请求失败：${(err as Error).message}`, undefined, originSessionId)
       _loadingBySession.value[originSessionId] = false
+      delete _abortBySession[originSessionId]
     }
   }
 
   // ── 重新生成（原地替换 AI 回复） ──────────────────────────────────────────
   async function regenerateMessage(aiMsgIndex: number) {
-    const originSessionId = currentSessionId.value
-    if (!originSessionId) return
+    if (!currentSessionId.value) return
+    const originSessionId: string = currentSessionId.value
 
     // 找到 AI 消息前面最近的用户消息
     let userText = ''
@@ -533,6 +547,10 @@ export const useChatStore = defineStore('chat', () => {
 
     if (_loadingBySession.value[originSessionId]) return
     _loadingBySession.value[originSessionId] = true
+
+    // 创建 AbortController 供终止使用
+    const abortCtrl = new AbortController()
+    _abortBySession[originSessionId] = abortCtrl
 
     // 删除从 AI 消息开始到后续连续的 artifact/error 消息
     let removeEnd = aiMsgIndex + 1
@@ -619,6 +637,7 @@ export const useChatStore = defineStore('chat', () => {
         },
         onDone() {
           _loadingBySession.value[originSessionId] = false
+          delete _abortBySession[originSessionId]
           _agentStatusBySession.value[originSessionId] = null
           const m = findAiMsg()
           if (m) {
@@ -629,13 +648,17 @@ export const useChatStore = defineStore('chat', () => {
           }
         },
         onNetworkError(err) {
+          if (abortCtrl.signal.aborted) return
           _addMsg('error', `网络错误：${err.message}`, undefined, originSessionId)
           _loadingBySession.value[originSessionId] = false
+          delete _abortBySession[originSessionId]
         },
-      }, webSearchEnabled.value)
+      }, webSearchEnabled.value, abortCtrl.signal)
     } catch (err) {
+      if (abortCtrl.signal.aborted) return
       _addMsg('error', `请求失败：${(err as Error).message}`, undefined, originSessionId)
       _loadingBySession.value[originSessionId] = false
+      delete _abortBySession[originSessionId]
     }
   }
 
@@ -646,10 +669,15 @@ export const useChatStore = defineStore('chat', () => {
       const updated = await apiFetch<SessionInfo>(`/api/chat/sessions/${sid}`)
       const idx = sessionList.value.findIndex(s => s.session_id === sid)
       if (idx !== -1) {
-        // 防止后端异步持久化未完成时，DB 返回的旧 message_count 覆盖本地乐观更新值
+        // 防止后端异步持久化未完成时，DB 返回的旧值覆盖本地乐观更新值
         const localCount = sessionList.value[idx].message_count
         if (updated.message_count < localCount) {
           updated.message_count = localCount
+        }
+        // 防止后端返回 '新对话' 覆盖本地已更新的标题
+        const localTitle = sessionList.value[idx].title
+        if (updated.title === '新对话' && localTitle !== '新对话') {
+          updated.title = localTitle
         }
         sessionList.value[idx] = updated
       }
@@ -692,6 +720,29 @@ export const useChatStore = defineStore('chat', () => {
     webSearchEnabled.value = !webSearchEnabled.value
   }
 
+  // ── 终止当前会话生成 ──────────────────────────────────────────────────────
+  function stopGeneration() {
+    const sid = currentSessionId.value
+    if (!sid) return
+    const ctrl = _abortBySession[sid]
+    if (ctrl) {
+      ctrl.abort()
+      delete _abortBySession[sid]
+    }
+    _loadingBySession.value[sid] = false
+    _agentStatusBySession.value[sid] = null
+    // 将正在生成的 AI 消息标记为思考完成
+    const lastAi = [...messages.value].reverse().find(m => m.role === 'ai')
+    if (lastAi) {
+      if (!lastAi.thinkingFinished) lastAi.thinkingFinished = true
+      if (!lastAi.thinkingDuration && lastAi.thinkingStartTime) {
+        lastAi.thinkingDuration = Math.round((performance.now() - lastAi.thinkingStartTime) / 1000)
+      }
+      // 如果没有任何内容，标记为被终止
+      if (!lastAi.content) lastAi.content = '（已终止生成）'
+    }
+  }
+
   // ── 清除当前会话消息（前端清屏） ──────────────────────────────────────────
   function clearSession() {
     const sid = currentSessionId.value
@@ -711,6 +762,6 @@ export const useChatStore = defineStore('chat', () => {
     messages, isLoading, currentAgentStatus, pendingWorkOrder, hasMessages,
     webSearchEnabled,
     init, loadSessionList, newSession, switchSession, removeTab, closeSession,
-    sendMessage, regenerateMessage, approveOrder, clearSession, renameSession, toggleWebSearch,
+    sendMessage, regenerateMessage, stopGeneration, approveOrder, clearSession, renameSession, toggleWebSearch,
   }
 })

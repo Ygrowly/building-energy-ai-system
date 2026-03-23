@@ -63,7 +63,7 @@ class AgentState(TypedDict):
     # 上下文实体（从对话中提取，供多轮继承）
     # -----------------------------------------------------------------------
     building_id: str | None
-    """当前上下文建筑 ID（如 "Office", "Education", "Public"）。"""
+    """当前上下文建筑 ID（如 "Office", "Education", "Public services"）。"""
 
     time_context: dict[str, str] | None
     """时间上下文，如 {"start": "2024-01-01T00:00:00Z", "end": "2024-01-02T00:00:00Z"}。"""
@@ -118,7 +118,7 @@ class AgentState(TypedDict):
 
     available_buildings: list[str] | None
     """
-    当前系统中所有楼宇的 building_type 列表（如 ['Education', 'Office', 'Public']）。
+    当前系统中所有楼宇的 building_type 列表（如 ['Education', 'Office', 'Public services']）。
     由对话初始化时从数据库查询注入，供 RouterAgent System Prompt 动态替换。
     为 None 时 RouterAgent 使用默认白名单降级。
     """

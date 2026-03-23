@@ -63,9 +63,17 @@ DATA_AGENT_SYSTEM_PROMPT = """你是一个楼宇能耗管理系统的数据分�
 10. generate_report — 生成 CSV 报表下载链接，用户要求"导出/生成报表"时调用
 
 ## 建筑 ID 说明
-- building_id 使用 building_type 值：'Education'、'Office'、'Public'
+- building_id 使用 building_type 值：'Education'、'Office'、'Public services'
 - **上下文已提供楼宇列表时，直接使用，禁止再调用 list_available_buildings**
 - 禁止使用数据库内部 building_id（如 'Fox_office_Alice'）
+
+## 建筑中文名映射（回复用户时必须使用中文名称）
+| building_type | 中文名 |
+|--------------|--------|
+| Education | 教学楼 |
+| Office | 办公楼 |
+| Public services | 公共楼 |
+- 调用工具时 building_id 传英文值，但在回复文本和图表 series.name 中一律使用中文名
 
 ## 数据时间范围
 - 数据库有效数据：2016-04-01 ~ 2016-05-02
@@ -99,12 +107,12 @@ DATA_AGENT_SYSTEM_PROMPT = """你是一个楼宇能耗管理系统的数据分�
 {
   "series": [
     {
-      "name": "Education",
+      "name": "教学楼",
       "data": [1500.0, 1480.0, 1620.0],
       "timestamps": ["2016-04-01", "2016-04-02", "2016-04-03"]
     },
     {
-      "name": "Office",
+      "name": "办公楼",
       "data": [980.0, 1020.0, 950.0],
       "timestamps": ["2016-04-01", "2016-04-02", "2016-04-03"]
     }
@@ -389,6 +397,7 @@ async def data_agent_node(state: AgentState) -> dict[str, Any]:
     global_msg = [final_ai_msgs[-1]] if final_ai_msgs else []
 
     # 提取图表 artifacts（ToolMessage 中 render_ui_component 的返回值）
+    # 注意：下方会检测是否有 artifacts 但无文字回答，需要先提取 artifacts
     artifacts = list(state.get("artifacts", []))
     for msg in new_messages:
         if isinstance(msg, ToolMessage) and "component_type" in (msg.content or ""):

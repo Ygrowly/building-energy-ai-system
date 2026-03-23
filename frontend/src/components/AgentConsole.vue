@@ -732,22 +732,34 @@ function toSourceInfo(v: unknown): Record<string, unknown> {
 // ── Markdown 渲染 ────────────────────────────────────────────────────────────
 function formatMarkdown(text: string): string {
   return text
-    .replace(/^---+$/gm, '<hr style="border:none;border-top:1px solid var(--border);margin:6px 0"/>')
-    .replace(/^### (.+)$/gm,
-      '<span style="display:block;font-size:12px;font-weight:700;color:var(--accent);margin:6px 0 2px">$1</span>')
-    .replace(/^## (.+)$/gm,
-      '<span style="display:block;font-size:13px;font-weight:700;color:var(--text-primary);margin:8px 0 3px;border-bottom:1px solid var(--border);padding-bottom:2px">$1</span>')
-    .replace(/^# (.+)$/gm,
-      '<span style="display:block;font-size:14px;font-weight:700;color:var(--text-primary);margin:8px 0 3px">$1</span>')
-    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+    // 分隔线
+    .replace(/^---+$/gm, '<hr class="md-hr"/>')
+    // 标题 h1 / h2 / h3
+    .replace(/^### (.+)$/gm, '<span class="md-h3">$1</span>')
+    .replace(/^## (.+)$/gm,  '<span class="md-h2">$1</span>')
+    .replace(/^# (.+)$/gm,   '<span class="md-h1">$1</span>')
+    // 粗体 / 斜体
+    .replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>')
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
     .replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, '<em>$1</em>')
-    .replace(/`([^`]+)`/g,
-      '<code style="background:rgba(108,142,245,0.15);padding:1px 5px;border-radius:3px;font-family:monospace;font-size:0.9em">$1</code>')
+    // 行内代码
+    .replace(/`([^`]+)`/g, '<code class="md-code">$1</code>')
+    // 无序列表（支持嵌套缩进）
+    .replace(/^([ \t]{2,})[-*] (.+)$/gm,
+      '<span class="md-li md-li-indent"><span class="md-li-bullet md-li-sub">–</span><span class="md-li-text">$2</span></span>')
     .replace(/^[ \t]*[-*] (.+)$/gm,
-      '<span style="display:block;padding-left:14px;margin:2px 0;position:relative"><span style="position:absolute;left:4px;color:var(--accent)">•</span>$1</span>')
+      '<span class="md-li"><span class="md-li-bullet">•</span><span class="md-li-text">$1</span></span>')
+    // 有序列表
     .replace(/^[ \t]*(\d+)\. (.+)$/gm,
-      '<span style="display:block;padding-left:20px;margin:2px 0;position:relative"><span style="position:absolute;left:4px;color:var(--text-secondary)">$1.</span>$2</span>')
-    .replace(/\n{2,}/g, '<div style="margin:4px 0"></div>')
+      '<span class="md-oli"><span class="md-oli-num">$1.</span><span class="md-li-text">$2</span></span>')
+    // 引用块
+    .replace(/^> (.+)$/gm, '<span class="md-blockquote">$1</span>')
+    // block 元素（display:block 的 span）之间的换行不需要 <br/>，直接吃掉
+    .replace(/(<\/span>)\n(<span class="md-(?:h[123]|li|oli|blockquote|hr))/g, '$1$2')
+    .replace(/(<hr class="md-hr"\/>)\n/g, '$1')
+    // 段落间距（2+ 空行 → 段落分隔）
+    .replace(/\n{2,}/g, '<div class="md-para-gap"></div>')
+    // 单换行
     .replace(/\n/g, '<br/>')
 }
 </script>
@@ -1239,16 +1251,132 @@ html[data-theme="light"] .tab.active .tab-close {
 }
 
 .ai-bubble {
-  /* 无气泡样式，类似 claude.ai 的纯文本输出 */
   background: transparent;
   color: var(--text-primary);
   border: none;
   border-radius: 0;
   max-width: 100%;
-  padding: 12px 14px;
+  padding: 10px 14px 6px;
   font-size: 13.5px;
-  line-height: 1.8;
+  line-height: 1.85;
+  letter-spacing: 0.015em;
+  word-break: break-word;
+}
+
+/* ── Markdown 排版样式 ───────────────────────────────────────────────────── */
+
+/* 标题 */
+.ai-bubble :deep(.md-h1) {
+  display: block;
+  font-size: 15.5px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 14px 0 6px;
   letter-spacing: 0.01em;
+  line-height: 1.4;
+}
+.ai-bubble :deep(.md-h2) {
+  display: block;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 12px 0 5px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+  letter-spacing: 0.01em;
+  line-height: 1.4;
+}
+.ai-bubble :deep(.md-h3) {
+  display: block;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--accent);
+  margin: 10px 0 4px;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  line-height: 1.4;
+}
+
+/* 分隔线 */
+.ai-bubble :deep(.md-hr) {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 10px 0;
+  opacity: 0.6;
+}
+
+/* 行内代码 */
+.ai-bubble :deep(.md-code) {
+  background: rgba(108, 142, 245, 0.12);
+  color: var(--accent);
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', Consolas, monospace;
+  font-size: 0.88em;
+  letter-spacing: 0;
+  border: 1px solid rgba(108, 142, 245, 0.18);
+}
+
+/* 无序列表项 — display:block 避免在 span 容器内 flex 导致的换行异常 */
+.ai-bubble :deep(.md-li) {
+  display: block;
+  padding: 1px 0 1px 16px;
+  line-height: 1.7;
+  position: relative;
+}
+.ai-bubble :deep(.md-li-indent) {
+  padding-left: 30px;
+}
+.ai-bubble :deep(.md-li-bullet) {
+  position: absolute;
+  left: 4px;
+  top: 0;
+  color: var(--accent);
+  line-height: inherit;
+  font-size: 1em;
+}
+.ai-bubble :deep(.md-li-sub) {
+  color: var(--text-muted);
+  font-size: 0.9em;
+}
+.ai-bubble :deep(.md-li-text) {
+  display: inline;
+}
+
+/* 有序列表项 */
+.ai-bubble :deep(.md-oli) {
+  display: block;
+  padding: 1px 0 1px 24px;
+  line-height: 1.7;
+  position: relative;
+}
+.ai-bubble :deep(.md-oli-num) {
+  position: absolute;
+  left: 2px;
+  top: 0;
+  color: var(--text-secondary);
+  font-size: 0.9em;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: inherit;
+}
+
+/* 引用块 */
+.ai-bubble :deep(.md-blockquote) {
+  display: block;
+  border-left: 3px solid var(--accent);
+  padding: 4px 10px 4px 12px;
+  margin: 4px 0;
+  color: var(--text-secondary);
+  font-style: italic;
+  background: rgba(108, 142, 245, 0.05);
+  border-radius: 0 4px 4px 0;
+  line-height: 1.7;
+}
+
+/* 段落间距 */
+.ai-bubble :deep(.md-para-gap) {
+  height: 6px;
 }
 
 .error-bubble {

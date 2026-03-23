@@ -167,7 +167,7 @@ function agentLabel(agent: string): string {
 <style scoped>
 /* ─── 容器 ─── */
 .thinking-cursor {
-  margin-bottom: 4px;
+  margin-bottom: 6px;
   font-size: 13px;
   color: var(--text-secondary, #999);
 }
@@ -204,22 +204,24 @@ function agentLabel(agent: string): string {
 
 /* 标题 */
 .th-title {
-  font-size: 13px;
+  font-size: 12.5px;
   color: var(--text-muted, #888);
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 5px;
+  letter-spacing: 0.01em;
 }
 
 .th-elapsed {
-  opacity: 0.7;
-  font-size: 12px;
+  opacity: 0.65;
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
 }
 
 /* 思考中的点动画 */
 .th-dots {
   display: inline-flex;
-  gap: 2px;
+  gap: 3px;
   align-items: center;
   margin-left: 2px;
 }
@@ -241,10 +243,10 @@ function agentLabel(agent: string): string {
 /* ─── 内容区 ─── */
 .th-body {
   margin-top: 4px;
-  margin-left: 8px;
+  margin-left: 10px;
   padding-left: 12px;
-  border-left: 1.5px solid rgba(128, 128, 128, 0.2);
-  max-height: 400px;
+  border-left: 1.5px solid rgba(128, 128, 128, 0.18);
+  max-height: 420px;
   overflow-y: auto;
   scrollbar-width: thin;
 }
@@ -253,10 +255,10 @@ function agentLabel(agent: string): string {
 .th-step {
   display: flex;
   align-items: flex-start;
-  gap: 6px;
-  padding: 3px 6px;
+  gap: 7px;
+  padding: 3px 6px 3px 2px;
   font-size: 12px;
-  line-height: 1.6;
+  line-height: 1.65;
   border-radius: 4px;
 }
 
@@ -265,8 +267,7 @@ function agentLabel(agent: string): string {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  margin-top: 6px;
-  /* 颜色由 inline style 动态设置 */
+  margin-top: 5px;
 }
 
 /* 正在执行的步骤：呼吸缩放动画 */
@@ -284,44 +285,50 @@ function agentLabel(agent: string): string {
   white-space: nowrap;
   flex-shrink: 0;
   font-size: 11px;
-  /* 颜色由 inline style 动态设置（与圆点同色） */
+  letter-spacing: 0.02em;
 }
 
 .th-step-msg {
   color: var(--text-secondary, #aaa);
   word-break: break-word;
-  font-size: 12px;
+  font-size: 11.5px;
+  line-height: 1.65;
+  letter-spacing: 0.01em;
 }
 
 /* 工具调用步骤 */
 .is-tool .th-step-msg {
-  font-size: 12px;
+  font-size: 11.5px;
   color: var(--text-secondary, #aaa);
+  font-family: 'JetBrains Mono', 'Cascadia Code', Consolas, monospace;
+  font-size: 11px;
 }
 
 /* ─── 流式推理内容块 ─── */
 .th-stream-block {
-  padding: 4px 6px;
-  margin: 2px 0;
+  padding: 4px 6px 6px 2px;
+  margin: 3px 0;
 }
 
 .th-stream-header {
   display: flex;
   align-items: center;
-  gap: 6px;
-  margin-bottom: 4px;
+  gap: 7px;
+  margin-bottom: 5px;
 }
 
 .th-stream-content {
   color: var(--text-secondary, #aaa);
-  font-size: 12.5px;
-  line-height: 1.7;
+  font-size: 12px;
+  line-height: 1.8;
   white-space: pre-wrap;
   word-break: break-word;
-  padding: 6px 8px;
+  letter-spacing: 0.01em;
+  padding: 8px 10px;
   background: rgba(128, 128, 128, 0.04);
   border-radius: 6px;
-  max-height: 240px;
+  border: 1px solid rgba(128, 128, 128, 0.08);
+  max-height: 260px;
   overflow-y: auto;
   scrollbar-width: thin;
 }

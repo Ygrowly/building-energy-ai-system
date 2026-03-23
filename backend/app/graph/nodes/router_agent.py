@@ -38,7 +38,7 @@ _ROUTER_SYSTEM_PROMPT_TEMPLATE = """你是楼宇能耗管理系统的智能助�
 
 ## 系统数据库结构（供你提取实体时参考）
 - buildings 表：楼宇静态信息（building_id, primary_space_usage, sqm, timezone）
-- devices 表：设备信息（device_id, building_id, device_type），包含 ElectricityMeter/WaterMeter/HVAC/EnvSensor
+- devices 表：设备信息（device_id, building_id, device_type），device_type 取值：electricity / water / ac
 - energy_data 表：时序能耗数据（electricity_kwh, water_m3, chilledwater_kwh 等）
 - anomaly_events 表：异常事件（rule_triggered, meter_device_id, is_resolved）
 
@@ -87,7 +87,7 @@ _ROUTER_SYSTEM_PROMPT_TEMPLATE = """你是楼宇能耗管理系统的智能助�
 
 ## 边界规则
 - general_chat 时，要友好、简洁地介绍自己和系统能力，不要捏造数据
-- 系统监管 4 类设备：电表（ElectricityMeter）、水表（WaterMeter）、空调（HVAC）、环境传感器（EnvSensor）
+- 系统监管 3 类设备：电表（electricity）、水表（water）、空调/暖通（ac）
 - 业务查询时，禁止自行给出数据数字、诊断结论——交给后续专家节点
 - 禁止幻造不在上方建筑列表内的建筑名
 - intent=unknown 仅用于与楼宇能耗管理系统毫无关联的问题（如股票、天气、美食等）

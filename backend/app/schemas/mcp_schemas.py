@@ -43,7 +43,10 @@ class BuildingID(str, Enum):
     已知 building_type 参考枚举（仅作文档用途）。
     工具输入参数统一使用 str 类型 + 数据库层动态校验，
     新增楼宇后无需修改代码，重启应用即自动生效。
-    对应 meter_device_id：Education→M-EDU-001, Office→M-OFF-001, Public→M-PUB-001
+    building_id（数据库内部）→ building_type（工具参数）：
+      Fox_education_Louie → Education
+      Fox_office_Alice    → Office
+      Fox_public_Henry    → Public services
     """
     EDUCATION = "Education"
     OFFICE = "Office"
@@ -166,7 +169,7 @@ class EnergyMetricRecord(BaseModel):
     metric: MetricType
     value: float
     unit: str = Field(description="如 'kWh', 'm³', '°C'")
-    meter_device_id: str = Field(description="如 'M-EDU-001'，来自 buildings 表")
+    meter_device_id: str = Field(description="如 'EM_ELE_Fox_education_Louie'，来自 devices 表")
     source_table: Literal["energy_data"] = "energy_data"
 
 
@@ -356,13 +359,13 @@ class QueryDailyEnergySummaryOutput(BaseModel):
 class MetadataFilter(BaseModel):
     """
     RAG 元数据硬过滤：先用 device_id 过滤掉 90% 无关文档，再做向量检索。
-    device_id 来自 devices 表（如 'Fox_public_Henr_hvac'）；
+    device_id 来自 devices 表（如 'EM_AC_Fox_office_Alice'）；
     building_type 来自 buildings.primary_space_usage（如 'Office'）。
     全部字段可选，不传则不过滤（全库范围检索模式）。
     """
     device_id: Optional[str] = Field(
         default=None,
-        description="设备 ID，来自 devices 表，如 'Fox_office_Alice_hvac'"
+        description="设备 ID，来自 devices 表，如 'EM_AC_Fox_office_Alice'"
     )
     building_type: Optional[str] = Field(
         default=None,
@@ -543,10 +546,10 @@ class CreateWorkOrderDraftOutput(BaseModel):
 class DeviceInfo(BaseModel):
     """单个设备的基本信息（来自 devices 表）。"""
     device_id: str = Field(
-        description="设备唯一标识，如 'Fox_office_Alice_hvac'"
+        description="设备唯一标识，如 'EM_AC_Fox_office_Alice'（ac）/ 'EM_ELE_Fox_office_Alice'（electricity）"
     )
     device_type: str = Field(
-        description="设备类型，如 'ElectricityMeter' / 'WaterMeter' / 'HVAC' / 'EnvSensor'"
+        description="设备类型：'electricity'（电表）/ 'water'（水表）/ 'ac'（空调/暖通）"
     )
 
 

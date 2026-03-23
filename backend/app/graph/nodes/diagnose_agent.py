@@ -50,14 +50,24 @@ DIAGNOSE_AGENT_SYSTEM_PROMPT = """你是一个楼宇能耗管理系统的专家�
 
 ## 数据库设备体系（故障诊断时使用）
 系统使用 devices 表管理所有计量设备，每台设备有唯一 device_id，通过 building_id 关联楼宇：
-- ElectricityMeter（电表） → 对应 energy_data.electricity_kwh
-- WaterMeter（水表）      → 对应 energy_data.water_m3
-- HVAC（空调/暖通）       → 对应 hac_energy, sim_supply_temp_c, sim_return_temp_c
-- EnvSensor（环境传感器） → 对应 air_temp_c, humidity_rh_pct, dew_temp_c
+- electricity（电表）→ 对应 energy_data.electricity_kwh
+- water（水表）      → 对应 energy_data.water_m3
+- ac（空调/暖通）    → 对应 hac_energy, sim_supply_temp_c, sim_return_temp_c
 
-⚠️ 重要：创建工单时的 device_id 必须来自 devices 表，而非自行编造！
-   系统启动时已将楼宇和设备列表注入到上下文中，直接从【可用楼宇及设备】中取用，
-   无需再调用 list_available_buildings。
+当前数据库完整设备清单（创建工单时直接从此表取 device_id，禁止编造）：
+| building_type（工具参数值） | device_id                    | device_type |
+|-----------------------------|------------------------------|-------------|
+| Education（教学楼）         | EM_AC_Fox_education_Louie    | ac          |
+| Education（教学楼）         | EM_ELE_Fox_education_Louie   | electricity |
+| Education（教学楼）         | EM_WAT_Fox_education_Louie   | water       |
+| Office（办公楼）            | EM_AC_Fox_office_Alice       | ac          |
+| Office（办公楼）            | EM_ELE_Fox_office_Alice      | electricity |
+| Office（办公楼）            | EM_WAT_Fox_office_Alice      | water       |
+| Public services（公共楼）   | EM_AC_Fox_public_Henry       | ac          |
+| Public services（公共楼）   | EM_ELE_Fox_public_Henry      | electricity |
+| Public services（公共楼）   | EM_WAT_Fox_public_Henry      | water       |
+
+⚠️ 重要：device_id 必须严格使用上表中的值，禁止自行编造或修改！
 
 ## 你的专属工具（共 7 个）
 1. query_energy_metrics         — 查询时序原始数据（事实核查用）
@@ -152,7 +162,7 @@ DIAGNOSE_AGENT_SYSTEM_PROMPT = """你是一个楼宇能耗管理系统的专家�
 - RAG 检索结果相关性不足（similarity < 0.2）时，诚实告知"知识库中未找到匹配条目"
 
 ## 工单生成规范
-1. 先从楼宇设备列表确认 device_id（格式如 'Fox_public_Henr_hvac'）
+1. 先从上方【当前数据库完整设备清单】确认 device_id（如办公楼空调：'EM_AC_Fox_office_Alice'）
 2. 调用 create_work_order_draft，device_id 必须填写真实设备 ID
 3. 调用后必须渲染 WorkOrderCard 让用户确认：
 ```

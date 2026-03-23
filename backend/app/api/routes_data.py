@@ -369,6 +369,8 @@ _LOAD_PROFILE_METRICS: dict[str, str] = {
     "hac_energy": "hac_energy",
     "air_temp": "air_temp_c",
     "humidity": "humidity_rh_pct",
+    "supply_temp": "sim_supply_temp_c",
+    "return_temp": "sim_return_temp_c",
 }
 
 _PEAK_VALLEY_METRICS: frozenset[str] = frozenset({

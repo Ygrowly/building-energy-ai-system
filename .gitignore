@@ -28,3 +28,5 @@ dataset/output/knowledge_vectors/
 Thumbs.db
 
 guide/
+
+.cursor/

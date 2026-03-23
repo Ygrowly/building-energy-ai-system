@@ -110,14 +110,14 @@
           </span>
           <div class="legend-pills">
             <span class="legend-pill actual">
-              <span class="pill-dot" style="background:#6c8ef5;"></span> 实际值
+              <span class="pill-dot" :style="`background:${METRIC_COLORS[form.metric]?.actual ?? '#3b82f6'};`"></span> 实际值
             </span>
             <span class="legend-pill rated">
-              <span class="pill-dot" style="background:#6c8ef5;opacity:0.4;border:1px dashed #6c8ef5;"></span>
+              <span class="pill-dot" :style="`background:${METRIC_COLORS[form.metric]?.actual ?? '#3b82f6'};opacity:0.35;border:1px dashed ${METRIC_COLORS[form.metric]?.actual ?? '#3b82f6'};`"></span>
               {{ usingNotebook ? 'Notebook 基线' : 'GB 期望' }}
             </span>
             <span class="legend-pill dev">
-              <span class="pill-dot" style="background:#f59e0b;opacity:0.6;"></span> 偏差 %
+              <span class="pill-dot" style="background:#f59e0b;opacity:0.7;"></span> 偏差 %
             </span>
           </div>
         </div>
@@ -254,11 +254,11 @@ const currentMetric = computed(() => metricOptions.find(m => m.key === form.valu
 const currentMetricLabel = computed(() => currentMetric.value?.label ?? '')
 const currentMetricGbRef = computed(() => currentMetric.value?.gbRef ?? '')
 
-// ── 图表配色（按指标） ────────────────────────────────────────────────────────
+// ── 图表配色（按指标）— 统一蓝/绿/紫方案 ────────────────────────────────────
 const METRIC_COLORS: Record<string, { actual: string; rated: string; dev: string }> = {
-  electricity: { actual: '#6c8ef5', rated: 'rgba(108,142,245,0.35)', dev: '#f59e0b' },
-  water:       { actual: '#22d3ee', rated: 'rgba(34,211,238,0.35)',  dev: '#f59e0b' },
-  hac_energy:  { actual: '#a78bfa', rated: 'rgba(167,139,250,0.35)', dev: '#f59e0b' },
+  electricity: { actual: '#3b82f6', rated: 'rgba(59,130,246,0.22)',  dev: '#f59e0b' },
+  water:       { actual: '#22c55e', rated: 'rgba(34,197,94,0.22)',   dev: '#f59e0b' },
+  hac_energy:  { actual: '#8b5cf6', rated: 'rgba(139,92,246,0.22)',  dev: '#f59e0b' },
 }
 
 // ── 楼宇显示名 ───────────────────────────────────────────────────────────────
@@ -338,7 +338,8 @@ function renderChart() {
   if (!chartEl.value || !records.value.length) return
   destroyChart()
 
-  chartInst = echarts.init(chartEl.value, 'dark')
+  const isDark = document.documentElement.dataset.theme !== 'light'
+  chartInst = echarts.init(chartEl.value, isDark ? 'dark' : undefined)
 
   const colors = METRIC_COLORS[form.value.metric] ?? METRIC_COLORS.electricity
   const rs     = records.value
@@ -391,19 +392,28 @@ function renderChart() {
     anomalyRanges.push([{ coord: [rangeStart, ''] }, { coord: [xData[rs.length - 1], ''] }])
   }
 
+  const gridLineColor  = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)'
+  const axisLabelColor = isDark ? '#64748b' : '#9ca3af'
+  const axisLineColor  = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)'
+  const tooltipBg      = isDark ? '#1e293b' : '#ffffff'
+  const tooltipBorder  = isDark ? 'rgba(255,255,255,0.08)' : '#e5e7eb'
+  const tooltipText    = isDark ? '#e2e8f0' : '#374151'
+
   chartInst.setOption({
     backgroundColor: 'transparent',
     animation: false,
     grid: [
-      { top: 36, right: 72, bottom: 80, left: 64 },
+      { top: 40, right: 76, bottom: 84, left: 68 },
     ],
     legend: { show: false },
     tooltip: {
       trigger: 'axis',
-      axisPointer: { type: 'cross', crossStyle: { color: '#3d445c' } },
-      backgroundColor: '#101118',
-      borderColor: '#1a1c28',
-      textStyle: { color: '#dde3f0', fontSize: 12 },
+      axisPointer: { type: 'cross', crossStyle: { color: axisLineColor } },
+      backgroundColor: tooltipBg,
+      borderColor: tooltipBorder,
+      borderWidth: 1,
+      textStyle: { color: tooltipText, fontSize: 12 },
+      extraCssText: 'box-shadow: 0 4px 16px rgba(0,0,0,0.12); border-radius: 8px;',
       formatter(params: any[]) {
         const p0 = params.find((p: any) => p.seriesName === '实际值')
         const p1 = params.find((p: any) => p.seriesName?.includes('基线') || p.seriesName?.includes('期望'))
@@ -442,31 +452,34 @@ function renderChart() {
       type: 'category',
       data: xData,
       axisLabel: {
-        color: '#6b7a9a', fontSize: 10,
+        color: axisLabelColor, fontSize: 10,
         rotate: xData.length > 48 ? 45 : xData.length > 24 ? 30 : 0,
         interval: Math.max(0, Math.floor(xData.length / 24) - 1),
       },
-      axisLine: { lineStyle: { color: '#1a1c28' } },
+      axisLine: { lineStyle: { color: axisLineColor } },
       axisTick: { show: false },
     },
     yAxis: [
       {
         type: 'value',
         name: unit,
-        nameTextStyle: { color: '#3d445c', fontSize: 11 },
-        axisLabel: { color: '#6b7a9a', fontSize: 11 },
-        splitLine: { lineStyle: { color: '#1a1c28', type: 'dashed' } },
+        nameTextStyle: { color: axisLabelColor, fontSize: 11 },
+        axisLabel: { color: axisLabelColor, fontSize: 11 },
+        splitLine: { lineStyle: { color: gridLineColor, type: 'dashed' } },
+        axisLine: { show: false },
+        axisTick: { show: false },
       },
       {
         type: 'value',
         name: '偏差 %',
-        nameTextStyle: { color: '#3d445c', fontSize: 11 },
+        nameTextStyle: { color: axisLabelColor, fontSize: 11 },
         axisLabel: {
-          color: '#6b7a9a', fontSize: 11,
+          color: axisLabelColor, fontSize: 11,
           formatter: (v: number) => `${v}%`,
         },
         splitLine: { show: false },
-        axisLine: { lineStyle: { color: '#1a1c28' } },
+        axisLine: { show: false },
+        axisTick: { show: false },
       },
     ],
     dataZoom: [
@@ -479,10 +492,10 @@ function renderChart() {
         type: 'slider',
         height: 20,
         bottom: 8,
-        borderColor: '#1a1c28',
-        fillerColor: 'rgba(108,142,245,0.12)',
-        handleStyle: { color: '#6c8ef5' },
-        textStyle: { color: '#6b7a9a', fontSize: 10 },
+        borderColor: axisLineColor,
+        fillerColor: `${colors.actual}22`,
+        handleStyle: { color: colors.actual },
+        textStyle: { color: axisLabelColor, fontSize: 10 },
       },
     ],
     series: [
@@ -571,19 +584,20 @@ function devClass(pct: number | null): string {
 </script>
 
 <style scoped>
-.rva-section { margin-bottom: 28px; }
+.rva-section { margin-bottom: 36px; }
 
 .section-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 12px;
+  margin-bottom: 14px;
 }
 
 .section-title {
   font-size: 15px;
   font-weight: 700;
   color: var(--text-secondary);
+  letter-spacing: 0.01em;
 }
 
 .gb-badge {
@@ -602,9 +616,9 @@ function devClass(pct: number | null): string {
 .rva-form {
   background: var(--bg-panel);
   border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 14px 16px;
-  margin-bottom: 12px;
+  border-radius: 12px;
+  padding: 18px 20px;
+  margin-bottom: 16px;
 }
 
 .form-row {
@@ -701,19 +715,22 @@ function devClass(pct: number | null): string {
   gap: 0;
   background: var(--bg-panel);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 12px;
   padding: 0;
   overflow: hidden;
-  margin-bottom: 12px;
+  margin-bottom: 16px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.06);
 }
 
 .summary-item {
   display: flex;
   flex-direction: column;
-  gap: 3px;
-  padding: 10px 18px;
+  gap: 4px;
+  padding: 14px 20px;
   border-right: 1px solid var(--border);
+  transition: background 0.18s;
 }
+.summary-item:hover { background: var(--bg-hover); }
 
 .summary-item.warn .si-val { color: var(--warning); }
 .summary-item.ok  .si-val  { color: var(--success);  }
@@ -752,21 +769,26 @@ function devClass(pct: number | null): string {
 }
 
 /* ── 图表容器 ── */
-.rva-results { display: flex; flex-direction: column; gap: 12px; }
+.rva-results { display: flex; flex-direction: column; gap: 20px; }
 
 .chart-container {
   background: var(--bg-panel);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: 14px;
   overflow: hidden;
-  box-shadow: var(--card-shadow);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+  transition: box-shadow 0.22s, transform 0.22s;
+}
+.chart-container:hover {
+  box-shadow: 0 4px 16px rgba(0,0,0,0.10);
+  transform: translateY(-1px);
 }
 
 .chart-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 12px 16px 8px;
+  padding: 14px 18px 10px;
   border-bottom: 1px solid var(--border);
   flex-wrap: wrap;
   gap: 8px;
@@ -774,7 +796,7 @@ function devClass(pct: number | null): string {
 
 .chart-title { font-size: 13px; font-weight: 600; color: var(--text-primary); }
 .chart-range { font-size: 12px; color: var(--text-muted); margin-left: 5px; font-weight: 400; }
-.chart-body  { width: 100%; height: 320px; }
+.chart-body  { width: 100%; height: 340px; }
 
 .legend-pills { display: flex; align-items: center; gap: 12px; }
 
@@ -797,10 +819,14 @@ function devClass(pct: number | null): string {
 /* ── 异常明细表 ── */
 .anomaly-table-section {
   background: var(--bg-panel);
-  border: 1px solid rgba(248,113,113,0.25);
-  border-radius: 10px;
+  border: 1px solid rgba(248,113,113,0.22);
+  border-radius: 12px;
   overflow: hidden;
-  box-shadow: var(--card-shadow);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+  transition: box-shadow 0.22s;
+}
+.anomaly-table-section:hover {
+  box-shadow: 0 4px 16px rgba(0,0,0,0.09);
 }
 
 .table-header {
@@ -887,16 +913,28 @@ function devClass(pct: number | null): string {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
-  padding: 56px 20px;
+  justify-content: center;
+  gap: 10px;
+  padding: 72px 40px;
   background: var(--bg-panel);
   border: 2px dashed var(--border);
-  border-radius: 12px;
+  border-radius: 14px;
   color: var(--text-secondary);
   font-size: 14px;
+  text-align: center;
 }
-.empty-icon { display: flex; justify-content: center; color: var(--text-muted); margin-bottom: 6px; }
-.empty-sub  { font-size: 12px; color: var(--text-muted); }
+.empty-icon {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  background: var(--accent-glow);
+  color: var(--accent);
+  margin-bottom: 8px;
+}
+.empty-sub  { font-size: 12px; color: var(--text-muted); max-width: 340px; line-height: 1.6; }
 
 /* ── 异常阶段徽章 ── */
 .phase-chip {
@@ -954,20 +992,20 @@ function devClass(pct: number | null): string {
 .bar-icon   { vertical-align: middle; flex-shrink: 0; }
 .btn-icon   { vertical-align: middle; }
 
-/* ══ Light Theme 适配 ══ */
+/* ══ Light Theme 适配 — SaaS Dashboard 风格 ══ */
 html[data-theme="light"] .rva-form,
 html[data-theme="light"] .chart-container,
 html[data-theme="light"] .anomaly-table-section,
 html[data-theme="light"] .summary-bar,
 html[data-theme="light"] .empty-chart {
   background: #ffffff;
-  border-color: #d0e8d8;
+  border-color: #e5eae7;
 }
 
 html[data-theme="light"] .chart-header,
 html[data-theme="light"] .data-table th {
-  background: #f2f9f4;
-  border-color: #d0e8d8;
+  background: #f8faf9;
+  border-color: #e5eae7;
 }
 
 html[data-theme="light"] .table-header {
@@ -975,32 +1013,37 @@ html[data-theme="light"] .table-header {
   border-color: rgba(248,113,113,0.12);
 }
 
-html[data-theme="light"] .metric-tab           { color: #3d6b4a; }
-html[data-theme="light"] .metric-tab:hover     { background: #e8f5ec; color: #0f2818; }
-html[data-theme="light"] .metric-tab.active    { background: rgba(34,197,94,0.1); color: #22c55e; }
+html[data-theme="light"] .metric-tab           { color: #374151; }
+html[data-theme="light"] .metric-tab:hover     { background: #f3f4f6; color: #111827; }
+html[data-theme="light"] .metric-tab.active    { background: rgba(59,130,246,0.08); color: #3b82f6; border-color: rgba(59,130,246,0.25); }
 
 html[data-theme="light"] .form-label,
-html[data-theme="light"] .form-hint  { color: #6a8c72; }
+html[data-theme="light"] .form-hint  { color: #6b7280; }
 
 html[data-theme="light"] .form-select,
 html[data-theme="light"] .form-input {
-  background: #f2f9f4;
-  border-color: #c8dfc8;
-  color: #0f2818;
+  background: #f9fafb;
+  border-color: #e5e7eb;
+  color: #111827;
 }
 
-html[data-theme="light"] .chart-title { color: #0f2818; }
-html[data-theme="light"] .chart-range { color: #6a8c72; }
-html[data-theme="light"] .table-title { color: #2d5c3a; }
-html[data-theme="light"] .table-count { color: #6a8c72; }
-html[data-theme="light"] .data-table td { color: #2d5c3a; }
-html[data-theme="light"] .data-table th { color: #6a8c72; }
-html[data-theme="light"] .summary-item { border-color: #d0e8d8; }
-html[data-theme="light"] .si-label { color: #6a8c72; }
-html[data-theme="light"] .si-val   { color: #0f2818; }
-html[data-theme="light"] .gb-ref   { color: #7ab89a; }
-html[data-theme="light"] .section-title { color: #2d5c3a; }
-html[data-theme="light"] .empty-chart { color: #3d6b4a; border-color: #c8dfc8; }
-html[data-theme="light"] .empty-sub  { color: #6a8c72; }
-html[data-theme="light"] .empty-icon { color: #7ab89a; }
+html[data-theme="light"] .chart-title { color: #111827; }
+html[data-theme="light"] .chart-range { color: #9ca3af; }
+html[data-theme="light"] .table-title { color: #374151; }
+html[data-theme="light"] .table-count { color: #9ca3af; }
+html[data-theme="light"] .data-table td { color: #374151; }
+html[data-theme="light"] .data-table th { color: #9ca3af; }
+html[data-theme="light"] .summary-item { border-color: #e5eae7; }
+html[data-theme="light"] .summary-item:hover { background: #f8faf9; }
+html[data-theme="light"] .si-label { color: #9ca3af; }
+html[data-theme="light"] .si-val   { color: #111827; }
+html[data-theme="light"] .gb-ref   { color: #9ca3af; }
+html[data-theme="light"] .section-title { color: #374151; }
+html[data-theme="light"] .empty-chart { color: #374151; border-color: #d1d5db; }
+html[data-theme="light"] .empty-sub  { color: #9ca3af; }
+html[data-theme="light"] .empty-icon { background: rgba(59,130,246,0.08); color: #3b82f6; }
+html[data-theme="light"] .chart-container:hover,
+html[data-theme="light"] .summary-bar {
+  box-shadow: 0 4px 16px rgba(0,0,0,0.07);
+}
 </style>

@@ -144,7 +144,9 @@
         v-if="!anomalyLoading && anomalyBuildings.length === 0 && recentAnomalies.length === 0"
         class="no-anomaly"
       >
-        <Icon icon="mdi:check-circle" width="16" class="bar-icon" /> 所有楼宇当前运行正常，暂无告警记录
+        <div class="no-anomaly-icon"><Icon icon="mdi:check-circle" width="28" /></div>
+        <span class="no-anomaly-title">所有楼宇运行正常</span>
+        <span class="no-anomaly-sub">暂无异常告警记录</span>
       </div>
 
       <div v-if="anomalyError" class="error-bar" style="margin-top: 8px;">
@@ -555,13 +557,28 @@ async function fetchTrend() {
 function renderChart() {
   if (!chartEl.value || trendData.value.length === 0) return
   destroyChart()
-  chartInstance = echarts.init(chartEl.value, 'dark')
+
+  const isDark = document.documentElement.dataset.theme !== 'light'
+  chartInstance = echarts.init(chartEl.value, isDark ? 'dark' : undefined)
 
   const days = trendData.value.map((r: any) => (r.day ?? '').slice(5, 10))
   const elec  = trendData.value.map((r: any) => +(r.total_electricity_kwh ?? 0).toFixed(2))
   const temp  = trendData.value.map((r: any) => +(r.avg_ambient_temp ?? 0).toFixed(1))
   const water = trendData.value.map((r: any) => +(r.total_water_m3 ?? 0).toFixed(2))
   const { chartType, params } = trendForm.value
+
+  // 统一配色方案：蓝/绿/琥珀
+  const COLOR_BLUE  = '#3b82f6'
+  const COLOR_GREEN = '#22c55e'
+  const COLOR_AMBER = '#f59e0b'
+
+  const gridLineColor = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)'
+  const axisLabelColor = isDark ? '#64748b' : '#9ca3af'
+  const axisLineColor  = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)'
+  const tooltipBg   = isDark ? '#1e293b' : '#ffffff'
+  const tooltipBorder = isDark ? 'rgba(255,255,255,0.08)' : '#e5e7eb'
+  const tooltipText   = isDark ? '#e2e8f0' : '#374151'
+  const legendColor   = isDark ? '#64748b' : '#9ca3af'
 
   const series: echarts.SeriesOption[] = []
 
@@ -572,18 +589,18 @@ function renderChart() {
       yAxisIndex: 0,
       data: elec,
       smooth: true,
-      lineStyle: { color: '#60a5fa', width: 2 },
+      lineStyle: { color: COLOR_BLUE, width: 2.5 },
       areaStyle: chartType !== 'bar' ? {
         color: {
           type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
           colorStops: [
-            { offset: 0, color: 'rgba(96,165,250,0.30)' },
-            { offset: 1, color: 'rgba(96,165,250,0.02)' },
+            { offset: 0, color: 'rgba(59,130,246,0.22)' },
+            { offset: 1, color: 'rgba(59,130,246,0.02)' },
           ],
         },
       } : undefined,
-      itemStyle: { color: '#60a5fa', borderRadius: chartType === 'bar' ? [3, 3, 0, 0] : undefined },
-      barMaxWidth: 18,
+      itemStyle: { color: COLOR_BLUE, borderRadius: chartType === 'bar' ? [4, 4, 0, 0] : undefined },
+      barMaxWidth: 20,
     })
   }
 
@@ -594,9 +611,18 @@ function renderChart() {
       yAxisIndex: 0,
       data: water,
       smooth: true,
-      barMaxWidth: 14,
-      itemStyle: { color: 'rgba(34,211,238,0.7)', borderRadius: [3, 3, 0, 0] },
-      lineStyle: { color: '#22d3ee', width: 2, type: 'dashed' },
+      barMaxWidth: 16,
+      itemStyle: { color: COLOR_GREEN, borderRadius: [4, 4, 0, 0] },
+      lineStyle: { color: COLOR_GREEN, width: 2, type: 'dashed' },
+      areaStyle: chartType === 'line' ? {
+        color: {
+          type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
+          colorStops: [
+            { offset: 0, color: 'rgba(34,197,94,0.18)' },
+            { offset: 1, color: 'rgba(34,197,94,0.02)' },
+          ],
+        },
+      } : undefined,
     })
   }
 
@@ -607,45 +633,54 @@ function renderChart() {
       yAxisIndex: 1,
       data: temp,
       smooth: true,
-      lineStyle: { color: '#fbbf24', width: 2, type: 'dashed' },
-      itemStyle: { color: '#fbbf24' },
+      lineStyle: { color: COLOR_AMBER, width: 2, type: 'dashed' },
+      itemStyle: { color: COLOR_AMBER },
       symbol: 'none',
     })
   }
 
   chartInstance.setOption({
     backgroundColor: 'transparent',
-    grid: { top: 40, right: 64, bottom: 40, left: 64 },
+    grid: { top: 44, right: 68, bottom: 44, left: 68 },
     legend: {
-      top: 6,
-      textStyle: { color: '#6b7a9a', fontSize: 12 },
+      top: 8,
+      textStyle: { color: legendColor, fontSize: 12 },
+      itemHeight: 8,
+      itemWidth: 16,
     },
     tooltip: {
       trigger: 'axis',
-      backgroundColor: '#101118',
-      borderColor: '#1a1c28',
-      textStyle: { color: '#dde3f0', fontSize: 12 },
+      backgroundColor: tooltipBg,
+      borderColor: tooltipBorder,
+      borderWidth: 1,
+      textStyle: { color: tooltipText, fontSize: 12 },
+      extraCssText: 'box-shadow: 0 4px 16px rgba(0,0,0,0.12); border-radius: 8px;',
     },
     xAxis: {
       type: 'category',
       data: days,
-      axisLabel: { color: '#6b7a9a', fontSize: 11, rotate: days.length > 20 ? 30 : 0 },
-      axisLine: { lineStyle: { color: '#1a1c28' } },
+      axisLabel: { color: axisLabelColor, fontSize: 11, rotate: days.length > 20 ? 30 : 0 },
+      axisLine: { lineStyle: { color: axisLineColor } },
+      axisTick: { show: false },
     },
     yAxis: [
       {
         type: 'value',
         name: 'kWh / m³',
-        nameTextStyle: { color: '#3d445c', fontSize: 11 },
-        axisLabel: { color: '#6b7a9a', fontSize: 11 },
-        splitLine: { lineStyle: { color: '#1a1c28', type: 'dashed' } },
+        nameTextStyle: { color: axisLabelColor, fontSize: 11 },
+        axisLabel: { color: axisLabelColor, fontSize: 11 },
+        splitLine: { lineStyle: { color: gridLineColor, type: 'dashed' } },
+        axisLine: { show: false },
+        axisTick: { show: false },
       },
       {
         type: 'value',
         name: '°C',
-        nameTextStyle: { color: '#3d445c', fontSize: 11 },
-        axisLabel: { color: '#6b7a9a', fontSize: 11 },
+        nameTextStyle: { color: axisLabelColor, fontSize: 11 },
+        axisLabel: { color: axisLabelColor, fontSize: 11 },
         splitLine: { show: false },
+        axisLine: { show: false },
+        axisTick: { show: false },
       },
     ],
     series,
@@ -810,44 +845,46 @@ function formatDay(iso: string): string {
 </script>
 
 <style scoped>
-.dashboard { padding: 48px 24px 24px; }
+.dashboard { padding: 48px 28px 32px; }
 
 /* ── KPI ── */
 .kpi-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  gap: 8px;
-  margin-bottom: 20px;
+  gap: 12px;
+  margin-bottom: 28px;
 }
 .kpi-card {
   background: var(--bg-panel);
   border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 10px 14px;
+  border-radius: 12px;
+  padding: 16px 18px;
   display: flex;
   align-items: center;
-  gap: 10px;
-  box-shadow: var(--card-shadow);
-  transition: box-shadow 0.2s, border-color 0.2s;
+  gap: 14px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+  transition: box-shadow 0.22s, border-color 0.22s, transform 0.22s;
+  cursor: default;
 }
 .kpi-card:hover {
-  box-shadow: var(--card-shadow-hover);
+  box-shadow: 0 4px 16px rgba(0,0,0,0.10);
   border-color: var(--border-accent);
+  transform: translateY(-2px);
 }
 .kpi-icon {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 34px;
-  height: 34px;
-  border-radius: 8px;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
   background: var(--accent-glow);
   color: var(--accent);
   flex-shrink: 0;
 }
 .kpi-body { flex: 1; min-width: 0; }
-.kpi-value { font-size: 18px; font-weight: 700; color: var(--text-primary); line-height: 1.2; }
-.kpi-label { font-size: 10px; color: var(--text-muted); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.kpi-value { font-size: 22px; font-weight: 700; color: var(--text-primary); line-height: 1.2; letter-spacing: -0.5px; }
+.kpi-label { font-size: 11px; color: var(--text-muted); margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .kpi-trend { font-size: 11px; font-weight: 600; flex-shrink: 0; }
 .kpi-trend.up { color: var(--danger); }
 .kpi-trend.down { color: var(--success); }
@@ -857,7 +894,7 @@ function formatDay(iso: string): string {
 .building-selector-wrap {
   display: flex;
   justify-content: center;
-  margin-bottom: 24px;
+  margin-bottom: 28px;
 }
 
 /* 胶囊外壳 */
@@ -913,15 +950,20 @@ function formatDay(iso: string): string {
 .building-detail {
   background: var(--bg-panel);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: 14px;
   overflow: hidden;
-  box-shadow: var(--card-shadow);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+  transition: box-shadow 0.22s, transform 0.22s;
+}
+.building-detail:hover {
+  box-shadow: 0 4px 16px rgba(0,0,0,0.10);
+  transform: translateY(-1px);
 }
 .building-detail.anomaly {
   border-color: rgba(248,113,113,0.45);
 }
 .detail-header {
-  padding: 16px 20px;
+  padding: 18px 22px;
   background: var(--bg-card);
   border-bottom: 1px solid var(--border);
 }
@@ -944,11 +986,13 @@ function formatDay(iso: string): string {
 .detail-metric {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 18px 20px;
+  gap: 14px;
+  padding: 20px 22px;
   border-right: 1px solid var(--border);
+  transition: background 0.18s;
 }
 .detail-metric:last-child { border-right: none; }
+.detail-metric:hover { background: var(--bg-hover); }
 
 .dm-icon {
   width: 40px;
@@ -969,13 +1013,13 @@ function formatDay(iso: string): string {
 .dm-label { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
 
 /* ── 通用 ── */
-.section { margin-bottom: 28px; }
-.section-title { font-size: 15px; font-weight: 700; margin-bottom: 12px; color: var(--text-secondary); }
+.section { margin-bottom: 36px; }
+.section-title { font-size: 15px; font-weight: 700; margin-bottom: 14px; color: var(--text-secondary); letter-spacing: 0.01em; }
 .section-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 12px;
+  margin-bottom: 14px;
 }
 .section-header .section-title { margin-bottom: 0; }
 
@@ -1003,8 +1047,15 @@ function formatDay(iso: string): string {
   align-items: center;
   background: var(--bg-panel);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 10px;
   padding: 12px 16px;
+  transition: box-shadow 0.2s, transform 0.2s, border-color 0.2s;
+  cursor: default;
+}
+.anomaly-item:hover {
+  box-shadow: 0 3px 12px rgba(0,0,0,0.08);
+  transform: translateY(-1px);
+  border-color: var(--border-accent);
 }
 .anomaly-left { display: flex; align-items: center; gap: 12px; }
 .anomaly-priority {
@@ -1029,24 +1080,38 @@ function formatDay(iso: string): string {
 .anomaly-status.warn    { background: rgba(251,191,36,0.15);  color: var(--warning); }
 
 .no-anomaly {
-  background: rgba(74,222,128,0.08);
-  border: 1px solid rgba(74,222,128,0.25);
-  border-radius: 8px;
-  padding: 12px 16px;
+  background: rgba(74,222,128,0.06);
+  border: 1px solid rgba(74,222,128,0.22);
+  border-radius: 12px;
+  padding: 32px 24px;
   color: var(--success);
   font-size: 13px;
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
+  text-align: center;
 }
+.no-anomaly-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: rgba(74,222,128,0.12);
+  margin-bottom: 4px;
+}
+.no-anomaly-title { font-size: 14px; font-weight: 600; }
+.no-anomaly-sub   { font-size: 12px; opacity: 0.7; }
 
 /* ── 能耗趋势查询 ── */
 .query-form {
   background: var(--bg-panel);
   border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 16px 18px;
-  margin-bottom: 12px;
+  border-radius: 12px;
+  padding: 18px 20px;
+  margin-bottom: 16px;
 }
 .form-row {
   display: flex;
@@ -1123,45 +1188,54 @@ function formatDay(iso: string): string {
 .query-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* ── 趋势结果区 ── */
-.trend-results { display: flex; flex-direction: column; gap: 16px; }
+.trend-results { display: flex; flex-direction: column; gap: 20px; }
 
 .chart-container {
   background: var(--bg-panel);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: 14px;
   overflow: hidden;
-  box-shadow: var(--card-shadow);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+  transition: box-shadow 0.22s, transform 0.22s;
+}
+.chart-container:hover {
+  box-shadow: 0 4px 16px rgba(0,0,0,0.10);
+  transform: translateY(-1px);
 }
 .data-table-section {
-  box-shadow: var(--card-shadow);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.06);
 }
 .report-card {
-  box-shadow: var(--card-shadow);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.06);
 }
 .chart-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 12px 16px 8px;
+  padding: 14px 18px 10px;
   border-bottom: 1px solid var(--border);
 }
 .chart-title { font-size: 13px; font-weight: 600; color: var(--text-primary); }
 .chart-range { font-size: 12px; color: var(--text-muted); margin-left: 6px; font-weight: 400; }
 .chart-source { font-size: 11px; color: var(--text-muted); }
-.chart-body { width: 100%; height: 280px; }
+.chart-body { width: 100%; height: 300px; }
 
 /* ── 数据表 ── */
 .data-table-section {
   background: var(--bg-panel);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 12px;
   overflow: hidden;
+  transition: box-shadow 0.22s;
+}
+.data-table-section:hover {
+  box-shadow: 0 4px 16px rgba(0,0,0,0.08);
 }
 .table-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 12px 16px;
+  padding: 12px 18px;
   border-bottom: 1px solid var(--border);
   background: var(--bg-card);
 }
@@ -1199,14 +1273,18 @@ function formatDay(iso: string): string {
 .report-card {
   background: var(--bg-panel);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 12px;
   overflow: hidden;
+  transition: box-shadow 0.22s;
+}
+.report-card:hover {
+  box-shadow: 0 4px 16px rgba(0,0,0,0.08);
 }
 .report-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 12px 16px;
+  padding: 12px 18px;
   background: var(--bg-card);
   border-bottom: 1px solid var(--border);
 }
@@ -1283,16 +1361,28 @@ function formatDay(iso: string): string {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
-  padding: 56px 20px;
+  justify-content: center;
+  gap: 10px;
+  padding: 72px 40px;
   background: var(--bg-panel);
   border: 2px dashed var(--border);
-  border-radius: 12px;
+  border-radius: 14px;
   color: var(--text-secondary);
   font-size: 14px;
+  text-align: center;
 }
-.empty-icon { display: flex; justify-content: center; color: var(--text-muted); margin-bottom: 6px; }
-.empty-sub  { font-size: 12px; color: var(--text-muted); }
+.empty-icon {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  background: var(--accent-glow);
+  color: var(--accent);
+  margin-bottom: 8px;
+}
+.empty-sub  { font-size: 12px; color: var(--text-muted); max-width: 320px; line-height: 1.6; }
 
 /* ── 状态栏 ── */
 .loading-bar {
@@ -1351,13 +1441,12 @@ function formatDay(iso: string): string {
 .btn-icon   { vertical-align: middle; }
 
 /* ══════════════════════════════════════════════
-   Green (Light) Theme — white surface cards
-   KPI cards stay dark green via --bg-panel ✓
-   Sidebar stays dark green via --bg-panel ✓
-   Content cards below need white override
+   Light Theme — SaaS Dashboard 风格
+   浅灰背景 + 白色卡片 + 细边框
    ══════════════════════════════════════════════ */
 
-/* --- Surface containers → white --- */
+/* --- Surface containers → white + 细边框 --- */
+html[data-theme="light"] .kpi-card,
 html[data-theme="light"] .building-selector,
 html[data-theme="light"] .building-detail,
 html[data-theme="light"] .chart-container,
@@ -1367,7 +1456,13 @@ html[data-theme="light"] .query-form,
 html[data-theme="light"] .anomaly-item,
 html[data-theme="light"] .empty-chart {
   background: #ffffff;
-  border-color: #d0e8d8;
+  border-color: #e5eae7;
+}
+
+/* --- KPI 卡片 hover (light) --- */
+html[data-theme="light"] .kpi-card:hover {
+  box-shadow: 0 6px 20px rgba(0,0,0,0.09);
+  border-color: #b8d4be;
 }
 
 /* --- Sub-headers inside white cards → off-white --- */
@@ -1375,17 +1470,17 @@ html[data-theme="light"] .detail-header,
 html[data-theme="light"] .table-header,
 html[data-theme="light"] .report-header,
 html[data-theme="light"] .data-table th {
-  background: #f2f9f4;
-  border-color: #d0e8d8;
+  background: #f8faf9;
+  border-color: #e5eae7;
 }
 
 /* --- Table row hover --- */
-html[data-theme="light"] .data-table tr:hover td { background: #f0f7f2; }
+html[data-theme="light"] .data-table tr:hover td { background: #f4f8f5; }
 
 /* --- Building selector pill --- */
 html[data-theme="light"] .selector-indicator {
-  background: #e8f5ec;
-  box-shadow: 0 1px 6px rgba(0,0,0,0.08), 0 0 0 1px rgba(34,197,94,0.3);
+  background: #edf7f0;
+  box-shadow: 0 1px 6px rgba(0,0,0,0.07), 0 0 0 1px rgba(34,197,94,0.25);
 }
 html[data-theme="light"] .selector-option        { color: #3d6b4a; }
 html[data-theme="light"] .selector-option.active { color: #22c55e; }
@@ -1395,52 +1490,62 @@ html[data-theme="light"] .selector-option:hover  { color: #0f2818; }
 html[data-theme="light"] .section-title { color: #2d5c3a; }
 
 /* --- Building detail card text --- */
-html[data-theme="light"] .detail-name  { color: #0f2818; }
-html[data-theme="light"] .detail-meta  { color: #6a8c72; }
-html[data-theme="light"] .dm-value     { color: #0f2818; }
-html[data-theme="light"] .dm-label     { color: #6a8c72; }
+html[data-theme="light"] .detail-name  { color: #111827; }
+html[data-theme="light"] .detail-meta  { color: #6b7280; }
+html[data-theme="light"] .dm-value     { color: #111827; }
+html[data-theme="light"] .dm-label     { color: #6b7280; }
 
 /* --- Chart text --- */
-html[data-theme="light"] .chart-title                          { color: #0f2818; }
+html[data-theme="light"] .chart-title    { color: #111827; }
 html[data-theme="light"] .chart-range,
-html[data-theme="light"] .chart-source                        { color: #6a8c72; }
+html[data-theme="light"] .chart-source   { color: #9ca3af; }
 
 /* --- Table text --- */
-html[data-theme="light"] .table-title   { color: #2d5c3a; }
-html[data-theme="light"] .table-count   { color: #6a8c72; }
-html[data-theme="light"] .data-table td { color: #2d5c3a; }
-html[data-theme="light"] .data-table th { color: #6a8c72; }
-html[data-theme="light"] .num-cell      { color: #0f2818; }
+html[data-theme="light"] .table-title   { color: #374151; }
+html[data-theme="light"] .table-count   { color: #9ca3af; }
+html[data-theme="light"] .data-table td { color: #374151; }
+html[data-theme="light"] .data-table th { color: #9ca3af; }
+html[data-theme="light"] .num-cell      { color: #111827; }
 
 /* --- Report card text --- */
-html[data-theme="light"] .report-title     { color: #2d5c3a; }
-html[data-theme="light"] .report-meta      { color: #6a8c72; }
-html[data-theme="light"] .stat-group       { border-right-color: #d0e8d8; }
-html[data-theme="light"] .stat-group-title { color: #6a8c72; }
-html[data-theme="light"] .stat-label       { color: #6a8c72; }
+html[data-theme="light"] .report-title     { color: #374151; }
+html[data-theme="light"] .report-meta      { color: #9ca3af; }
+html[data-theme="light"] .stat-group       { border-right-color: #e5eae7; }
+html[data-theme="light"] .stat-group-title { color: #9ca3af; }
+html[data-theme="light"] .stat-label       { color: #9ca3af; }
 
 /* --- Form elements inside white cards --- */
-html[data-theme="light"] .form-label  { color: #6a8c72; }
-html[data-theme="light"] .form-hint   { color: #6a8c72; }
+html[data-theme="light"] .form-label  { color: #6b7280; }
+html[data-theme="light"] .form-hint   { color: #9ca3af; }
 html[data-theme="light"] .form-select,
 html[data-theme="light"] .form-input  {
-  background: #f2f9f4;
-  border-color: #c8dfc8;
-  color: #0f2818;
+  background: #f9fafb;
+  border-color: #e5e7eb;
+  color: #111827;
 }
-html[data-theme="light"] .param-check        { color: #3d6b4a; }
+html[data-theme="light"] .param-check        { color: #374151; }
 html[data-theme="light"] .param-check:hover  { color: #22c55e; }
 
 /* --- Anomaly items --- */
-html[data-theme="light"] .anomaly-title { color: #0f2818; }
-html[data-theme="light"] .anomaly-meta  { color: #6a8c72; }
+html[data-theme="light"] .anomaly-title { color: #111827; }
+html[data-theme="light"] .anomaly-meta  { color: #9ca3af; }
+html[data-theme="light"] .anomaly-item:hover {
+  border-color: #c1d8c7;
+  box-shadow: 0 3px 12px rgba(0,0,0,0.07);
+}
 html[data-theme="light"] .no-anomaly {
-  background: rgba(34,197,94,0.08);
-  border-color: rgba(34,197,94,0.25);
+  background: rgba(34,197,94,0.06);
+  border-color: rgba(34,197,94,0.22);
+}
+
+/* --- Chart/detail card hover (light) --- */
+html[data-theme="light"] .chart-container:hover,
+html[data-theme="light"] .building-detail:hover {
+  box-shadow: 0 6px 20px rgba(0,0,0,0.09);
 }
 
 /* --- Empty/loading state on canvas --- */
-html[data-theme="light"] .empty-chart { color: #3d6b4a; border-color: #c8dfc8; }
-html[data-theme="light"] .empty-icon  { color: #7ab89a; }
-html[data-theme="light"] .empty-sub   { color: #6a8c72; }
+html[data-theme="light"] .empty-chart { color: #374151; border-color: #d1d5db; }
+html[data-theme="light"] .empty-icon  { background: rgba(34,197,94,0.08); color: #22c55e; }
+html[data-theme="light"] .empty-sub   { color: #9ca3af; }
 </style>

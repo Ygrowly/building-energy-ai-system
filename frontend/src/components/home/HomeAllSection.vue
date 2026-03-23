@@ -17,6 +17,18 @@ const props = defineProps<{
 
 const buildingStore = useBuildingStore()
 
+// HVAC 图实时数据
+const hvacApiData = ref<{ outdoorTemp: number[]; actualHvac: number[]; simOptHvac: number[] } | null>(null)
+
+// 多楼栋能耗饼图切换
+type CompareMetric = 'electricity' | 'water' | 'hac'
+const compareMetric = ref<CompareMetric>('electricity')
+const COMPARE_METRICS: { key: CompareMetric; label: string }[] = [
+  { key: 'electricity', label: '当日用电' },
+  { key: 'water', label: '当日用水' },
+  { key: 'hac', label: '当日暖通' },
+]
+
 const bubbleEl = ref<HTMLElement | null>(null)
 const hvacEl = ref<HTMLElement | null>(null)
 const compareEl = ref<HTMLElement | null>(null)
@@ -88,25 +100,6 @@ const _SANKEY_TARGET_COLORS: Record<string, string> = {
   数据标注: MC.lav,
   夜间异常运行: MC.lav,
 }
-
-const _SANKEY_MOCK_NODES = [
-  { name: '温差过大' },
-  { name: '能耗超标' },
-  { name: '设备离线' },
-  { name: '过滤网堵塞' },
-  { name: '传感器失效' },
-  { name: '冷水机故障' },
-  { name: '管道泄漏' },
-]
-const _SANKEY_MOCK_LINKS = [
-  { source: '温差过大', target: '过滤网堵塞', value: 14 },
-  { source: '温差过大', target: '冷水机故障', value: 8 },
-  { source: '能耗超标', target: '过滤网堵塞', value: 11 },
-  { source: '能耗超标', target: '传感器失效', value: 9 },
-  { source: '能耗超标', target: '管道泄漏', value: 5 },
-  { source: '设备离线', target: '传感器失效', value: 17 },
-  { source: '设备离线', target: '冷水机故障', value: 7 },
-]
 
 function disposeAll() {
   instances.forEach((c) => c.dispose())
@@ -302,13 +295,64 @@ function renderBubble() {
   instances.push(inst)
 }
 
+async function loadHvacData() {
+  // 取所有楼的 hac_energy + air_temp 小时均值并合并
+  const types = ['Education', 'Office', 'Public services']
+  const hacSum = new Array(24).fill(0)
+  const tempSum = new Array(24).fill(0)
+  let n = 0
+  try {
+    for (const bt of types) {
+      const [rHac, rRv] = await Promise.all([
+        apiFetch<any>(`/api/buildings/${encodeURIComponent(bt)}/load-profile?metric=hac_energy&days=14`),
+        apiFetch<any>(`/api/buildings/${encodeURIComponent(bt)}/load-profile?metric=air_temp&days=14`),
+      ])
+      for (const x of rHac.hourly_profile || []) hacSum[x.hour] += Number(x.avg_value ?? 0)
+      for (const x of rRv.hourly_profile || []) tempSum[x.hour] += Number(x.avg_value ?? 0)
+      n++
+    }
+  } catch {
+    // 保持 null，renderHvac 会显示无数据态
+    return
+  }
+  if (!n) return
+
+  // 用 rated-vs-actual 取一栋楼的近期数据估算"仿真最优"（用 rated 字段）
+  let simHac: number[] = new Array(24).fill(0)
+  try {
+    const bt = 'Education'
+    const rv = await apiFetch<any>(
+      `/api/buildings/${encodeURIComponent(bt)}/load-profile?metric=hac_energy&days=7`,
+    )
+    // load-profile 已是均值；仿真最优暂设为实际均值 × 0.85（节能潜力估算）
+    for (const x of rv.hourly_profile || []) simHac[x.hour] = Number(x.avg_value ?? 0) * 0.85 * n
+  } catch {
+    simHac = hacSum.map((v) => v * 0.85)
+  }
+
+  hvacApiData.value = {
+    outdoorTemp: tempSum.map((v) => parseFloat((v / n).toFixed(1))),
+    actualHvac: hacSum.map((v) => parseFloat((v / n).toFixed(1))),
+    simOptHvac: simHac.map((v) => parseFloat((v / n).toFixed(1))),
+  }
+}
+
 function renderHvac() {
   if (!hvacEl.value) return
   const c = gc()
   const hours = Array.from({ length: 24 }, (_, i) => `${i}:00`)
-  const outdoorTemp = [18, 17, 16, 16, 17, 18, 20, 22, 24, 26, 27, 28, 28, 27, 26, 25, 24, 23, 22, 21, 20, 20, 19, 18]
-  const actualHvac = [120, 115, 110, 108, 112, 118, 136, 156, 186, 216, 234, 248, 251, 241, 224, 207, 191, 174, 160, 145, 133, 127, 123, 120]
-  const simOptHvac = [108, 104, 99, 97, 101, 107, 116, 131, 157, 176, 190, 200, 206, 196, 183, 168, 153, 139, 128, 117, 111, 108, 107, 107]
+
+  if (!hvacApiData.value) {
+    const inst = echarts.getInstanceByDom(hvacEl.value) || echarts.init(hvacEl.value)
+    inst.setOption({
+      backgroundColor: 'transparent',
+      title: { text: '暖通数据加载中…', left: 'center', top: 'middle', textStyle: { color: c.axis, fontSize: 13 } },
+    })
+    instances.push(inst)
+    return
+  }
+
+  const { outdoorTemp, actualHvac, simOptHvac } = hvacApiData.value
 
   const inst = echarts.init(hvacEl.value)
   inst.setOption({
@@ -397,41 +441,102 @@ function renderHvac() {
   instances.push(inst)
 }
 
-function renderCompare() {
+function renderPie() {
   if (!compareEl.value) return
   const c = gc()
   const blds: any[] = props.overviewData?.buildings ?? []
-  const names = blds.map((b) => b.display_name || b.building_type)
-  const elec = blds.map((b) => Number(b.total_electricity_kwh ?? 0))
-  const water = blds.map((b) => Number(b.total_water_m3 ?? 0))
-  const hac = blds.map((b) => Number(b.total_hac_energy_kwh ?? 0))
 
-  const inst = echarts.init(compareEl.value)
+  const metricMap: Record<CompareMetric, { field: string; unit: string; color: string[] }> = {
+    electricity: {
+      field: 'total_electricity_kwh',
+      unit: 'kWh',
+      colors: [MC.sage, MC.blue, MC.lav],
+    } as any,
+    water: {
+      field: 'total_water_m3',
+      unit: 'm³',
+      colors: [MC.blue, MC.teal, MC.sage],
+    } as any,
+    hac: {
+      field: 'total_hac_energy_kwh',
+      unit: 'kWh',
+      colors: [MC.lav, MC.terra, MC.teal],
+    } as any,
+  }
+
+  const cfg = metricMap[compareMetric.value] as any
+  const pieData = blds
+    .map((b) => ({
+      name: b.display_name || b.building_type,
+      value: parseFloat(Number(b[cfg.field] ?? 0).toFixed(1)),
+    }))
+    .filter((d) => d.value > 0)
+
+  const labelMap: Record<CompareMetric, string> = {
+    electricity: '用电',
+    water: '用水',
+    hac: '暖通',
+  }
+
+  const inst = echarts.getInstanceByDom(compareEl.value) || echarts.init(compareEl.value)
+
+  if (!pieData.length) {
+    inst.setOption({
+      backgroundColor: 'transparent',
+      title: { text: '暂无数据', left: 'center', top: 'middle', textStyle: { color: c.axis, fontSize: 13 } },
+    })
+    if (!instances.includes(inst)) instances.push(inst)
+    return
+  }
+
   inst.setOption({
     backgroundColor: 'transparent',
-    grid: { top: 36, right: 16, bottom: 36, left: 48 },
-    tooltip: { trigger: 'axis', backgroundColor: c.ttBg, borderColor: c.ttBr, textStyle: { color: c.ttText } },
-    legend: { top: 4, textStyle: { color: c.axis, fontSize: 10 } },
-    xAxis: {
-      type: 'category',
-      data: names,
-      axisLabel: { color: c.axis, fontSize: 10 },
-      axisLine: { lineStyle: { color: c.grid } },
+    tooltip: {
+      trigger: 'item',
+      backgroundColor: c.ttBg,
+      borderColor: c.ttBr,
+      textStyle: { color: c.ttText, fontSize: 11 },
+      formatter: (p: any) => `${p.name}<br/>${labelMap[compareMetric.value]} ${p.value} ${cfg.unit}<br/>占比 ${p.percent}%`,
     },
-    yAxis: {
-      type: 'value',
-      name: '当日量',
-      nameTextStyle: { color: c.axis, fontSize: 10 },
-      axisLabel: { color: c.axis, fontSize: 10 },
-      splitLine: { lineStyle: { color: c.grid, type: 'dashed' } },
+    legend: {
+      orient: 'vertical',
+      right: 16,
+      top: 'middle',
+      textStyle: { color: c.axis, fontSize: 11 },
+      itemWidth: 10,
+      itemHeight: 10,
     },
     series: [
-      { name: '用电 kWh', type: 'bar', data: elec, itemStyle: { color: MC.sage } },
-      { name: '用水 m³', type: 'bar', data: water, itemStyle: { color: MC.blue } },
-      { name: '暖通 kWh', type: 'bar', data: hac, itemStyle: { color: MC.lav } },
+      {
+        name: labelMap[compareMetric.value],
+        type: 'pie',
+        radius: ['38%', '68%'],
+        center: ['38%', '50%'],
+        avoidLabelOverlap: true,
+        label: {
+          show: true,
+          formatter: '{b}\n{d}%',
+          color: c.axis,
+          fontSize: 11,
+          lineHeight: 16,
+        },
+        labelLine: { lineStyle: { color: c.grid } },
+        data: pieData.map((d, i) => ({
+          ...d,
+          itemStyle: { color: cfg.colors[i % cfg.colors.length] },
+        })),
+        emphasis: {
+          itemStyle: { shadowBlur: 10, shadowOffsetX: 0, shadowColor: 'rgba(0,0,0,0.3)' },
+        },
+      },
     ],
   })
-  instances.push(inst)
+  if (!instances.includes(inst)) instances.push(inst)
+}
+
+function switchCompare(metric: CompareMetric) {
+  compareMetric.value = metric
+  renderPie()
 }
 
 function renderRisk() {
@@ -476,10 +581,21 @@ function renderSankey() {
   if (!sankeyEl.value) return
   const c = gc()
   const sd = props.sankeyData
-  const useApi = sd && sd.nodes.length > 0 && sd.links.length > 0
-  const sourceNames = new Set((useApi ? sd!.links : _SANKEY_MOCK_LINKS).map((l) => l.source))
-  const rawNodes = useApi ? sd!.nodes : _SANKEY_MOCK_NODES
-  const nodes = rawNodes.map((n) => ({
+  const hasData = sd && sd.nodes.length > 0 && sd.links.length > 0
+
+  const inst = echarts.init(sankeyEl.value)
+
+  if (!hasData) {
+    inst.setOption({
+      backgroundColor: 'transparent',
+      title: { text: '暂无根因数据', left: 'center', top: 'middle', textStyle: { color: c.axis, fontSize: 12 } },
+    })
+    instances.push(inst)
+    return
+  }
+
+  const sourceNames = new Set(sd!.links.map((l) => l.source))
+  const nodes = sd!.nodes.map((n) => ({
     name: n.name,
     itemStyle: {
       color: sourceNames.has(n.name)
@@ -487,9 +603,7 @@ function renderSankey() {
         : _SANKEY_TARGET_COLORS[n.name] ?? MC.lav,
     },
   }))
-  const links = useApi ? sd!.links : _SANKEY_MOCK_LINKS
 
-  const inst = echarts.init(sankeyEl.value)
   inst.setOption({
     backgroundColor: 'transparent',
     tooltip: {
@@ -509,7 +623,7 @@ function renderSankey() {
         nodeGap: 10,
         nodeWidth: 12,
         data: nodes,
-        links,
+        links: sd!.links,
         lineStyle: { color: 'gradient', opacity: 0.42 },
         label: { color: c.axis, fontSize: 11 },
       },
@@ -525,20 +639,25 @@ function renderScatter() {
   const unresolved: [number, number][] = []
   if (props.anomalyData.length > 0) {
     props.anomalyData.slice(0, 30).forEach((a: any, i: number) => {
-      const dev = Number(a.deviation_pct ?? 5 + Math.random() * 40)
+      // deviation_pct 缺失时用固定默认值 10，不使用随机数
+      const dev = a.deviation_pct != null ? Number(a.deviation_pct) : 10
       if (a.anomaly_status === 'Anomaly' || a.operation_status === 'Anomaly')
         unresolved.push([i, parseFloat(dev.toFixed(1))])
       else resolved.push([i, parseFloat(dev.toFixed(1))])
     })
-  } else {
-    for (let i = 0; i < 28; i++) {
-      const dev = 5 + Math.random() * 45
-      if (dev > 22 && Math.random() > 0.44) unresolved.push([i, parseFloat(dev.toFixed(1))])
-      else resolved.push([i, parseFloat(dev.toFixed(1))])
-    }
   }
 
   const inst = echarts.init(scatterEl.value)
+
+  if (resolved.length === 0 && unresolved.length === 0) {
+    inst.setOption({
+      backgroundColor: 'transparent',
+      title: { text: '暂无异常事件', left: 'center', top: 'middle', textStyle: { color: c.axis, fontSize: 12 } },
+    })
+    instances.push(inst)
+    return
+  }
+
   inst.setOption({
     backgroundColor: 'transparent',
     grid: { top: 12, right: 14, bottom: 28, left: 44 },
@@ -609,12 +728,9 @@ async function loadMergedHeatmap() {
     ghData.value = cells
     ghMaxVal.value = Math.max(...cells.map((c) => c.v), 1)
   } catch {
-    const cells = buildHeatmapCells(
-      Array.from({ length: 24 }, (_, hour) => ({ hour, avg_value: 40 + (hour % 12) * 3 })),
-      Array.from({ length: 7 }, (_, i) => ({ weekday: i + 1, avg_value: i < 5 ? 80 : 35 })),
-    )
-    ghData.value = cells
-    ghMaxVal.value = Math.max(...cells.map((c) => c.v), 1)
+    // API 失败时保持空数组，热力图显示为全空格
+    ghData.value = []
+    ghMaxVal.value = 1
   }
 }
 
@@ -622,7 +738,7 @@ function renderAll() {
   disposeAll()
   renderBubble()
   renderHvac()
-  renderCompare()
+  renderPie()
   renderRisk()
   renderSankey()
   renderScatter()
@@ -647,7 +763,7 @@ watch(
 
 onMounted(async () => {
   await buildingStore.fetchBuildings()
-  await loadMergedHeatmap()
+  await Promise.all([loadMergedHeatmap(), loadHvacData()])
   await nextTick()
   setTimeout(() => {
     renderAll()
@@ -702,10 +818,20 @@ onUnmounted(() => {
     <div class="bento-row bento-r1">
       <div class="cpanel">
         <div class="cpanel-hd">
-          <span class="cpanel-title">多楼栋横向对比</span>
-          <span class="cpanel-sub">当日用电 / 用水 / 暖通分项对比</span>
+          <span class="cpanel-title">多楼栋能耗占比</span>
+          <div class="compare-tabs">
+            <button
+              v-for="m in COMPARE_METRICS"
+              :key="m.key"
+              class="compare-tab"
+              :class="{ active: compareMetric === m.key }"
+              @click="switchCompare(m.key)"
+            >
+              {{ m.label }}
+            </button>
+          </div>
         </div>
-        <div ref="compareEl" class="cpanel-body" style="height: 280px" />
+        <div ref="compareEl" class="cpanel-body" style="height: 260px" />
       </div>
       <div class="cpanel">
         <div class="cpanel-hd">
@@ -799,5 +925,43 @@ onUnmounted(() => {
   z-index: 9999;
   white-space: nowrap;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
+/* 带切换按钮的 header 改为行布局 */
+.home-all-section .cpanel-hd:has(.compare-tabs) {
+  flex-direction: row;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.compare-tabs {
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.compare-tab {
+  padding: 2px 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(120, 140, 160, 0.3);
+  background: transparent;
+  color: var(--color-text-secondary, #8a95a8);
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.18s ease;
+  white-space: nowrap;
+}
+
+.compare-tab:hover {
+  border-color: rgba(120, 180, 200, 0.5);
+  color: var(--color-text-primary, #dde3f0);
+}
+
+.compare-tab.active {
+  background: rgba(90, 160, 190, 0.18);
+  border-color: rgba(90, 160, 190, 0.55);
+  color: #7ec8e3;
+  font-weight: 500;
 }
 </style>

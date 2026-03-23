@@ -43,7 +43,7 @@ html[data-theme="dark"] {
    Content cards: white (#ffffff)
    ══════════════════════════════════════════════ */
 html[data-theme="light"] {
-  --bg-dark:        #f0f2f5;        /* canvas background */
+  --bg-dark:        #f3f4f6;        /* canvas background — SaaS 浅灰 */
   --bg-panel:       #3e6354;        /* sidebar + KPI cards */
   --bg-card:        #365849;        /* panel sub-headers */
   --bg-hover:       #3a5e4f;        /* hover on dark-green items */
@@ -74,6 +74,26 @@ html[data-theme="light"] {
   --scrollbar-thumb-hover: #22c55e;
 }
 
+/* ── Light theme: canvas (main content) uses white SaaS vars ── */
+html[data-theme="light"] .canvas {
+  --bg-panel:       #ffffff;
+  --bg-card:        #f8f9fa;
+  --bg-hover:       #f3f4f6;
+  --border:         #e5e7eb;
+  --border-accent:  rgba(34,197,94,0.35);
+  --text-primary:   #111827;
+  --text-secondary: #4b5563;
+  --text-muted:     #9ca3af;
+  --accent:         #22c55e;
+  --accent-glow:    rgba(34,197,94,0.10);
+  --accent-glow-md: rgba(34,197,94,0.20);
+  --card-shadow:    0 1px 3px rgba(0,0,0,0.06), 0 0 0 1px rgba(0,0,0,0.03);
+  --card-shadow-hover: 0 4px 16px rgba(0,0,0,0.10);
+  --success:        #22c55e;
+  --warning:        #f59e0b;
+  --danger:         #ef4444;
+}
+
 /* ── Light theme: agent panel uses light colors, not dark green ── */
 html[data-theme="light"] .agent-panel {
   --bg-panel:       #ffffff;
@@ -101,6 +121,14 @@ html, body, #app {
   font-size: 14px;
   line-height: 1.6;
   transition: background 0.25s, color 0.2s;
+}
+
+/* ── 减少动效：respect user motion preference ── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
 }
 
 /* ── Scrollbar（默认隐藏，悬停时显示） ── */

@@ -121,6 +121,32 @@ def _diagnose_hvac(
     return "other_hvac"
 
 
+def _is_hvac_actually_off(
+    *,
+    hvac_mode: str | None,
+    hac: float | None,
+    hac_e: float | None,
+) -> bool:
+    """Determine whether HVAC is effectively off for temperature checks.
+
+    Returns True in two scenarios:
+    1. Expected mode is "Ventilation" (expected service computed hvac_on=False).
+    2. Expected mode is Cooling/Heating but actual hac_energy is near zero
+       while expected is significant — the actual data was generated with
+       HVAC off despite the expected calculation saying ON (state machine
+       divergence due to noise).
+    """
+    mode = (hvac_mode or "").lower()
+    if "ventilation" in mode:
+        return True
+    if ("cool" in mode or "heat" in mode):
+        actual_hac = hac if hac is not None else 0.0
+        expected_hac = hac_e if hac_e is not None else 0.0
+        if expected_hac > 5.0 and actual_hac < expected_hac * 0.1:
+            return True
+    return False
+
+
 def _detect_flags(
     *,
     water: float | None,
@@ -168,14 +194,27 @@ def _detect_flags(
         rel_h = delta_h / max(hac_e, eps)
         fh = rel_h > _HAC_REL * factor and delta_h >= _HAC_ABS * factor
 
-    # flag_supply_deviation
+    # flag_supply_deviation — skip when HVAC is actually off
     fs = False
-    if supply is not None and supply_e is not None:
+    hvac_actually_off = _is_hvac_actually_off(
+        hvac_mode=hvac_mode, hac=hac, hac_e=hac_e,
+    )
+    # #region agent log
+    if supply is not None and supply_e is not None and abs(supply - supply_e) > _SUPPLY_DEV * factor:
+        _dbg_ad("H_HVAC_OFF", "anomaly_detection_service.py:_detect_flags", "supply-dev-check", {
+            "hvac_mode": hvac_mode, "hac": float(hac) if hac is not None else None,
+            "hac_e": float(hac_e) if hac_e is not None else None,
+            "hvac_actually_off": hvac_actually_off,
+            "supply": float(supply), "supply_e": float(supply_e),
+            "soft": soft,
+        })
+    # #endregion
+    if not hvac_actually_off and supply is not None and supply_e is not None:
         fs = abs(supply - supply_e) > _SUPPLY_DEV * factor
 
-    # flag_return_deviation
+    # flag_return_deviation — skip when HVAC is actually off
     fr = False
-    if ret is not None and return_e is not None:
+    if not hvac_actually_off and ret is not None and return_e is not None:
         fr = abs(ret - return_e) > _RETURN_DEV * factor
 
     # HVAC 根因（仅满幅度时诊断）
@@ -654,6 +693,10 @@ async def detect_and_store_all_buildings(db: AsyncSession) -> dict[str, dict[str
     返回 {building_id: {"flags": N, "events": M}}。
     """
     from app.db.session import AsyncSessionLocal
+
+    async with AsyncSessionLocal() as cleanup_session:
+        await cleanup_session.execute(text("TRUNCATE TABLE anomaly_events"))
+        await cleanup_session.commit()
 
     bld_result = await db.execute(
         select(Building.building_id).order_by(Building.building_id)

@@ -742,7 +742,7 @@ const BUILDING_OPTIONS = [
   { value: 'all',       label: '全部建筑' },
   { value: 'Education', label: '教学楼' },
   { value: 'Office',    label: '办公楼' },
-  { value: 'Public',    label: '图书馆' },
+  { value: 'Public services',    label: '公共楼' },
 ]
 const TIME_OPTIONS = [
   { value: 0,    label: '全部时间' },

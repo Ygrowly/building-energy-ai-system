@@ -88,7 +88,7 @@ _LOCAL_KB: list[tuple[list[str], str, str, str]] = [
 2. 能耗强度（kWh/㎡）计算：total_electricity_kwh / buildings.sqm
    - 办公建筑（primary_space_usage='Office'）：40-80 kWh/㎡·月（制冷季偏高）
    - 教育建筑（primary_space_usage='Education'）：25-50 kWh/㎡·月（寒暑假低谷明显）
-   - 公共建筑（primary_space_usage='Public'）：60-120 kWh/㎡·月（全年较高）
+   - 公共建筑（primary_space_usage='Public services'）：60-120 kWh/㎡·月（全年较高）
 
 3. 多楼宇横向对比：使用 compare_metric_across_buildings 工具
    - 可按建筑类型分组对比（通过 buildings.primary_space_usage 过滤）

@@ -12,10 +12,10 @@
       <!-- 标题文字 -->
       <span class="th-title">
         <template v-if="isFinished">
-          Thought for {{ displayDuration }}
+          已思考 {{ displayDuration }}
         </template>
         <template v-else>
-          Thinking
+          思考中
           <span class="th-elapsed" v-if="elapsedSeconds > 0">{{ elapsedSeconds }}s</span>
           <span class="th-dots">
             <span></span><span></span><span></span>
@@ -27,19 +27,19 @@
     <!-- 折叠内容区 -->
     <Transition name="th-slide">
       <div v-if="!collapsed" class="th-body" ref="bodyEl">
-        <template v-for="step in steps" :key="step.id">
+        <template v-for="(step, idx) in steps" :key="step.id">
           <!-- 普通状态步骤（工具调用等） -->
           <div v-if="step.streamContent == null" class="th-step" :class="isToolStep(step.agent) ? 'is-tool' : 'is-think'">
-            <span class="th-step-icon">{{ isToolStep(step.agent) ? '⚡' : '💭' }}</span>
-            <span class="th-step-label">{{ agentLabel(step.agent) }}</span>
+            <span class="th-step-icon" :class="{ breathing: isActiveStep(idx) }" :style="{ background: agentColor(step.agent) }"></span>
+            <span class="th-step-label" :style="{ color: agentColor(step.agent) }">{{ agentLabel(step.agent) }}</span>
             <span class="th-step-msg">{{ step.message }}</span>
           </div>
 
           <!-- 流式推理内容 -->
           <div v-else class="th-stream-block">
             <div class="th-stream-header">
-              <span class="th-step-icon">💭</span>
-              <span class="th-step-label">{{ agentLabel(step.agent) }}</span>
+              <span class="th-step-icon" :class="{ breathing: isActiveStep(idx) }" :style="{ background: agentColor(step.agent) }"></span>
+              <span class="th-step-label" :style="{ color: agentColor(step.agent) }">{{ agentLabel(step.agent) }}</span>
             </div>
             <div class="th-stream-content">
               <span>{{ step.streamContent }}</span>
@@ -50,7 +50,7 @@
 
         <!-- 加载中 -->
         <div v-if="!isFinished && steps.length === 0" class="th-step is-loading">
-          <span class="th-step-icon">💭</span>
+          <span class="th-step-icon breathing" style="background: #D1C4BC"></span>
           <span class="th-step-label thinking-anim">推理中</span>
           <span class="th-loading-dots">
             <span></span><span></span><span></span>
@@ -132,11 +132,30 @@ function isToolStep(agent: string) {
   return agent === 'tool' || agent === 'tools'
 }
 
+/** agent 类型 → 莫兰蒂提亮配色 */
+const agentColorMap: Record<string, string> = {
+  router:         '#3B82C4',  // 信息蓝
+  data_agent:     '#259468',  // 数据绿
+  diagnose_agent: '#D4782C',  // 警示橙
+  tool:           '#7C5CB8',  // 执行紫
+  tools:          '#7C5CB8',  // 执行紫
+  agent:          '#8A7B96',  // 思考灰紫
+}
+
+function agentColor(agent: string): string {
+  return agentColorMap[agent] ?? '#8A7B96'
+}
+
+/** 判断某个 step 是否正在执行（最后一步 + 整体未完成） */
+function isActiveStep(index: number): boolean {
+  return !props.isFinished && index === props.steps.length - 1
+}
+
 function agentLabel(agent: string): string {
   const map: Record<string, string> = {
     router:         '路由',
-    data_agent:     '数据分析',
-    diagnose_agent: '故障诊断',
+    data_agent:     '数据分析师',
+    diagnose_agent: '故障诊断专家',
     tool:           '工具调用',
     agent:          '推理',
     tools:          '工具执行',
@@ -243,16 +262,29 @@ function agentLabel(agent: string): string {
 
 .th-step-icon {
   flex-shrink: 0;
-  font-size: 11px;
-  margin-top: 1px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  margin-top: 6px;
+  /* 颜色由 inline style 动态设置 */
+}
+
+/* 正在执行的步骤：呼吸缩放动画 */
+.th-step-icon.breathing {
+  animation: th-breathe 1.6s ease-in-out infinite;
+}
+
+@keyframes th-breathe {
+  0%, 100% { transform: scale(1);   opacity: 0.7; }
+  50%      { transform: scale(1.8); opacity: 1; }
 }
 
 .th-step-label {
   font-weight: 600;
-  color: var(--text-muted, #888);
   white-space: nowrap;
   flex-shrink: 0;
   font-size: 11px;
+  /* 颜色由 inline style 动态设置（与圆点同色） */
 }
 
 .th-step-msg {
@@ -261,14 +293,10 @@ function agentLabel(agent: string): string {
   font-size: 12px;
 }
 
-/* 工具调用步骤高亮 */
-.is-tool .th-step-label {
-  color: var(--accent, #6c8ef5);
-}
+/* 工具调用步骤 */
 .is-tool .th-step-msg {
-  font-family: 'Consolas', 'Monaco', monospace;
-  font-size: 11px;
-  color: var(--text-primary, #ccc);
+  font-size: 12px;
+  color: var(--text-secondary, #aaa);
 }
 
 /* ─── 流式推理内容块 ─── */

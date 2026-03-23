@@ -72,6 +72,19 @@ async def lifespan(app: FastAPI):
     from app.graph.workflow import get_graph
     get_graph()
 
+    # 预加载楼宇列表（运行期间不变，避免每次对话查 DB）
+    from app.db.session import AsyncSessionLocal
+    from app.mcp.tools.data_query import list_available_buildings
+    try:
+        async with AsyncSessionLocal() as db:
+            buildings = await list_available_buildings(db)
+            logging.getLogger(__name__).info(
+                "楼宇列表预加载完成: %d 栋",
+                buildings.total,
+            )
+    except Exception as exc:
+        logging.getLogger(__name__).warning("楼宇列表预加载失败（首次请求时重试）: %s", exc)
+
     # 定期清理过期/已吊销的 refresh token（每 24 小时一次）
     token_cleanup_task = asyncio.create_task(_cleanup_refresh_tokens(interval_seconds=86400))
 

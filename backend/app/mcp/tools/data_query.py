@@ -67,9 +67,9 @@ _METRIC_META: dict[MetricType, tuple[str, str]] = {
 # 公共辅助：通过 building_type 查找 meter_device_id 和真实 building_id
 #
 # 数据库中：
-#   building_type 列 = 'Education'/'Office'/'Public'（工具传参使用此值）
+#   building_type 列 = 'Education'/'Office'/'Public services'（工具传参使用此值）
 #   building_id   列 = 实际资产名 'Fox_office_Alice'（energy_data 外键使用此值）
-#   meter_device_id  = devices 表中该楼宇的 ElectricityMeter 设备 ID（血缘溯源首选）
+#   meter_device_id  = devices 表中该楼宇的 electricity 设备 ID（血缘溯源首选）
 # 此函数被 data_query.py 和 physics_calc.py 共同引用，避免重复逻辑。
 # ---------------------------------------------------------------------------
 
@@ -80,7 +80,7 @@ async def get_building_info(
     通过 primary_space_usage（如 'Office'）查找对应建筑。
     返回 (meter_device_id, actual_building_id)，找不到返回 (None, None)。
 
-    meter_device_id 优先取 devices 表中该楼宇的 ElectricityMeter 类型设备 ID；
+    meter_device_id 优先取 devices 表中该楼宇的 electricity 类型设备 ID；
     若 devices 表为空或无电表设备，退化为 building_id（向后兼容）。
     支持动态扩展：数据库新增楼宇后无需修改代码。
     """
@@ -97,7 +97,7 @@ async def get_building_info(
     dev_result = await session.execute(
         select(Device.device_id)
         .where(Device.building_id == actual_bid)
-        .where(Device.device_type == "ElectricityMeter")
+        .where(Device.device_type == "electricity")
         .limit(1)
     )
     dev_row = dev_result.first()
@@ -392,6 +392,10 @@ async def query_daily_energy_summary(
 # Tool 9：list_available_buildings
 # ===========================================================================
 
+# 楼宇列表缓存（启动时预加载，运行期间不变，服务重启自动刷新）
+_buildings_cache: ListBuildingsOutput | None = None
+
+
 async def list_available_buildings(
     session: AsyncSession,
 ) -> ListBuildingsOutput:
@@ -402,7 +406,13 @@ async def list_available_buildings(
     1. 不确定有哪些合法 building_id 时（避免 BUILDING_NOT_FOUND）
     2. 需要 device_id 填写工单（从返回的 devices 列表中选取）
     3. 需要设备 ID 用于 rag_hybrid_search 的 metadata_filter.device_id 精准过滤
+
+    启动时由 lifespan 预加载，后续调用直接返回缓存，0ms 响应。
     """
+    global _buildings_cache
+    if _buildings_cache is not None:
+        return _buildings_cache
+
     # 查所有楼宇基本信息
     bld_result = await session.execute(
         select(
@@ -440,7 +450,14 @@ async def list_available_buildings(
         )
         for r in bld_rows
     ]
-    return ListBuildingsOutput(buildings=buildings, total=len(buildings))
+    result = ListBuildingsOutput(buildings=buildings, total=len(buildings))
+    _buildings_cache = result
+    return result
+
+
+def get_buildings_cache() -> ListBuildingsOutput | None:
+    """返回启动时预加载的楼宇列表缓存（含完整 devices），无需 DB session。"""
+    return _buildings_cache
 
 
 # ===========================================================================

@@ -30,6 +30,7 @@ from app.db.session import AsyncSessionLocal
 from app.graph.state import AgentState, update_context_summary
 from app.graph.evidence import extract_evidence
 from app.mcp.server import call_tool
+from app.mcp.tools.data_query import get_buildings_cache
 from app.schemas.mcp_schemas import (
     CreateWorkOrderDraftInput,
     DetectEnergyAnomaliesInput,
@@ -50,15 +51,26 @@ DIAGNOSE_AGENT_SYSTEM_PROMPT = """你是一个楼宇能耗管理系统的专家�
 
 ## 数据库设备体系（故障诊断时使用）
 系统使用 devices 表管理所有计量设备，每台设备有唯一 device_id，通过 building_id 关联楼宇：
-- ElectricityMeter（电表） → 对应 energy_data.electricity_kwh
-- WaterMeter（水表）      → 对应 energy_data.water_m3
-- HVAC（空调/暖通）       → 对应 hac_energy, sim_supply_temp_c, sim_return_temp_c
-- EnvSensor（环境传感器） → 对应 air_temp_c, humidity_rh_pct, dew_temp_c
+- electricity（电表）→ 对应 energy_data.electricity_kwh
+- water（水表）      → 对应 energy_data.water_m3
+- ac（空调/暖通）    → 对应 hac_energy, sim_supply_temp_c, sim_return_temp_c
 
-⚠️ 重要：创建工单时的 device_id 必须来自 devices 表，而非自行编造！
-   正确做法：先调用 list_available_buildings 获取楼宇的 devices 列表，再取对应 device_id。
+当前数据库完整设备清单（创建工单时直接从此表取 device_id，禁止编造）：
+| building_type（工具参数值） | device_id                    | device_type |
+|-----------------------------|------------------------------|-------------|
+| Education（教学楼）         | EM_AC_Fox_education_Louie    | ac          |
+| Education（教学楼）         | EM_ELE_Fox_education_Louie   | electricity |
+| Education（教学楼）         | EM_WAT_Fox_education_Louie   | water       |
+| Office（办公楼）            | EM_AC_Fox_office_Alice       | ac          |
+| Office（办公楼）            | EM_ELE_Fox_office_Alice      | electricity |
+| Office（办公楼）            | EM_WAT_Fox_office_Alice      | water       |
+| Public services（公共楼）   | EM_AC_Fox_public_Henry       | ac          |
+| Public services（公共楼）   | EM_ELE_Fox_public_Henry      | electricity |
+| Public services（公共楼）   | EM_WAT_Fox_public_Henry      | water       |
 
-## 你的专属工具（共 8 个）
+⚠️ 重要：device_id 必须严格使用上表中的值，禁止自行编造或修改！
+
+## 你的专属工具（共 7 个）
 1. query_energy_metrics         — 查询时序原始数据（事实核查用）
 2. get_device_live_status       — 获取设备最新实时状态快照（含设备列表）
 3. get_building_rated_values    — ⭐ 查询国标（GB）期望值 vs 实际值逐小时对比（解释异常的核心依据）
@@ -66,7 +78,6 @@ DIAGNOSE_AGENT_SYSTEM_PROMPT = """你是一个楼宇能耗管理系统的专家�
 5. rag_hybrid_search            — 检索建筑规范/运维手册/技术标准
 6. render_ui_component          — 渲染诊断报告卡片或工单卡片
 7. create_work_order_draft      — 生成维修工单草稿（须人工确认才能提交）
-8. list_available_buildings     — 列出所有楼宇及其设备（工单前必须调用）
 
 ---
 
@@ -123,7 +134,7 @@ DIAGNOSE_AGENT_SYSTEM_PROMPT = """你是一个楼宇能耗管理系统的专家�
 1. 【异常发现】调用 detect_energy_anomalies 获取 rule_triggered 和 hvac_root_cause
 2. 【期望对比】⭐ 调用 get_building_rated_values 获取国标期望值 vs 实际值，
    定量告诉用户"期望应该是多少，实际是多少，偏差多少"
-3. 【设备定位】从 list_available_buildings 获取真实 device_id（创建工单必须）
+3. 【设备定位】若上下文已提供【楼宇设备列表】则直接读取 device_id；否则调用 list_available_buildings 获取（创建工单必须使用真实 device_id）
 4. 【知识检索】调用 rag_hybrid_search，传入故障类型关键词，例如：
    - hvac_root_cause=A_low_efficiency → 搜索"冷水机组效能衰退 排查"
    - hvac_root_cause=B_small_deltaT  → 搜索"压差旁通阀 水力失调 大流量小温差"
@@ -152,7 +163,7 @@ DIAGNOSE_AGENT_SYSTEM_PROMPT = """你是一个楼宇能耗管理系统的专家�
 - RAG 检索结果相关性不足（similarity < 0.2）时，诚实告知"知识库中未找到匹配条目"
 
 ## 工单生成规范
-1. 先从楼宇设备列表确认 device_id（格式如 'Fox_public_Henr_hvac'）
+1. 先从上方【当前数据库完整设备清单】确认 device_id（如办公楼空调：'EM_AC_Fox_office_Alice'）
 2. 调用 create_work_order_draft，device_id 必须填写真实设备 ID
 3. 调用后必须渲染 WorkOrderCard 让用户确认：
 ```
@@ -193,12 +204,14 @@ def _make_mcp_tool(
     )
 
 
-DIAGNOSE_AGENT_TOOLS = [
-    _make_mcp_tool(
-        "list_available_buildings",
-        "列出数据库中所有楼宇及其设备（building_type、devices 列表）。"
-        "创建工单前必须先调用以获取真实的 device_id，禁止编造。无需参数，直接调用即可。",
-    ),
+# 不含 list_available_buildings 的工具（当上下文已注入设备列表时使用）
+_TOOL_LIST_BUILDINGS = _make_mcp_tool(
+    "list_available_buildings",
+    "列出数据库中所有楼宇及其设备（building_type、devices 列表）。"
+    "仅在上下文未提供设备列表时调用，无需参数，直接调用即可。",
+)
+
+_DIAGNOSE_BASE_TOOLS = [
     _make_mcp_tool(
         "query_energy_metrics",
         "查询指定建筑在时间范围内的能耗指标时序数据（事实核查用）。"
@@ -243,13 +256,17 @@ DIAGNOSE_AGENT_TOOLS = [
     _make_mcp_tool(
         "create_work_order_draft",
         "生成维修工单草稿（status=pending_approval，须人工确认后才正式派单）。"
-        "device_id 必须来自 list_available_buildings 返回的真实设备 ID。",
+        "device_id 必须来自上下文【楼宇设备列表】中的真实设备 ID。",
         args_schema=CreateWorkOrderDraftInput,
     ),
 ]
 
+# 完整工具集（含 list_available_buildings，用于楼宇信息未知时）
+DIAGNOSE_AGENT_TOOLS = [_TOOL_LIST_BUILDINGS] + _DIAGNOSE_BASE_TOOLS
 
-_cached_diagnose_agent = None
+
+_cached_diagnose_agent_full = None     # 含 list_available_buildings
+_cached_diagnose_agent_no_list = None  # 不含（楼宇已注入上下文时使用）
 _diagnose_agent_lock: Any = None
 
 
@@ -272,25 +289,47 @@ def reset_diagnose_agent_cache() -> None:
 _MAX_HISTORY_MESSAGES = 8
 
 
-def _get_diagnose_agent():
-    """获取 Diagnose Agent 单例（首次调用时构建，锁保护避免并发重复创建）。"""
-    global _cached_diagnose_agent
+def _get_diagnose_agent(include_list_buildings: bool = True):
+    """
+    获取 Diagnose Agent 单例。
+
+    - include_list_buildings=True ：提供 list_available_buildings 工具（楼宇未知时）
+    - include_list_buildings=False：移除该工具，避免 LLM 在已知设备列表时冗余调用
+    """
+    global _cached_diagnose_agent_full, _cached_diagnose_agent_no_list
     with _get_diagnose_agent_lock():
-        if _cached_diagnose_agent is None:
-            settings = get_settings()
-            llm = ChatOpenAI(
-                model=settings.LLM_MODEL,
-                api_key=settings.LLM_API_KEY or "placeholder",
-                base_url=settings.LLM_BASE_URL,
-                temperature=0.2,
-                max_tokens=2048,   # 诊断报告允许稍长，但不超过 2048
-            )
-            _cached_diagnose_agent = create_react_agent(
-                llm,
-                tools=DIAGNOSE_AGENT_TOOLS,
-                prompt=DIAGNOSE_AGENT_SYSTEM_PROMPT,
-            )
-    return _cached_diagnose_agent
+        if include_list_buildings:
+            if _cached_diagnose_agent_full is None:
+                settings = get_settings()
+                llm = ChatOpenAI(
+                    model=settings.LLM_MODEL,
+                    api_key=settings.LLM_API_KEY or "placeholder",
+                    base_url=settings.LLM_BASE_URL,
+                    temperature=0.2,
+                    max_tokens=2048,
+                )
+                _cached_diagnose_agent_full = create_react_agent(
+                    llm,
+                    tools=DIAGNOSE_AGENT_TOOLS,
+                    prompt=DIAGNOSE_AGENT_SYSTEM_PROMPT,
+                )
+            return _cached_diagnose_agent_full
+        else:
+            if _cached_diagnose_agent_no_list is None:
+                settings = get_settings()
+                llm = ChatOpenAI(
+                    model=settings.LLM_MODEL,
+                    api_key=settings.LLM_API_KEY or "placeholder",
+                    base_url=settings.LLM_BASE_URL,
+                    temperature=0.2,
+                    max_tokens=2048,
+                )
+                _cached_diagnose_agent_no_list = create_react_agent(
+                    llm,
+                    tools=_DIAGNOSE_BASE_TOOLS,
+                    prompt=DIAGNOSE_AGENT_SYSTEM_PROMPT,
+                )
+            return _cached_diagnose_agent_no_list
 
 
 async def diagnose_agent_node(state: AgentState) -> dict[str, Any]:
@@ -305,7 +344,6 @@ async def diagnose_agent_node(state: AgentState) -> dict[str, Any]:
     """
     t0 = time.time()
     hop_count = state.get("hop_count", 0) + 1
-    agent = _get_diagnose_agent()
 
     # ── 构建上下文注入消息 ─────────────────────────────────────────────
     context_parts: list[str] = []
@@ -315,8 +353,25 @@ async def diagnose_agent_node(state: AgentState) -> dict[str, Any]:
         context_parts.append(f"【历史对话摘要（仅供参考）】\n{existing_summary}")
 
     available = state.get("available_buildings")
+    # 若楼宇列表已在 state 中，从启动缓存提取完整设备信息注入上下文，
+    # 同时移除 list_available_buildings 工具，避免 LLM 冗余调用。
+    include_list_tool = not bool(available)
     if available:
-        context_parts.append(f"【可用楼宇】: {', '.join(available)}")
+        cache = get_buildings_cache()
+        if cache and cache.buildings:
+            device_lines = []
+            for b in cache.buildings:
+                device_ids = [d.device_id for d in (b.devices or [])]
+                device_lines.append(
+                    f"  {b.building_type}：{', '.join(device_ids) if device_ids else '（无设备）'}"
+                )
+            context_parts.append(
+                "【楼宇及设备列表（直接使用，无需调用 list_available_buildings）】:\n"
+                + "\n".join(device_lines)
+            )
+        else:
+            context_parts.append(f"【可用楼宇】: {', '.join(available)}")
+
     if state.get("building_id"):
         context_parts.append(f"【目标楼宇】: {state['building_id']}")
     if state.get("device_id"):
@@ -341,6 +396,8 @@ async def diagnose_agent_node(state: AgentState) -> dict[str, Any]:
 
     injected_count = len(sub_messages)
     sub_state = {"messages": sub_messages}
+
+    agent = _get_diagnose_agent(include_list_buildings=include_list_tool)
 
     try:
         result = await agent.ainvoke(sub_state)

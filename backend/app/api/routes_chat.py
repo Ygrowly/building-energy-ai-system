@@ -208,6 +208,88 @@ def _thinking_event(agent: str, message: str, hop_count: int = 0) -> str:
     })
 
 
+_BUILDING_LABEL = {
+    "Education": "教学楼",
+    "Office": "办公楼",
+    "Public services": "公共楼",
+}
+
+
+def _describe_tool_call(tool_name: str, tool_input: dict) -> str:
+    """根据工具名 + 输入参数，生成人类可读的调用描述。"""
+    bid = tool_input.get("building_id", "")
+    building = _BUILDING_LABEL.get(bid, bid)
+
+    # 提取通用的时间段描述
+    def _period() -> str:
+        dr = tool_input.get("date_range", {})
+        if not dr:
+            return ""
+        start = str(dr.get("start", ""))[:10]
+        end = str(dr.get("end", ""))[:10]
+        return f"（{start} ~ {end}）" if start and end else ""
+
+    # ── 数据查询类 ──
+    if tool_name == "query_daily_energy_summary":
+        return f"查询{building}每日能耗汇总{_period()}"
+
+    if tool_name == "query_energy_metrics":
+        return f"查询{building}能耗指标明细{_period()}"
+
+    if tool_name == "get_building_info":
+        return f"获取{building}基础信息"
+
+    if tool_name == "get_device_live_status":
+        device = tool_input.get("device_id", "")
+        return f"查询设备实时状态（{device}）" if device else "查询设备实时状态"
+
+    if tool_name == "list_available_buildings":
+        return "获取可用建筑列表"
+
+    if tool_name == "compare_metric_across_buildings":
+        metric = tool_input.get("metric", "")
+        bids = tool_input.get("building_ids", [])
+        names = "、".join(_BUILDING_LABEL.get(b, b) for b in bids) if bids else ""
+        label = f"对比{names}" if names else "多楼宇对比"
+        return f"{label}{metric or '能耗'}指标{_period()}"
+
+    if tool_name == "compare_time_periods":
+        return f"对比{building}不同时段能耗"
+
+    # ── 物理计算 / 诊断类 ──
+    if tool_name == "calculate_system_cop":
+        return f"计算{building}系统 COP 能效比{_period()}"
+
+    if tool_name == "detect_energy_anomalies":
+        return f"检测{building}能耗异常{_period()}"
+
+    if tool_name == "get_building_rated_values":
+        return f"获取{building}额定参数"
+
+    # ── UI / 工单类 ──
+    if tool_name == "render_ui_component":
+        title = tool_input.get("title", "")
+        comp = tool_input.get("component_type", "")
+        return f"渲染可视化：{title or comp or '组件'}"
+
+    if tool_name == "create_work_order_draft":
+        return "生成维修工单草稿"
+
+    if tool_name == "generate_report":
+        return f"生成{building or ''}能耗报表"
+
+    # ── RAG 搜索 ──
+    if tool_name == "rag_hybrid_search":
+        query = tool_input.get("query", "")
+        return f"检索知识库：{query[:30]}" if query else "检索知识库"
+
+    # ── 兜底：从参数中提取关键信息 ──
+    parts = [tool_name]
+    if building:
+        parts.append(building)
+    return f"调用工具：{'（'.join(parts)}{'）' if building else ''}"
+
+
 def _text_event(content: str, is_final: bool = False) -> str:
     return _sse({
         "type": "text",
@@ -264,7 +346,7 @@ async def _get_or_create_state(session_id: str) -> dict[str, Any]:
         logger.info("会话已从 DB 恢复: %s", session_id)
         return recovered
 
-    # 全新会话：从 DB 查楼宇列表动态注入白名单
+    # 全新会话：查楼宇列表（list_available_buildings 内部有 5 分钟 TTL 缓存，不会重复查 DB）
     available_buildings: list[str] | None = None
     try:
         async with AsyncSessionLocal() as _db:
@@ -334,14 +416,18 @@ async def _stream_graph(
             ))
             return
 
-    # ── 常规路径：先做 DB 初始化，再走 LangGraph ────────────────────────────
-    # 注意：DB 查询在此处阻塞。对非快速通道消息属正常，因需要加载历史上下文。
-    state = await _get_or_create_state(session_id)
+    # ── 立即推送首条反馈，让用户零等待感知系统响应 ──────────────────────────
+    yield _thinking_event("router", "正在分析您的请求...", hop_count=0)
 
-    # 确保 DB 中存在该会话记录（首次发送消息时自动创建）
-    db_row = await session_store.get(session_id)
+    # ── 常规路径：DB 初始化（并行加载，用户已看到反馈，不影响体验）──────────────
+    state, db_row = await asyncio.gather(
+        _get_or_create_state(session_id),
+        session_store.get(session_id),
+    )
     if db_row is None:
-        await session_store.create(session_id, title="新对话", user_id=user_id)
+        auto_title = user_message[:30] + ("…" if len(user_message) > 30 else "")
+        # 后台创建会话记录，不阻塞流式响应
+        asyncio.create_task(session_store.create(session_id, title=auto_title, user_id=user_id))
 
     is_first_message = len(state.get("messages", [])) == 0
 
@@ -382,14 +468,15 @@ async def _stream_graph(
             yield _thinking_event("web_search", "联网搜索暂时不可用，将基于已有知识回答", hop_count=0)
             logger.error("联网搜索异常，降级: %s", exc)
 
-    yield _thinking_event("router", "正在分析您的请求...", hop_count=state.get("hop_count", 0))
-
     graph = get_graph()
 
     final_state_holder: dict[str, Any] = {}
     _t: dict[str, float] = {}
     _t["request"] = time.time()
     _tool_count = 0
+
+    # 追踪当前活跃的父级 agent，用于将内部 "agent" 节点映射回真实 agent 名
+    _current_parent_agent = ""
 
     try:
         async for event in graph.astream_events(graph_input, version="v2"):
@@ -398,19 +485,28 @@ async def _stream_graph(
             data = event.get("data", {})
 
             if kind == "on_chain_start" and name in ("router", "data_agent", "diagnose_agent"):
-                agent_label = {
-                    "router": "路由分析",
-                    "data_agent": "数据分析师",
-                    "diagnose_agent": "故障诊断专家",
-                }.get(name, name)
+                _current_parent_agent = name
                 _t[f"node_{name}"] = time.time()
-                yield _thinking_event(name, f"{agent_label} 正在工作...", hop_count=state.get("hop_count", 0))
+                # 每个 agent 使用更具体的启动描述
+                chain_start_msg = {
+                    "router": "正在识别意图...",
+                    "data_agent": "正在准备数据查询...",
+                    "diagnose_agent": "正在启动故障诊断...",
+                }.get(name, "正在工作...")
+                yield _thinking_event(name, chain_start_msg, hop_count=state.get("hop_count", 0))
 
             elif kind == "on_chat_model_start":
                 agent_name = event.get("metadata", {}).get("langgraph_node", "")
                 _t[f"llm_{agent_name}"] = time.time()
-                if agent_name:
-                    yield _thinking_event(agent_name, "正在推理...", hop_count=0)
+                # ReAct 内部 "agent" 节点的推理内容已通过 on_chat_model_stream 流式展示，
+                # 跳过冗余的状态标签
+                if agent_name and agent_name != "agent":
+                    llm_start_msg = {
+                        "router": "正在规划路由...",
+                        "data_agent": "正在推理...",
+                        "diagnose_agent": "正在推理...",
+                    }.get(agent_name, "正在推理...")
+                    yield _thinking_event(agent_name, llm_start_msg, hop_count=0)
 
             elif kind == "on_chat_model_stream":
                 # 流式推送 LLM 推理 token
@@ -419,19 +515,37 @@ async def _stream_graph(
                 if stream_agent and stream_agent != "router":
                     chunk = data.get("chunk")
                     if chunk:
+                        # DEBUG: 打印 chunk 结构，确认 reasoning_content 位置
+                        if hasattr(chunk, "additional_kwargs") and chunk.additional_kwargs:
+                            logger.debug("chunk additional_kwargs: %s", chunk.additional_kwargs)
                         token = ""
-                        if hasattr(chunk, "content"):
-                            c = chunk.content
-                            if isinstance(c, str):
-                                token = c
-                            elif isinstance(c, list):
-                                token = "".join(
-                                    part.get("text", "") for part in c if isinstance(part, dict)
-                                )
+                        # 1. 提取推理模型的 reasoning_content（思考链，如 DeepSeek-R1 / Qwen3）
+                        reasoning = ""
+                        if hasattr(chunk, "additional_kwargs"):
+                            reasoning = chunk.additional_kwargs.get("reasoning_content", "")
+                        if not reasoning and hasattr(chunk, "response_metadata"):
+                            reasoning = chunk.response_metadata.get("reasoning_content", "")
+                        if reasoning:
+                            token = reasoning
+                        # 2. 提取工具调用决策过程（函数名 + 参数流式片段）
+                        # 注意：常规 chunk.content（最终回答文本）不在此处提取，
+                        # 由 on_chain_end 统一发送为 text 事件，避免内容重复渲染
+                        if not token:
+                            tcc = getattr(chunk, "tool_call_chunks", None) or []
+                            for tc in tcc:
+                                tc_name = tc.get("name", "")
+                                tc_args = tc.get("args", "")
+                                if tc_name:
+                                    token = f"调用 {tc_name}\n"
+                                elif tc_args:
+                                    token = tc_args
+                                break
                         if token:
+                            # 内部 "agent" 节点映射回父级 agent 名，让前端知道是谁在推理
+                            effective_agent = _current_parent_agent if stream_agent == "agent" and _current_parent_agent else stream_agent
                             yield _sse({
                                 "type": "thinking",
-                                "agent": stream_agent,
+                                "agent": effective_agent,
                                 "message": "",
                                 "content": token,
                                 "hop_count": 0,
@@ -445,7 +559,9 @@ async def _stream_graph(
             elif kind == "on_tool_start":
                 tool_name = name or data.get("name", "tool")
                 _t[f"tool_{tool_name}_{_tool_count}"] = time.time()
-                yield _thinking_event("tool", f"调用工具：{tool_name}", hop_count=0)
+                tool_input = data.get("input", {})
+                tool_purpose = _describe_tool_call(tool_name, tool_input)
+                yield _thinking_event("tool", f"调用MCP工具：{tool_name}　{tool_purpose}", hop_count=0)
 
             elif kind == "on_tool_end":
                 tool_key = f"tool_{name}_{_tool_count}"
@@ -481,6 +597,17 @@ async def _stream_graph(
             elif kind == "on_chain_end" and name in ("data_agent", "diagnose_agent", "router"):
                 node_elapsed = time.time() - _t.pop(f"node_{name}", time.time())
                 logger.info("节点完成: %s, 工具调用=%d, 用时=%.1fs", name, _tool_count, node_elapsed)
+
+                # 路由完成时，推送 "已转接至 XXX"
+                if name == "router":
+                    chain_output = data.get("output", {})
+                    next_agent = chain_output.get("current_agent", "")
+                    if next_agent and next_agent != "router":
+                        next_label = {
+                            "data_agent": "数据分析师",
+                            "diagnose_agent": "故障诊断专家",
+                        }.get(next_agent, next_agent)
+                        yield _thinking_event("router", f"已转接至{next_label}", hop_count=0)
                 output_messages = data.get("output", {}).get("messages", [])
                 final_text: str | None = None
                 for msg in reversed(output_messages):

@@ -85,9 +85,9 @@ async def lifespan(app: FastAPI):
         except asyncio.CancelledError:
             pass
 
-    # 关闭数据库连接池
+    # 关闭数据库连接池（close=True 强制关闭所有活跃连接，避免残留 idle in transaction）
     from app.db.session import engine
-    await engine.dispose()
+    await engine.dispose(close=True)
 
     # 关闭 Redis client（若可用）
     await close_redis_client()

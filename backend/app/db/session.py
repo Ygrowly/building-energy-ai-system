@@ -30,7 +30,15 @@ engine = create_async_engine(
     pool_size=5,
     max_overflow=10,
     pool_pre_ping=True,
-    connect_args={"ssl": _ssl_ctx},  # Supabase 强制 SSL
+    pool_recycle=600,  # 10 分钟回收空闲连接，防止 idle in transaction 残留
+    connect_args={
+        "ssl": _ssl_ctx,  # Supabase 强制 SSL
+        "server_settings": {
+            "statement_timeout": "30000",      # 30s — 防止单条 SQL 无限等待
+            "lock_timeout": "10000",            # 10s — 防止 DDL 获取锁时无限阻塞
+            "idle_in_transaction_session_timeout": "60000",  # 60s — 自动终止空闲事务
+        },
+    },
 )
 
 logger = logging.getLogger(__name__)
@@ -74,15 +82,27 @@ async def _run_startup_db_op_with_retry(
     op_name: str,
     operation,
     *,
-    attempts: int = 5,
+    attempts: int = 3,
     base_delay_seconds: float = 1.0,
+    per_attempt_timeout: float = 15.0,
 ) -> None:
     for attempt in range(1, attempts + 1):
         try:
-            await operation()
+            await asyncio.wait_for(operation(), timeout=per_attempt_timeout)
             if attempt > 1:
                 logger.warning("%s 在第 %d 次尝试后成功", op_name, attempt)
             return
+        except asyncio.TimeoutError:
+            logger.warning(
+                "%s 第 %d/%d 次执行超时（%.0fs），%s",
+                op_name,
+                attempt,
+                attempts,
+                per_attempt_timeout,
+                "将重试" if attempt < attempts else "放弃",
+            )
+            if attempt >= attempts:
+                raise
         except Exception as exc:
             if attempt >= attempts or not _is_transient_db_error(exc):
                 raise
@@ -96,7 +116,8 @@ async def _run_startup_db_op_with_retry(
                 type(exc).__name__,
                 exc,
             )
-            await asyncio.sleep(delay)
+        delay = base_delay_seconds * attempt
+        await asyncio.sleep(delay)
 
 
 async def ensure_auth_schema_compat() -> None:
@@ -104,9 +125,25 @@ async def ensure_auth_schema_compat() -> None:
     兼容旧库结构：确保 users.role 字段存在。
     历史库可能未执行 012_add_user_role.sql，登录查询会因缺列报错。
     连接失败时仅记录警告，不阻断服务启动（连接池预热后下次请求会自动重连）。
+
+    优化：先用轻量 SELECT 检查列是否已存在，仅在缺失时执行 ALTER TABLE，
+    避免每次启动都获取 AccessExclusiveLock。
     """
     async def _op():
         async with engine.begin() as conn:
+            result = await conn.execute(
+                text(
+                    """
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'users' AND column_name = 'role'
+                    """
+                )
+            )
+            if result.fetchone() is not None:
+                logger.info("users.role 列已存在，跳过 ALTER TABLE")
+                return
+
+            logger.info("users.role 列缺失，执行 ALTER TABLE 添加...")
             await conn.execute(
                 text(
                     """

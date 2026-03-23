@@ -28,6 +28,7 @@ from pydantic import BaseModel
 from app.core.config import get_settings
 from app.db.session import AsyncSessionLocal
 from app.graph.state import AgentState, update_context_summary
+from app.graph.evidence import extract_evidence
 from app.schemas.mcp_schemas import MCPError
 from app.mcp.server import call_tool
 from app.schemas.mcp_schemas import (
@@ -232,6 +233,14 @@ def _get_data_agent_lock() -> Any:
     return _data_agent_lock
 
 
+def reset_data_agent_cache() -> None:
+    """Reset cached Data Agent instances (used by eval/tests)."""
+    global _cached_data_agent_full, _cached_data_agent_no_list_buildings, _data_agent_lock
+    _cached_data_agent_full = None
+    _cached_data_agent_no_list_buildings = None
+    _data_agent_lock = None
+
+
 # 历史消息最大条数（超出时截断最早的），避免 token 随对话增长而膨胀
 _MAX_HISTORY_MESSAGES = 8
 
@@ -390,13 +399,20 @@ async def data_agent_node(state: AgentState) -> dict[str, Any]:
 
     # 提取图表 artifacts（ToolMessage 中 render_ui_component 的返回值）
     artifacts = list(state.get("artifacts", []))
+    evidence = list(state.get("evidence", []))
     for msg in new_messages:
-        if isinstance(msg, ToolMessage) and "component_type" in (msg.content or ""):
-            try:
-                artifact_data = json.loads(msg.content)
-                artifacts.append(artifact_data)
-            except (json.JSONDecodeError, TypeError):
-                pass
+        if not isinstance(msg, ToolMessage):
+            continue
+        content = msg.content or ""
+        try:
+            payload = json.loads(content)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        evidence.extend(extract_evidence(payload))
+        if "component_type" in payload:
+            artifacts.append(payload)
 
     tool_count = sum(1 for m in new_messages if isinstance(m, ToolMessage))
     logger.info(
@@ -418,5 +434,6 @@ async def data_agent_node(state: AgentState) -> dict[str, Any]:
         "current_agent": "end",
         "hop_count": hop_count,
         "artifacts": artifacts,
+        "evidence": evidence,
         "context_summary": new_summary,  # ★ 更新滚动摘要
     }

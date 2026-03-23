@@ -219,6 +219,18 @@ def _get_router_llm() -> ChatOpenAI:
     return _cached_router_llm
 
 
+def reset_router_llm_cache() -> None:
+    """
+    Reset cached Router LLM instance.
+
+    Used by the eval harness / tests to avoid cross-case leakage when monkeypatching
+    ChatOpenAI.
+    """
+    global _cached_router_llm, _router_llm_lock
+    _cached_router_llm = None
+    _router_llm_lock = None
+
+
 def _parse_router_output(raw: str) -> dict[str, Any]:
     """解析 LLM 返回的 JSON，容错处理。"""
     raw = raw.strip()

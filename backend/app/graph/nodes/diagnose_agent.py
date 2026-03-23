@@ -28,6 +28,7 @@ from langgraph.prebuilt import create_react_agent
 from app.core.config import get_settings
 from app.db.session import AsyncSessionLocal
 from app.graph.state import AgentState, update_context_summary
+from app.graph.evidence import extract_evidence
 from app.mcp.server import call_tool
 from app.schemas.mcp_schemas import (
     CreateWorkOrderDraftInput,
@@ -260,6 +261,13 @@ def _get_diagnose_agent_lock() -> Any:
     return _diagnose_agent_lock
 
 
+def reset_diagnose_agent_cache() -> None:
+    """Reset cached Diagnose Agent instance (used by eval/tests)."""
+    global _cached_diagnose_agent, _diagnose_agent_lock
+    _cached_diagnose_agent = None
+    _diagnose_agent_lock = None
+
+
 # 历史消息最大条数（与 data_agent 保持一致）
 _MAX_HISTORY_MESSAGES = 8
 
@@ -362,6 +370,7 @@ async def diagnose_agent_node(state: AgentState) -> dict[str, Any]:
 
     # 收集 artifacts + 检测工单草稿（HITL）
     artifacts = list(state.get("artifacts", []))
+    evidence = list(state.get("evidence", []))
     pending_action = state.get("pending_action")
 
     for msg in new_messages:
@@ -372,6 +381,8 @@ async def diagnose_agent_node(state: AgentState) -> dict[str, Any]:
             data = json.loads(content)
         except (json.JSONDecodeError, TypeError):
             continue
+
+        evidence.extend(extract_evidence(data))
 
         if "component_type" in data:
             artifacts.append(data)
@@ -407,6 +418,7 @@ async def diagnose_agent_node(state: AgentState) -> dict[str, Any]:
         "current_agent": "end",
         "hop_count": hop_count,
         "artifacts": artifacts,
+        "evidence": evidence,
         "pending_action": pending_action,
         "context_summary": new_summary,  # ★ 更新滚动摘要
     }

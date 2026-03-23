@@ -19,6 +19,8 @@ export interface ThinkingStep {
   id: string
   agent: string
   message: string
+  /** LLM 流式推理内容（逐 token 追加） */
+  streamContent?: string
 }
 
 export interface ChatMessage {
@@ -406,6 +408,9 @@ export const useChatStore = defineStore('chat', () => {
 
     // 会话已使用真实 UUID，无需等待预创建，直接进入流式请求
     let textStarted = false
+    // 追踪当前正在流式累积的步骤索引（确保 token 追加到同一步骤）
+    let _streamStepIdx = -1
+    let _streamStepAgent = ''
 
     /**
      * 查找 AI 气泡：
@@ -425,10 +430,32 @@ export const useChatStore = defineStore('chat', () => {
       await sendChatMessage(userText, originSessionId, {
         onThinking(e) {
           const label = agentLabelMap[e.agent] ?? e.agent
-          _agentStatusBySession.value[originSessionId] = { name: e.agent, label, status: 'thinking', message: e.message }
           const m = findAiMsg()
-          if (m) {
-            if (!m.thinkingSteps) m.thinkingSteps = []
+          if (!m) return
+          if (!m.thinkingSteps) m.thinkingSteps = []
+
+          // 流式推理 token：累积到同一个步骤
+          if (e.content) {
+            _agentStatusBySession.value[originSessionId] = { name: e.agent, label, status: 'thinking', message: '正在推理...' }
+            if (_streamStepIdx >= 0 && _streamStepAgent === e.agent && _streamStepIdx < m.thinkingSteps.length) {
+              // 追加到已有流式步骤
+              m.thinkingSteps[_streamStepIdx].streamContent = (m.thinkingSteps[_streamStepIdx].streamContent ?? '') + e.content
+            } else {
+              // 新建流式步骤
+              _streamStepIdx = m.thinkingSteps.length
+              _streamStepAgent = e.agent
+              m.thinkingSteps.push({
+                id: crypto.randomUUID(),
+                agent: e.agent,
+                message: '正在推理...',
+                streamContent: e.content,
+              })
+            }
+          } else {
+            // 普通状态标签（工具调用等）→ 中断流式累积
+            _streamStepIdx = -1
+            _streamStepAgent = ''
+            _agentStatusBySession.value[originSessionId] = { name: e.agent, label, status: 'thinking', message: e.message }
             m.thinkingSteps.push({ id: crypto.randomUUID(), agent: e.agent, message: e.message })
           }
         },
@@ -528,6 +555,8 @@ export const useChatStore = defineStore('chat', () => {
     }, originSessionId)
 
     let textStarted = false
+    let _regenStreamIdx = -1
+    let _regenStreamAgent = ''
 
     function findAiMsg(): ChatMessage | undefined {
       if (currentSessionId.value === originSessionId) {
@@ -541,10 +570,28 @@ export const useChatStore = defineStore('chat', () => {
       await sendChatMessage(userText, originSessionId, {
         onThinking(e) {
           const label = agentLabelMap[e.agent] ?? e.agent
-          _agentStatusBySession.value[originSessionId] = { name: e.agent, label, status: 'thinking', message: e.message }
           const m = findAiMsg()
-          if (m) {
-            if (!m.thinkingSteps) m.thinkingSteps = []
+          if (!m) return
+          if (!m.thinkingSteps) m.thinkingSteps = []
+
+          if (e.content) {
+            _agentStatusBySession.value[originSessionId] = { name: e.agent, label, status: 'thinking', message: '正在推理...' }
+            if (_regenStreamIdx >= 0 && _regenStreamAgent === e.agent && _regenStreamIdx < m.thinkingSteps.length) {
+              m.thinkingSteps[_regenStreamIdx].streamContent = (m.thinkingSteps[_regenStreamIdx].streamContent ?? '') + e.content
+            } else {
+              _regenStreamIdx = m.thinkingSteps.length
+              _regenStreamAgent = e.agent
+              m.thinkingSteps.push({
+                id: crypto.randomUUID(),
+                agent: e.agent,
+                message: '正在推理...',
+                streamContent: e.content,
+              })
+            }
+          } else {
+            _regenStreamIdx = -1
+            _regenStreamAgent = ''
+            _agentStatusBySession.value[originSessionId] = { name: e.agent, label, status: 'thinking', message: e.message }
             m.thinkingSteps.push({ id: crypto.randomUUID(), agent: e.agent, message: e.message })
           }
         },

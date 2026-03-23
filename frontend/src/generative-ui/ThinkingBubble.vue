@@ -26,20 +26,30 @@
 
     <!-- 折叠内容区 -->
     <Transition name="th-slide">
-      <div v-if="!collapsed" class="th-body">
-        <div
-          v-for="step in steps"
-          :key="step.id"
-          class="th-step"
-          :class="isToolStep(step.agent) ? 'is-tool' : 'is-think'"
-        >
-          <span class="th-step-icon">{{ isToolStep(step.agent) ? '⚡' : '💭' }}</span>
-          <span class="th-step-label">{{ agentLabel(step.agent) }}</span>
-          <span class="th-step-msg">{{ step.message }}</span>
-        </div>
+      <div v-if="!collapsed" class="th-body" ref="bodyEl">
+        <template v-for="step in steps" :key="step.id">
+          <!-- 普通状态步骤（工具调用等） -->
+          <div v-if="step.streamContent == null" class="th-step" :class="isToolStep(step.agent) ? 'is-tool' : 'is-think'">
+            <span class="th-step-icon">{{ isToolStep(step.agent) ? '⚡' : '💭' }}</span>
+            <span class="th-step-label">{{ agentLabel(step.agent) }}</span>
+            <span class="th-step-msg">{{ step.message }}</span>
+          </div>
 
-        <!-- 思考中加载 -->
-        <div v-if="!isFinished" class="th-step is-loading">
+          <!-- 流式推理内容 -->
+          <div v-else class="th-stream-block">
+            <div class="th-stream-header">
+              <span class="th-step-icon">💭</span>
+              <span class="th-step-label">{{ agentLabel(step.agent) }}</span>
+            </div>
+            <div class="th-stream-content">
+              <span>{{ step.streamContent }}</span>
+              <span v-if="!isFinished" class="th-stream-cursor"></span>
+            </div>
+          </div>
+        </template>
+
+        <!-- 加载中 -->
+        <div v-if="!isFinished && steps.length === 0" class="th-step is-loading">
           <span class="th-step-icon">💭</span>
           <span class="th-step-label thinking-anim">推理中</span>
           <span class="th-loading-dots">
@@ -52,17 +62,18 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import type { ThinkingStep } from '@/stores/chatStore'
 
 const props = defineProps<{
   steps: ThinkingStep[]
   isFinished: boolean
-  duration?: number        // 秒，来自 thinkingDuration
-  startTime?: number       // performance.now()，来自 thinkingStartTime
+  duration?: number
+  startTime?: number
 }>()
 
-const collapsed = ref(true)    // 默认折叠
+const collapsed = ref(true)
+const bodyEl = ref<HTMLElement>()
 const elapsedSeconds = ref(0)
 let timer: ReturnType<typeof setInterval> | null = null
 
@@ -79,7 +90,33 @@ onUnmounted(() => {
   if (timer) clearInterval(timer)
 })
 
-// 完成时的显示时长
+// 思考完成时停止计时
+watch(() => props.isFinished, (finished) => {
+  if (finished && timer) {
+    clearInterval(timer)
+    timer = null
+  }
+})
+
+// 有流式内容时自动展开
+watch(() => props.steps.length, () => {
+  const hasStream = props.steps.some(s => s.streamContent != null)
+  if (hasStream && collapsed.value) {
+    collapsed.value = false
+  }
+})
+
+// 自动滚动到底部
+watch(() => {
+  const last = props.steps[props.steps.length - 1]
+  return last?.streamContent?.length ?? 0
+}, async () => {
+  if (!props.isFinished && bodyEl.value) {
+    await nextTick()
+    bodyEl.value.scrollTop = bodyEl.value.scrollHeight
+  }
+})
+
 const displayDuration = computed(() => {
   const secs = props.duration ?? elapsedSeconds.value
   if (secs < 1) return '<1s'
@@ -188,12 +225,12 @@ function agentLabel(agent: string): string {
   margin-left: 8px;
   padding-left: 12px;
   border-left: 1.5px solid rgba(128, 128, 128, 0.2);
-  max-height: 300px;
+  max-height: 400px;
   overflow-y: auto;
   scrollbar-width: thin;
 }
 
-/* ─── 每一步 ─── */
+/* ─── 普通步骤 ─── */
 .th-step {
   display: flex;
   align-items: flex-start;
@@ -234,6 +271,50 @@ function agentLabel(agent: string): string {
   color: var(--text-primary, #ccc);
 }
 
+/* ─── 流式推理内容块 ─── */
+.th-stream-block {
+  padding: 4px 6px;
+  margin: 2px 0;
+}
+
+.th-stream-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.th-stream-content {
+  color: var(--text-secondary, #aaa);
+  font-size: 12.5px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+  padding: 6px 8px;
+  background: rgba(128, 128, 128, 0.04);
+  border-radius: 6px;
+  max-height: 240px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+/* 流式打字光标 */
+.th-stream-cursor {
+  display: inline-block;
+  width: 2px;
+  height: 14px;
+  background: var(--thinking-color, #4ade80);
+  vertical-align: middle;
+  border-radius: 1px;
+  margin-left: 1px;
+  animation: blink-cursor 0.8s infinite;
+}
+
+@keyframes blink-cursor {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
 /* 加载中 */
 .thinking-anim {
   color: var(--thinking-color, #4ade80);
@@ -267,10 +348,10 @@ function agentLabel(agent: string): string {
 
 @keyframes slide-down {
   from { max-height: 0; opacity: 0; }
-  to   { max-height: 300px; opacity: 1; }
+  to   { max-height: 400px; opacity: 1; }
 }
 @keyframes slide-up {
-  from { max-height: 300px; opacity: 1; }
+  from { max-height: 400px; opacity: 1; }
   to   { max-height: 0; opacity: 0; }
 }
 </style>

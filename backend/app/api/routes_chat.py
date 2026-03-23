@@ -411,6 +411,31 @@ async def _stream_graph(
                 if agent_name:
                     yield _thinking_event(agent_name, "正在推理...", hop_count=0)
 
+            elif kind == "on_chat_model_stream":
+                # 流式推送 LLM 推理 token
+                # Router 输出结构化 JSON，跳过；ReAct 内部节点名为 "agent"
+                stream_agent = event.get("metadata", {}).get("langgraph_node", "")
+                if stream_agent and stream_agent != "router":
+                    chunk = data.get("chunk")
+                    if chunk:
+                        token = ""
+                        if hasattr(chunk, "content"):
+                            c = chunk.content
+                            if isinstance(c, str):
+                                token = c
+                            elif isinstance(c, list):
+                                token = "".join(
+                                    part.get("text", "") for part in c if isinstance(part, dict)
+                                )
+                        if token:
+                            yield _sse({
+                                "type": "thinking",
+                                "agent": stream_agent,
+                                "message": "",
+                                "content": token,
+                                "hop_count": 0,
+                            })
+
             elif kind == "on_chat_model_end":
                 agent_name = event.get("metadata", {}).get("langgraph_node", "")
                 elapsed = time.time() - _t.pop(f"llm_{agent_name}", time.time())

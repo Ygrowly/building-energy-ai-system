@@ -12,6 +12,8 @@ export interface ThinkingEvent {
   agent: string
   message: string
   hop_count: number
+  /** LLM 流式推理 token（存在时为推理内容片段，追加到当前步骤） */
+  content?: string
 }
 
 export interface TextEvent {

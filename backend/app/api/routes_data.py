@@ -5,6 +5,8 @@
   GET /api/buildings                       — 获取所有建筑列表
   GET /api/buildings/{building_type}/status — 获取建筑最新设备状态（按 building_type）
   GET /api/buildings/{building_type}/energy — 获取建筑每日能耗趋势（按 building_type）
+  GET /api/buildings/{building_type}/load-profile — 按小时/星期聚合负荷曲线
+  GET /api/buildings/{building_type}/peak-valley-stats — 峰谷与夜间高耗统计
   GET /api/overview                         — 获取 Dashboard KPI 汇总（全局总览）
   GET /api/anomalies/sankey                  — 异常根因桑基图聚合数据
   GET /api/tools                            — 列出所有可用 MCP 工具（调试用）
@@ -13,19 +15,22 @@ from __future__ import annotations
 
 import logging
 from datetime import date, datetime, timedelta, timezone
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import AnomalyEvent, Building, DailyEnergySummary, Device, EnergyData
+from app.core.cache import cache_bucket, get_or_compute_json
+from app.core.config import get_settings
+from app.db.models import Building, DailyEnergySummary, Device, EnergyData
 from app.db.session import get_db_session
 from app.mcp.server import list_tools
-from app.services.gb_simulator import calculate_rated_values
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["数据"])
+settings = get_settings()
 
 _BUILDING_ICONS = {
     "Education": "🏫",
@@ -47,40 +52,49 @@ _BUILDING_NAMES = {
 @router.get("/buildings", summary="获取所有建筑列表")
 async def get_buildings(db: AsyncSession = Depends(get_db_session)):
     """返回 buildings 表中所有建筑的基本信息（含 timezone 和关联设备列表）。"""
-    try:
-        result = await db.execute(
-            select(Building).order_by(Building.primary_space_usage)
-        )
-        buildings = result.scalars().all()
+    cache_key = "buildings:list"
+    ttl_seconds = settings.CACHE_BUILDINGS_TTL_SECONDS
 
-        # 一次查出所有设备（避免 N+1）
-        all_bids = [b.building_id for b in buildings]
-        dev_map: dict[str, list[dict]] = {bid: [] for bid in all_bids}
-        if all_bids:
-            dev_result = await db.execute(
-                select(Device.device_id, Device.building_id, Device.device_type)
-                .where(Device.building_id.in_(all_bids))
-                .order_by(Device.building_id, Device.device_type)
+    async def _compute() -> list[dict]:
+        try:
+            result = await db.execute(
+                select(Building).order_by(Building.primary_space_usage)
             )
-            for drow in dev_result.fetchall():
-                dev_map[drow[1]].append({"device_id": drow[0], "device_type": drow[2]})
+            buildings = result.scalars().all()
 
-        return [
-            {
-                "building_id": b.building_id,
-                "building_type": b.primary_space_usage,
-                "display_name": _BUILDING_NAMES.get(
-                    b.primary_space_usage or "", b.primary_space_usage or b.building_id
-                ),
-                "icon": _BUILDING_ICONS.get(b.primary_space_usage or "", "🏠"),
-                "sqm": b.sqm,
-                "devices": dev_map.get(b.building_id, []),
-            }
-            for b in buildings
-        ]
-    except Exception as exc:
-        logger.error("查询建筑列表失败: %s", exc)
-        raise HTTPException(status_code=500, detail=f"数据库查询失败: {exc}")
+            # 一次查出所有设备（避免 N+1）
+            all_bids = [b.building_id for b in buildings]
+            dev_map: dict[str, list[dict]] = {bid: [] for bid in all_bids}
+            if all_bids:
+                dev_result = await db.execute(
+                    select(Device.device_id, Device.building_id, Device.device_type)
+                    .where(Device.building_id.in_(all_bids))
+                    .order_by(Device.building_id, Device.device_type)
+                )
+                for drow in dev_result.fetchall():
+                    dev_map[drow[1]].append(
+                        {"device_id": drow[0], "device_type": drow[2]}
+                    )
+
+            return [
+                {
+                    "building_id": b.building_id,
+                    "building_type": b.primary_space_usage,
+                    "display_name": _BUILDING_NAMES.get(
+                        b.primary_space_usage or "",
+                        b.primary_space_usage or b.building_id,
+                    ),
+                    "icon": _BUILDING_ICONS.get(b.primary_space_usage or "", "🏠"),
+                    "sqm": b.sqm,
+                    "devices": dev_map.get(b.building_id, []),
+                }
+                for b in buildings
+            ]
+        except Exception as exc:
+            logger.error("查询建筑列表失败: %s", exc)
+            raise HTTPException(status_code=500, detail=f"数据库查询失败: {exc}")
+
+    return await get_or_compute_json(cache_key, ttl_seconds, _compute)
 
 
 # ---------------------------------------------------------------------------
@@ -153,73 +167,90 @@ async def get_building_energy_trend(
     if start_date > end_date:
         raise HTTPException(status_code=400, detail="start_date 不能晚于 end_date")
 
-    bld_result = await db.execute(
-        select(Building.building_id).where(Building.primary_space_usage == building_type)
+    cache_key = (
+        f"building_energy:{building_type}:"
+        f"{start_date.isoformat()}:{end_date.isoformat()}:"
+        f"{int(include_water)}"
     )
-    building_id = bld_result.scalar_one_or_none()
-    if not building_id:
-        raise HTTPException(status_code=404, detail=f"建筑类型 {building_type} 不存在")
+    ttl_seconds = settings.CACHE_BUILDING_ENERGY_TREND_TTL_SECONDS
 
-    result = await db.execute(
-        select(DailyEnergySummary)
-        .where(
-            DailyEnergySummary.building_id == building_id,
-            DailyEnergySummary.day >= start_date,
-            DailyEnergySummary.day <= end_date,
+    async def _compute() -> dict[str, Any]:
+        bld_result = await db.execute(
+            select(Building.building_id).where(
+                Building.primary_space_usage == building_type
+            )
         )
-        .order_by(DailyEnergySummary.day)
-    )
-    rows = result.scalars().all()
+        building_id = bld_result.scalar_one_or_none()
+        if not building_id:
+            raise HTTPException(status_code=404, detail=f"建筑类型 {building_type} 不存在")
 
-    water_by_day: dict[str, float] = {}
-    if include_water:
-        water_result = await db.execute(
-            text("""
-                SELECT date_trunc('day', timestamp)::date AS day,
-                       SUM(water_m3) AS total_water_m3
-                FROM energy_data
-                WHERE building_id = :bid
-                  AND timestamp >= :sd AND timestamp <= :ed
-                GROUP BY day ORDER BY day
-            """),
-            {"bid": building_id, "sd": start_date, "ed": end_date},
+        result = await db.execute(
+            select(DailyEnergySummary)
+            .where(
+                DailyEnergySummary.building_id == building_id,
+                DailyEnergySummary.day >= start_date,
+                DailyEnergySummary.day <= end_date,
+            )
+            .order_by(DailyEnergySummary.day)
         )
-        for wr in water_result.fetchall():
-            water_by_day[wr[0].isoformat() if hasattr(wr[0], 'isoformat') else str(wr[0])] = float(wr[1] or 0)
+        rows = result.scalars().all()
 
-    records = []
-    for r in rows:
-        day_str = r.day.isoformat() if r.day else None
-        rec = {
-            "day": day_str,
-            "total_electricity_kwh": r.total_electricity_kwh,
-            "avg_ambient_temp": r.avg_ambient_temp,
-            "total_water_m3": r.total_water_m3,
+        water_by_day: dict[str, float] = {}
+        if include_water:
+            water_result = await db.execute(
+                text("""
+                    SELECT date_trunc('day', timestamp)::date AS day,
+                           SUM(water_m3) AS total_water_m3
+                    FROM energy_data
+                    WHERE building_id = :bid
+                      AND timestamp >= :sd AND timestamp <= :ed
+                    GROUP BY day ORDER BY day
+                """),
+                {"bid": building_id, "sd": start_date, "ed": end_date},
+            )
+            for wr in water_result.fetchall():
+                water_by_day[
+                    wr[0].isoformat() if hasattr(wr[0], 'isoformat') else str(wr[0])
+                ] = float(wr[1] or 0)
+
+        records = []
+        for r in rows:
+            day_str = r.day.isoformat() if r.day else None
+            rec = {
+                "day": day_str,
+                "total_electricity_kwh": r.total_electricity_kwh,
+                "avg_ambient_temp": r.avg_ambient_temp,
+                "total_water_m3": r.total_water_m3,
+            }
+            if include_water and day_str:
+                day_key = day_str[:10] if day_str else ""
+                rec["total_water_m3"] = water_by_day.get(
+                    day_key, r.total_water_m3 or 0.0
+                )
+            records.append(rec)
+
+        return {
+            "building_type": building_type,
+            "building_id": building_id,
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat(),
+            "source": "daily_energy_summary (materialized view)",
+            "records": records,
+            "count": len(records),
         }
-        if include_water and day_str:
-            day_key = day_str[:10] if day_str else ""
-            rec["total_water_m3"] = water_by_day.get(day_key, r.total_water_m3 or 0.0)
-        records.append(rec)
 
-    return {
-        "building_type": building_type,
-        "building_id": building_id,
-        "start_date": start_date.isoformat(),
-        "end_date": end_date.isoformat(),
-        "source": "daily_energy_summary (materialized view)",
-        "records": records,
-        "count": len(records),
-    }
+    return await get_or_compute_json(cache_key, ttl_seconds, _compute)
 
 
 # ---------------------------------------------------------------------------
 # 实际 vs 国标期望逐小时对比（供前端"实际 vs 期望"折线图使用）
 # ---------------------------------------------------------------------------
 _METRIC_COLS = {
-    "electricity": ("electricity_kwh", "kWh"),
-    "water":       ("water_m3",        "m³"),
-    "hac_energy":  ("hac_energy",      "kWh"),
+    "electricity": ("electricity_kwh",  "electricity_kwh_expected",  "kWh"),
+    "water":       ("water_m3",         "water_m3_expected",         "L"),
+    "hac_energy":  ("hac_energy",       "hac_energy_expected",       "kWh"),
 }
+
 @router.get(
     "/buildings/{building_type}/rated-vs-actual",
     summary="获取建筑逐小时实际 vs 国标期望值对比",
@@ -231,130 +262,389 @@ async def get_rated_vs_actual(
     metric: str      = Query("electricity", description="指标：electricity | water | hac_energy"),
     db: AsyncSession = Depends(get_db_session),
 ):
-    """
-    逐小时返回指定建筑的"实际值 vs 国标 GB 期望值"对比数据。
-
-    期望值由 gb_simulator 实时计算（基于 GB/T 51161、GB 50034、GB 50189、
-    GB 50736、GB 50015 五项国标），不依赖外部存储。
-
-    返回字段：
-      timestamp        — ISO 8601 时间戳（UTC）
-      actual           — 实际值（来自 energy_data 表）
-      rated            — 国标期望值
-      deviation_pct    — 偏差百分比（正数=超标，负数=低于期望）
-      hvac_mode        — 当前 HVAC 工况（Cooling / Heating / Ventilation）
-      schedule_factor  — 当前小时建筑负荷率 S
-      is_anomaly       — 是否异常（|偏差| > 15% 且满足绝对值阈值）
-    """
-    if start_date > end_date:
-        raise HTTPException(status_code=400, detail="start_date 不能晚于 end_date")
-    if (end_date - start_date).days > 7:
-        raise HTTPException(status_code=400, detail="查询跨度不能超过 7 天（168 小时）")
     if metric not in _METRIC_COLS:
         raise HTTPException(status_code=400, detail=f"metric 只能为：{list(_METRIC_COLS.keys())}")
+    actual_col, expected_col, unit = _METRIC_COLS[metric]
 
-    col_name, unit = _METRIC_COLS[metric]
-    abs_thresholds = {"electricity": None, "water": 1.0, "hac_energy": 20.0}
-    rel_threshold  = {"electricity": 0.15, "water": 0.20, "hac_energy": 0.20}
-    abs_thr = abs_thresholds[metric]
-    rel_thr = rel_threshold[metric]
-
-    # 查建筑元数据
     bld_result = await db.execute(
-        select(Building.building_id, Building.sqm, Building.primary_space_usage)
-        .where(Building.primary_space_usage == building_type)
+        select(Building.building_id).where(Building.primary_space_usage == building_type)
     )
-    bld_row = bld_result.fetchone()
-    if not bld_row:
+    building_id = bld_result.scalar_one_or_none()
+    if not building_id:
         raise HTTPException(status_code=404, detail=f"建筑类型 {building_type} 不存在")
-    building_id, sqm, usage = bld_row
-    sqm = sqm or 1000.0
 
-    # 查时段内所有小时记录
-    result = await db.execute(
-        select(
-            EnergyData.timestamp,
-            EnergyData.electricity_kwh,
-            EnergyData.water_m3,
-            EnergyData.hac_energy,
-            EnergyData.sim_supply_temp_c,
-            EnergyData.sim_return_temp_c,
-            EnergyData.air_temp_c,
-            EnergyData.dew_temp_c,
-        )
-        .where(EnergyData.building_id == building_id)
-        .where(EnergyData.timestamp >= start_date)
-        .where(EnergyData.timestamp < end_date + timedelta(days=1))
-        .order_by(EnergyData.timestamp.asc())
-    )
-    rows = result.fetchall()
+    start_dt = datetime(start_date.year, start_date.month, start_date.day, tzinfo=timezone.utc)
+    end_dt   = datetime(end_date.year,   end_date.month,   end_date.day,   tzinfo=timezone.utc) + timedelta(days=1)
+
+    rows_result = await db.execute(text(f"""
+        SELECT
+            e.timestamp,
+            e.{actual_col}   AS actual_val,
+            x.{expected_col} AS rated_val,
+            x.hvac_mode,
+            x.schedule_factor,
+            f.flag_water OR f.flag_electricity OR f.flag_hvac_energy
+                OR f.flag_supply_deviation OR f.flag_return_deviation AS is_anomaly,
+            f.anomaly_phase,
+            f.hvac_diagnosis
+        FROM energy_data e
+        LEFT JOIN kpi_expected_hourly x
+            ON x.building_id = e.building_id AND x.timestamp = e.timestamp
+        LEFT JOIN kpi_anomaly_flags f
+            ON f.building_id = e.building_id AND f.timestamp = e.timestamp
+        WHERE e.building_id = :bid
+          AND e.timestamp >= :t0
+          AND e.timestamp < :t1
+        ORDER BY e.timestamp ASC
+    """), {"bid": building_id, "t0": start_dt, "t1": end_dt})
+    rows = rows_result.fetchall()
+
+    if not rows:
+        return {
+            "building_type": building_type,
+            "building_id": building_id,
+            "metric": metric,
+            "unit": unit,
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat(),
+            "records": [],
+            "summary": {"total_hours": 0, "anomaly_hours": 0, "anomaly_rate_pct": 0.0},
+            "module_status": "no_data",
+            "message": "查询范围内暂无数据。",
+        }
+
+    # Check if expected values are populated
+    has_expected = any(r[2] is not None for r in rows)
 
     records = []
     anomaly_count = 0
-    eps = 1e-6
-
-    for ts, elec, water, hac, supply, ret, air_t, dew_t in rows:
-        try:
-            rated = calculate_rated_values(
-                sqm=sqm,
-                primary_space_usage=usage or "Office",
-                hour=ts.hour,
-                dayofweek=ts.isoweekday(),
-                air_temp=air_t or 20.0,
-                dew_temp=dew_t or 10.0,
-            )
-        except Exception:
-            continue
-
-        actual_val: float | None = {
-            "electricity": elec,
-            "water":       water,
-            "hac_energy":  hac,
-        }[metric]
-        rated_val: float = {
-            "electricity": rated.rated_electricity_kwh,
-            "water":       rated.rated_water_m3,
-            "hac_energy":  rated.rated_hac_energy,
-        }[metric]
-
+    for row in rows:
+        ts, actual, rated, hvac_mode, sched_f, is_anom, phase, hvac_diag = row
+        ts_str = ts.isoformat() if ts else None
         dev_pct: float | None = None
-        is_anomaly = False
-        if actual_val is not None and rated_val > eps:
-            delta = actual_val - rated_val
-            dev_pct = round(delta / rated_val * 100, 2)
-            # 异常判定：满足相对阈值 AND 绝对阈值（电耗只用相对阈值）
-            if abs_thr is None:
-                is_anomaly = dev_pct > rel_thr * 100
-            else:
-                is_anomaly = dev_pct > rel_thr * 100 and delta > abs_thr
-
-        if is_anomaly:
+        if actual is not None and rated is not None and rated > 1e-9:
+            dev_pct = round((actual - rated) / rated * 100, 2)
+        if is_anom:
             anomaly_count += 1
-
         records.append({
-            "timestamp":       ts_utc.isoformat(),
-            "actual":          round(actual_val, 4) if actual_val is not None else None,
-            "rated":           round(rated_val, 4),
-            "deviation_pct":   dev_pct,
-            "hvac_mode":       rated.hvac_mode,
-            "schedule_factor": rated.schedule_factor,
-            "is_anomaly":      is_anomaly,
+            "timestamp": ts_str,
+            "actual": round(float(actual), 4) if actual is not None else None,
+            "rated": round(float(rated), 4) if rated is not None else None,
+            "deviation_pct": dev_pct,
+            "hvac_mode": hvac_mode,
+            "schedule_factor": round(float(sched_f), 4) if sched_f is not None else None,
+            "is_anomaly": bool(is_anom) if is_anom is not None else False,
+            "anomaly_phase": phase,
+            "hvac_diagnosis": hvac_diag,
+            "expected_source": "notebook_baseline",
+        })
+
+    total = len(records)
+    anom_rate = round(anomaly_count / total * 100, 2) if total > 0 else 0.0
+
+    return {
+        "building_type": building_type,
+        "building_id": building_id,
+        "metric": metric,
+        "unit": unit,
+        "start_date": start_date.isoformat(),
+        "end_date": end_date.isoformat(),
+        "records": records,
+        "summary": {
+            "total_hours": total,
+            "anomaly_hours": anomaly_count,
+            "anomaly_rate_pct": anom_rate,
+        },
+        "module_status": "ok" if has_expected else "no_expected_data",
+        "message": None if has_expected else "kpi_expected_hourly 暂无数据，请先调用 /api/admin/rebuild-all",
+    }
+
+
+# ---------------------------------------------------------------------------
+# 负荷曲线：按小时 / 按星期聚合（首页节律热力图、工作时段图等）
+# ---------------------------------------------------------------------------
+_LOAD_PROFILE_METRICS: dict[str, str] = {
+    "electricity": "electricity_kwh",
+    "water": "water_m3",
+    "hac_energy": "hac_energy",
+    "air_temp": "air_temp_c",
+    "humidity": "humidity_rh_pct",
+}
+
+_PEAK_VALLEY_METRICS: frozenset[str] = frozenset({
+    "electricity",
+    "water",
+    "hac_energy",
+})
+
+_WD_LABELS: dict[int, str] = {
+    1: "周一",
+    2: "周二",
+    3: "周三",
+    4: "周四",
+    5: "周五",
+    6: "周六",
+    7: "周日",
+}
+
+
+@router.get(
+    "/buildings/{building_type}/load-profile",
+    summary="按小时与星期聚合负荷曲线",
+)
+async def get_load_profile(
+    building_type: str,
+    metric: str = Query(
+        "electricity",
+        description="指标：electricity | water | hac_energy",
+    ),
+    days: int = Query(14, ge=1, le=90, description="回溯天数，以库内最新时间为终点"),
+    db: AsyncSession = Depends(get_db_session),
+):
+    """从 energy_data 聚合小时均值与星期均值，供首页节律类图表使用。"""
+    if metric not in _LOAD_PROFILE_METRICS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"metric 只能为：{list(_LOAD_PROFILE_METRICS.keys())}",
+        )
+
+    col = _LOAD_PROFILE_METRICS[metric]
+
+    bld_result = await db.execute(
+        select(Building.building_id).where(
+            Building.primary_space_usage == building_type
+        )
+    )
+    building_id = bld_result.scalar_one_or_none()
+    if not building_id:
+        raise HTTPException(status_code=404, detail=f"建筑类型 {building_type} 不存在")
+
+    max_row = await db.execute(
+        select(func.max(EnergyData.timestamp)).where(
+            EnergyData.building_id == building_id
+        )
+    )
+    max_ts = max_row.scalar()
+    if max_ts is None:
+        return {
+            "building_type": building_type,
+            "building_id": building_id,
+            "metric": metric,
+            "days": days,
+            "window_end": None,
+            "window_start": None,
+            "hourly_profile": [],
+            "weekday_profile": [],
+        }
+
+    if max_ts.tzinfo is None:
+        end_dt = max_ts.replace(tzinfo=timezone.utc)
+    else:
+        end_dt = max_ts.astimezone(timezone.utc)
+    start_dt = end_dt - timedelta(days=days)
+
+    hourly_sql = text(
+        f"""
+        SELECT EXTRACT(HOUR FROM e.timestamp)::int AS hr,
+               AVG(e.{col})::float AS avg_val,
+               COUNT(*)::int AS n
+          FROM energy_data e
+         WHERE e.building_id = :bid
+           AND e.timestamp >= :t0
+           AND e.timestamp <= :t1
+         GROUP BY hr
+         ORDER BY hr
+        """
+    )
+    h_result = await db.execute(
+        hourly_sql, {"bid": building_id, "t0": start_dt, "t1": end_dt}
+    )
+    hourly_map: dict[int, tuple[float, int]] = {}
+    for hr, avg_val, n in h_result.fetchall():
+        if hr is None:
+            continue
+        hourly_map[int(hr)] = (float(avg_val or 0), int(n or 0))
+
+    hourly_profile = []
+    for h in range(24):
+        av, n = hourly_map.get(h, (0.0, 0))
+        hourly_profile.append({
+            "hour": h,
+            "avg_value": round(av, 4),
+            "sample_count": n,
+            "anomaly_count": 0,
+        })
+
+    wd_sql = text(
+        f"""
+        SELECT EXTRACT(ISODOW FROM e.timestamp)::int AS wd,
+               AVG(e.{col})::float AS avg_val,
+               COUNT(*)::int AS n
+          FROM energy_data e
+         WHERE e.building_id = :bid
+           AND e.timestamp >= :t0
+           AND e.timestamp <= :t1
+         GROUP BY wd
+         ORDER BY wd
+        """
+    )
+    wd_result = await db.execute(
+        wd_sql, {"bid": building_id, "t0": start_dt, "t1": end_dt}
+    )
+    wd_map: dict[int, tuple[float, int]] = {}
+    for wd, avg_val, n in wd_result.fetchall():
+        if wd is None:
+            continue
+        wd_map[int(wd)] = (float(avg_val or 0), int(n or 0))
+
+    weekday_profile = []
+    for wd in range(1, 8):
+        av, n = wd_map.get(wd, (0.0, 0))
+        weekday_profile.append({
+            "weekday": wd,
+            "label": _WD_LABELS.get(wd, str(wd)),
+            "avg_value": round(av, 4),
+            "sample_count": n,
         })
 
     return {
-        "building_type":   building_type,
-        "metric":          metric,
-        "unit":            unit,
-        "primary_space_usage": usage,
-        "sqm":             sqm,
-        "start_date":      start_date.isoformat(),
-        "end_date":        end_date.isoformat(),
-        "records":         records,
-        "summary": {
-            "total_hours":      len(records),
-            "anomaly_hours":    anomaly_count,
-            "anomaly_rate_pct": round(anomaly_count / len(records) * 100, 1) if records else 0,
-        },
+        "building_type": building_type,
+        "building_id": building_id,
+        "metric": metric,
+        "days": days,
+        "window_end": end_dt.isoformat(),
+        "window_start": start_dt.isoformat(),
+        "hourly_profile": hourly_profile,
+        "weekday_profile": weekday_profile,
+    }
+
+
+# ---------------------------------------------------------------------------
+# 峰谷统计：按日汇总后的峰值、谷值、峰谷比、夜间异常小时数
+# ---------------------------------------------------------------------------
+@router.get(
+    "/buildings/{building_type}/peak-valley-stats",
+    summary="峰谷与夜间高耗统计",
+)
+async def get_peak_valley_stats(
+    building_type: str,
+    metric: str = Query("electricity", description="指标：electricity | water | hac_energy"),
+    days: int = Query(7, ge=1, le=90),
+    night_threshold: float = Query(
+        50.0,
+        description="夜间单小时判定阈值（电 kWh；水/暖通按同列数值）",
+    ),
+    db: AsyncSession = Depends(get_db_session),
+):
+    if metric not in _PEAK_VALLEY_METRICS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"峰谷统计 metric 只能为：{sorted(_PEAK_VALLEY_METRICS)}",
+        )
+    col = _LOAD_PROFILE_METRICS[metric]
+
+    bld_result = await db.execute(
+        select(Building.building_id).where(
+            Building.primary_space_usage == building_type
+        )
+    )
+    building_id = bld_result.scalar_one_or_none()
+    if not building_id:
+        raise HTTPException(status_code=404, detail=f"建筑类型 {building_type} 不存在")
+
+    max_row = await db.execute(
+        select(func.max(EnergyData.timestamp)).where(
+            EnergyData.building_id == building_id
+        )
+    )
+    max_ts = max_row.scalar()
+    if max_ts is None:
+        return {
+            "building_type": building_type,
+            "building_id": building_id,
+            "metric": metric,
+            "days": days,
+            "peak_value": None,
+            "valley_value": None,
+            "avg_value": None,
+            "peak_valley_ratio": None,
+            "night_abnormal_hours": 0,
+            "daily_totals": [],
+        }
+
+    if max_ts.tzinfo is None:
+        end_dt = max_ts.replace(tzinfo=timezone.utc)
+    else:
+        end_dt = max_ts.astimezone(timezone.utc)
+    start_dt = end_dt - timedelta(days=days)
+
+    daily_sql = text(
+        f"""
+        SELECT date_trunc('day', e.timestamp AT TIME ZONE 'UTC')::date AS d,
+               SUM(e.{col})::float AS total
+          FROM energy_data e
+         WHERE e.building_id = :bid
+           AND e.timestamp >= :t0
+           AND e.timestamp <= :t1
+         GROUP BY d
+         ORDER BY d
+        """
+    )
+    d_result = await db.execute(
+        daily_sql, {"bid": building_id, "t0": start_dt, "t1": end_dt}
+    )
+    daily_rows = d_result.fetchall()
+    daily_totals: list[dict[str, Any]] = []
+    totals: list[float] = []
+    for d, total in daily_rows:
+        t = float(total or 0)
+        totals.append(t)
+        day_str = d.isoformat() if hasattr(d, "isoformat") else str(d)
+        daily_totals.append({"day": day_str, "total": round(t, 4)})
+
+    if not totals:
+        peak = valley = avg = None
+        ratio = None
+    else:
+        peak = max(totals)
+        valley = min(totals)
+        avg = sum(totals) / len(totals)
+        ratio = round(peak / valley, 3) if valley and valley > 1e-9 else None
+        peak = round(peak, 4)
+        valley = round(valley, 4)
+        avg = round(avg, 4)
+
+    night_sql = text(
+        f"""
+        SELECT COUNT(*)::int
+          FROM energy_data e
+         WHERE e.building_id = :bid
+           AND e.timestamp >= :t0
+           AND e.timestamp <= :t1
+           AND (MOD((EXTRACT(HOUR FROM e.timestamp AT TIME ZONE 'UTC')::int + 8), 24)) < 6
+           AND e.{col} > :thr
+        """
+    )
+    n_result = await db.execute(
+        night_sql,
+        {"bid": building_id, "t0": start_dt, "t1": end_dt, "thr": night_threshold},
+    )
+    night_abnormal_hours = int(n_result.scalar() or 0)
+
+    return {
+        "building_type": building_type,
+        "building_id": building_id,
+        "metric": metric,
+        "days": days,
+        "night_threshold": night_threshold,
+        "window_end": end_dt.isoformat(),
+        "window_start": start_dt.isoformat(),
+        "peak_value": peak,
+        "valley_value": valley,
+        "avg_value": avg,
+        "peak_valley_ratio": ratio,
+        "night_abnormal_hours": night_abnormal_hours,
+        "daily_totals": daily_totals,
     }
 
 
@@ -371,199 +661,166 @@ async def get_overview(
     包含：各楼总用电、总用水、最新设备状态快照。
     直接从 energy_data 聚合，不依赖物化视图，确保数据实时。
     """
-    # 确定目标日期：优先用请求参数，否则取最新一天
     if query_date:
-        target_day = query_date
+        cache_key = f"overview:date:{query_date.isoformat()}"
     else:
-        latest_ts_result = await db.execute(
-            text('SELECT MAX("timestamp")::date AS latest_day FROM energy_data')
+        cache_key = f"overview:latest:{cache_bucket()}"
+
+    ttl_seconds = settings.CACHE_OVERVIEW_TTL_SECONDS
+
+    async def _compute() -> dict[str, Any]:
+        # 确定目标日期：优先用请求参数，否则取最新一天
+        if query_date:
+            target_day = query_date
+        else:
+            latest_ts_result = await db.execute(
+                text('SELECT MAX("timestamp")::date AS latest_day FROM energy_data')
+            )
+            row = latest_ts_result.fetchone()
+            target_day = row[0] if row else None
+        if not target_day:
+            return {"error": "暂无能耗数据"}
+
+        # 用时间戳范围代替 ::date 转换，避免时区问题
+        day_start = datetime(
+            target_day.year,
+            target_day.month,
+            target_day.day,
+            tzinfo=timezone.utc,
         )
-        row = latest_ts_result.fetchone()
-        target_day = row[0] if row else None
-    if not target_day:
-        return {"error": "暂无能耗数据"}
+        day_end = day_start + timedelta(days=1)
 
-    # 用时间戳范围代替 ::date 转换，避免时区问题
-    day_start = datetime(target_day.year, target_day.month, target_day.day, tzinfo=timezone.utc)
-    day_end   = day_start + timedelta(days=1)
-
-    # 按楼宇聚合当天数据（电、水、温度）
-    daily_result = await db.execute(
-        text("""
-            SELECT
-                e.building_id,
-                b.primary_space_usage,
-                b.sqm,
-                SUM(e.electricity_kwh)  AS total_electricity_kwh,
-                SUM(e.water_m3)         AS total_water_m3,
-                AVG(e.air_temp_c)       AS avg_ambient_temp,
-                SUM(e.hac_energy)       AS total_hac_energy
-            FROM energy_data e
-            JOIN buildings b ON e.building_id = b.building_id
-            WHERE e."timestamp" >= :day_start
-              AND e."timestamp" <  :day_end
-            GROUP BY e.building_id, b.primary_space_usage, b.sqm
-            ORDER BY b.primary_space_usage
-        """),
-        {"day_start": day_start, "day_end": day_end},
-    )
-    daily_rows = daily_result.fetchall()
-
-    if not daily_rows:
-        return {"error": f"日期 {target_day} 无能耗数据"}
-
-    # 全局平均气温和湿度（当天所有建筑平均）
-    weather_result = await db.execute(
-        text("""
-            SELECT
-                AVG(e.air_temp_c)       AS avg_temp,
-                AVG(e.humidity_rh_pct)  AS avg_humidity
-            FROM energy_data e
-            WHERE e."timestamp" >= :day_start
-              AND e."timestamp" <  :day_end
-        """),
-        {"day_start": day_start, "day_end": day_end},
-    )
-    weather_row = weather_result.fetchone()
-    global_avg_temp = round(float(weather_row[0]), 1) if weather_row and weather_row[0] else None
-    global_avg_humidity = round(float(weather_row[1]), 1) if weather_row and weather_row[1] else None
-
-    # 各楼最新一条实时记录（实时读数）
-    live_result = await db.execute(
-        text("""
-            SELECT DISTINCT ON (e.building_id)
-                e.building_id,
-                b.primary_space_usage,
-                e.water_m3,
-                e.hac_energy,
-                e.air_temp_c
-            FROM energy_data e
-            JOIN buildings b ON e.building_id = b.building_id
-            ORDER BY e.building_id, e."timestamp" DESC
-        """)
-    )
-    live_map: dict[str, tuple] = {r[0]: r for r in live_result.fetchall()}
-
-    # 从 anomaly_events 查询有未解决异常的楼宇（24h 窗口）
-    anomaly_building_ids: set[str] = set()
-    try:
-        anomaly_result = await db.execute(
+        # 按楼宇聚合当天数据（电、水、温度）
+        daily_result = await db.execute(
             text("""
-                SELECT DISTINCT building_id
-                FROM anomaly_events
-                WHERE data_timestamp >= (
-                    SELECT MAX(data_timestamp) FROM anomaly_events
-                ) - INTERVAL '24 hours'
-                  AND is_resolved = false
+                SELECT
+                    e.building_id,
+                    b.primary_space_usage,
+                    b.sqm,
+                    SUM(e.electricity_kwh)  AS total_electricity_kwh,
+                    SUM(e.water_m3)         AS total_water_m3,
+                    AVG(e.air_temp_c)       AS avg_ambient_temp,
+                    SUM(e.hac_energy)       AS total_hac_energy
+                FROM energy_data e
+                JOIN buildings b ON e.building_id = b.building_id
+                WHERE e."timestamp" >= :day_start
+                  AND e."timestamp" <  :day_end
+                GROUP BY e.building_id, b.primary_space_usage, b.sqm
+                ORDER BY b.primary_space_usage
+            """),
+            {"day_start": day_start, "day_end": day_end},
+        )
+        daily_rows = daily_result.fetchall()
+
+        if not daily_rows:
+            return {"error": f"日期 {target_day} 无能耗数据"}
+
+        # 全局平均气温和湿度（当天所有建筑平均）
+        weather_result = await db.execute(
+            text("""
+                SELECT
+                    AVG(e.air_temp_c)       AS avg_temp,
+                    AVG(e.humidity_rh_pct)  AS avg_humidity
+                FROM energy_data e
+                WHERE e."timestamp" >= :day_start
+                  AND e."timestamp" <  :day_end
+            """),
+            {"day_start": day_start, "day_end": day_end},
+        )
+        weather_row = weather_result.fetchone()
+        global_avg_temp = (
+            round(float(weather_row[0]), 1)
+            if weather_row and weather_row[0]
+            else None
+        )
+        global_avg_humidity = (
+            round(float(weather_row[1]), 1)
+            if weather_row and weather_row[1]
+            else None
+        )
+
+        # 各楼最新一条实时记录（实时读数）
+        live_result = await db.execute(
+            text("""
+                SELECT DISTINCT ON (e.building_id)
+                    e.building_id,
+                    b.primary_space_usage,
+                    e.water_m3,
+                    e.hac_energy,
+                    e.air_temp_c
+                FROM energy_data e
+                JOIN buildings b ON e.building_id = b.building_id
+                ORDER BY e.building_id, e."timestamp" DESC
             """)
         )
-        anomaly_building_ids = {r[0] for r in anomaly_result.fetchall()}
-    except Exception:
-        pass
+        live_map: dict[str, tuple] = {r[0]: r for r in live_result.fetchall()}
 
-    total_electricity = 0.0
-    total_water = 0.0
-    total_hac = 0.0
-    buildings_detail = []
+        # 从 anomaly_events 查询有未解决异常的楼宇（24h 窗口）
+        anomaly_building_ids: set[str] = set()
+        try:
+            anomaly_result = await db.execute(
+                text("""
+                    SELECT DISTINCT building_id
+                    FROM anomaly_events
+                    WHERE data_timestamp >= (
+                        SELECT MAX(data_timestamp) FROM anomaly_events
+                    ) - INTERVAL '24 hours'
+                      AND is_resolved = false
+                """)
+            )
+            anomaly_building_ids = {r[0] for r in anomaly_result.fetchall()}
+        except Exception:
+            pass
 
-    for dr in daily_rows:
-        bid, usage, sqm, total_elec, total_w, bld_avg_temp, hac = dr
-        live = live_map.get(bid)
-        latest_w = float(live[2] or 0) if live else 0.0
-        is_anomaly = bid in anomaly_building_ids
-        intensity = (
-            round(float(total_elec or 0) / float(sqm), 2)
-            if sqm and sqm > 0 else None
-        )
-        total_electricity += float(total_elec or 0)
-        total_water += float(total_w or 0)
-        total_hac += float(hac or 0)
-        buildings_detail.append({
-            "building_type": usage,
-            "display_name": _BUILDING_NAMES.get(usage or "", usage or bid),
-            "icon": _BUILDING_ICONS.get(usage or "", "🏠"),
-            "total_electricity_kwh": round(float(total_elec or 0), 2),
-            "total_water_m3": round(float(total_w or 0), 2),
-            "total_hac_energy_kwh": round(float(hac or 0), 2),
-            "avg_ambient_temp": round(float(bld_avg_temp or 0), 1) if bld_avg_temp else None,
-            "sqm": sqm,
-            "energy_intensity_kwh_per_sqm": intensity,
-            "anomaly_status": "Anomaly" if is_anomaly else "Normal",
-            "latest_water_m3": latest_w,
-        })
+        total_electricity = 0.0
+        total_water = 0.0
+        total_hac = 0.0
+        buildings_detail = []
 
-    # 查询昨日 KPI 数据（按楼分组），用于计算环比变化
-    prev_day = target_day - timedelta(days=1)
-    prev_start = datetime(prev_day.year, prev_day.month, prev_day.day, tzinfo=timezone.utc)
-    prev_end   = prev_start + timedelta(days=1)
-    prev_result = await db.execute(
-        text("""
-            SELECT
-                b.primary_space_usage,
-                SUM(e.electricity_kwh) AS total_electricity_kwh,
-                SUM(e.water_m3)        AS total_water_m3,
-                SUM(e.hac_energy)      AS total_hac_energy
-            FROM energy_data e
-            JOIN buildings b ON e.building_id = b.building_id
-            WHERE e."timestamp" >= :prev_start
-              AND e."timestamp" <  :prev_end
-            GROUP BY b.primary_space_usage
-        """),
-        {"prev_start": prev_start, "prev_end": prev_end},
-    )
-    # 按建筑类型建立昨日数据映射
-    prev_by_building: dict[str, dict] = {}
-    prev_electricity = 0.0
-    prev_water = 0.0
-    prev_hac = 0.0
-    for pr in prev_result.fetchall():
-        p_usage, p_elec, p_water, p_hac_val = pr
-        p_elec_f = float(p_elec or 0)
-        p_water_f = float(p_water or 0)
-        p_hac_f = float(p_hac_val or 0)
-        prev_electricity += p_elec_f
-        prev_water += p_water_f
-        prev_hac += p_hac_f
-        prev_by_building[p_usage] = {
-            "electricity": p_elec_f,
-            "water": p_water_f,
-            "hac": p_hac_f,
+        for dr in daily_rows:
+            bid, usage, sqm, total_elec, total_w, bld_avg_temp, hac = dr
+            live = live_map.get(bid)
+            latest_w = float(live[2] or 0) if live else 0.0
+            is_anomaly = bid in anomaly_building_ids
+            intensity = (
+                round(float(total_elec or 0) / float(sqm), 2)
+                if sqm and sqm > 0
+                else None
+            )
+            total_electricity += float(total_elec or 0)
+            total_water += float(total_w or 0)
+            total_hac += float(hac or 0)
+            buildings_detail.append({
+                "building_type": usage,
+                "display_name": _BUILDING_NAMES.get(usage or "", usage or bid),
+                "icon": _BUILDING_ICONS.get(usage or "", "🏠"),
+                "total_electricity_kwh": round(float(total_elec or 0), 2),
+                "total_water_m3": round(float(total_w or 0), 2),
+                "total_hac_energy_kwh": round(float(hac or 0), 2),
+                "avg_ambient_temp": round(float(bld_avg_temp or 0), 1) if bld_avg_temp else None,
+                "sqm": sqm,
+                "energy_intensity_kwh_per_sqm": intensity,
+                "anomaly_status": "Anomaly" if is_anomaly else "Normal",
+                "latest_water_m3": latest_w,
+            })
+
+        return {
+            "data_date": target_day.isoformat() if hasattr(target_day, "isoformat") else str(target_day),
+            "kpis": {
+                "total_electricity_kwh": round(total_electricity, 2),
+                "total_water_m3": round(total_water, 2),
+                "total_hac_energy_kwh": round(total_hac, 2),
+                "total_carbon_kg": round(total_electricity * 0.5703, 2),
+                "anomaly_count": len(anomaly_building_ids),
+            },
+            "weather": {
+                "temperature": global_avg_temp,
+                "humidity": global_avg_humidity,
+            },
+            "buildings": buildings_detail,
         }
 
-    def pct_change(today: float, yesterday: float) -> float | None:
-        if yesterday == 0:
-            return None
-        return round((today - yesterday) / yesterday * 100, 1)
-
-    # 为每栋楼追加环比变化
-    for bd in buildings_detail:
-        prev_b = prev_by_building.get(bd["building_type"], {})
-        bd["electricity_change_pct"] = pct_change(bd["total_electricity_kwh"], prev_b.get("electricity", 0))
-        bd["water_change_pct"]       = pct_change(bd["total_water_m3"], prev_b.get("water", 0))
-        bd["hac_change_pct"]         = pct_change(bd["total_hac_energy_kwh"], prev_b.get("hac", 0))
-        bd["carbon_change_pct"]      = pct_change(bd["total_electricity_kwh"] * 0.5703, prev_b.get("electricity", 0) * 0.5703)
-
-    return {
-        "data_date": target_day.isoformat() if hasattr(target_day, "isoformat") else str(target_day),
-        "kpis": {
-            "total_electricity_kwh": round(total_electricity, 2),
-            "total_water_m3": round(total_water, 2),
-            "total_hac_energy_kwh": round(total_hac, 2),
-            "total_carbon_kg": round(total_electricity * 0.5703, 2),
-            "anomaly_count": len(anomaly_building_ids),
-        },
-        "kpis_change": {
-            "total_electricity_pct": pct_change(total_electricity, prev_electricity),
-            "total_water_pct":       pct_change(total_water, prev_water),
-            "total_hac_pct":         pct_change(total_hac, prev_hac),
-            "total_carbon_pct":      pct_change(total_electricity * 0.5703, prev_electricity * 0.5703),
-        },
-        "weather": {
-            "temperature": global_avg_temp,
-            "humidity": global_avg_humidity,
-        },
-        "buildings": buildings_detail,
-    }
+    return await get_or_compute_json(cache_key, ttl_seconds, _compute)
 
 
 # ---------------------------------------------------------------------------
@@ -575,192 +832,102 @@ async def get_recent_anomalies(
     building_type: str | None = Query(None, description="按建筑类型过滤"),
     db: AsyncSession = Depends(get_db_session),
 ):
-    """
-    从 anomaly_events 表读取近期异常告警，供 Dashboard 和运维页展示。
-    数据由后台 anomaly_detector 服务持续写入，不再在请求时实时计算规则。
+    # 以 anomaly_events 表中最新数据时间戳为窗口终点（数据集是历史数据）
+    max_ts_result = await db.execute(text("SELECT MAX(data_timestamp) FROM anomaly_events"))
+    max_ts = max_ts_result.scalar()
 
-    若 anomaly_events 表尚未创建（迁移 002 未执行），自动降级为实时规则计算模式。
-    """
-    from datetime import datetime, timedelta, timezone
-
-    now_utc = datetime.now(timezone.utc)
-    start_time = now_utc - timedelta(hours=hours)
-
-    try:
-        # ── 主路径：读 anomaly_events 表 ──────────────────────────────────
-        # 时间窗口以数据自身最大时间戳为基准（兼容历史数据集，不依赖 NOW()）
-        max_ts_row = await db.execute(
-            text("SELECT MAX(data_timestamp) FROM anomaly_events WHERE is_resolved = false")
-        )
-        max_data_ts = max_ts_row.scalar()
-
-        if max_data_ts is None:
-            return {
-                "anomalies": [],
-                "total": 0,
-                "check_period": {"start": None, "end": None, "hours": hours},
-                "source": "anomaly_events",
-            }
-
-        from datetime import timedelta
-        window_start = max_data_ts - timedelta(hours=hours)
-
-        stmt = (
-            select(AnomalyEvent, Building.primary_space_usage)
-            .outerjoin(Building, AnomalyEvent.building_id == Building.building_id)
-            .where(AnomalyEvent.data_timestamp >= window_start)
-            .where(AnomalyEvent.is_resolved.is_(False))
-            .order_by(AnomalyEvent.data_timestamp.desc())
-        )
-        if building_type:
-            stmt = stmt.where(Building.primary_space_usage == building_type)
-
-        result = await db.execute(stmt)
-        rows = result.fetchall()
-
-        # actual_value 使用扫描时存入的值（anomaly_events.actual_value）
-        # 扫描器遍历 energy_data 每一行，已正确取对应字段：
-        #   electricity_overload → electricity_kwh
-        #   water_leak           → water_m3
-        #   hvac_overconsumption → hac_energy
-        # 注意：energy_data 无主键，可能存在重复行（正常+注入异常各一条），
-        #       扫描时对异常行触发告警并存入正确的 actual_value，此处直接使用。
-        anomalies = [
-            {
-                "timestamp": ev.data_timestamp.isoformat(),
-                "building_type": usage,
-                "building_id": ev.building_id,
-                "meter_device_id": ev.meter_device_id,
-                "rule": ev.rule_triggered,
-                "message": ev.message,
-                "actual_value": ev.actual_value,
-                "threshold": ev.threshold_value,
-                "expected_value": ev.expected_value,
-                "deviation_pct": ev.deviation_pct,
-                "anomaly_status": "Anomaly",
-            }
-            for ev, usage in rows[:100]
-        ]
-        events = rows  # 用于 total 计数
-
+    if max_ts is None:
         return {
-            "anomalies": anomalies,
-            "total": len(events),
-            "check_period": {
-                "start": window_start.isoformat(),
-                "end": max_data_ts.isoformat(),
-                "hours": hours,
-            },
+            "anomalies": [],
+            "total": 0,
+            "check_period": {"start": None, "end": None, "hours": hours},
             "source": "anomaly_events",
+            "module_status": "no_data",
+            "message": "anomaly_events 暂无数据，请先调用 /api/admin/rebuild-all",
         }
 
-    except Exception as exc:
-        exc_type = type(exc).__name__
-        exc_msg = str(exc)
+    if hasattr(max_ts, "tzinfo") and max_ts.tzinfo is None:
+        max_ts = max_ts.replace(tzinfo=timezone.utc)
 
-        # ── 连接级别错误（网络断开、连接池耗尽等）──────────────────────────
-        # 此时 db session 已损坏，不能再用同一连接重试，直接返回安全空响应。
-        # 典型特征：ConnectionError / asyncpg connection_lost / InterfaceError
-        _conn_keywords = ("connection_lost", "ConnectionError", "InterfaceError",
-                          "connection", "connect", "asyncpg")
-        is_connection_error = (
-            "ConnectionError" in exc_type
-            or "InterfaceError" in exc_type
-            or any(kw in exc_msg for kw in _conn_keywords)
-        )
-        if is_connection_error:
-            logger.error(
-                "数据库连接异常，/api/anomalies/recent 返回空结果（请检查 DB 连接）: %s: %s",
-                exc_type, exc_msg,
-            )
-            return {
-                "anomalies": [],
-                "total": 0,
-                "check_period": {"start": start_time.isoformat(), "end": now_utc.isoformat(), "hours": hours},
-                "source": "connection_error",
-                "error": "数据库连接异常，请稍后重试",
-            }
+    window_start = max_ts - timedelta(hours=hours)
 
-        # ── 表不存在等 DDL 错误 → 降级为实时规则计算（兼容迁移未执行）────
-        logger.warning(
-            "anomaly_events 表不可用，降级为实时规则计算（%s: %s）"
-            "——请执行迁移 002_create_anomaly_events.sql",
-            exc_type, exc_msg,
-        )
-        try:
-            return await _fallback_realtime_anomalies(start_time, now_utc, hours, building_type, db)
-        except Exception as fb_exc:
-            # 降级路径也失败（例如 session 已污染），返回安全空响应
-            logger.error("降级路径执行失败: %s: %s", type(fb_exc).__name__, fb_exc)
-            return {
-                "anomalies": [],
-                "total": 0,
-                "check_period": {"start": start_time.isoformat(), "end": now_utc.isoformat(), "hours": hours},
-                "source": "fallback_error",
-                "error": "告警数据暂时不可用",
-            }
-
-
-async def _fallback_realtime_anomalies(
-    start_time,
-    now_utc,
-    hours: int,
-    building_type: str | None,
-    db: AsyncSession,
-) -> dict:
-    """降级：实时扫描 energy_data 计算异常（兼容新 schema）。"""
-    from datetime import timezone
-
-    query = (
-        select(EnergyData, Building.primary_space_usage)
-        .join(Building, EnergyData.building_id == Building.building_id)
-        .where(EnergyData.timestamp >= start_time)
-    )
+    # 可选：按建筑类型过滤
+    building_filter = ""
+    params: dict[str, Any] = {"t0": window_start, "t1": max_ts}
     if building_type:
-        query = query.where(Building.primary_space_usage == building_type)
-    query = query.order_by(EnergyData.timestamp.desc())
+        bld_result = await db.execute(
+            select(Building.building_id).where(Building.primary_space_usage == building_type)
+        )
+        bid = bld_result.scalar_one_or_none()
+        if bid:
+            building_filter = " AND ae.building_id = :bid"
+            params["bid"] = bid
 
-    result = await db.execute(query)
-    rows = result.fetchall()
+    anomaly_result = await db.execute(text(f"""
+        SELECT
+            ae.id,
+            ae.detected_at,
+            ae.data_timestamp,
+            ae.building_id,
+            ae.meter_device_id,
+            ae.rule_triggered,
+            ae.actual_value,
+            ae.threshold_value,
+            ae.expected_value,
+            ae.deviation_pct,
+            ae.hvac_root_cause,
+            ae.message,
+            ae.is_resolved,
+            ae.anomaly_phase,
+            ae.symptom_flags_json,
+            ae.event_source,
+            ae.severity
+        FROM anomaly_events ae
+        WHERE ae.data_timestamp >= :t0
+          AND ae.data_timestamp <= :t1
+          AND ae.is_resolved = false
+          {building_filter}
+        ORDER BY ae.data_timestamp DESC
+        LIMIT 200
+    """), params)
 
+    rows = anomaly_result.fetchall()
     anomalies = []
-    for row in rows:
-        ed, usage = row
-        ts = ed.timestamp
-        hour_utc = ts.hour if ts.tzinfo else ts.replace(tzinfo=timezone.utc).hour
-        hour_local = (hour_utc + 8) % 24  # 转换为 CST（UTC+8）
-        display = _BUILDING_NAMES.get(usage or "", usage or ed.building_id)
-
-        # 降级路径中 meter_device_id 使用 building_id + '_elec' 格式（与 migration 008 约定一致）
-        meter_id = ed.building_id + "_elec"
-
-        if (
-            ed.electricity_kwh is not None
-            and 0 <= hour_local < 6
-            and ed.electricity_kwh > 50
-        ):
-            anomalies.append({
-                "timestamp": ts.isoformat(),
-                "building_type": usage,
-                "building_id": ed.building_id,
-                "meter_device_id": meter_id,
-                "rule": "night_high_power",
-                "message": f"{display}夜间能耗异常：{ed.electricity_kwh:.1f} kWh",
-                "actual_value": ed.electricity_kwh,
-                "threshold": 50.0,
-                "anomaly_status": "Anomaly",
-            })
-
+    for idx, row in enumerate(rows):
+        (ev_id, det_at, data_ts, bid, meter_id, rule, actual, threshold,
+         expected, dev_pct, hvac_rc, msg, is_res, phase, sym_flags,
+         src, severity) = row
+        anomalies.append({
+            "idx": idx,
+            "id": ev_id,
+            "detected_at": det_at.isoformat() if det_at else None,
+            "data_timestamp": data_ts.isoformat() if data_ts else None,
+            "building_id": bid,
+            "meter_device_id": meter_id,
+            "rule_triggered": rule,
+            "actual_value": actual,
+            "threshold_value": threshold,
+            "expected_value": expected,
+            "deviation_pct": dev_pct,
+            "message": msg,
+            "is_resolved": is_res,
+            "hvac_root_cause": hvac_rc,
+            "anomaly_phase": phase,
+            "symptom_flags_json": sym_flags,
+            "event_source": src,
+            "severity": severity,
+        })
 
     return {
-        "anomalies": anomalies[:100],
+        "anomalies": anomalies,
         "total": len(anomalies),
         "check_period": {
-            "start": start_time.isoformat(),
-            "end": now_utc.isoformat(),
+            "start": window_start.isoformat(),
+            "end": max_ts.isoformat(),
             "hours": hours,
         },
-        "source": "realtime_fallback",
+        "source": "anomaly_events",
+        "module_status": "ok",
     }
 
 
@@ -768,11 +935,18 @@ async def _fallback_realtime_anomalies(
 # 异常根因桑基图（Sankey）聚合数据
 # ---------------------------------------------------------------------------
 _RULE_LABEL = {
+    # 旧版规则（兼容）
     "water_leak": "水耗异常",
     "electricity_overload": "电耗超标",
     "hvac_overconsumption": "空调过耗",
     "db_flagged": "标注异常",
     "night_high_power": "夜间高耗",
+    # notebook v2 规则
+    "flag_water": "水耗偏高",
+    "flag_electricity": "总电耗偏高",
+    "flag_hvac_energy": "空调能耗偏高",
+    "flag_supply_deviation": "供水温度偏离",
+    "flag_return_deviation": "回水温度偏离",
 }
 
 _ROOT_CAUSE_LABEL = {
@@ -788,52 +962,55 @@ async def get_anomaly_sankey(
     db: AsyncSession = Depends(get_db_session),
 ):
     """
-    聚合 anomaly_events 中所有未解决异常的 rule_triggered → hvac_root_cause 流向与频次，
-    供前端 Sankey 图渲染。
-
-    返回格式:
-      { nodes: [{name}], links: [{source, target, value}] }
+    从 anomaly_events 聚合桑基图数据：
+      异常规则  →  HVAC 根因（仅 hvac_overconsumption 有根因）
+    非 HVAC 类规则直接作为终点节点。
     """
-    try:
-        # 聚合所有未解决异常：按 (rule_triggered, hvac_root_cause) 计数
-        stmt = text("""
-            SELECT rule_triggered,
-                   hvac_root_cause,
-                   COUNT(*) AS cnt
-              FROM anomaly_events
-             WHERE is_resolved = false
-             GROUP BY rule_triggered, hvac_root_cause
-             ORDER BY cnt DESC
-        """)
-        result = await db.execute(stmt)
-        rows = result.fetchall()
+    agg_result = await db.execute(text("""
+        SELECT
+            rule_triggered,
+            hvac_root_cause,
+            COUNT(*) AS cnt
+        FROM anomaly_events
+        WHERE is_resolved = false
+        GROUP BY rule_triggered, hvac_root_cause
+        ORDER BY cnt DESC
+    """))
+    rows = agg_result.fetchall()
 
-        node_set: set[str] = set()
-        links: list[dict] = []
+    if not rows:
+        return {
+            "nodes": [],
+            "links": [],
+            "module_status": "no_data",
+            "message": "anomaly_events 暂无数据，请先调用 /api/admin/rebuild-all",
+        }
 
-        for rule, root_cause, cnt in rows:
-            source = _RULE_LABEL.get(rule, rule or "未知规则")
-            node_set.add(source)
+    # 收集节点名称（去重）
+    node_set: list[str] = []
+    def _node_idx(name: str) -> int:
+        if name not in node_set:
+            node_set.append(name)
+        return node_set.index(name)
 
-            if root_cause and root_cause in _ROOT_CAUSE_LABEL:
-                target = _ROOT_CAUSE_LABEL[root_cause]
-            else:
-                # 非 HVAC 规则没有 root_cause，映射到通用目标
-                target = {
-                    "water_leak": "管网漏损",
-                    "electricity_overload": "负荷过载",
-                    "db_flagged": "数据标注",
-                    "night_high_power": "夜间异常运行",
-                }.get(rule, "未分类")
-            node_set.add(target)
-            links.append({"source": source, "target": target, "value": cnt})
+    links: list[dict[str, Any]] = []
+    for rule, root_cause, cnt in rows:
+        rule_label = _RULE_LABEL.get(rule, rule)
+        if root_cause:
+            cause_label = _ROOT_CAUSE_LABEL.get(root_cause, root_cause)
+        else:
+            cause_label = rule_label + "(直接)"
 
-        nodes = [{"name": n} for n in sorted(node_set)]
-        return {"nodes": nodes, "links": links}
+        src_idx = _node_idx(rule_label)
+        tgt_idx = _node_idx(cause_label)
+        links.append({"source": src_idx, "target": tgt_idx, "value": int(cnt)})
 
-    except Exception as exc:
-        logger.warning("sankey 聚合查询失败，返回空数据: %s: %s", type(exc).__name__, exc)
-        return {"nodes": [], "links": []}
+    nodes = [{"name": n} for n in node_set]
+    return {
+        "nodes": nodes,
+        "links": links,
+        "module_status": "ok",
+    }
 
 
 # ---------------------------------------------------------------------------

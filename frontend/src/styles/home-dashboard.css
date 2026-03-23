@@ -1,0 +1,343 @@
+/* 首页大屏图表区（挂载在 .home-page 下，避免污染全局） */
+
+.home-page .bento-row {
+  display: grid;
+  gap: 14px;
+  align-items: start;
+}
+.home-page .bento-r1 {
+  grid-template-columns: 1.5fr 1fr;
+}
+.home-page .bento-r2 {
+  grid-template-columns: 1.2fr 1fr;
+}
+.home-page .bento-r3 {
+  display: grid;
+  grid-template-columns: 1.15fr 1fr minmax(220px, 0.85fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.home-page .cpanel {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  transition: border-color 0.2s;
+}
+.home-page .cpanel:hover {
+  border-color: var(--border-accent);
+}
+.home-page .cpanel-hd {
+  padding: 12px 16px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex-shrink: 0;
+  min-width: 0;
+}
+.home-page .cpanel-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.home-page .cpanel-sub {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.home-page .cpanel-body {
+  flex: 1;
+  width: 100%;
+}
+.home-page .cpanel-col {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  align-self: start;
+}
+
+/* 动作建议卡 */
+.home-action-cards {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 120px;
+  align-self: stretch;
+}
+.home-action-cards-hd {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.home-action-cards ul {
+  margin: 0;
+  padding: 0 0 0 18px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+.home-action-cards li {
+  margin-bottom: 6px;
+}
+
+/* 轻量指标卡条 */
+.home-mini-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 10px;
+}
+.home-mini-metric {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+.home-mini-metric-val {
+  font-size: 16px;
+  font-weight: 800;
+  color: var(--text-primary);
+}
+.home-mini-metric-lbl {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+/* GitHub 热力图 */
+.home-page .gh-wrap {
+  padding: 14px 16px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.home-page .gh-main {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+}
+.home-page .gh-y-col {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-around;
+  width: 30px;
+  flex-shrink: 0;
+}
+.home-page .gh-y-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-align: right;
+  line-height: 1;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+}
+.home-page .gh-cells {
+  flex: 1;
+  display: grid;
+  grid-template-columns: repeat(24, 1fr);
+  gap: 3px;
+}
+.home-page .gh-cell {
+  aspect-ratio: 1;
+  border-radius: 3px;
+  cursor: default;
+  transition: opacity 0.1s;
+}
+.home-page .gh-cell:hover {
+  opacity: 0.65;
+}
+.home-page .gh-x-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.home-page .gh-y-spacer {
+  width: 30px;
+  flex-shrink: 0;
+}
+.home-page .gh-x-labels {
+  flex: 1;
+  display: grid;
+  grid-template-columns: repeat(24, 1fr);
+  gap: 3px;
+}
+.home-page .gh-x-label {
+  font-size: 10px;
+  color: var(--text-muted);
+  text-align: center;
+  white-space: nowrap;
+  line-height: 1;
+}
+.home-page .gh-legend {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  justify-content: flex-end;
+  margin-top: 2px;
+}
+.home-page .gh-legend-text {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+.home-page .gh-legend-cell {
+  width: 13px;
+  height: 13px;
+  border-radius: 3px;
+}
+
+/* 时间轴列表 */
+.home-timeline {
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 8px 12px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.home-timeline-item {
+  font-size: 11px;
+  color: var(--text-secondary);
+  border-left: 2px solid var(--border-accent, #7aaa8e);
+  padding-left: 10px;
+}
+.home-timeline-item strong {
+  color: var(--text-primary);
+  display: block;
+  margin-bottom: 2px;
+}
+
+@container (max-width: 899px) {
+  .home-page .bento-r1 {
+    grid-template-columns: 1.3fr 1fr;
+  }
+  .home-page .bento-r2 {
+    grid-template-columns: 1.1fr 1fr;
+  }
+  .home-page .bento-r1 .cpanel-body {
+    height: 260px !important;
+  }
+  .home-page .bento-r3 {
+    grid-template-columns: 1fr;
+  }
+}
+
+@container (max-width: 699px) {
+  .home-page .bento-r1,
+  .home-page .bento-r2,
+  .home-page .bento-r3 {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+  .home-page .bento-r1 .cpanel-body {
+    height: 300px !important;
+  }
+  .home-page .cpanel-col {
+    flex-direction: row;
+  }
+  .home-page .cpanel-col .cpanel {
+    flex: 1;
+    min-width: 0;
+  }
+  .home-page .cpanel-col .cpanel-body {
+    height: 200px !important;
+  }
+}
+
+@container (max-width: 539px) {
+  .home-page .bento-r1 .cpanel-body {
+    height: 260px !important;
+  }
+  .home-page .cpanel-col {
+    flex-direction: column;
+  }
+  .home-page .cpanel-col .cpanel-body {
+    height: 160px !important;
+  }
+  .home-page .gh-wrap {
+    padding: 10px 12px 8px;
+  }
+  .home-page .gh-cells {
+    gap: 2px;
+  }
+  .home-page .gh-x-labels {
+    gap: 2px;
+  }
+  .home-page .gh-x-label {
+    font-size: 9px;
+  }
+  .home-page .gh-y-label {
+    font-size: 9px;
+  }
+  .home-page .gh-y-col {
+    width: 26px;
+  }
+  .home-page .gh-y-spacer {
+    width: 26px;
+  }
+}
+
+@container (max-width: 399px) {
+  .home-page .bento-row {
+    gap: 8px;
+  }
+  .home-page .bento-r1 .cpanel-body {
+    height: 220px !important;
+  }
+  .home-page .cpanel-col .cpanel-body {
+    height: 130px !important;
+  }
+  .home-page .cpanel-hd {
+    padding: 8px 12px 6px;
+  }
+  .home-page .cpanel-title {
+    font-size: 12px;
+  }
+  .home-page .gh-wrap {
+    padding: 8px 10px 6px;
+  }
+  .home-page .gh-cells {
+    gap: 1px;
+  }
+  .home-page .gh-x-labels {
+    gap: 1px;
+  }
+  .home-page .gh-legend {
+    display: none;
+  }
+}
+
+html[data-theme='light'] .home-page .cpanel,
+html[data-theme='light'] .home-page .home-action-cards,
+html[data-theme='light'] .home-page .home-mini-metric {
+  background: #ffffff;
+  border-color: #e2e8e4;
+}
+html[data-theme='light'] .home-page .cpanel-title {
+  color: #111;
+}
+html[data-theme='light'] .home-page .cpanel-sub {
+  color: #888;
+}
+html[data-theme='light'] .home-page .gh-y-label,
+html[data-theme='light'] .home-page .gh-x-label,
+html[data-theme='light'] .home-page .gh-legend-text {
+  color: #555;
+}

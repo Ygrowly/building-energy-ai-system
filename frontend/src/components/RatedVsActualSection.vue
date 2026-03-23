@@ -3,11 +3,11 @@
     <div class="section-header">
       <h2 class="section-title">
         <Icon icon="mdi:chart-areaspline-variant" width="16" class="title-icon" />
-        实际 vs 国标期望对比
+        实际 vs 仿真基线对比
       </h2>
-      <span class="gb-badge">
-        <Icon icon="mdi:certificate-outline" width="12" />
-        GB 双阈值物理基线
+      <span class="gb-badge" :class="expectedSourceBadgeClass">
+        <Icon :icon="usingNotebook ? 'mdi:brain' : 'mdi:certificate-outline'" width="12" />
+        {{ usingNotebook ? 'Notebook 仿真基线' : 'GB 实时估算（回退）' }}
       </span>
     </div>
 
@@ -90,6 +90,10 @@
           <span class="si-label"><Icon icon="mdi:snowflake" width="12" /> HVAC 主要工况</span>
           <span class="si-val">{{ dominantMode }}</span>
         </div>
+        <div class="summary-item" v-if="hvacDiagCount > 0">
+          <span class="si-label"><Icon icon="mdi:wrench-outline" width="12" /> 空调根因</span>
+          <span class="si-val warn-text">{{ hvacDiagCount }} 条</span>
+        </div>
         <div class="summary-spacer"></div>
         <span class="gb-ref">
           <Icon icon="mdi:book-open-outline" width="11" />
@@ -101,7 +105,7 @@
       <div class="chart-container">
         <div class="chart-header">
           <span class="chart-title">
-            {{ buildingDisplayName }} · {{ currentMetricLabel }} 实际 vs 国标期望
+            {{ buildingDisplayName }} · {{ currentMetricLabel }} 实际 vs 仿真基线
             <span class="chart-range">（{{ form.startDate }} ~ {{ form.endDate }}，逐小时）</span>
           </span>
           <div class="legend-pills">
@@ -109,7 +113,8 @@
               <span class="pill-dot" style="background:#6c8ef5;"></span> 实际值
             </span>
             <span class="legend-pill rated">
-              <span class="pill-dot" style="background:#6c8ef5;opacity:0.4;border:1px dashed #6c8ef5;"></span> 国标期望
+              <span class="pill-dot" style="background:#6c8ef5;opacity:0.4;border:1px dashed #6c8ef5;"></span>
+              {{ usingNotebook ? 'Notebook 基线' : 'GB 期望' }}
             </span>
             <span class="legend-pill dev">
               <span class="pill-dot" style="background:#f59e0b;opacity:0.6;"></span> 偏差 %
@@ -136,25 +141,53 @@
                 <th>HVAC 工况</th>
                 <th>负荷率</th>
                 <th>实际值</th>
-                <th>国标期望</th>
+                <th>基线期望</th>
                 <th>偏差</th>
+                <th>异常阶段</th>
+                <th>空调根因</th>
+                <th>供水偏差</th>
+                <th>回水偏差</th>
               </tr>
             </thead>
             <tbody>
               <tr v-for="(r, i) in anomalyRows.slice(0, 20)" :key="i" class="anomaly-row">
                 <td>{{ formatTs(r.timestamp) }}</td>
                 <td>
-                  <span class="mode-chip" :class="r.hvac_mode.toLowerCase()">{{ r.hvac_mode }}</span>
+                  <span class="mode-chip" :class="(r.hvac_mode || '').toLowerCase()">{{ r.hvac_mode || '—' }}</span>
                 </td>
-                <td class="num-cell">{{ (r.schedule_factor * 100).toFixed(0) }}%</td>
+                <td class="num-cell">{{ r.schedule_factor != null ? (r.schedule_factor * 100).toFixed(0) + '%' : '—' }}</td>
                 <td class="num-cell actual-val">
                   {{ r.actual != null ? r.actual.toFixed(3) : '—' }} {{ currentUnit }}
                 </td>
-                <td class="num-cell rated-val">{{ r.rated.toFixed(3) }} {{ currentUnit }}</td>
+                <td class="num-cell rated-val">{{ r.rated != null ? r.rated.toFixed(3) : '—' }} {{ currentUnit }}</td>
                 <td class="num-cell">
                   <span class="dev-badge" :class="devClass(r.deviation_pct)">
                     {{ r.deviation_pct != null ? (r.deviation_pct >= 0 ? '+' : '') + r.deviation_pct.toFixed(1) + '%' : '—' }}
                   </span>
+                </td>
+                <td>
+                  <span v-if="r.anomaly_phase" class="phase-chip" :class="r.anomaly_phase">
+                    {{ r.anomaly_phase === 'ramp' ? '上升期' : '全量期' }}
+                  </span>
+                  <span v-else class="phase-chip none">—</span>
+                </td>
+                <td>
+                  <span v-if="r.hvac_diagnosis" class="diag-chip" :class="r.hvac_diagnosis">
+                    {{ diagLabel(r.hvac_diagnosis) }}
+                  </span>
+                  <span v-else>—</span>
+                </td>
+                <td class="num-cell">
+                  <span v-if="r.supply_dev_c != null" :class="Math.abs(r.supply_dev_c) > 1.5 ? 'warn-text' : ''">
+                    {{ r.supply_dev_c > 0 ? '+' : '' }}{{ r.supply_dev_c.toFixed(1) }}℃
+                  </span>
+                  <span v-else>—</span>
+                </td>
+                <td class="num-cell">
+                  <span v-if="r.return_dev_c != null" :class="Math.abs(r.return_dev_c) > 2.0 ? 'warn-text' : ''">
+                    {{ r.return_dev_c > 0 ? '+' : '' }}{{ r.return_dev_c.toFixed(1) }}℃
+                  </span>
+                  <span v-else>—</span>
                 </td>
               </tr>
             </tbody>
@@ -170,7 +203,7 @@
     <div class="empty-chart" v-else-if="!loading && !error">
       <div class="empty-icon"><Icon icon="mdi:chart-areaspline-variant" width="44" /></div>
       <p>选择楼宇、日期范围和监测指标后点击查询</p>
-      <p class="empty-sub">图表将展示逐小时实际值与国标 GB 期望值的对比，并高亮异常时段</p>
+      <p class="empty-sub">图表将展示逐小时实际值与仿真基线的对比，并高亮异常时段及根因诊断</p>
     </div>
   </section>
 </template>
@@ -212,9 +245,9 @@ watch(() => props.activeBuildingType, (v) => {
 
 // ── 指标配置 ─────────────────────────────────────────────────────────────────
 const metricOptions = [
-  { key: 'electricity', label: '总电耗',   icon: 'mdi:lightning-bolt',   unit: 'kWh', gbRef: 'GB/T 51161 + GB 50034 + GB 50189' },
-  { key: 'water',       label: '用水量',   icon: 'mdi:water',            unit: 'm³',  gbRef: 'GB 50015-2019' },
-  { key: 'hac_energy',  label: '空调能耗', icon: 'mdi:air-conditioner',  unit: 'kWh', gbRef: 'GB 50189-2015 (COP 3.5/2.5)' },
+  { key: 'electricity', label: '总电耗',   icon: 'mdi:lightning-bolt',   unit: 'kWh', gbRef: 'Notebook 仿真 / GB/T 51161' },
+  { key: 'water',       label: '用水量',   icon: 'mdi:water',            unit: 'L',   gbRef: 'Notebook 仿真 / GB 50015-2019' },
+  { key: 'hac_energy',  label: '空调能耗', icon: 'mdi:air-conditioner',  unit: 'kWh', gbRef: 'Notebook 仿真 / GB 50189-2015' },
 ]
 
 const currentMetric = computed(() => metricOptions.find(m => m.key === form.value.metric)!)
@@ -232,6 +265,29 @@ const METRIC_COLORS: Record<string, { actual: string; rated: string; dev: string
 const buildingDisplayName = computed(() =>
   props.buildings.find(b => b.building_type === form.value.buildingType)?.display_name
   ?? form.value.buildingType
+)
+
+// ── 期望值来源检测 ────────────────────────────────────────────────────────────
+const usingNotebook = computed(() =>
+  records.value.some(r => r.expected_source === 'notebook_baseline')
+)
+const expectedSourceBadgeClass = computed(() =>
+  usingNotebook.value ? 'badge-notebook' : 'badge-gb'
+)
+
+// ── 空调根因诊断标签 ──────────────────────────────────────────────────────────
+const _DIAG_LABELS: Record<string, string> = {
+  'A_low_efficiency': 'A: 主机衰退',
+  'B_small_deltaT':   'B: 水力失调',
+  'C_unexpected_on':  'C: 非预期开机',
+  'other_hvac':       '其他空调故障',
+}
+function diagLabel(code: string): string {
+  return _DIAG_LABELS[code] ?? code
+}
+
+const hvacDiagCount = computed(() =>
+  records.value.filter(r => r.is_anomaly && r.hvac_diagnosis).length
 )
 
 // ── 衍生数据 ─────────────────────────────────────────────────────────────────
@@ -350,20 +406,36 @@ function renderChart() {
       textStyle: { color: '#dde3f0', fontSize: 12 },
       formatter(params: any[]) {
         const p0 = params.find((p: any) => p.seriesName === '实际值')
-        const p1 = params.find((p: any) => p.seriesName === '国标期望')
+        const p1 = params.find((p: any) => p.seriesName?.includes('基线') || p.seriesName?.includes('期望'))
         const p2 = params.find((p: any) => p.seriesName === '偏差 %')
         const idx = p0?.dataIndex ?? 0
         const r = rs[idx]
         const devStr = p2?.value != null
           ? `<span style="color:${p2.value > 15 ? '#f87171' : '#4ade80'}">${p2.value >= 0 ? '+' : ''}${p2.value}%</span>`
           : '—'
-        return [
+        const lines = [
           `<b>${p0?.axisValueLabel ?? ''}</b>`,
           `<span style="color:${colors.actual}">实际: ${p0?.value ?? '—'} ${unit}</span>`,
-          `<span style="color:#9399b8">期望: ${p1?.value ?? '—'} ${unit}</span>`,
+          `<span style="color:#9399b8">基线: ${p1?.value ?? '—'} ${unit}</span>`,
           `偏差: ${devStr}`,
           `工况: <b>${r?.hvac_mode ?? '—'}</b> · 负荷率: ${((r?.schedule_factor ?? 0) * 100).toFixed(0)}%`,
-        ].join('<br/>')
+        ]
+        if (r?.anomaly_phase) {
+          lines.push(`阶段: <span style="color:#f59e0b">${r.anomaly_phase === 'ramp' ? '上升期' : '全量期'}</span>`)
+        }
+        if (r?.hvac_diagnosis) {
+          lines.push(`根因: <span style="color:#f87171">${diagLabel(r.hvac_diagnosis)}</span>`)
+        }
+        if (r?.supply_dev_c != null) {
+          lines.push(`供水偏差: ${r.supply_dev_c > 0 ? '+' : ''}${r.supply_dev_c.toFixed(1)}℃`)
+        }
+        if (r?.return_dev_c != null) {
+          lines.push(`回水偏差: ${r.return_dev_c > 0 ? '+' : ''}${r.return_dev_c.toFixed(1)}℃`)
+        }
+        if (r?.expected_source) {
+          lines.push(`<span style="color:#6b7a9a;font-size:11px">来源: ${r.expected_source === 'notebook_baseline' ? 'Notebook 基线' : 'GB 实时'}</span>`)
+        }
+        return lines.join('<br/>')
       },
     },
     xAxis: {
@@ -430,9 +502,9 @@ function renderChart() {
             }
           : undefined,
       },
-      // 国标期望线（先渲染，在实际线下方）
+      // 基线期望线（先渲染，在实际线下方）
       {
-        name: '国标期望',
+        name: usingNotebook.value ? 'Notebook 基线' : 'GB 期望',
         type: 'line',
         yAxisIndex: 0,
         data: ratedData,
@@ -825,6 +897,44 @@ function devClass(pct: number | null): string {
 }
 .empty-icon { display: flex; justify-content: center; color: var(--text-muted); margin-bottom: 6px; }
 .empty-sub  { font-size: 12px; color: var(--text-muted); }
+
+/* ── 异常阶段徽章 ── */
+.phase-chip {
+  display: inline-block;
+  font-size: 10px;
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-weight: 600;
+}
+.phase-chip.ramp  { background: rgba(251,191,36,0.15); color: var(--warning); }
+.phase-chip.full  { background: rgba(248,113,113,0.15); color: var(--danger); }
+.phase-chip.none  { color: var(--text-muted); }
+
+/* ── 空调根因徽章 ── */
+.diag-chip {
+  display: inline-block;
+  font-size: 10px;
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.diag-chip.A_low_efficiency { background: rgba(248,113,113,0.12); color: #f87171; }
+.diag-chip.B_small_deltaT   { background: rgba(167,139,250,0.12); color: #a78bfa; }
+.diag-chip.C_unexpected_on  { background: rgba(251,191,36,0.12);  color: var(--warning); }
+.diag-chip.other_hvac       { background: rgba(148,163,184,0.12); color: var(--text-muted); }
+
+/* ── 来源徽章变体 ── */
+.badge-notebook {
+  background: rgba(167,139,250,0.12);
+  color: #a78bfa;
+  border-color: rgba(167,139,250,0.3);
+}
+.badge-gb {
+  background: var(--accent-glow);
+  color: var(--accent);
+  border-color: var(--border-accent);
+}
 
 /* ── 错误 ── */
 .error-bar {

@@ -37,23 +37,46 @@
       <div v-if="fetchError" class="error-bar"><Icon icon="mdi:alert" width="14" class="bar-icon" /> {{ fetchError }}</div>
 
       <div v-if="!loading && anomalies.length > 0" class="anomaly-list">
-        <div class="anomaly-item" v-for="(a, idx) in anomalies" :key="idx">
+        <div class="anomaly-item" v-for="(a, idx) in anomalies" :key="idx"
+             :class="{ 'item-critical': a.severity === 'critical', 'item-warning': a.severity === 'warning' }">
           <div class="anomaly-left">
-            <span class="anomaly-priority" :class="rulePriority(a.rule)">
-              {{ rulePriority(a.rule) === 'high' ? 'HIGH' : 'MED' }}
+            <span class="anomaly-priority" :class="a.severity === 'critical' ? 'high' : rulePriority(a.rule)">
+              {{ a.severity === 'critical' ? 'CRIT' : (rulePriority(a.rule) === 'high' ? 'HIGH' : 'MED') }}
             </span>
             <div>
               <p class="anomaly-title">{{ a.message }}</p>
               <p class="anomaly-meta">
-                {{ formatTime(a.timestamp) }} · 设备 {{ a.meter_device_id }} · {{ buildingName(a.building_type) }}
+                {{ formatTime(a.timestamp) }} · {{ buildingName(a.building_type) }}
               </p>
+              <!-- notebook v2 丰富信息 -->
+              <div class="anomaly-tags" v-if="a.anomaly_phase || a.hvac_diagnosis || (a.symptom_flags && a.symptom_flags.length)">
+                <span v-if="a.anomaly_phase" class="tag" :class="'phase-' + a.anomaly_phase">
+                  <Icon icon="mdi:waves" width="11" />
+                  {{ a.anomaly_phase === 'ramp' ? '上升期' : '全量期' }}
+                </span>
+                <span v-if="a.hvac_diagnosis" class="tag diag" :title="a.hvac_diagnosis">
+                  <Icon icon="mdi:air-conditioner" width="11" />
+                  {{ diagLabel(a.hvac_diagnosis) }}
+                </span>
+                <span v-for="flag in (a.symptom_flags || []).slice(0,3)" :key="flag"
+                      class="tag flag">
+                  {{ flagLabel(flag) }}
+                </span>
+              </div>
             </div>
           </div>
           <div class="anomaly-right">
+            <span v-if="a.deviation_pct != null" class="anomaly-dev"
+                  :class="a.deviation_pct > 30 ? 'dev-high' : 'dev-med'">
+              {{ a.deviation_pct > 0 ? '+' : '' }}{{ Number(a.deviation_pct).toFixed(1) }}%
+            </span>
             <span v-if="a.actual_value != null" class="anomaly-val">
               {{ Number(a.actual_value).toFixed(2) }} {{ ruleUnit(a.rule) }}
             </span>
-            <span v-if="a.threshold != null" class="anomaly-threshold">
+            <span v-if="a.expected_value != null" class="anomaly-threshold">
+              基线 {{ Number(a.expected_value).toFixed(2) }} {{ ruleUnit(a.rule) }}
+            </span>
+            <span v-else-if="a.threshold != null" class="anomaly-threshold">
               阈值 {{ Number(a.threshold).toFixed(4) }} {{ ruleUnit(a.rule) }}
             </span>
           </div>
@@ -167,12 +190,34 @@ function buildingName(type: string): string {
   return buildingStore.getBuildingName(type)
 }
 
+// ── notebook v2 辅助函数 ──────────────────────────────
+const _DIAG_LABELS: Record<string, string> = {
+  'A_low_efficiency': 'A: 主机衰退',
+  'B_small_deltaT':   'B: 水力失调',
+  'C_unexpected_on':  'C: 非预期开机',
+  'other_hvac':       '其他空调故障',
+}
+function diagLabel(code: string): string {
+  return _DIAG_LABELS[code] ?? code
+}
+
+const _FLAG_LABELS: Record<string, string> = {
+  'flag_water':           '水耗偏高',
+  'flag_electricity':     '总电偏高',
+  'flag_hvac_energy':     '空调偏高',
+  'flag_supply_deviation':'供水偏离',
+  'flag_return_deviation':'回水偏离',
+}
+function flagLabel(flag: string): string {
+  return _FLAG_LABELS[flag] ?? flag
+}
+
 function rulePriority(rule: string): 'high' | 'medium' {
-  return ['night_high_power', 'hvac_overconsumption'].includes(rule) ? 'high' : 'medium'
+  return ['night_high_power', 'hvac_overconsumption', 'flag_hvac_energy'].includes(rule) ? 'high' : 'medium'
 }
 
 function ruleUnit(rule: string): string {
-  if (rule === 'water_leak') return 'm³'
+  if (rule === 'water_leak') return 'L'
   return 'kWh'
 }
 
@@ -299,10 +344,41 @@ function formatTime(iso: string): string {
 .anomaly-priority.high   { background: rgba(248,113,113,0.15); color: var(--danger); }
 .anomaly-priority.medium { background: rgba(251,191,36,0.15); color: var(--warning); }
 
+.anomaly-priority.high   { background: rgba(248,113,113,0.15); color: var(--danger); }
+.anomaly-priority.medium { background: rgba(251,191,36,0.15); color: var(--warning); }
+
 .anomaly-title { font-size: 13px; font-weight: 500; margin-bottom: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.anomaly-meta  { font-size: 11px; color: var(--text-muted); }
+.anomaly-meta  { font-size: 11px; color: var(--text-muted); margin-bottom: 4px; }
+
+/* notebook v2 tags */
+.anomaly-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-weight: 600;
+}
+.tag.phase-ramp  { background: rgba(251,191,36,0.15);   color: var(--warning); }
+.tag.phase-full  { background: rgba(248,113,113,0.12);  color: var(--danger);  }
+.tag.diag        { background: rgba(167,139,250,0.12);  color: #a78bfa; }
+.tag.flag        { background: rgba(148,163,184,0.1);   color: var(--text-muted); }
+
+/* severity borders */
+.item-critical { border-color: rgba(248,113,113,0.3); }
+.item-warning  { border-color: rgba(251,191,36,0.2);  }
 
 .anomaly-right { display: flex; flex-direction: column; align-items: flex-end; flex-shrink: 0; margin-left: 12px; }
+.anomaly-dev       { font-size: 12px; font-weight: 700; margin-bottom: 2px; }
+.anomaly-dev.dev-high { color: var(--danger); }
+.anomaly-dev.dev-med  { color: var(--warning); }
 .anomaly-val       { font-size: 14px; font-weight: 700; color: var(--danger); }
 .anomaly-threshold { font-size: 11px; color: var(--text-muted); }
 

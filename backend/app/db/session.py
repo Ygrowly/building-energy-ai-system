@@ -2,6 +2,7 @@
 数据库连接池：异步 SQLAlchemy 2.0 引擎 + Session 工厂。
 FastAPI 依赖注入用 get_db_session()；工具函数直接用 AsyncSessionLocal。
 """
+import asyncio
 import logging
 import ssl
 from collections.abc import AsyncGenerator
@@ -47,13 +48,64 @@ async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
         yield session
 
 
+def _is_transient_db_error(exc: Exception) -> bool:
+    """识别启动期常见的瞬时连库异常，避免单次握手抖动直接导致应用退出。"""
+    cursor: Exception | None = exc
+    keywords = (
+        "connection reset",
+        "connectionreseterror",
+        "ssl",
+        "handshake",
+        "timeout",
+        "connection refused",
+        "closed the connection unexpectedly",
+        "cannot connect",
+        "connection_lost",
+    )
+    while cursor is not None:
+        text_repr = f"{type(cursor).__name__}: {cursor}".lower()
+        if any(keyword in text_repr for keyword in keywords):
+            return True
+        cursor = getattr(cursor, "__cause__", None) or getattr(cursor, "__context__", None)
+    return False
+
+
+async def _run_startup_db_op_with_retry(
+    op_name: str,
+    operation,
+    *,
+    attempts: int = 5,
+    base_delay_seconds: float = 1.0,
+) -> None:
+    for attempt in range(1, attempts + 1):
+        try:
+            await operation()
+            if attempt > 1:
+                logger.warning("%s 在第 %d 次尝试后成功", op_name, attempt)
+            return
+        except Exception as exc:
+            if attempt >= attempts or not _is_transient_db_error(exc):
+                raise
+            delay = base_delay_seconds * attempt
+            logger.warning(
+                "%s 第 %d/%d 次执行失败，%ss 后重试。error=%s: %s",
+                op_name,
+                attempt,
+                attempts,
+                delay,
+                type(exc).__name__,
+                exc,
+            )
+            await asyncio.sleep(delay)
+
+
 async def ensure_auth_schema_compat() -> None:
     """
     兼容旧库结构：确保 users.role 字段存在。
     历史库可能未执行 012_add_user_role.sql，登录查询会因缺列报错。
     连接失败时仅记录警告，不阻断服务启动（连接池预热后下次请求会自动重连）。
     """
-    try:
+    async def _op():
         async with engine.begin() as conn:
             await conn.execute(
                 text(
@@ -63,6 +115,9 @@ async def ensure_auth_schema_compat() -> None:
                     """
                 )
             )
+
+    try:
+        await _run_startup_db_op_with_retry("ensure_auth_schema_compat", _op)
     except Exception as exc:
         logger.warning("ensure_auth_schema_compat 失败，已跳过（不影响启动）: %s", exc)
 
@@ -94,7 +149,7 @@ async def ensure_daily_energy_summary_view() -> None:
         return
 
     # ── Step 2：视图缺失时尝试创建（独立事务）────────────────────────────────
-    try:
+    async def _op():
         async with engine.begin() as conn:
             await conn.execute(
                 text(
@@ -110,12 +165,15 @@ async def ensure_daily_energy_summary_view() -> None:
                     GROUP BY date_trunc('day', "timestamp")::date, building_id
                     WITH DATA;
 
-                    CREATE UNIQUE INDEX IF NOT EXISTS idx_daily_summary_day_building
-                        ON daily_energy_summary (day, building_id);
-                    """
-                )
+                        CREATE UNIQUE INDEX IF NOT EXISTS idx_daily_summary_day_building
+                            ON daily_energy_summary (day, building_id);
+                        """
+                    )
             )
             await conn.execute(text('REFRESH MATERIALIZED VIEW daily_energy_summary'))
-        logger.info("已确保 daily_energy_summary 物化视图可用")
+            logger.info("已确保 daily_energy_summary 物化视图可用")
+
+    try:
+        await _run_startup_db_op_with_retry("ensure_daily_energy_summary_view", _op)
     except Exception as exc:
         logger.warning("创建/刷新 daily_energy_summary 失败，仍将使用工具降级。error=%s", exc)

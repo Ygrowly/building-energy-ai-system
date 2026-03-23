@@ -41,7 +41,11 @@ async function authFetch<T>(path: string, body: unknown): Promise<T> {
   return res.json() as Promise<T>
 }
 
-export function apiLogin(username: string, password: string): Promise<TokenResponse> {
+export interface LoginResponse extends TokenResponse {
+  user: UserInfo
+}
+
+export function apiLogin(username: string, password: string): Promise<LoginResponse> {
   return authFetch('/api/auth/login', { username, password })
 }
 

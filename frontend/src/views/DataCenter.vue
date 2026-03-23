@@ -394,6 +394,10 @@ const docSuccess = ref('')
 const documents = ref<RagDocument[]>([])
 const parsingByDoc = ref<Record<string, boolean>>({})
 
+// 轮询任务取消：每次触发解析都会生成一个 jobId；删除文档时把 jobId 标记失效，轮询下一轮立刻退出。
+const pollJobIdByDoc = ref<Record<string, number>>({})
+let pollJobCounter = 0
+
 // 删除确认
 const deleteConfirm = ref<{ message: string; action: () => Promise<void> } | null>(null)
 
@@ -533,9 +537,7 @@ async function uploadDocFile(file: File) {
   uploadingDoc.value = true
   try {
     const uploadRes = await api.uploadDocument(file)
-    await loadDocuments()
-
-    const docId = extractDocIdFromUpload(uploadRes)
+    const docId = extractDocIdFromUpload(uploadRes, file.name)
     if (docId) {
       docSuccess.value = `「${file.name}」已上传，正在后台解析...`
       // 不阻塞上传 UI：上传完成后直接后台触发轮询直到 Done/失败
@@ -543,6 +545,9 @@ async function uploadDocFile(file: File) {
     } else {
       docSuccess.value = `「${file.name}」已上传，需点击"解析"按钮进行向量化`
     }
+
+    // 上传成功后不阻塞等待列表刷新；列表刷新只为更新表格展示
+    void loadDocuments()
   } catch (e) {
     docError.value = (e as Error).message
   } finally {
@@ -553,6 +558,9 @@ async function uploadDocFile(file: File) {
 async function triggerParse(docId: string, opts?: { auto?: boolean }) {
   if (parsingByDoc.value[docId]) return
   parsingByDoc.value[docId] = true
+  pollJobCounter += 1
+  const jobId = pollJobCounter
+  pollJobIdByDoc.value[docId] = jobId
   docError.value = ''
   try {
     // 乐观更新：让用户立刻看到“解析中”，并禁用重复点击
@@ -566,8 +574,10 @@ async function triggerParse(docId: string, opts?: { auto?: boolean }) {
     }
 
     await api.parseDocument(docId)
+    // 删除发生在 parseDocument 之后：避免继续轮询导致页面反复刷新
+    if (pollJobIdByDoc.value[docId] !== jobId) return
     docSuccess.value = opts?.auto ? '已提交解析任务，正在后台解析...' : '已提交解析任务，正在后台解析...'
-    await pollDocStatus(docId)
+    await pollDocStatus(docId, jobId)
   } catch (e) {
     docError.value = (e as Error).message
     await loadDocuments()
@@ -580,6 +590,8 @@ function confirmDeleteDoc(docId: string, name: string) {
   deleteConfirm.value = {
     message: `确认从知识库删除文档「${name}」？`,
     action: async () => {
+      // 立刻取消该文档的轮询，避免删除后页面持续刷新（轮询里会触发 loadDocuments）
+      pollJobIdByDoc.value[docId] = -1
       await api.deleteDocument(docId)
       documents.value = documents.value.filter(d => d.id !== docId)
       docSuccess.value = '文档已删除'
@@ -675,26 +687,53 @@ function isFinalRunKey(key: string): boolean {
   return key === 'done' || key === 'fail' || key === 'CANCEL'
 }
 
-function extractDocIdFromUpload(uploadRes: api.RagUploadResponse | unknown): string | null {
-  const data = uploadRes as any
-  const inner = data?.data
-  if (Array.isArray(inner)) return inner?.[0]?.id ?? null
-  if (inner && typeof inner === 'object') return inner.id ?? null
-  return data?.id ?? null
+function extractDocIdFromUpload(uploadRes: api.RagUploadResponse | unknown, fileName?: string): string | null {
+  const findId = (obj: any, visited: WeakSet<object>): string | null => {
+    if (!obj || typeof obj !== 'object') return null
+    if (visited.has(obj)) return null
+    visited.add(obj)
+
+    if (typeof obj.id === 'string') {
+      if (!fileName) return obj.id
+      if (typeof obj.name === 'string' && obj.name === fileName) return obj.id
+    }
+
+    // 递归扫描：兼容 RAGFlow 返回的 data/data.docs 等形态
+    for (const v of Object.values(obj)) {
+      const got = findId(v, visited)
+      if (got) return got
+    }
+    return null
+  }
+
+  const root = uploadRes as any
+  // 先尝试常见形态 data:[{id,...}] / data:{id,...}
+  const data = root?.data ?? root
+  if (Array.isArray(data)) return data?.[0]?.id ?? null
+  if (data && typeof data === 'object' && typeof data.id === 'string') return data.id
+
+  return findId(data, new WeakSet()) ?? (typeof root?.id === 'string' ? root.id : null)
 }
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
 
-async function pollDocStatus(docId: string) {
+async function pollDocStatus(docId: string, jobId: number) {
   const intervalMs = 2000
   const timeoutMs = 900000 // 15 分钟轮询：RAGFlow 解析有时会较慢，避免“卡在中间态后需手动刷新”
   const startedAt = Date.now()
   let errorCount = 0
   const maxErrorCount = 10
+  let lastListRefreshAt = 0
+  const listRefreshIntervalMs = 15000
+  let finalRunKey: string = 'unstart'
+  let finalProgress: number | null = null
 
   while (Date.now() - startedAt < timeoutMs) {
+    // 删除后标记失效：立刻退出，避免持续触发 loadDocuments
+    if (pollJobIdByDoc.value[docId] !== jobId) return
+
     let status: api.RagDocumentStatus
     try {
       status = await api.getDocumentStatus(docId)
@@ -708,6 +747,8 @@ async function pollDocStatus(docId: string) {
     }
 
     const runKey = getRunKey(status.run ?? '')
+    finalRunKey = runKey
+    finalProgress = status.progress ?? null
 
     const idx = documents.value.findIndex(d => d.id === docId)
     if (idx !== -1) {
@@ -718,12 +759,30 @@ async function pollDocStatus(docId: string) {
         update_time: status.update_time ?? documents.value[idx].update_time,
       }
     } else {
-      // 如果当前列表还没包含该 doc（分页/刷新时序等），强制拉一次列表
-      await loadDocuments()
+      // 如果当前列表还没包含该 doc，避免“删除后轮询不断触发刷新”
+      const now = Date.now()
+      if (now - lastListRefreshAt >= listRefreshIntervalMs) {
+        if (pollJobIdByDoc.value[docId] !== jobId) return
+        lastListRefreshAt = now
+        await loadDocuments()
+      }
     }
 
     if (isFinalRunKey(runKey)) break
     await sleep(intervalMs)
+  }
+
+  if (pollJobIdByDoc.value[docId] !== jobId) return
+
+  // 轮询结束时更新顶部提示文案，避免用户看到“正在后台解析..”但已解析完成
+  const doc = documents.value.find(d => d.id === docId)
+  const docName = doc?.name ?? docId
+  if (finalRunKey === 'done') {
+    docSuccess.value = `「${docName}」已解析完成`
+  } else if (finalRunKey === 'fail') {
+    docError.value = `「${docName}」解析失败`
+  } else if (finalRunKey === 'CANCEL') {
+    docSuccess.value = `「${docName}」解析已取消`
   }
 
   await loadDocuments()

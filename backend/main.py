@@ -5,20 +5,33 @@ FastAPI 应用入口。
     uvicorn main:app --reload --host 0.0.0.0 --port 8000
 """
 import asyncio
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.core.cache import close_redis_client, init_redis_client
 from app.api.routes_auth import router as auth_router
 from app.api.routes_chat import router as chat_router
 from app.api.routes_data import router as data_router
 from app.api.routes_datacenter import router as datacenter_router
 from app.api.routes_report import router as report_router
 from app.api.routes_workorder import router as workorder_router
+from app.api.routes_admin import router as admin_router
 from app.core.config import get_settings
 
 settings = get_settings()
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s - %(message)s",
+)
+# 强制缓存与业务路由日志在控制台可见
+logging.getLogger("app.core.cache").setLevel(logging.INFO)
+logging.getLogger("app.api.routes_data").setLevel(logging.INFO)
+logging.getLogger("app.api.routes_chat").setLevel(logging.INFO)
+logging.getLogger("app.api.routes_workorder").setLevel(logging.INFO)
 
 
 _DEFAULT_JWT_KEY = "change-this-to-a-random-secret-in-production"
@@ -46,6 +59,9 @@ async def lifespan(app: FastAPI):
     import app.db.models  # noqa: F401  — 触发 User/RefreshToken metadata 注册
     from app.db.session import ensure_auth_schema_compat, ensure_daily_energy_summary_view
 
+    # 初始化缓存层（Redis 不可用时会自动降级到本地缓存）
+    await init_redis_client()
+
     # 兼容历史数据库结构，避免 users.role 缺失导致登录 500
     await ensure_auth_schema_compat()
 
@@ -56,22 +72,14 @@ async def lifespan(app: FastAPI):
     from app.graph.workflow import get_graph
     get_graph()
 
-    # 启动异常检测服务：
-    #   - initial_scan：首次全量扫描历史数据（或增量补齐），写入 anomaly_events
-    #   - start_periodic_scan：此后每小时增量扫描一次
-    from app.services.anomaly_detector import initial_scan, start_periodic_scan
-    asyncio.create_task(initial_scan())
-    periodic_task = asyncio.create_task(start_periodic_scan(interval_seconds=3600))
-
     # 定期清理过期/已吊销的 refresh token（每 24 小时一次）
     token_cleanup_task = asyncio.create_task(_cleanup_refresh_tokens(interval_seconds=86400))
 
     yield
 
     # 关闭时取消定期任务
-    periodic_task.cancel()
     token_cleanup_task.cancel()
-    for task in (periodic_task, token_cleanup_task):
+    for task in (token_cleanup_task,):
         try:
             await task
         except asyncio.CancelledError:
@@ -80,6 +88,9 @@ async def lifespan(app: FastAPI):
     # 关闭数据库连接池
     from app.db.session import engine
     await engine.dispose()
+
+    # 关闭 Redis client（若可用）
+    await close_redis_client()
 
 
 async def _cleanup_refresh_tokens(interval_seconds: int = 86400) -> None:
@@ -142,6 +153,7 @@ app.include_router(data_router, prefix="/api")
 app.include_router(datacenter_router, prefix="/api")
 app.include_router(workorder_router, prefix="/api")
 app.include_router(report_router, prefix="/api")
+app.include_router(admin_router)
 
 
 # ---------------------------------------------------------------------------

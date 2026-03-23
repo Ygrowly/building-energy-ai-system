@@ -23,14 +23,15 @@ from app.core.security import (
     create_refresh_token,
     decode_refresh_token,
     get_current_active_user,
-    hash_password,
-    verify_password,
+    hash_password_async,
+    verify_password_async,
 )
 from app.db.models import RefreshToken, User
 from app.db.session import get_db_session
 from app.schemas.auth_schemas import (
     ChangePasswordRequest,
     LoginRequest,
+    LoginResponse,
     RefreshRequest,
     RegisterRequest,
     RegisterResponse,
@@ -69,7 +70,7 @@ async def register(
 ) -> RegisterResponse:
     user = User(
         username=body.username,
-        hashed_password=hash_password(body.password),
+        hashed_password=await hash_password_async(body.password),
         email=body.email or None,
         phone=body.phone or None,
     )
@@ -107,19 +108,18 @@ async def register(
 
 @router.post(
     "/login",
-    response_model=TokenResponse,
+    response_model=LoginResponse,
     summary="用户登录",
 )
 async def login(
     body: LoginRequest,
     request: Request,
     db: AsyncSession = Depends(get_db_session),
-) -> TokenResponse:
+) -> LoginResponse:
     client_ip = request.client.host if request.client else "unknown"
     user = await _get_user_by_username(db, body.username)
 
-    # 故意不区分"用户不存在"和"密码错误"，防止用户枚举攻击
-    if user is None or not verify_password(body.password, user.hashed_password):
+    if user is None or not await verify_password_async(body.password, user.hashed_password):
         logger.warning("登录失败: username=%s ip=%s", body.username, client_ip)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -141,7 +141,8 @@ async def login(
 
     logger.info("用户登录成功: user_id=%s ip=%s", user.id, client_ip)
 
-    return TokenResponse(
+    return LoginResponse(
+        user=UserResponse.model_validate(user),
         access_token=access_token,
         refresh_token=refresh_token_str,
         expires_in=expires_in,
@@ -289,7 +290,7 @@ async def change_password(
     """
     修改当前用户密码。需提供旧密码校验，成功后写入新密码哈希。
     """
-    if not verify_password(body.old_password, current_user.hashed_password):
+    if not await verify_password_async(body.old_password, current_user.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="旧密码不正确",
@@ -303,7 +304,7 @@ async def change_password(
     user = result.scalar_one_or_none()
     if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="用户不存在")
-    user.hashed_password = hash_password(body.new_password)
+    user.hashed_password = await hash_password_async(body.new_password)
     await db.commit()
     logger.info("用户密码已修改: user_id=%s", current_user.id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

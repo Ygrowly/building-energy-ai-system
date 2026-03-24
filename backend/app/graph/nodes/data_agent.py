@@ -7,8 +7,8 @@ Data Agent（数据分析师）节点。
 - 每日趋势聚合（query_daily_energy_summary）
 - COP 能效比计算（calculate_system_cop）
 - 异常检测（detect_energy_anomalies）
-- 渲染图表（render_ui_component）
 - 自我纠错：工具调用失败时能识别错误原因并重试
+- 可视化由后处理 viz_engine 自动完成，LLM 无需关心
 
 严禁：自己做加减乘除；查询不在白名单的建筑；跨越权限。
 """
@@ -40,8 +40,8 @@ from app.schemas.mcp_schemas import (
     GetDeviceLiveStatusInput,
     QueryDailyEnergySummaryInput,
     QueryEnergyMetricsInput,
-    RenderUIComponentInput,
 )
+from app.graph.viz_engine import generate_viz_artifacts
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +49,7 @@ logger = logging.getLogger(__name__)
 # System Prompt — 数据分析师
 # ---------------------------------------------------------------------------
 DATA_AGENT_SYSTEM_PROMPT = """你是一个楼宇能耗管理系统的数据分析师（Data Agent）。
-你拥有只读数据库权限，负责所有数据查询、统计分析和图表生成工作。
+你拥有只读数据库权限，负责所有数据查询和统计分析工作。
 
 ## 你的专属工具（严格按此列表调用，不允许猜测工具名称）
 1. list_available_buildings — 列出全部楼宇。**仅当上下文未提供楼宇列表时才调用**
@@ -60,8 +60,10 @@ DATA_AGENT_SYSTEM_PROMPT = """你是一个楼宇能耗管理系统的数据分�
 6. detect_energy_anomalies — 基于规则检测能耗异常
 7. compare_metric_across_buildings — 多栋楼同一指标横向汇总对比，building_ids 传空则自动对比全部楼宇
 8. compare_time_periods — 同环比分析（当期 vs 基期），返回变化量和变化率
-9. render_ui_component — 生成前端图表/卡片渲染指令（有数值结果时必须调用）
-10. generate_report — 生成 CSV 报表下载链接，用户要求"导出/生成报表"时调用
+9. generate_report — 生成 CSV 报表下载链接，用户要求"导出/生成报表"时调用
+
+**重要：系统会自动根据你调用的工具和返回数据的形状决定是否生成可视化图表，你无需关心图表渲染。
+专注于：选择正确的工具 → 获取数据 → 用自然语言回答用户问题。**
 
 ## 建筑 ID 说明
 - building_id 使用 building_type 值：'Education'、'Office'、'Public services'
@@ -86,63 +88,25 @@ DATA_AGENT_SYSTEM_PROMPT = """你是一个楼宇能耗管理系统的数据分�
 |------|---------|
 | 多楼横向总量/均值对比 | compare_metric_across_buildings（building_ids=[]，一次搞定） |
 | 单楼日趋势 | query_daily_energy_summary |
-| 多楼日趋势对比 | 对每栋楼各调一次 query_daily_energy_summary，再统一渲染多线图 |
+| 多楼日趋势对比 | 对每栋楼各调一次 query_daily_energy_summary |
 | 原始小时数据 | query_energy_metrics |
 | 故障/异常分析 | detect_energy_anomalies |
 
 ## 效率规范（重要）
-- **完成一个任务的工具调用次数通常不超过 5 次**（查询 + 渲染），超过说明选错了工具
+- **完成一个任务的工具调用次数通常不超过 4 次**，超过说明选错了工具
 - 开始前先制定查询计划，每种数据只查一次，不重复调用相同工具
-- 多楼数据渲染时，把所有系列合并进一个 render_ui_component 调用
 
 ## 工作规范
 1. 先调工具获取真实数据，再组织自然语言回答
-2. **智能决定是否生成图表**（不要每次都生成）：
-   - **应该生成图表**：趋势分析（多天/多月数据）、多楼对比、数据分布、异常检测结果等——数据量大或需要直观对比时
-   - **不应该生成图表**：查询单个数值（如"某天用电量多少"）、查询单个状态、简单的是/否问题——直接用文字回答即可
-   - 原则：图表应该为用户提供额外的信息价值，而不是把一个数字重复画一遍
-3. 工具报错时，分析原因并修正参数后最多重试 2 次
-4. 数据确实不存在时，如实说明，不要编造
-
-## render_ui_component 的 data_payload 格式规范（严格遵守）
-
-**LineChart / BarChart（折线图/柱状图）**：
-```json
-{
-  "series": [
-    {
-      "name": "教学楼",
-      "data": [1500.0, 1480.0, 1620.0],
-      "timestamps": ["2016-04-01", "2016-04-02", "2016-04-03"]
-    },
-    {
-      "name": "办公楼",
-      "data": [980.0, 1020.0, 950.0],
-      "timestamps": ["2016-04-01", "2016-04-02", "2016-04-03"]
-    }
-  ]
-}
-```
-关键约束：
-- `data` 字段必须是**纯数字数组**（float），不能是对象或字符串
-- `timestamps` 是与 `data` 等长的日期字符串列表，格式 "YYYY-MM-DD"
-- 每个楼宇一个 series 对象，多楼宇合并进同一次 render_ui_component 调用
-
-**Gauge（仪表盘）**：
-```json
-{"value": 3.5, "unit": "COP", "min": 0, "max": 6}
-```
-关键约束：
-- `unit`：数值的单位（如 "COP"、"kWh"、"m³"、"°C"、"%"），根据数据语义自行判断
-- `min` / `max`：仪表盘量程范围，根据数据含义和实际值合理设定（如 COP 一般 0-6，日用电量可设 0-数据值×1.5）
-- 可选 `colorStops`：归一化颜色分段，如 `[[0.3, "#4ade80"], [0.7, "#fbbf24"], [1, "#f87171"]]`，不传则使用默认绿-黄-红
+2. 工具报错时，分析原因并修正参数后最多重试 2 次
+3. 数据确实不存在时，如实说明，不要编造
+4. 回答要包含关键数值，方便用户快速获取信息
 
 ## 禁止事项
 - 禁止自行计算 COP、总耗电量等（必须调工具）
 - 禁止输出未经工具返回的数字
 - 禁止查询白名单外的建筑
-- 禁止冗余重复的工具调用
-- 禁止在 data_payload 的 data 字段中放对象（必须是数字）"""
+- 禁止冗余重复的工具调用"""
 
 
 # ---------------------------------------------------------------------------
@@ -223,11 +187,6 @@ DATA_AGENT_TOOLS = [
         "同环比分析：对同一建筑、同一指标在两段时间之间做对比，返回变化量和变化率(%)。"
         "适合'本周vs上周'、'4月vs3月'等时间对比问题。默认时间范围在 2016-04 ~ 2016-05 内。",
         args_schema=CompareTimePeriodsInput,
-    ),
-    _make_mcp_tool(
-        "render_ui_component",
-        "生成前端图表/卡片渲染指令（LineChart/BarChart/Gauge/WorkOrderCard/ReportDownload）。",
-        args_schema=RenderUIComponentInput,
     ),
     _make_mcp_tool(
         "generate_report",
@@ -415,8 +374,7 @@ async def data_agent_node(state: AgentState) -> dict[str, Any]:
     ]
     global_msg = [final_ai_msgs[-1]] if final_ai_msgs else []
 
-    # 提取图表 artifacts（ToolMessage 中 render_ui_component 的返回值）
-    # 注意：下方会检测是否有 artifacts 但无文字回答，需要先提取 artifacts
+    # 提取 evidence（数据溯源）
     artifacts = list(state.get("artifacts", []))
     evidence = list(state.get("evidence", []))
     for msg in new_messages:
@@ -430,18 +388,20 @@ async def data_agent_node(state: AgentState) -> dict[str, Any]:
         if not isinstance(payload, dict):
             continue
         evidence.extend(extract_evidence(payload))
-        if "component_type" in payload:
-            artifacts.append(payload)
+
+    # 提取用户原始问题（同时用于 viz_engine 和 context_summary）
+    user_q = next(
+        (str(m.content) for m in reversed(list(history)) if isinstance(m, HumanMessage)),
+        "",
+    )
+
+    # ★ 可视化引擎：根据工具调用结果 + 用户问题自动生成 artifacts
+    viz_artifacts = generate_viz_artifacts(new_messages, user_question=user_q)
+    artifacts.extend(viz_artifacts)
 
     tool_count = sum(1 for m in new_messages if isinstance(m, ToolMessage))
     logger.info(
         "Data Agent 完成: 工具调用=%d 用时=%.1fs", tool_count, time.time() - t0,
-    )
-
-    # ── 滚动更新 context_summary ──────────────────────────────────────
-    user_q = next(
-        (str(m.content) for m in reversed(list(history)) if isinstance(m, HumanMessage)),
-        "",
     )
     answer_text = str(global_msg[0].content) if global_msg else "（无文字回答，已生成图表）"
     new_summary = update_context_summary(

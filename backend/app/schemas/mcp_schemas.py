@@ -27,7 +27,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Literal, Optional
 
@@ -126,7 +126,13 @@ class TimeRange(BaseModel):
     end: datetime
 
     @model_validator(mode="after")
-    def end_after_start(self) -> "TimeRange":
+    def _normalize(self) -> "TimeRange":
+        # LLM 传入的 datetime 可能不带时区，强制标记为 UTC
+        # 避免 PostgreSQL 用服务器本地时区解释 naive datetime
+        if self.start.tzinfo is None:
+            self.start = self.start.replace(tzinfo=timezone.utc)
+        if self.end.tzinfo is None:
+            self.end = self.end.replace(tzinfo=timezone.utc)
         if self.end <= self.start:
             raise ValueError(
                 f"time_range.end ({self.end}) 必须晚于 time_range.start ({self.start})"

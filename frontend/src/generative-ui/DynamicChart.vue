@@ -208,7 +208,7 @@ function buildOption() {
       } : undefined,
       xAxis: { type: 'category', data: xAxis, axisLabel: { color: '#9399b8', fontSize: 10, rotate: 30 } },
       yAxis: { type: 'value', axisLabel: { color: '#9399b8', fontSize: 11 } },
-      tooltip: { trigger: 'axis' },
+      tooltip: { trigger: 'axis', valueFormatter: (v: number) => v != null ? v.toFixed(2) : '—' },
       series: seriesList.map((s, i) => {
         const color = PALETTE[i % PALETTE.length]
         const yData = extractData(s)
@@ -249,7 +249,7 @@ function buildOption() {
         xAxis: { type: 'category', data: xData, axisLabel: { color: '#9399b8', fontSize: 10, rotate: 30 } },
         yAxis: { type: 'value', axisLabel: { color: '#9399b8', fontSize: 11 } },
         series: [{ type: 'bar', data: yData, itemStyle: { color: PALETTE[0], borderRadius: [3, 3, 0, 0] } }],
-        tooltip: { trigger: 'axis' },
+        tooltip: { trigger: 'axis', valueFormatter: (v: number) => v != null ? v.toFixed(2) : '—' },
       }
     }
     return {
@@ -262,7 +262,7 @@ function buildOption() {
         areaStyle: { color: { type: 'linear', x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: 'rgba(108,142,245,0.3)' }, { offset: 1, color: 'rgba(108,142,245,0)' }] } },
         itemStyle: { color: PALETTE[0] },
       }],
-      tooltip: { trigger: 'axis' },
+      tooltip: { trigger: 'axis', valueFormatter: (v: number) => v != null ? v.toFixed(2) : '—' },
     }
   }
 

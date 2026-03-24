@@ -479,6 +479,12 @@ async def _stream_graph(
     _current_parent_agent = ""
     # 追踪当前 agent 节点是否已通过 on_chat_model_stream 流式推送了 text 内容
     _text_content_streamed = False
+    # viz_engine artifact 去重：记住进入前已有的 artifact IDs，只推送新增的
+    _prev_artifact_ids: set[str] = {
+        a.get("artifact_id", "") for a in state.get("artifacts", [])
+        if isinstance(a, dict)
+    }
+    _emitted_artifact_ids: set[str] = set(_prev_artifact_ids)
 
     try:
         async for event in graph.astream_events(graph_input, version="v2"):
@@ -596,9 +602,8 @@ async def _stream_graph(
                 if output:
                     try:
                         parsed = json.loads(output)
-                        if "component_type" in parsed or "widget" in parsed:
-                            yield _artifact_event(parsed)
-                        elif parsed.get("status") == "pending_approval":
+                        # 工单草稿 → 立即推送审批卡片
+                        if parsed.get("status") == "pending_approval":
                             yield _artifact_event({
                                 "widget": "WorkOrderCard",
                                 "component_type": "WorkOrderCard",
@@ -606,6 +611,10 @@ async def _stream_graph(
                                 "data_payload": parsed,
                                 "source_info": {"tool": "create_work_order_draft"},
                             })
+                        # 报表下载 → 立即推送（generate_report 直接带 component_type）
+                        elif parsed.get("component_type") == "ReportDownload":
+                            yield _artifact_event(parsed)
+                        # 其他工具结果的可视化由 viz_engine 在 on_chain_end 统一处理
                     except (json.JSONDecodeError, TypeError):
                         pass
 
@@ -653,6 +662,14 @@ async def _stream_graph(
                     else:
                         # 兜底：若未经过流式推送（如非流式模型），一次性发送全部文本
                         yield _text_event(final_text, is_final=True)
+
+                # ★ viz_engine 生成的 artifacts 在节点完成时推送
+                chain_artifacts = data.get("output", {}).get("artifacts", [])
+                for art in chain_artifacts:
+                    if isinstance(art, dict) and art.get("artifact_id"):
+                        if art["artifact_id"] not in _emitted_artifact_ids:
+                            _emitted_artifact_ids.add(art["artifact_id"])
+                            yield _artifact_event(art)
 
             elif kind == "on_chain_end" and name in ("LangGraph", ""):
                 output = data.get("output")

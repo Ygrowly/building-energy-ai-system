@@ -250,6 +250,12 @@
           </div>
         </template>
 
+        <!-- Artifact：数值卡片 -->
+        <ValueCard
+          v-else-if="msg.role === 'artifact' && isValueCard(msg.artifact)"
+          :artifact="ensureArtifact(msg.artifact)"
+        />
+
         <!-- Artifact：图表 -->
         <DynamicChart
           v-else-if="msg.role === 'artifact' && isChart(msg.artifact)"
@@ -375,6 +381,7 @@ import ThinkingBubble from '@/generative-ui/ThinkingBubble.vue'
 import DynamicChart from '@/generative-ui/DynamicChart.vue'
 import WorkOrderCard from '@/generative-ui/WorkOrderCard.vue'
 import ReportDownload from '@/generative-ui/ReportDownload.vue'
+import ValueCard from '@/generative-ui/ValueCard.vue'
 import EvidenceLink from '@/generative-ui/EvidenceLink.vue'
 import type { ArtifactEvent } from '@/api/stream_client'
 
@@ -705,6 +712,12 @@ watch(() => store.currentSessionId, async () => {
 // ── Artifact 类型判断 ────────────────────────────────────────────────────────
 function ensureArtifact(a: ArtifactEvent | undefined): ArtifactEvent {
   return a!
+}
+
+function isValueCard(artifact?: ArtifactEvent): boolean {
+  if (!artifact) return false
+  const t = artifact.component_type ?? artifact.widget ?? ''
+  return ['ValueCard', 'value-card'].includes(t)
 }
 
 function isChart(artifact?: ArtifactEvent): boolean {

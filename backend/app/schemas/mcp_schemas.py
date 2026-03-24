@@ -698,3 +698,80 @@ class GenerateReportOutput(BaseModel):
     building_id: str
     report_type: str
     period: str
+
+
+# ===========================================================================
+# Tool 13：building_kpi_forecast_6h_12h — ML 模型预测 + 预测预警
+# ===========================================================================
+
+class ForecastKPIInput(BaseModel):
+    """
+    基于 ML 模型预测楼宇未来 6h / 12h 的 5 项 KPI，
+    并与 kpi_expected_hourly 基线对比，生成预测预警标志。
+    典型场景：
+      - "未来 6 小时教学楼是否可能出现能耗超标？"
+      - "预测一下办公楼接下来 12 小时的水电消耗"
+    """
+    building_id: str = Field(
+        min_length=1,
+        description="建筑类型名称，如 'Education'、'Office'、'Public services'"
+    )
+    as_of: Optional[datetime] = Field(
+        default=None,
+        description="预测基准时刻（默认取数据库中该楼最新可用行）"
+    )
+    include_expected_comparison: bool = Field(
+        default=True,
+        description="是否与 kpi_expected_hourly 基线对比并生成预测预警"
+    )
+
+
+class ForecastedMetric(BaseModel):
+    """单个指标在单个 horizon 的预测结果。"""
+    metric_name: str = Field(description="KPI 名称：water_l / electricity_kwh / sim_supply_temp_c / sim_return_temp_c / hac_energy")
+    horizon_h: int = Field(description="预测跨度：6 或 12 小时")
+    predicted_value: float
+    expected_value: Optional[float] = Field(default=None, description="kpi_expected_hourly 基线值（可能为空）")
+    deviation_pct: Optional[float] = Field(default=None, description="(predicted - expected) / expected * 100")
+    risk_level: str = Field(default="normal", description="normal / warning / critical")
+    rule_triggered: Optional[str] = Field(default=None, description="触发的预警规则")
+
+
+class ForecastKPIOutput(BaseModel):
+    """ML 模型预测结果，含预测值和预测预警。"""
+    building_id: str
+    as_of_timestamp: datetime = Field(description="预测基准时刻")
+    model_name: str
+    horizons_h: list[int] = Field(description="预测跨度列表，固定为 [6, 12]")
+    metrics: list[ForecastedMetric] = Field(description="各指标各 horizon 的预测结果（10 条）")
+    warnings_count: int = Field(description="预测预警数量（risk_level != normal）")
+    data_rows_used: int = Field(description="用于构造特征的历史数据行数")
+    persisted: bool = Field(default=False, description="预测预警是否已写入 predicted_anomaly_events")
+
+
+# ===========================================================================
+# Tool 14：building_kpi_forecast_from_features — 调试用 features 直传
+# ===========================================================================
+
+class ForecastFromFeaturesInput(BaseModel):
+    """
+    内部调试工具：直接传入已构造好的特征向量调用模型 predict。
+    用于验证模型可用性、验证 target_cols 输出映射、
+    与服务端自动构造特征的结果做对照。
+    键名必须与 artifact["feature_cols"] 完全一致（41 个）。
+    """
+    features: dict[str, float] = Field(
+        description="键为 feature_cols 中的列名，值为 number；须与训练时特征工程完全一致"
+    )
+
+
+class ForecastFromFeaturesOutput(BaseModel):
+    """调试工具返回：模型原始预测输出 + 元数据。"""
+    model_name: str
+    horizons_h: list[int]
+    target_cols: list[str]
+    predictions: dict[str, float] = Field(
+        description="键为 target_cols 中的列名，值为预测值"
+    )
+    feature_count_received: int
+    feature_count_expected: int

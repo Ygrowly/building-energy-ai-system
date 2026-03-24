@@ -37,6 +37,7 @@ from app.mcp.tools.ui_render import (
     render_ui_component,
 )
 from app.mcp.tools.rag_search import rag_hybrid_search
+from app.mcp.tools.forecast import building_kpi_forecast, building_kpi_forecast_debug
 
 # Schema 导入（用于参数校验）
 from app.schemas.mcp_schemas import (
@@ -45,6 +46,8 @@ from app.schemas.mcp_schemas import (
     CompareTimePeriodsInput,
     CreateWorkOrderDraftInput,
     DetectEnergyAnomaliesInput,
+    ForecastFromFeaturesInput,
+    ForecastKPIInput,
     GenerateReportInput,
     GetBuildingRatedValuesInput,
     GetDeviceLiveStatusInput,
@@ -200,6 +203,33 @@ _register(ToolDefinition(
     input_schema=GenerateReportInput,
     requires_db=False,
     func=generate_report,
+))
+
+_register(ToolDefinition(
+    name="building_kpi_forecast_6h_12h",
+    description=(
+        "基于 ML 模型预测楼宇未来第 6、12 小时的 5 项 KPI"
+        "（水耗 water_l、电耗 electricity_kwh、供水温度 sim_supply_temp_c、"
+        "回水温度 sim_return_temp_c、空调能耗 hac_energy），"
+        "并与国标基线期望值对比生成 pre-emptive 异常预警标志。"
+        "预警记录自动写入 predicted_anomaly_events 表。"
+        "适用场景：'未来6小时是否可能出现能耗超标？'、'预测一下办公楼接下来的水电消耗'。"
+    ),
+    input_schema=ForecastKPIInput,
+    requires_db=True,
+    func=building_kpi_forecast,
+))
+
+_register(ToolDefinition(
+    name="building_kpi_forecast_from_features",
+    description=(
+        "（内部调试）直接传入已构造好的 41 维特征向量，"
+        "跳过数据库查询和特征工程，直接调用模型 predict。"
+        "用途：验证模型可用性、验证 target_cols 输出映射、与自动构造特征做对照。"
+    ),
+    input_schema=ForecastFromFeaturesInput,
+    requires_db=False,
+    func=building_kpi_forecast_debug,
 ))
 
 

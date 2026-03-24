@@ -2,27 +2,31 @@
 数据中心路由模块。
 
 提供两类端点：
-  1. /datacenter/datasets/*   — CSV/Excel 数据集上传、预览、AI 分析
-  2. /datacenter/documents/*  — PDF/Word 知识库文档管理（代理 RAGFlow API）
+  1. /datacenter/datasets/*        — CSV/Excel 数据集上传、预览、AI 分析
+  2. /datacenter/datasets/import   — 将数据集导入 energy_data 表
+  3. /datacenter/energy-data/*     — energy_data 表 CRUD（增删改查）
+  4. /datacenter/documents/*       — PDF/Word 知识库文档管理（代理 RAGFlow API）
 """
 from __future__ import annotations
 
 import json
 import logging
-import os
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+import pandas as pd
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from fastapi.responses import StreamingResponse
-from sqlalchemy import delete, select
+from pydantic import BaseModel
+from sqlalchemy import delete, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.security import get_current_active_user
-from app.db.models import DatasetFile, User
+from app.db.models import DatasetFile, EnergyData, User
 from app.db.session import AsyncSessionLocal
 from app.services import data_analyzer
 
@@ -178,18 +182,75 @@ async def get_dataset(
 @router.delete("/datasets/{dataset_id}", summary="删除数据集")
 async def delete_dataset(
     dataset_id: str,
+    delete_energy_data: bool = Query(
+        True,
+        description="是否同时删除已导入到 energy_data 的对应记录（默认 True）",
+    ),
     current_user: User = Depends(get_current_active_user),
     db: AsyncSession = Depends(get_db),
-) -> dict[str, str]:
+) -> dict[str, Any]:
+    """
+    删除数据集文件记录及磁盘文件。
+
+    当 `delete_energy_data=true`（默认）时，如果该数据集曾导入过 energy_data，
+    则同时删除导入的 energy_data 记录（按楼宇 ID + 时间范围精确匹配）。
+    """
     record = await _get_dataset_or_404(dataset_id, current_user.id, db)
 
+    log.info("删除数据集 %s (delete_energy_data=%s)", dataset_id, delete_energy_data)
+
+    # ── 尝试获取导入元信息 ──────────────────────────────────────
+    deleted_energy_rows = 0
+    import_meta: dict | None = None
+    try:
+        stats = json.loads(record.stats_json or "{}")
+        import_meta = stats.get("_import")
+    except Exception:
+        pass
+
+    if import_meta and not delete_energy_data:
+        log.info("数据集 %s 有 energy_data 导入记录，但 delete_energy_data=False，跳过清除", dataset_id)
+
+    # ── 删除对应的 energy_data 记录 ─────────────────────────────
+    if delete_energy_data and import_meta:
+        building_ids: list[str] = import_meta.get("building_ids") or []
+        min_ts_str: str | None = import_meta.get("min_ts")
+        max_ts_str: str | None = import_meta.get("max_ts")
+
+        if building_ids and min_ts_str and max_ts_str:
+            try:
+                min_ts = datetime.fromisoformat(min_ts_str.replace("Z", "+00:00"))
+                max_ts = datetime.fromisoformat(max_ts_str.replace("Z", "+00:00"))
+                result = await db.execute(
+                    text("""
+                        DELETE FROM energy_data
+                        WHERE building_id = ANY(:bids)
+                          AND timestamp >= :t0
+                          AND timestamp <= :t1
+                    """),
+                    {"bids": building_ids, "t0": min_ts, "t1": max_ts},
+                )
+                deleted_energy_rows = result.rowcount or 0
+                log.info(
+                    "数据集 %s 删除时同步删除 energy_data %d 条 (buildings=%s, %s ~ %s)",
+                    dataset_id, deleted_energy_rows, building_ids, min_ts_str, max_ts_str,
+                )
+            except Exception as exc:
+                log.warning("删除 energy_data 失败：%s", exc)
+
+    # ── 删除磁盘文件 ──────────────────────────────────────────────
     Path(record.file_path).unlink(missing_ok=True)
 
+    # ── 删除数据集记录 ────────────────────────────────────────────
     await db.execute(
         delete(DatasetFile).where(DatasetFile.id == dataset_id)
     )
     await db.commit()
-    return {"message": "数据集已删除"}
+
+    msg = "数据集已删除"
+    if deleted_energy_rows > 0:
+        msg += f"，同时清除了 {deleted_energy_rows:,} 条 energy_data 记录"
+    return {"message": msg, "deleted_energy_rows": deleted_energy_rows}
 
 
 @router.post("/datasets/{dataset_id}/analyze", summary="对数据集进行 AI 洞察分析（SSE 流式输出）")
@@ -417,6 +478,515 @@ async def parse_document(
             _raise_ragflow_error(exc)
         except httpx.RequestError as exc:
             raise HTTPException(status_code=502, detail=f"RAGFlow 连接失败：{exc}") from exc
+
+
+# ---------------------------------------------------------------------------
+# energy_data 字段列别名映射（CSV 列名 → energy_data 字段名）
+# ---------------------------------------------------------------------------
+
+_ENERGY_COL_ALIASES: dict[str, list[str]] = {
+    "timestamp": [
+        "timestamp", "time", "datetime", "date_time", "ts", "日期时间", "时间",
+    ],
+    "building_id": [
+        "building_id", "building", "buildingid", "building_name", "楼宇id", "楼宇",
+    ],
+    "electricity_kwh": [
+        "electricity_kwh", "electricity", "elec_kwh", "electricity(kwh)",
+        "electricity_energy", "用电量", "电耗",
+    ],
+    "water_m3": [
+        "water_m3", "water", "water(m3)", "water_consumption",
+        # 注意：water_l 是升，直接映射不做单位转换（用户需自行核实）
+        "water_l", "waterconsumption", "用水量", "水耗",
+    ],
+    "hac_energy": [
+        "hac_energy", "hvac_energy", "hac", "hvac", "hac_kwh",
+        "ac_energy", "空调能耗",
+    ],
+    "sim_supply_temp_c": [
+        "sim_supply_temp_c", "supply_temp", "supply_temp_c", "supply_temperature",
+        "supplytemp", "供水温度",
+    ],
+    "sim_return_temp_c": [
+        "sim_return_temp_c", "return_temp", "return_temp_c", "return_temperature",
+        "returntemp", "回水温度",
+    ],
+    "air_temp_c": [
+        "air_temp_c", "air_temp", "ambient_temp", "temperature", "temp_c",
+        "airtemperature", "air_temperature", "室外温度", "气温",
+    ],
+    "dew_temp_c": [
+        "dew_temp_c", "dew_temp", "dew_point", "dew_point_c",
+        "dewtemperature", "dew_temperature", "露点温度",
+    ],
+    "humidity_rh_pct": [
+        "humidity_rh_pct", "humidity", "humidity_pct", "rh_pct",
+        "relative_humidity", "relativehumidity", "湿度",
+    ],
+}
+
+_ENERGY_FLOAT_FIELDS = [
+    "electricity_kwh", "water_m3", "hac_energy",
+    "sim_supply_temp_c", "sim_return_temp_c",
+    "air_temp_c", "dew_temp_c", "humidity_rh_pct",
+]
+
+# 批量导入分批大小
+_IMPORT_BATCH_SIZE = 500
+
+
+def _detect_column_mapping(csv_columns: list[str]) -> dict[str, str]:
+    """
+    自动检测 CSV 列名 → energy_data 字段名的映射。
+    返回 {energy_field: csv_column_name}，只包含能匹配上的字段。
+    """
+    lower_cols = {c.lower().strip(): c for c in csv_columns}
+    mapping: dict[str, str] = {}
+    for field, aliases in _ENERGY_COL_ALIASES.items():
+        for alias in aliases:
+            if alias.lower() in lower_cols:
+                mapping[field] = lower_cols[alias.lower()]
+                break
+    return mapping
+
+
+# ---------------------------------------------------------------------------
+# Pydantic 请求体模型
+# ---------------------------------------------------------------------------
+
+class EnergyDataUpdate(BaseModel):
+    timestamp: str
+    building_id: str
+    electricity_kwh: float | None = None
+    water_m3: float | None = None
+    hac_energy: float | None = None
+    sim_supply_temp_c: float | None = None
+    sim_return_temp_c: float | None = None
+    air_temp_c: float | None = None
+    dew_temp_c: float | None = None
+    humidity_rh_pct: float | None = None
+
+
+class EnergyDataCreate(BaseModel):
+    timestamp: str
+    building_id: str
+    electricity_kwh: float | None = None
+    water_m3: float | None = None
+    hac_energy: float | None = None
+    sim_supply_temp_c: float | None = None
+    sim_return_temp_c: float | None = None
+    air_temp_c: float | None = None
+    dew_temp_c: float | None = None
+    humidity_rh_pct: float | None = None
+
+
+# ---------------------------------------------------------------------------
+# 数据集导入到 energy_data（SSE 流式 + 批量 upsert）
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/datasets/{dataset_id}/import-to-energy-data",
+    summary="将数据集流式导入 energy_data 表（SSE 进度推送）",
+)
+async def import_dataset_to_energy_data(
+    dataset_id: str,
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+) -> StreamingResponse:
+    """
+    SSE 流式导入：
+      - 每批（500 行）推送一次进度事件
+      - 事件格式：data: {"stage":"importing","progress":0.45,"imported":500,"total":1100}
+      - 完成事件：data: {"done":true,"imported":1000,"failed":5,"col_map":{...},...}
+      - 结束标记：data: [DONE]
+
+    列名自动映射（不区分大小写）：
+      - airTemperature / air_temperature → air_temp_c
+      - dewTemperature / dew_temperature → dew_temp_c
+      - humidity → humidity_rh_pct
+      - water_l / water_m3 → water_m3
+      - 以及其他常见别名（详见 _ENERGY_COL_ALIASES）
+    """
+    # 前置校验（用请求 session）
+    record = await _get_dataset_or_404(dataset_id, current_user.id, db)
+    file_path = record.file_path
+    saved_id = record.id
+
+    async def _stream():  # noqa: C901
+        _emit = lambda obj: f"data: {json.dumps(obj, ensure_ascii=False)}\n\n"  # noqa: E731
+
+        async with AsyncSessionLocal() as sdb:
+            try:
+                # ── 阶段 1：解析文件 ──────────────────────────────────────
+                yield _emit({"stage": "parsing", "progress": 0.0, "msg": "正在解析文件..."})
+
+                try:
+                    df, _ = data_analyzer.parse_file(file_path)
+                except Exception as exc:
+                    yield _emit({"error": f"文件解析失败：{exc}"})
+                    yield "data: [DONE]\n\n"
+                    return
+
+                col_map = _detect_column_mapping(df.columns.tolist())
+                missing = []
+                if "timestamp" not in col_map:
+                    missing.append("timestamp（或 time/datetime）")
+                if "building_id" not in col_map:
+                    missing.append("building_id（或 building）")
+                if missing:
+                    yield _emit({"error": f"CSV 缺少必要列：{', '.join(missing)}。当前列：{df.columns.tolist()[:15]}"})
+                    yield "data: [DONE]\n\n"
+                    return
+
+                # ── 阶段 2：验证楼宇 ID ─────────────────────────────────
+                yield _emit({"stage": "validating", "progress": 0.02, "msg": "校验楼宇 ID..."})
+
+                bids_in_csv = (
+                    df[col_map["building_id"]].dropna().astype(str).str.strip().unique().tolist()
+                )
+                valid_bids_res = await sdb.execute(
+                    text("SELECT building_id FROM buildings WHERE building_id = ANY(:bids)"),
+                    {"bids": bids_in_csv},
+                )
+                valid_bids: set[str] = {r[0] for r in valid_bids_res.fetchall()}
+                invalid_bids = [b for b in bids_in_csv if b not in valid_bids]
+
+                if not valid_bids:
+                    yield _emit({
+                        "error": f"所有楼宇 ID 均不存在于 buildings 表：{bids_in_csv[:5]}",
+                    })
+                    yield "data: [DONE]\n\n"
+                    return
+
+                # ── 阶段 3：准备数据 ─────────────────────────────────────
+                yield _emit({"stage": "preparing", "progress": 0.05, "msg": "预处理数据..."})
+
+                # 只保留已映射的列并重命名
+                keep_cols = {v: k for k, v in col_map.items()}  # csv_col → field
+                df_sub = df[list(col_map.values())].copy()
+                df_sub = df_sub.rename(columns=keep_cols)
+
+                # 过滤无效楼宇
+                df_sub["building_id"] = df_sub["building_id"].astype(str).str.strip()
+                df_sub = df_sub[df_sub["building_id"].isin(valid_bids)]
+
+                # 解析时间戳（向量化，比行循环快 10-50x）
+                df_sub["timestamp"] = pd.to_datetime(df_sub["timestamp"], utc=True)
+                df_sub = df_sub.dropna(subset=["timestamp", "building_id"])
+
+                total = len(df_sub)
+                if total == 0:
+                    yield _emit({"error": "没有有效数据行可导入"})
+                    yield "data: [DONE]\n\n"
+                    return
+
+                # ── 阶段 4：确定 upsert SQL（一次性构建） ────────────────
+                mapped_fields = [f for f in _ENERGY_FLOAT_FIELDS if f in col_map]
+                if mapped_fields:
+                    cols_sql = "timestamp, building_id, " + ", ".join(mapped_fields)
+                    vals_sql = ":ts, :bid, " + ", ".join(f":{f}" for f in mapped_fields)
+                    set_sql  = ", ".join(f"{f} = EXCLUDED.{f}" for f in mapped_fields)
+                    upsert_sql = text(f"""
+                        INSERT INTO energy_data ({cols_sql})
+                        VALUES ({vals_sql})
+                        ON CONFLICT (timestamp, building_id) DO UPDATE SET {set_sql}
+                    """)
+                else:
+                    upsert_sql = text("""
+                        INSERT INTO energy_data (timestamp, building_id)
+                        VALUES (:ts, :bid)
+                        ON CONFLICT (timestamp, building_id) DO NOTHING
+                    """)
+
+                # ── 阶段 5：批量 upsert ───────────────────────────────────
+                imported = 0
+                failed = 0
+                errors: list[str] = []
+                min_ts: datetime | None = None
+                max_ts: datetime | None = None
+                imported_bids: set[str] = set()
+
+                records_list = df_sub.to_dict(orient="records")
+
+                for batch_start in range(0, total, _IMPORT_BATCH_SIZE):
+                    batch = records_list[batch_start: batch_start + _IMPORT_BATCH_SIZE]
+                    batch_params: list[dict] = []
+
+                    for rec in batch:
+                        try:
+                            ts: datetime = rec["timestamp"].to_pydatetime()  # type: ignore[union-attr]
+                            bid: str = str(rec["building_id"])
+                            row_p: dict[str, Any] = {"ts": ts, "bid": bid}
+                            for f in mapped_fields:
+                                raw = rec.get(f)
+                                try:
+                                    row_p[f] = None if (raw is None or pd.isna(raw)) else float(raw)
+                                except (TypeError, ValueError):
+                                    row_p[f] = None
+                            batch_params.append(row_p)
+                            imported_bids.add(bid)
+                            if min_ts is None or ts < min_ts:
+                                min_ts = ts
+                            if max_ts is None or ts > max_ts:
+                                max_ts = ts
+                        except Exception as exc:
+                            failed += 1
+                            if len(errors) < 5:
+                                errors.append(str(exc))
+
+                    if batch_params:
+                        try:
+                            await sdb.execute(upsert_sql, batch_params)
+                            await sdb.commit()
+                            imported += len(batch_params)
+                        except Exception as exc:
+                            await sdb.rollback()
+                            failed += len(batch_params)
+                            imported -= len(batch_params)  # 回滚已计数
+                            if len(errors) < 5:
+                                errors.append(f"批次 {batch_start} 写入失败：{exc}")
+
+                    progress = min(0.99, (batch_start + len(batch)) / total * 0.95 + 0.05)
+                    yield _emit({
+                        "stage": "importing",
+                        "progress": round(progress, 3),
+                        "imported": imported,
+                        "total": total,
+                    })
+
+                # ── 阶段 6：保存导入元信息回 dataset_files ───────────────
+                import_meta = {
+                    "imported_rows": imported,
+                    "building_ids": list(imported_bids),
+                    "min_ts": min_ts.isoformat() if min_ts else None,
+                    "max_ts": max_ts.isoformat() if max_ts else None,
+                    "col_map": col_map,
+                }
+                try:
+                    meta_res = await sdb.execute(
+                        select(DatasetFile).where(DatasetFile.id == saved_id)
+                    )
+                    saved_rec = meta_res.scalar_one_or_none()
+                    if saved_rec:
+                        existing_stats = json.loads(saved_rec.stats_json or "{}")
+                        existing_stats["_import"] = import_meta
+                        saved_rec.stats_json = json.dumps(existing_stats, ensure_ascii=False)
+                        await sdb.commit()
+                except Exception as exc:
+                    log.warning("保存导入元信息失败：%s", exc)
+
+                yield _emit({
+                    "done": True,
+                    "imported_rows": imported,
+                    "failed_rows": failed,
+                    "errors": errors,
+                    "col_map": col_map,
+                    "invalid_building_ids": invalid_bids,
+                    "building_ids": list(imported_bids),
+                    "min_ts": min_ts.isoformat() if min_ts else None,
+                    "max_ts": max_ts.isoformat() if max_ts else None,
+                })
+
+            except Exception as exc:
+                log.exception("导入流异常")
+                yield _emit({"error": f"导入失败：{exc}"})
+            finally:
+                yield "data: [DONE]\n\n"
+
+    return StreamingResponse(
+        _stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+# ---------------------------------------------------------------------------
+# energy_data CRUD 端点
+# ---------------------------------------------------------------------------
+
+@router.get("/energy-data", summary="分页查询 energy_data 记录")
+async def list_energy_data(
+    building_ids: str = Query(..., description="逗号分隔的楼宇 ID 列表"),
+    start_ts: str = Query(..., description="开始时间 ISO8601"),
+    end_ts: str = Query(..., description="结束时间 ISO8601"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    """分页返回指定楼宇和时间范围内的 energy_data 记录。"""
+    bid_list = [b.strip() for b in building_ids.split(",") if b.strip()]
+    try:
+        t0 = datetime.fromisoformat(start_ts.replace("Z", "+00:00"))
+        t1 = datetime.fromisoformat(end_ts.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"时间格式错误：{exc}") from exc
+
+    offset = (page - 1) * page_size
+
+    count_result = await db.execute(
+        text("""
+            SELECT COUNT(*) FROM energy_data
+            WHERE building_id = ANY(:bids)
+              AND timestamp >= :t0
+              AND timestamp <= :t1
+        """),
+        {"bids": bid_list, "t0": t0, "t1": t1},
+    )
+    total = count_result.scalar() or 0
+
+    rows_result = await db.execute(
+        text("""
+            SELECT timestamp, building_id,
+                   electricity_kwh, water_m3, hac_energy,
+                   sim_supply_temp_c, sim_return_temp_c,
+                   air_temp_c, dew_temp_c, humidity_rh_pct
+            FROM energy_data
+            WHERE building_id = ANY(:bids)
+              AND timestamp >= :t0
+              AND timestamp <= :t1
+            ORDER BY timestamp DESC, building_id
+            LIMIT :lim OFFSET :off
+        """),
+        {"bids": bid_list, "t0": t0, "t1": t1, "lim": page_size, "off": offset},
+    )
+
+    records = []
+    for row in rows_result.fetchall():
+        ts, bid, elec, water, hac, sup_t, ret_t, air_t, dew_t, hum = row
+        records.append({
+            "timestamp": ts.isoformat() if ts else None,
+            "building_id": bid,
+            "electricity_kwh": _fv(elec),
+            "water_m3": _fv(water),
+            "hac_energy": _fv(hac),
+            "sim_supply_temp_c": _fv(sup_t),
+            "sim_return_temp_c": _fv(ret_t),
+            "air_temp_c": _fv(air_t),
+            "dew_temp_c": _fv(dew_t),
+            "humidity_rh_pct": _fv(hum),
+        })
+
+    return {"records": records, "total": total, "page": page, "page_size": page_size}
+
+
+@router.post("/energy-data/row", summary="新增一条 energy_data 记录")
+async def create_energy_data_record(
+    body: EnergyDataCreate,
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    """新增一条 energy_data 记录（如已存在则更新）。"""
+    try:
+        ts = datetime.fromisoformat(body.timestamp.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"时间格式错误：{exc}") from exc
+
+    # 验证 building_id 存在
+    bid_check = await db.execute(
+        text("SELECT 1 FROM buildings WHERE building_id = :bid"),
+        {"bid": body.building_id},
+    )
+    if not bid_check.scalar():
+        raise HTTPException(status_code=400, detail=f"楼宇 '{body.building_id}' 不存在")
+
+    fields = {f: getattr(body, f) for f in _ENERGY_FLOAT_FIELDS}
+    non_null = {k: v for k, v in fields.items() if v is not None}
+
+    if non_null:
+        cols = ", ".join(non_null.keys())
+        vals = ", ".join(f":{k}" for k in non_null.keys())
+        sets = ", ".join(f"{k} = :{k}" for k in non_null.keys())
+        params = {"ts": ts, "bid": body.building_id, **non_null}
+        await db.execute(
+            text(f"""
+                INSERT INTO energy_data (timestamp, building_id, {cols})
+                VALUES (:ts, :bid, {vals})
+                ON CONFLICT (timestamp, building_id) DO UPDATE SET {sets}
+            """),
+            params,
+        )
+    else:
+        await db.execute(
+            text("""
+                INSERT INTO energy_data (timestamp, building_id)
+                VALUES (:ts, :bid)
+                ON CONFLICT (timestamp, building_id) DO NOTHING
+            """),
+            {"ts": ts, "bid": body.building_id},
+        )
+
+    await db.commit()
+    return {"message": "记录已创建", "timestamp": ts.isoformat(), "building_id": body.building_id}
+
+
+@router.put("/energy-data/row", summary="更新一条 energy_data 记录")
+async def update_energy_data_record(
+    body: EnergyDataUpdate,
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    """按 (timestamp, building_id) 主键更新 energy_data 记录的数值字段。"""
+    try:
+        ts = datetime.fromisoformat(body.timestamp.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"时间格式错误：{exc}") from exc
+
+    fields = {f: getattr(body, f) for f in _ENERGY_FLOAT_FIELDS}
+    non_null = {k: v for k, v in fields.items() if v is not None}
+    if not non_null:
+        raise HTTPException(status_code=400, detail="没有可更新的字段")
+
+    sets = ", ".join(f"{k} = :{k}" for k in non_null.keys())
+    params = {"ts": ts, "bid": body.building_id, **non_null}
+    result = await db.execute(
+        text(f"""
+            UPDATE energy_data
+            SET {sets}
+            WHERE timestamp = :ts AND building_id = :bid
+        """),
+        params,
+    )
+    if result.rowcount == 0:
+        raise HTTPException(status_code=404, detail="记录不存在")
+    await db.commit()
+    return {"message": "记录已更新"}
+
+
+@router.delete("/energy-data/row", summary="删除一条 energy_data 记录")
+async def delete_energy_data_record(
+    timestamp: str = Query(..., description="时间戳 ISO8601"),
+    building_id: str = Query(..., description="楼宇 ID"),
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, str]:
+    """按 (timestamp, building_id) 主键删除一条 energy_data 记录。"""
+    try:
+        ts = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"时间格式错误：{exc}") from exc
+
+    result = await db.execute(
+        text("DELETE FROM energy_data WHERE timestamp = :ts AND building_id = :bid"),
+        {"ts": ts, "bid": building_id},
+    )
+    if result.rowcount == 0:
+        raise HTTPException(status_code=404, detail="记录不存在")
+    await db.commit()
+    return {"message": "记录已删除"}
+
+
+def _fv(val: Any) -> float | None:
+    """安全转换为 float，None 或 NaN 返回 None。"""
+    if val is None:
+        return None
+    try:
+        import math
+        f = float(val)
+        return None if math.isnan(f) or math.isinf(f) else round(f, 6)
+    except (TypeError, ValueError):
+        return None
 
 
 # ---------------------------------------------------------------------------

@@ -2,14 +2,16 @@
 普通数据查询接口（非 AI，直接查 DB）。
 
 端点：
-  GET /api/buildings                       — 获取所有建筑列表
-  GET /api/buildings/{building_type}/status — 获取建筑最新设备状态（按 building_type）
-  GET /api/buildings/{building_type}/energy — 获取建筑每日能耗趋势（按 building_type）
+  GET /api/buildings                              — 获取所有建筑列表
+  GET /api/buildings/{building_type}/status       — 获取建筑最新设备状态（按 building_type）
+  GET /api/buildings/{building_type}/devices      — 获取设备运行状态快照 + 遥测历史（方案A）
+  GET /api/buildings/{building_type}/energy       — 获取建筑每日能耗趋势（按 building_type）
   GET /api/buildings/{building_type}/load-profile — 按小时/星期聚合负荷曲线
   GET /api/buildings/{building_type}/peak-valley-stats — 峰谷与夜间高耗统计
-  GET /api/overview                         — 获取 Dashboard KPI 汇总（全局总览）
-  GET /api/anomalies/sankey                  — 异常根因桑基图聚合数据
-  GET /api/tools                            — 列出所有可用 MCP 工具（调试用）
+  GET /api/overview                               — 获取 Dashboard KPI 汇总（全局总览）
+  GET /api/anomalies/sankey                       — 异常根因桑基图聚合数据
+  GET /api/anomalies/attributions                 — 异常设备归因列表（方案A）
+  GET /api/tools                                  — 列出所有可用 MCP 工具（调试用）
 """
 from __future__ import annotations
 
@@ -146,6 +148,300 @@ async def get_building_status(
         "air_temp_c": latest.air_temp_c,
         "dew_temp_c": latest.dew_temp_c,
         "humidity_rh_pct": latest.humidity_rh_pct,
+    }
+
+
+# ---------------------------------------------------------------------------
+# 设备运行状态（方案A：从 device_status_latest + device_telemetry_hourly 读取）
+# ---------------------------------------------------------------------------
+@router.get("/buildings/{building_type}/devices", summary="获取建筑设备运行状态")
+async def get_building_devices(
+    building_type: str,
+    history_hours: int = Query(24, ge=1, le=168, description="返回最近 N 小时遥测历史（默认24h）"),
+    db: AsyncSession = Depends(get_db_session),
+):
+    """
+    返回建筑下所有设备的最新运行状态快照（device_status_latest）
+    以及最近 history_hours 小时的遥测趋势（device_telemetry_hourly）。
+
+    包含字段：
+      - running_state: running | standby
+      - health_status: healthy | degraded | warning
+      - online_status: online | offline
+      - latest_power_kw / latest_flow_rate（电表/水表能量或流量）
+      - latest_supply_temp_c / latest_return_temp_c（空调供回水温）
+    """
+    bld_result = await db.execute(
+        select(Building.building_id).where(Building.primary_space_usage == building_type)
+    )
+    building_id = bld_result.scalar_one_or_none()
+    if not building_id:
+        raise HTTPException(status_code=404, detail=f"建筑类型 {building_type} 不存在")
+
+    # ── 最新状态快照 ──────────────────────────────────────────────────────────
+    latest_result = await db.execute(text("""
+        SELECT
+            dsl.device_id,
+            dsl.device_type,
+            dsl.last_seen_at,
+            dsl.online_status,
+            dsl.running_state,
+            dsl.health_status,
+            dsl.latest_power_kw,
+            dsl.latest_flow_rate,
+            dsl.latest_supply_temp_c,
+            dsl.latest_return_temp_c,
+            dsl.latest_payload_json
+        FROM device_status_latest dsl
+        WHERE dsl.building_id = :bid
+        ORDER BY dsl.device_type
+    """), {"bid": building_id})
+    latest_rows = latest_result.fetchall()
+
+    device_snapshot: list[dict] = []
+    device_ids: list[str] = []
+    for row in latest_rows:
+        (dev_id, dev_type, seen_at, online, running, health,
+         power_kw, flow_rate, supply_t, return_t, payload_json) = row
+        device_ids.append(dev_id)
+        device_snapshot.append({
+            "device_id": dev_id,
+            "device_type": dev_type,
+            "last_seen_at": seen_at.isoformat() if seen_at else None,
+            "online_status": online,
+            "running_state": running,
+            "health_status": health,
+            "latest_power_kw": float(power_kw) if power_kw is not None else None,
+            "latest_flow_rate": float(flow_rate) if flow_rate is not None else None,
+            "latest_supply_temp_c": float(supply_t) if supply_t is not None else None,
+            "latest_return_temp_c": float(return_t) if return_t is not None else None,
+            "latest_payload": payload_json if isinstance(payload_json, dict) else None,
+        })
+
+    # 若 device_status_latest 为空（未运行 rebuild-all），回退到 devices 表
+    if not device_snapshot:
+        dev_result = await db.execute(text(
+            "SELECT device_id, device_type FROM devices WHERE building_id = :bid ORDER BY device_type"
+        ), {"bid": building_id})
+        for drow in dev_result.fetchall():
+            device_snapshot.append({
+                "device_id": drow[0],
+                "device_type": drow[1],
+                "last_seen_at": None,
+                "online_status": "unknown",
+                "running_state": "unknown",
+                "health_status": "unknown",
+                "latest_power_kw": None,
+                "latest_flow_rate": None,
+                "latest_supply_temp_c": None,
+                "latest_return_temp_c": None,
+                "latest_payload": None,
+            })
+        return {
+            "building_type": building_type,
+            "building_id": building_id,
+            "devices": device_snapshot,
+            "history": [],
+            "module_status": "no_telemetry_data",
+            "message": "device_status_latest 暂无数据，请先调用 /api/admin/rebuild-all",
+        }
+
+    # ── 遥测历史趋势 ────────────────────────────────────────────────────────────
+    # 以 device_telemetry_hourly 最新时间戳为基点
+    max_ts_result = await db.execute(text(
+        "SELECT MAX(timestamp) FROM device_telemetry_hourly WHERE building_id = :bid"
+    ), {"bid": building_id})
+    max_ts = max_ts_result.scalar()
+
+    history_records: list[dict] = []
+    if max_ts is not None:
+        if hasattr(max_ts, "tzinfo") and max_ts.tzinfo is None:
+            max_ts = max_ts.replace(tzinfo=timezone.utc)
+        from datetime import timedelta
+        window_start = max_ts - timedelta(hours=history_hours)
+
+        hist_result = await db.execute(text("""
+            SELECT
+                dth.timestamp,
+                dth.device_id,
+                dth.device_type,
+                dth.running_state,
+                dth.health_status,
+                dth.power_kw,
+                dth.flow_rate,
+                dth.supply_temp_c,
+                dth.return_temp_c,
+                dth.ambient_temp_c
+            FROM device_telemetry_hourly dth
+            WHERE dth.building_id = :bid
+              AND dth.timestamp >= :t0
+              AND dth.timestamp <= :t1
+            ORDER BY dth.timestamp ASC, dth.device_type ASC
+        """), {"bid": building_id, "t0": window_start, "t1": max_ts})
+
+        for hrow in hist_result.fetchall():
+            (ts, d_id, d_type, run_st, health_st,
+             p_kw, fl, sup_t, ret_t, amb_t) = hrow
+            history_records.append({
+                "timestamp": ts.isoformat() if ts else None,
+                "device_id": d_id,
+                "device_type": d_type,
+                "running_state": run_st,
+                "health_status": health_st,
+                "power_kw": float(p_kw) if p_kw is not None else None,
+                "flow_rate": float(fl) if fl is not None else None,
+                "supply_temp_c": float(sup_t) if sup_t is not None else None,
+                "return_temp_c": float(ret_t) if ret_t is not None else None,
+                "ambient_temp_c": float(amb_t) if amb_t is not None else None,
+            })
+
+    return {
+        "building_type": building_type,
+        "building_id": building_id,
+        "devices": device_snapshot,
+        "history": history_records,
+        "history_hours": history_hours,
+        "module_status": "ok",
+    }
+
+
+# ---------------------------------------------------------------------------
+# 异常设备归因列表（方案A：从 anomaly_device_attributions 读取）
+# ---------------------------------------------------------------------------
+@router.get("/anomalies/attributions", summary="异常事件的设备归因列表")
+async def get_anomaly_attributions(
+    building_type: str | None = Query(None, description="按建筑类型过滤（如 Office）"),
+    hours: int = Query(168, ge=1, le=8760, description="查询最近 N 小时，默认 7 天"),
+    db: AsyncSession = Depends(get_db_session),
+):
+    """
+    从 anomaly_device_attributions 返回异常归因到设备的记录列表。
+    每条记录包含：事件ID、设备ID、设备类型、归因角色、归因得分和归因原因。
+    可用于前端"异常归因分析"和"设备故障统计"展示。
+    """
+    building_filter = ""
+    params: dict[str, Any] = {}
+
+    if building_type:
+        bld_result = await db.execute(
+            select(Building.building_id).where(Building.primary_space_usage == building_type)
+        )
+        bid = bld_result.scalar_one_or_none()
+        if bid:
+            building_filter = " AND ada.building_id = :bid"
+            params["bid"] = bid
+
+    # 以 anomaly_device_attributions 最新时间戳为基点
+    max_ts_sql = "SELECT MAX(timestamp) FROM anomaly_device_attributions"
+    max_ts_params: dict[str, Any] = {}
+    if "bid" in params:
+        max_ts_sql += " WHERE building_id = :bid"
+        max_ts_params["bid"] = params["bid"]
+    max_ts_result = await db.execute(text(max_ts_sql), max_ts_params)
+    max_ts = max_ts_result.scalar()
+
+    if max_ts is None:
+        return {
+            "attributions": [],
+            "total": 0,
+            "module_status": "no_data",
+            "message": "anomaly_device_attributions 暂无数据，请先调用 /api/admin/rebuild-all",
+        }
+
+    if hasattr(max_ts, "tzinfo") and max_ts.tzinfo is None:
+        max_ts = max_ts.replace(tzinfo=timezone.utc)
+    from datetime import timedelta
+    window_start = max_ts - timedelta(hours=hours)
+    params["t0"] = window_start
+    params["t1"] = max_ts
+
+    atr_result = await db.execute(text(f"""
+        SELECT
+            ada.id,
+            ada.building_id,
+            ada.timestamp,
+            ada.event_id,
+            ada.device_id,
+            ada.device_type,
+            ada.attribution_role,
+            ada.attribution_score,
+            ada.attribution_reason,
+            ada.evidence_json,
+            ae.rule_triggered,
+            ae.actual_value,
+            ae.expected_value,
+            ae.deviation_pct,
+            ae.hvac_root_cause,
+            ae.message AS anomaly_message
+        FROM anomaly_device_attributions ada
+        LEFT JOIN anomaly_events ae ON ae.id::text = ada.event_id
+        WHERE ada.timestamp >= :t0
+          AND ada.timestamp <= :t1
+          {building_filter}
+        ORDER BY ada.timestamp DESC, ada.attribution_score DESC
+        LIMIT 500
+    """), params)
+
+    rows = atr_result.fetchall()
+    attributions: list[dict] = []
+    for row in rows:
+        (atr_id, bid, ts, ev_id, dev_id, dev_type, role, score, reason,
+         evidence, rule, actual, expected, dev_pct, hvac_rc, msg) = row
+        attributions.append({
+            "id": atr_id,
+            "building_id": bid,
+            "timestamp": ts.isoformat() if ts else None,
+            "event_id": ev_id,
+            "device_id": dev_id,
+            "device_type": dev_type,
+            "attribution_role": role,
+            "attribution_score": float(score) if score is not None else None,
+            "attribution_reason": reason,
+            "evidence": evidence if isinstance(evidence, dict) else None,
+            "rule_triggered": rule,
+            "actual_value": actual,
+            "expected_value": expected,
+            "deviation_pct": dev_pct,
+            "hvac_root_cause": hvac_rc,
+            "anomaly_message": msg,
+        })
+
+    # 按设备汇总统计
+    device_stats: dict[str, dict] = {}
+    for a in attributions:
+        did = a["device_id"]
+        if did not in device_stats:
+            device_stats[did] = {
+                "device_id": did,
+                "device_type": a["device_type"],
+                "building_id": a["building_id"],
+                "anomaly_count": 0,
+                "avg_deviation_pct": 0.0,
+                "max_score": 0.0,
+            }
+        s = device_stats[did]
+        s["anomaly_count"] += 1
+        s["avg_deviation_pct"] = (
+            (s["avg_deviation_pct"] * (s["anomaly_count"] - 1) + (a["deviation_pct"] or 0))
+            / s["anomaly_count"]
+        )
+        if (a["attribution_score"] or 0) > s["max_score"]:
+            s["max_score"] = a["attribution_score"] or 0
+
+    return {
+        "attributions": attributions,
+        "total": len(attributions),
+        "device_summary": sorted(
+            device_stats.values(),
+            key=lambda x: x["anomaly_count"],
+            reverse=True,
+        ),
+        "check_period": {
+            "start": window_start.isoformat(),
+            "end": max_ts.isoformat(),
+            "hours": hours,
+        },
+        "module_status": "ok",
     }
 
 

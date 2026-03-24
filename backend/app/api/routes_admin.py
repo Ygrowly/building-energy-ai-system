@@ -51,13 +51,20 @@ async def detect_anomalies(db: AsyncSession = Depends(get_db)):
     summary = await detect_and_store_all_buildings(db)
     total_flags = sum(v["flags"] for v in summary.values())
     total_events = sum(v["events"] for v in summary.values())
+    total_telemetry = sum(v.get("telemetry", 0) for v in summary.values())
+    total_device_status = sum(v.get("device_status", 0) for v in summary.values())
+    total_attributions = sum(v.get("attributions", 0) for v in summary.values())
     logger.info(
-        "admin: 异常检测完毕，flags=%d，events=%d", total_flags, total_events
+        "admin: 异常检测完毕，flags=%d，events=%d，telemetry=%d，status=%d，attrib=%d",
+        total_flags, total_events, total_telemetry, total_device_status, total_attributions,
     )
     return {
         "status": "ok",
         "total_flags": total_flags,
         "total_events": total_events,
+        "device_telemetry_rows": total_telemetry,
+        "device_status_updated": total_device_status,
+        "anomaly_attributions": total_attributions,
         "per_building": summary,
     }
 
@@ -77,8 +84,12 @@ async def rebuild_all(db: AsyncSession = Depends(get_db)):
     detect_summary = await detect_and_store_all_buildings(db)
     total_flags = sum(v["flags"] for v in detect_summary.values())
     total_events = sum(v["events"] for v in detect_summary.values())
+    total_telemetry = sum(v.get("telemetry", 0) for v in detect_summary.values())
+    total_device_status = sum(v.get("device_status", 0) for v in detect_summary.values())
+    total_attributions = sum(v.get("attributions", 0) for v in detect_summary.values())
     logger.info(
-        "admin: rebuild-all 检测完毕，flags=%d，events=%d", total_flags, total_events
+        "admin: rebuild-all 完毕，flags=%d，events=%d，telemetry=%d，device_status=%d，attributions=%d",
+        total_flags, total_events, total_telemetry, total_device_status, total_attributions,
     )
 
     return {
@@ -86,6 +97,9 @@ async def rebuild_all(db: AsyncSession = Depends(get_db)):
         "expected_rows": total_expected,
         "anomaly_flags": total_flags,
         "anomaly_events": total_events,
+        "device_telemetry_rows": total_telemetry,
+        "device_status_updated": total_device_status,
+        "anomaly_attributions": total_attributions,
         "per_building_expected": expected_summary,
         "per_building_detection": detect_summary,
     }

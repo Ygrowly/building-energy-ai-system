@@ -131,14 +131,31 @@ function buildOption() {
 
   // ── Gauge ───────────────────────────────────────────────────────────────
   if (isGauge) {
-    const val = Number((payload as Record<string, unknown>).value ?? 0)
+    const gp = payload as Record<string, unknown>
+    const val = Number(gp.value ?? 0)
+    const unit = (gp.unit as string) || ''
+    const gMin = Number(gp.min ?? 0)
+    const gMax = Number(gp.max ?? (Math.ceil(val * 1.5) || 6))
+    // splitNumber 取 5，确保刻度标签是整数或短小数
+    const range = gMax - gMin
+    const splitN = Number(gp.splitNumber ?? (range <= 10 ? Math.max(range, 2) : 5))
+    const defaultColor: [number, string][] = [[0.3, '#4ade80'], [0.7, '#fbbf24'], [1, '#f87171']]
+    const colorStops = (Array.isArray(gp.colorStops) ? gp.colorStops : defaultColor) as [number, string][]
+    // 根据量程决定刻度标签小数位：大于10取整，否则保留1位
+    const labelDecimal = range > 10 ? 0 : 1
+    // 中心数值：大于1000取整，否则保留2位小数
+    const detailFmt = (v: number) => {
+      const s = v >= 1000 ? Math.round(v).toString() : v.toFixed(2)
+      return `${s} ${unit}`
+    }
     return {
       series: [{
         type: 'gauge', startAngle: 200, endAngle: -20,
-        min: 0, max: 6, splitNumber: 6,
-        axisLine: { lineStyle: { width: 20, color: [[0.3, '#4ade80'], [0.7, '#fbbf24'], [1, '#f87171']] } },
+        min: gMin, max: gMax, splitNumber: splitN,
+        axisLine: { lineStyle: { width: 20, color: colorStops } },
         pointer: { itemStyle: { color: 'auto' } },
-        detail: { valueAnimation: true, fontSize: 28, color: 'auto', formatter: '{value} COP' },
+        axisLabel: { fontSize: 11, color: '#9399b8', formatter: (v: number) => v.toFixed(labelDecimal) },
+        detail: { valueAnimation: true, fontSize: 28, color: 'auto', formatter: detailFmt, offsetCenter: [0, '70%'] },
         data: [{ value: val }],
       }],
     }

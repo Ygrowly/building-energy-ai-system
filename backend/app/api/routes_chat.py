@@ -477,6 +477,8 @@ async def _stream_graph(
 
     # 追踪当前活跃的父级 agent，用于将内部 "agent" 节点映射回真实 agent 名
     _current_parent_agent = ""
+    # 追踪当前 agent 节点是否已通过 on_chat_model_stream 流式推送了 text 内容
+    _text_content_streamed = False
 
     try:
         async for event in graph.astream_events(graph_input, version="v2"):
@@ -486,6 +488,7 @@ async def _stream_graph(
 
             if kind == "on_chain_start" and name in ("router", "data_agent", "diagnose_agent"):
                 _current_parent_agent = name
+                _text_content_streamed = False
                 _t[f"node_{name}"] = time.time()
                 # 每个 agent 使用更具体的启动描述
                 chain_start_msg = {
@@ -528,8 +531,6 @@ async def _stream_graph(
                         if reasoning:
                             token = reasoning
                         # 2. 提取工具调用决策过程（函数名 + 参数流式片段）
-                        # 注意：常规 chunk.content（最终回答文本）不在此处提取，
-                        # 由 on_chain_end 统一发送为 text 事件，避免内容重复渲染
                         if not token:
                             tcc = getattr(chunk, "tool_call_chunks", None) or []
                             for tc in tcc:
@@ -550,6 +551,20 @@ async def _stream_graph(
                                 "content": token,
                                 "hop_count": 0,
                             })
+
+                        # 3. 流式推送常规 content（最终回答文本），实现打字机效果
+                        if not token:
+                            content_text = ""
+                            if hasattr(chunk, "content"):
+                                if isinstance(chunk.content, str):
+                                    content_text = chunk.content
+                                elif isinstance(chunk.content, list):
+                                    content_text = "".join(
+                                        c.get("text", "") for c in chunk.content if isinstance(c, dict)
+                                    )
+                            if content_text:
+                                _text_content_streamed = True
+                                yield _text_event(content_text, is_final=False)
 
             elif kind == "on_chat_model_end":
                 agent_name = event.get("metadata", {}).get("langgraph_node", "")
@@ -630,7 +645,14 @@ async def _stream_graph(
                     final_text = content
                     break
                 if final_text:
-                    yield _text_event(final_text, is_final=True)
+                    if _text_content_streamed:
+                        # 内容已通过 on_chat_model_stream 逐 token 推送，
+                        # 仅发送 is_final 标记通知前端流式结束
+                        yield _text_event("", is_final=True)
+                        _text_content_streamed = False
+                    else:
+                        # 兜底：若未经过流式推送（如非流式模型），一次性发送全部文本
+                        yield _text_event(final_text, is_final=True)
 
             elif kind == "on_chain_end" and name in ("LangGraph", ""):
                 output = data.get("output")

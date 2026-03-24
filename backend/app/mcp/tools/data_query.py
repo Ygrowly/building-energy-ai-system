@@ -3,7 +3,7 @@
 =====================================================================
 工具清单：
   query_energy_metrics           → Tool 1   直查 energy_data 时序原表
-  get_device_live_status         → Tool 2   取最新 1 条传感器快照
+  get_device_live_status         → Tool 2   查楼宇下所有设备实时状态（device_status_latest）
   query_daily_energy_summary     → Tool 4   查物化视图 daily_energy_summary
   list_available_buildings       → Tool 9   列出所有楼宇及其设备（含 timezone）
   compare_metric_across_buildings→ Tool 10  多楼宇横向对比
@@ -25,7 +25,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import ProgrammingError
 
-from app.db.models import Building, DailyEnergySummary, Device, EnergyData
+from app.db.models import Building, DailyEnergySummary, Device, DeviceStatusLatest, EnergyData
 from app.schemas.mcp_schemas import (
     BuildingInfo,
     BuildingMetricStats,
@@ -36,6 +36,7 @@ from app.schemas.mcp_schemas import (
     DailyEnergySummaryRecord,
     DeviceInfo,
     EnergyMetricRecord,
+    DeviceLiveStatus,
     GetDeviceLiveStatusInput,
     GetDeviceLiveStatusOutput,
     ListBuildingsOutput,
@@ -185,16 +186,16 @@ async def get_device_live_status(
     session: AsyncSession,
 ) -> GetDeviceLiveStatusOutput | MCPError:
     """
-    按 meter_device_id 反查 building_id，再取 energy_data 最新 1 条记录。
-    场景：驾驶舱首页"实时设备状态"卡片。
+    查询指定楼宇下所有设备的实时状态快照（来自 device_status_latest 表）。
+    若 device_status_latest 中暂无该楼宇数据，自动降级为 devices 表的静态设备清单。
+    场景：工单设备定位、驾驶舱设备健康概览。
     """
-    # primary_space_usage → building_id
-    building_result = await session.execute(
-        select(Building.building_id, Building.primary_space_usage).where(
-            Building.primary_space_usage == inp.building_type
-        )
+    # building_type → building_id
+    bld_result = await session.execute(
+        select(Building.building_id, Building.primary_space_usage)
+        .where(Building.primary_space_usage == inp.building_type)
     )
-    bld_row = building_result.first()
+    bld_row = bld_result.first()
     if bld_row is None:
         return MCPError(
             error=f"建筑类型 '{inp.building_type}' 不存在，请先调用 list_available_buildings 确认合法值",
@@ -203,45 +204,58 @@ async def get_device_live_status(
         )
     building_id, usage = bld_row
 
-    # 取最新 1 条（命中复合索引头部，极速）
-    result = await session.execute(
-        select(EnergyData)
-        .where(EnergyData.building_id == building_id)
-        .order_by(EnergyData.timestamp.desc())
-        .limit(1)
+    # ── 优先查 device_status_latest（实时快照）────────────────────────
+    live_rows_result = await session.execute(
+        select(DeviceStatusLatest)
+        .where(DeviceStatusLatest.building_id == building_id)
+        .order_by(DeviceStatusLatest.device_type)
     )
-    row: EnergyData | None = result.scalar_one_or_none()
-    if row is None:
-        return MCPError(
-            error=f"建筑 '{inp.building_type}' 暂无历史数据记录",
-            error_code="NO_DATA_FOUND",
-            tool_name="get_device_live_status",
+    live_rows = live_rows_result.scalars().all()
+
+    if live_rows:
+        devices = [
+            DeviceLiveStatus(
+                device_id=r.device_id,
+                device_type=r.device_type,
+                online_status=r.online_status,
+                running_state=r.running_state,
+                health_status=r.health_status,
+                latest_power_kw=r.latest_power_kw,
+                latest_flow_rate=r.latest_flow_rate,
+                latest_supply_temp_c=r.latest_supply_temp_c,
+                latest_return_temp_c=r.latest_return_temp_c,
+                last_seen_at=r.last_seen_at,
+            )
+            for r in live_rows
+        ]
+        return GetDeviceLiveStatusOutput(
+            building_type=usage or inp.building_type,
+            building_id=building_id,
+            devices=devices,
+            total=len(devices),
+            has_live_data=True,
+            source_table="device_status_latest",
         )
 
-    # 查询该楼宇近 24h 是否有未解决异常（anomaly_status 改由 anomaly_events 推断）
-    anomaly_check = await session.execute(
-        text("""
-            SELECT 1 FROM anomaly_events
-            WHERE building_id = :bid
-              AND is_resolved = false
-              AND data_timestamp >= (
-                  SELECT MAX(data_timestamp) FROM anomaly_events
-              ) - INTERVAL '24 hours'
-            LIMIT 1
-        """),
-        {"bid": building_id},
+    # ── 降级：device_status_latest 无数据，返回 devices 静态清单 ────
+    dev_rows_result = await session.execute(
+        select(Device.device_id, Device.device_type)
+        .where(Device.building_id == building_id)
+        .order_by(Device.device_type)
     )
-    has_anomaly = anomaly_check.fetchone() is not None
+    dev_rows = dev_rows_result.fetchall()
 
+    devices = [
+        DeviceLiveStatus(device_id=r[0], device_type=r[1])
+        for r in dev_rows
+    ]
     return GetDeviceLiveStatusOutput(
         building_type=usage or inp.building_type,
         building_id=building_id,
-        anomaly_status="Anomaly" if has_anomaly else "Normal",
-        air_temp_c=float(row.air_temp_c or 0),
-        humidity_rh_pct=float(row.humidity_rh_pct or 0),
-        electricity_kwh=float(row.electricity_kwh or 0),
-        hac_energy=float(row.hac_energy or 0),
-        last_updated_utc=row.timestamp,
+        devices=devices,
+        total=len(devices),
+        has_live_data=False,
+        source_table="devices",
     )
 
 

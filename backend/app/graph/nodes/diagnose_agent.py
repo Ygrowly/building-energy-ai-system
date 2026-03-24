@@ -72,7 +72,7 @@ DIAGNOSE_AGENT_SYSTEM_PROMPT = """你是一个楼宇能耗管理系统的专家�
 
 ## 你的专属工具（共 7 个）
 1. query_energy_metrics         — 查询时序原始数据（事实核查用）
-2. get_device_live_status       — 获取设备最新实时状态快照（含设备列表）
+2. get_device_live_status       — 查询楼宇下所有设备实时状态（device_id、online_status、power_kw 等）
 3. get_building_rated_values    — ⭐ 查询国标（GB）期望值 vs 实际值逐小时对比（解释异常的核心依据）
 4. detect_energy_anomalies      — 基于 GB 双阈值规则检测异常，输出根因诊断码
 5. rag_hybrid_search            — 检索建筑规范/运维手册/技术标准

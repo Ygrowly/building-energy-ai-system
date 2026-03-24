@@ -187,7 +187,8 @@ class QueryEnergyMetricsOutput(BaseModel):
 
 class GetDeviceLiveStatusInput(BaseModel):
     """
-    通过 building_type（primary_space_usage，如 'Office'）查询最新传感器快照。
+    通过 building_type（primary_space_usage，如 'Office'）查询该楼宇所有设备的实时状态。
+    数据来自 device_status_latest 表；若该表暂无记录则降级返回 devices 表的设备清单。
     """
     building_type: str = Field(
         min_length=1,
@@ -195,17 +196,28 @@ class GetDeviceLiveStatusInput(BaseModel):
     )
 
 
+class DeviceLiveStatus(BaseModel):
+    """单台设备的实时状态快照（来自 device_status_latest 表）。"""
+    device_id: str = Field(description="设备唯一标识，如 'EM_AC_Fox_office_Alice'")
+    device_type: str = Field(description="设备类型：electricity / water / ac")
+    online_status: Optional[str] = Field(default=None, description="在线状态：online / offline / unknown")
+    running_state: Optional[str] = Field(default=None, description="运行状态：running / idle / fault")
+    health_status: Optional[str] = Field(default=None, description="健康状态：normal / warning / critical")
+    latest_power_kw: Optional[float] = Field(default=None, description="最新功率（kW），ac 设备适用")
+    latest_flow_rate: Optional[float] = Field(default=None, description="最新流量，water 设备适用")
+    latest_supply_temp_c: Optional[float] = Field(default=None, description="供水温度（℃），ac 设备适用")
+    latest_return_temp_c: Optional[float] = Field(default=None, description="回水温度（℃），ac 设备适用")
+    last_seen_at: Optional[datetime] = Field(default=None, description="最后更新时间（UTC）")
+
+
 class GetDeviceLiveStatusOutput(BaseModel):
-    """设备最新传感器快照。"""
+    """楼宇下所有设备的实时状态列表。"""
     building_type: str
     building_id: str
-    anomaly_status: Optional[str] = Field(default=None, description="'Anomaly' 表示该楼宇近期有未解决异常（来自 anomaly_events）")
-    air_temp_c: float
-    humidity_rh_pct: float
-    electricity_kwh: float
-    hac_energy: float = Field(default=0.0, description="暖通空调综合能耗（kWh）")
-    last_updated_utc: datetime
-    source_table: Literal["energy_data"] = "energy_data"
+    devices: list[DeviceLiveStatus]
+    total: int
+    has_live_data: bool = Field(description="True=来自 device_status_latest；False=降级为 devices 表静态清单")
+    source_table: str = Field(default="device_status_latest")
 
 
 # ===========================================================================

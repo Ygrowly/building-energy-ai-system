@@ -51,6 +51,7 @@ _ROUTER_SYSTEM_PROMPT_TEMPLATE = """你是楼宇能耗管理系统的智能助�
 | general_chat | 通用对话，Router 直接友好回复 | "你好"、"你是谁"、"你能做什么"、"谢谢"、"再见"、"帮我介绍一下系统" |
 | data_query | 查询能耗/设备状态/对比数据/楼宇列表 | "用了多少电"、"昨天图书馆的数据"、"哪栋楼最费电"、"有哪些楼宇"、"有哪些设备" |
 | cop_analysis | 计算空调能效比 COP | "能效比"、"COP"、"制冷效率"、"HVAC 性能" |
+| forecast | 预测未来能耗/预测预警 | "未来6小时会不会超标"、"预测办公楼的用电"、"接下来12小时能耗"、"预测预警"、"明天会不会有异常" |
 | fault_diagnosis | 故障诊断/异常分析 | "为什么这么高"、"有没有问题"、"凌晨异常"、"传感器跳变" |
 | work_order | 生成维修工单 | "派单"、"报修"、"维修"、"工单" |
 | knowledge_query | 查询建筑规范/技术标准/运维知识/节能法规 | "GB 55015 规定"、"建筑节能标准"、"供暖设计规范"、"预测性维护要求"、"设施管理标准"、"能效等级限值"、"智能化系统规范"、"建筑电气规范"、"设施运维指南"、"知识库"、"手册"、"规范要求"、"标准规定" |
@@ -115,6 +116,7 @@ ROUTER_SYSTEM_PROMPT = build_router_system_prompt()
 _INTENT_ROUTING: dict[IntentType | str, NextNode] = {
     "data_query":      "data_agent",
     "cop_analysis":    "data_agent",
+    "forecast":        "data_agent",      # 预测未来能耗 → Data Agent（内含 forecast 工具）
     "fault_diagnosis": "diagnose_agent",
     "work_order":      "diagnose_agent",
     "knowledge_query": "diagnose_agent",  # 知识库/规范查询 → RAG 检索
@@ -350,6 +352,7 @@ async def router_node(state: AgentState) -> dict[str, Any]:
     intent: IntentType = parsed.get("intent", "unknown")
     confidence: float = float(parsed.get("confidence", 0.0))
     next_agent: NextNode = parsed.get("next_agent", "end")
+
     building_id: str | None = parsed.get("building_id") or state.get("building_id")
     device_id: str | None = parsed.get("device_id") or state.get("device_id")
     raw_time = parsed.get("time_context")
@@ -357,9 +360,12 @@ async def router_node(state: AgentState) -> dict[str, Any]:
     # direct_reply 统一承接 general_chat 直接回复 和 clarify 反问
     direct_reply: str | None = parsed.get("direct_reply") or parsed.get("clarification_question")
 
-    # 验证 next_agent
-    if next_agent not in ("data_agent", "diagnose_agent", "router", "end"):
-        next_agent = _INTENT_ROUTING.get(intent, "end")
+    # 始终以路由表覆盖 LLM 返回的 next_agent，防止 LLM 选错目标节点
+    # LLM 可能返回合法但错误的节点名（如 forecast → diagnose_agent），路由表是唯一权威
+    if intent in _INTENT_ROUTING:
+        next_agent = _INTENT_ROUTING[intent]
+    elif next_agent not in ("data_agent", "diagnose_agent", "router", "end"):
+        next_agent = "end"
 
     # ── 构造 AI 回复消息 ──
     if intent == "general_chat" and direct_reply:

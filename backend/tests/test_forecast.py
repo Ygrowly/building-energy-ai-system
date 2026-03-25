@@ -268,41 +268,41 @@ class TestSchemas:
 # ---------------------------------------------------------------------------
 class TestModelLoadAndPredict:
     def test_artifact_loads(self):
-        """验证模型文件可加载并包含必要字段。"""
-        from app.services.forecast_service import _get_artifact, _ARTIFACT, _LOAD_ERROR, _PKL_PATH
+        """验证模型元数据可通过子进程加载并包含必要字段。"""
+        from app.services.forecast_service import _load_metadata, _METADATA_ERROR, _PKL_PATH
         import app.services.forecast_service as mod
-        mod._ARTIFACT = None
-        mod._LOAD_ERROR = None
-        artifact = _get_artifact()
-        if artifact is None:
-            pytest.skip(f"pkl not loadable at {_PKL_PATH}: {mod._LOAD_ERROR}")
-        assert "pipeline" in artifact
-        assert "feature_cols" in artifact
-        assert "target_cols" in artifact
-        assert "horizons_h" in artifact
-        assert "target_kpis" in artifact
-        assert "model_name" in artifact
-        assert len(artifact["feature_cols"]) == 41
-        assert len(artifact["target_cols"]) == 10
+        mod._METADATA = None
+        mod._METADATA_ERROR = None
+        meta = _load_metadata()
+        if meta is None:
+            pytest.skip(f"pkl not loadable at {_PKL_PATH}: {mod._METADATA_ERROR}")
+        assert "feature_cols" in meta
+        assert "target_cols" in meta
+        assert "horizons_h" in meta
+        assert "target_kpis" in meta
+        assert "model_name" in meta
+        assert len(meta["feature_cols"]) == 41
+        assert len(meta["target_cols"]) == 10
 
     def test_predict_with_fake_data(self):
-        """用假数据验证完整的特征构造 + 推理链路。"""
-        from app.services.forecast_service import _get_artifact, _build_features
+        """用假数据验证完整的特征构造 + 子进程推理链路。"""
+        from app.services.forecast_service import _load_metadata, _predict, _build_features
         import app.services.forecast_service as mod
-        mod._ARTIFACT = None
-        mod._LOAD_ERROR = None
-        artifact = _get_artifact()
-        if artifact is None:
+        mod._METADATA = None
+        mod._METADATA_ERROR = None
+        meta = _load_metadata()
+        if meta is None:
             pytest.skip("pkl not loadable")
 
         df = _make_fake_df(30)
-        X = _build_features(df, artifact["feature_cols"])
+        X = _build_features(df, meta["feature_cols"])
         assert X.shape == (1, 41)
 
-        Y = artifact["pipeline"].predict(X)
-        assert Y.shape == (1, 10)
-        for val in Y[0]:
-            assert isinstance(val, (float, np.floating))
+        feature_row = {col: float(X[col].iloc[0]) for col in meta["feature_cols"]}
+        y_hat = _predict(feature_row, meta["feature_cols"])
+        assert len(y_hat) == 10
+        for val in y_hat:
+            assert isinstance(val, float)
             assert not math.isnan(val)
 
 
@@ -348,8 +348,8 @@ class TestForecastFromFeatures:
         from app.services.forecast_service import forecast_from_raw_features
         from app.schemas.mcp_schemas import MCPError
         import app.services.forecast_service as mod
-        mod._ARTIFACT = None
-        mod._LOAD_ERROR = None
+        mod._METADATA = None
+        mod._METADATA_ERROR = None
         result = forecast_from_raw_features({"hour": 12.0})
         if isinstance(result, MCPError) and result.error_code == "MODEL_LOAD_FAILED":
             pytest.skip("pkl not loadable")
@@ -357,18 +357,18 @@ class TestForecastFromFeatures:
         assert result.error_code == "FEATURE_MISMATCH"
 
     def test_full_features_returns_predictions(self):
-        from app.services.forecast_service import forecast_from_raw_features, _get_artifact, _build_features
+        from app.services.forecast_service import forecast_from_raw_features, _load_metadata, _build_features
         from app.schemas.mcp_schemas import ForecastFromFeaturesOutput, MCPError
         import app.services.forecast_service as mod
-        mod._ARTIFACT = None
-        mod._LOAD_ERROR = None
-        artifact = _get_artifact()
-        if artifact is None:
+        mod._METADATA = None
+        mod._METADATA_ERROR = None
+        meta = _load_metadata()
+        if meta is None:
             pytest.skip("pkl not loadable")
 
         df = _make_fake_df(30)
-        X = _build_features(df, artifact["feature_cols"])
-        features_dict = {col: float(X[col].iloc[0]) for col in artifact["feature_cols"]}
+        X = _build_features(df, meta["feature_cols"])
+        features_dict = {col: float(X[col].iloc[0]) for col in meta["feature_cols"]}
         result = forecast_from_raw_features(features_dict)
         assert isinstance(result, ForecastFromFeaturesOutput)
         assert len(result.predictions) == 10
@@ -390,3 +390,66 @@ class TestForecastFromFeatures:
         d = out.model_dump()
         assert d["model_name"] == "test"
         assert len(d["predictions"]) == 2
+
+
+# ---------------------------------------------------------------------------
+# 8. 严格基线匹配策略
+# ---------------------------------------------------------------------------
+class TestStrictBaselineMatching:
+    """验证第一版基线对齐策略：仅当 future_ts == kpi_expected_hourly.timestamp 时才返回期望值。"""
+
+    def test_no_expected_returns_normal(self):
+        """expected_value=None 时，risk_level 必须为 normal，不报错不补值。"""
+        from app.services.forecast_service import _assess_risk
+        risk, rule, dev = _assess_risk("electricity_kwh", 999.0, None)
+        assert risk == "normal"
+        assert rule is None
+        assert dev is None
+
+    def test_exact_match_returns_expected(self):
+        """精确匹配到基线时，返回期望值和偏差。"""
+        from app.services.forecast_service import _assess_risk
+        risk, rule, dev = _assess_risk("electricity_kwh", 100.0, 50.0)
+        assert risk == "warning"
+        assert dev == 100.0
+        assert rule == "electricity_overload"
+
+    def test_all_kpi_none_expected_stays_normal(self):
+        """所有 KPI 在未匹配基线时均返回 normal。"""
+        from app.services.forecast_service import _assess_risk, _KPI_NAMES
+        for kpi in _KPI_NAMES:
+            risk, rule, dev = _assess_risk(kpi, 9999.0, None)
+            assert risk == "normal", f"{kpi} should be normal when expected=None"
+            assert dev is None
+
+    def test_metric_output_without_baseline(self):
+        """模拟完整 ForecastedMetric 组装：无基线时字段正确。"""
+        from app.schemas.mcp_schemas import ForecastedMetric
+        m = ForecastedMetric(
+            metric_name="water_l",
+            horizon_h=6,
+            predicted_value=1500.0,
+            expected_value=None,
+            deviation_pct=None,
+            risk_level="normal",
+            rule_triggered=None,
+        )
+        assert m.expected_value is None
+        assert m.deviation_pct is None
+        assert m.risk_level == "normal"
+
+    def test_metric_output_with_baseline(self):
+        """模拟完整 ForecastedMetric 组装：有基线且超标时字段正确。"""
+        from app.schemas.mcp_schemas import ForecastedMetric
+        m = ForecastedMetric(
+            metric_name="water_l",
+            horizon_h=12,
+            predicted_value=5000.0,
+            expected_value=2000.0,
+            deviation_pct=150.0,
+            risk_level="warning",
+            rule_triggered="water_leak",
+        )
+        assert m.expected_value == 2000.0
+        assert m.risk_level == "warning"
+        assert m.rule_triggered == "water_leak"

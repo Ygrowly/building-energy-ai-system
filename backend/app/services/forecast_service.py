@@ -23,14 +23,16 @@
 """
 from __future__ import annotations
 
+import json
 import logging
 import math
+import os
+import subprocess
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-import numpy as np
 import pandas as pd
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -46,38 +48,112 @@ from app.schemas.mcp_schemas import (
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# 模型单例加载
+# 路径常量
 # ---------------------------------------------------------------------------
-_ARTIFACT: dict | None = None
 _PKL_PATH = Path(__file__).resolve().parents[2] / "forecast_multi_6_12h_bundle.pkl"
+_WORKER_PATH = Path(__file__).parent / "_forecast_worker.py"
 
-_LOAD_ERROR: str | None = None
+# ---------------------------------------------------------------------------
+# 模型元数据缓存（不含 model 对象，仅 feature_cols / target_cols 等轻量信息）
+# ---------------------------------------------------------------------------
+_METADATA: dict | None = None
+_METADATA_ERROR: str | None = None
 
 
-def _get_artifact() -> dict | None:
-    """懒加载 pkl artifact，进程内缓存。加载失败记录错误信息，不抛异常。"""
-    global _ARTIFACT, _LOAD_ERROR
-    if _ARTIFACT is not None:
-        return _ARTIFACT
-    if _LOAD_ERROR is not None:
+def _venv_python() -> str:
+    """
+    获取 .venv-forecast 的 Python 可执行路径。
+    优先读取环境变量 VENV_FORECAST_PYTHON，
+    否则按约定路径（backend/.venv-forecast）查找。
+    """
+    custom = os.environ.get("VENV_FORECAST_PYTHON", "")
+    if custom and Path(custom).exists():
+        return custom
+
+    backend_dir = Path(__file__).resolve().parents[2]
+    candidates = [
+        backend_dir / ".venv-forecast" / "Scripts" / "python.exe",  # Windows
+        backend_dir / ".venv-forecast" / "bin" / "python",           # Unix
+        backend_dir / ".venv-forecast" / "bin" / "python3",
+    ]
+    for p in candidates:
+        if p.exists():
+            return str(p)
+
+    return "python"   # fallback：系统 python（可能失败）
+
+
+def _call_worker(payload: dict, timeout: int = 180) -> dict:
+    """调用推理 worker 子进程，返回解析后的 JSON 结果。"""
+    python = _venv_python()
+    try:
+        proc = subprocess.run(
+            [python, str(_WORKER_PATH)],
+            input=json.dumps(payload),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("推理 worker 超时")
+
+    stdout = proc.stdout.strip()
+    if not stdout:
+        raise RuntimeError(
+            f"Worker 无输出（exit={proc.returncode}）: {proc.stderr[:300]}"
+        )
+
+    try:
+        result = json.loads(stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"Worker 输出无法解析为 JSON: {stdout[:200]}") from exc
+
+    if "error" in result:
+        raise RuntimeError(result["error"])
+
+    return result
+
+
+def _load_metadata() -> dict | None:
+    """
+    通过子进程加载 pkl 元数据，进程内缓存。
+    仅缓存 model_name / feature_cols / target_cols / horizons_h / target_kpis，
+    不缓存 model 对象本身（模型对象留在 worker 进程内存中）。
+    """
+    global _METADATA, _METADATA_ERROR
+    if _METADATA is not None:
+        return _METADATA
+    if _METADATA_ERROR is not None:
         return None
     try:
-        import joblib
-        import warnings
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            _ARTIFACT = joblib.load(_PKL_PATH)
+        result = _call_worker({"pkl_path": str(_PKL_PATH), "mode": "metadata"})
+        _METADATA = result
         logger.info(
-            "forecast model loaded: %s, features=%d, targets=%d",
-            _ARTIFACT.get("model_name", "unknown"),
-            len(_ARTIFACT.get("feature_cols", [])),
-            len(_ARTIFACT.get("target_cols", [])),
+            "forecast metadata loaded via worker: %s, features=%d, targets=%d",
+            result.get("model_name", "unknown"),
+            len(result.get("feature_cols", [])),
+            len(result.get("target_cols", [])),
         )
-        return _ARTIFACT
+        return _METADATA
     except Exception as exc:
-        _LOAD_ERROR = str(exc)
-        logger.error("forecast model load failed: %s", _LOAD_ERROR)
+        _METADATA_ERROR = str(exc)
+        logger.error("forecast metadata load failed: %s", _METADATA_ERROR)
         return None
+
+
+def _predict(feature_row: dict[str, float], feature_cols: list[str]) -> list[float]:
+    """
+    通过子进程执行一行样本的模型推理，返回目标列预测值列表。
+    feature_row: {feature_name: value, ...}
+    """
+    features_vec = [feature_row[col] for col in feature_cols]
+    result = _call_worker({
+        "pkl_path": str(_PKL_PATH),
+        "mode": "predict",
+        "feature_cols": feature_cols,
+        "features": [features_vec],
+    })
+    return result["predictions"][0]
 
 
 # ---------------------------------------------------------------------------
@@ -257,22 +333,21 @@ def forecast_from_raw_features(
     features: dict[str, float],
 ) -> ForecastFromFeaturesOutput | MCPError:
     """
-    接受完整的特征字典，直接调用模型 predict，返回原始预测输出。
+    接受完整的特征字典，通过 worker 子进程调用模型 predict，返回原始预测输出。
     纯 CPU 运算，不涉及数据库。
     """
-    artifact = _get_artifact()
-    if artifact is None:
+    meta = _load_metadata()
+    if meta is None:
         return MCPError(
-            error=f"预测模型加载失败：{_LOAD_ERROR or '文件不存在'} (路径: {_PKL_PATH})",
+            error=f"预测模型加载失败：{_METADATA_ERROR or '文件不存在'} (路径: {_PKL_PATH})",
             error_code="MODEL_LOAD_FAILED",
             tool_name="building_kpi_forecast_from_features",
         )
 
-    pipe = artifact["pipeline"]
-    feature_cols: list[str] = artifact["feature_cols"]
-    target_cols: list[str] = artifact["target_cols"]
-    model_name: str = artifact["model_name"]
-    horizons: list[int] = artifact["horizons_h"]
+    feature_cols: list[str] = meta["feature_cols"]
+    target_cols: list[str] = meta["target_cols"]
+    model_name: str = meta["model_name"]
+    horizons: list[int] = meta["horizons_h"]
 
     missing = set(feature_cols) - set(features.keys())
     if missing:
@@ -282,10 +357,8 @@ def forecast_from_raw_features(
             tool_name="building_kpi_forecast_from_features",
         )
 
-    X = pd.DataFrame([{col: features[col] for col in feature_cols}])
-
     try:
-        Y_hat = pipe.predict(X)
+        y_hat_row = _predict(features, feature_cols)
     except Exception as exc:
         return MCPError(
             error=f"模型推理失败：{exc}",
@@ -293,7 +366,7 @@ def forecast_from_raw_features(
             tool_name="building_kpi_forecast_from_features",
         )
 
-    predictions = {col: round(float(val), 4) for col, val in zip(target_cols, Y_hat[0])}
+    predictions = {col: round(float(val), 4) for col, val in zip(target_cols, y_hat_row)}
 
     return ForecastFromFeaturesOutput(
         model_name=model_name,
@@ -317,20 +390,19 @@ async def forecast_building_kpi(
     """
     对指定楼宇执行 6h / 12h KPI 预测，返回预测值和预测预警。
     """
-    artifact = _get_artifact()
-    if artifact is None:
+    meta = _load_metadata()
+    if meta is None:
         return MCPError(
-            error=f"预测模型加载失败：{_LOAD_ERROR or '文件不存在'} (路径: {_PKL_PATH})",
+            error=f"预测模型加载失败：{_METADATA_ERROR or '文件不存在'} (路径: {_PKL_PATH})",
             error_code="MODEL_LOAD_FAILED",
             tool_name="building_kpi_forecast_6h_12h",
         )
 
-    pipe = artifact["pipeline"]
-    feature_cols: list[str] = artifact["feature_cols"]
-    target_cols: list[str] = artifact["target_cols"]
-    target_kpis: list[str] = artifact["target_kpis"]
-    model_name: str = artifact["model_name"]
-    horizons: list[int] = artifact["horizons_h"]
+    feature_cols: list[str] = meta["feature_cols"]
+    target_cols: list[str] = meta["target_cols"]
+    target_kpis: list[str] = meta["target_kpis"]
+    model_name: str = meta["model_name"]
+    horizons: list[int] = meta["horizons_h"]
 
     from app.mcp.tools.data_query import get_building_info
     _meter_id, actual_bid = await get_building_info(session, building_id)
@@ -397,9 +469,10 @@ async def forecast_building_kpi(
             tool_name="building_kpi_forecast_6h_12h",
         )
 
-    # --- 推理 ---
+    # --- 推理（通过 .venv-forecast worker 子进程） ---
+    feature_row = {col: float(X[col].iloc[0]) for col in feature_cols}
     try:
-        Y_hat = pipe.predict(X)
+        y_hat_row = _predict(feature_row, feature_cols)
     except Exception as exc:
         return MCPError(
             error=f"模型推理失败：{exc}",
@@ -407,9 +480,11 @@ async def forecast_building_kpi(
             tool_name="building_kpi_forecast_6h_12h",
         )
 
-    predictions = dict(zip(target_cols, Y_hat[0]))
+    predictions = dict(zip(target_cols, y_hat_row))
 
     # --- 获取基线期望值 ---
+    # ★ 第一版策略：严格时间戳匹配（future_ts == kpi_expected_hourly.timestamp）
+    # 未命中时返回 expected_value=None, risk_level="normal"，不报错、不补值、不做模糊容错。
     expected_map: dict[str, dict[int, float]] = {}
     if include_expected_comparison:
         for h in horizons:

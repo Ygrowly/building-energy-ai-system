@@ -46,6 +46,11 @@ _BUILDING_NAMES = {
     "Public": "公共楼",
     "Public services": "公共楼",
 }
+_bid_to_type: dict[str, str] = {
+    "Fox_education_Louie": "Education",
+    "Fox_office_Alice": "Office",
+    "Fox_public_Henry": "Public services",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -1172,6 +1177,42 @@ async def get_overview(
             "total_carbon_pct": _pct(total_electricity * 0.5703, yest_total_elec * 0.5703),
         }
 
+        # ---------- 预测预警摘要 ----------
+        prediction_warning_count = 0
+        prediction_building_map: dict[str, dict] = {}
+        try:
+            pred_result = await db.execute(text("""
+                SELECT
+                    p.building_id,
+                    COUNT(*) AS cnt,
+                    MAX(CASE WHEN p.risk_level = 'critical' THEN 1 ELSE 0 END) AS has_critical
+                FROM predicted_anomaly_events p
+                WHERE p.created_at >= (
+                    SELECT MAX(created_at) FROM predicted_anomaly_events
+                ) - INTERVAL '24 hours'
+                GROUP BY p.building_id
+            """))
+            for row in pred_result.fetchall():
+                pbid, pcnt, pcrit = row
+                prediction_warning_count += pcnt
+                prediction_building_map[pbid] = {
+                    "count": pcnt,
+                    "risk_level": "critical" if pcrit else "warning",
+                }
+        except Exception:
+            pass
+
+        for bd in buildings_detail:
+            bt = bd["building_type"]
+            bid_for_pred = None
+            for k, v in _bid_to_type.items():
+                if v == bt:
+                    bid_for_pred = k
+                    break
+            pred_info = prediction_building_map.get(bid_for_pred or "", {})
+            bd["prediction_warning_count"] = pred_info.get("count", 0)
+            bd["prediction_status"] = pred_info.get("risk_level", "normal")
+
         return {
             "data_date": target_day.isoformat() if hasattr(target_day, "isoformat") else str(target_day),
             "kpis": {
@@ -1180,6 +1221,7 @@ async def get_overview(
                 "total_hac_energy_kwh": round(total_hac, 2),
                 "total_carbon_kg": round(total_electricity * 0.5703, 2),
                 "anomaly_count": len(anomaly_building_ids),
+                "prediction_warning_count": prediction_warning_count,
             },
             "kpis_change": kpis_change,
             "weather": {
@@ -1484,6 +1526,173 @@ async def get_risk_now(db: AsyncSession = Depends(get_db_session)):
     risk_items.sort(key=lambda x: _order.get(x["risk_level"], 9))
 
     return {"risks": risk_items, "evaluated_at": now.isoformat()}
+
+
+# ---------------------------------------------------------------------------
+# 预测预警查询
+# ---------------------------------------------------------------------------
+@router.get("/predictions/recent", summary="获取近期预测预警")
+async def get_recent_predictions(
+    hours: int = Query(168, ge=1, le=8760, description="查询最近 N 小时内的预测预警（默认 7 天）"),
+    building_type: str | None = Query(None, description="按建筑类型过滤"),
+    risk_level: str | None = Query(None, description="按风险等级过滤（warning/critical）"),
+    db: AsyncSession = Depends(get_db_session),
+):
+    """
+    从 predicted_anomaly_events 表查询近期预测预警。
+    返回结构与 /anomalies/recent 对齐，方便前端复用组件。
+    """
+    max_ts_result = await db.execute(
+        text("SELECT MAX(created_at) FROM predicted_anomaly_events")
+    )
+    max_ts = max_ts_result.scalar()
+
+    if max_ts is None:
+        return {
+            "predictions": [],
+            "total": 0,
+            "check_period": {"start": None, "end": None, "hours": hours},
+            "message": "predicted_anomaly_events 暂无数据，请先调用 /api/admin/run-forecast",
+        }
+
+    if hasattr(max_ts, "tzinfo") and max_ts.tzinfo is None:
+        max_ts = max_ts.replace(tzinfo=timezone.utc)
+
+    window_start = max_ts - timedelta(hours=hours)
+
+    conditions = "WHERE p.created_at >= :t0 AND p.created_at <= :t1"
+    params: dict[str, Any] = {"t0": window_start, "t1": max_ts}
+
+    if building_type:
+        bld_result = await db.execute(
+            select(Building.building_id).where(
+                Building.primary_space_usage == building_type
+            )
+        )
+        bid = bld_result.scalar_one_or_none()
+        if bid:
+            conditions += " AND p.building_id = :bid"
+            params["bid"] = bid
+
+    if risk_level:
+        conditions += " AND p.risk_level = :rlevel"
+        params["rlevel"] = risk_level
+
+    result = await db.execute(text(f"""
+        SELECT
+            p.id,
+            p.created_at,
+            p.as_of_timestamp,
+            p.forecast_for_timestamp,
+            p.horizon_h,
+            p.building_id,
+            p.metric_name,
+            p.predicted_value,
+            p.expected_value,
+            p.deviation_pct,
+            p.risk_level,
+            p.rule_triggered,
+            p.model_name,
+            p.is_confirmed
+        FROM predicted_anomaly_events p
+        {conditions}
+        ORDER BY p.created_at DESC
+        LIMIT 200
+    """), params)
+
+    rows = result.fetchall()
+    predictions = []
+    for row in rows:
+        (pid, created, as_of, forecast_for, horizon, bid, metric,
+         pred_val, exp_val, dev_pct, rlevel, rule, model, confirmed) = row
+        bt = _bid_to_type.get(bid, bid)
+        predictions.append({
+            "id": pid,
+            "created_at": created.isoformat() if created else None,
+            "as_of_timestamp": as_of.isoformat() if as_of else None,
+            "forecast_for_timestamp": forecast_for.isoformat() if forecast_for else None,
+            "horizon_h": horizon,
+            "building_id": bid,
+            "building_name": _BUILDING_NAMES.get(bt, bt),
+            "building_type": bt,
+            "metric_name": metric,
+            "predicted_value": pred_val,
+            "expected_value": exp_val,
+            "deviation_pct": dev_pct,
+            "risk_level": rlevel,
+            "rule_triggered": rule,
+            "model_name": model,
+            "is_confirmed": confirmed,
+        })
+
+    return {
+        "predictions": predictions,
+        "total": len(predictions),
+        "check_period": {
+            "start": window_start.isoformat(),
+            "end": max_ts.isoformat(),
+            "hours": hours,
+        },
+    }
+
+
+@router.get("/predictions/summary", summary="预测预警按楼宇聚合摘要")
+async def get_predictions_summary(
+    hours: int = Query(168, ge=1, le=8760, description="统计最近 N 小时（默认 7 天）"),
+    db: AsyncSession = Depends(get_db_session),
+):
+    """
+    按楼宇聚合最近一段时间的预测预警数，返回最新预测时间与风险摘要。
+    对齐 /buildings/risk-now 的返回结构。
+    """
+    max_ts_result = await db.execute(
+        text("SELECT MAX(created_at) FROM predicted_anomaly_events")
+    )
+    max_ts = max_ts_result.scalar()
+
+    if max_ts is None:
+        return {"buildings": [], "latest_prediction_at": None, "total_warnings": 0}
+
+    if hasattr(max_ts, "tzinfo") and max_ts.tzinfo is None:
+        max_ts = max_ts.replace(tzinfo=timezone.utc)
+
+    window_start = max_ts - timedelta(hours=hours)
+
+    result = await db.execute(text("""
+        SELECT
+            p.building_id,
+            COUNT(*) AS warning_count,
+            MAX(p.created_at) AS latest,
+            COUNT(DISTINCT p.metric_name) AS metric_count,
+            MAX(CASE WHEN p.risk_level = 'critical' THEN 1 ELSE 0 END) AS has_critical
+        FROM predicted_anomaly_events p
+        WHERE p.created_at >= :t0 AND p.created_at <= :t1
+        GROUP BY p.building_id
+        ORDER BY warning_count DESC
+    """), {"t0": window_start, "t1": max_ts})
+
+    rows = result.fetchall()
+    buildings = []
+    total_warnings = 0
+    for row in rows:
+        bid, cnt, latest, metric_cnt, has_crit = row
+        bt = _bid_to_type.get(bid, bid)
+        total_warnings += cnt
+        buildings.append({
+            "building_id": bid,
+            "building_type": bt,
+            "building_name": _BUILDING_NAMES.get(bt, bt),
+            "warning_count": cnt,
+            "latest_prediction_at": latest.isoformat() if latest else None,
+            "metric_count": metric_cnt,
+            "risk_level": "critical" if has_crit else "warning",
+        })
+
+    return {
+        "buildings": buildings,
+        "latest_prediction_at": max_ts.isoformat(),
+        "total_warnings": total_warnings,
+    }
 
 
 # ---------------------------------------------------------------------------

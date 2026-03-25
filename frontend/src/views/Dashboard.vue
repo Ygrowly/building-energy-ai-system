@@ -471,11 +471,14 @@ const kpis = computed(() => {
     ? buildings.reduce((s: number, b: any) => s + (b.total_electricity_kwh ?? 0), 0) / totalSqm
     : 0
 
+  const predCount = k.prediction_warning_count ?? 0
+
   return [
-    { icon: 'mdi:lightning-bolt', label: '日总用电 (kWh)',       value: Number(k.total_electricity_kwh).toFixed(1), trend: null },
-    { icon: 'mdi:water',          label: '当前用水 (m³)',         value: Number(k.total_water_m3).toFixed(1),        trend: null },
-    { icon: 'mdi:ruler-square',   label: '综合能耗强度 (kWh/㎡)', value: intensity.toFixed(3),                       trend: null },
-    { icon: 'mdi:alert-circle',   label: '异常楼宇数',            value: String(k.anomaly_count),                    trend: null },
+    { icon: 'mdi:lightning-bolt',  label: '日总用电 (kWh)',       value: Number(k.total_electricity_kwh).toFixed(1), trend: null },
+    { icon: 'mdi:water',           label: '当前用水 (m³)',         value: Number(k.total_water_m3).toFixed(1),        trend: null },
+    { icon: 'mdi:ruler-square',    label: '综合能耗强度 (kWh/㎡)', value: intensity.toFixed(3),                       trend: null },
+    { icon: 'mdi:alert-circle',    label: '异常楼宇数',            value: String(k.anomaly_count),                    trend: null },
+    { icon: 'mdi:crystal-ball',    label: '预测预警',              value: String(predCount),                          trend: null },
   ]
 })
 
@@ -850,7 +853,7 @@ function formatDay(iso: string): string {
 /* ── KPI ── */
 .kpi-grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   gap: 12px;
   margin-bottom: 28px;
 }

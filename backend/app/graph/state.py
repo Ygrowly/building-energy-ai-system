@@ -23,6 +23,7 @@ from typing_extensions import TypedDict
 IntentType = Literal[
     "data_query",       # 查询能耗数据 / 设备状态
     "cop_analysis",     # 能效比计算
+    "forecast",         # 预测未来能耗 / 预测预警
     "fault_diagnosis",  # 故障诊断
     "work_order",       # 生成工单
     "knowledge_query",  # 查询建筑规范 / 标准 / 技术知识库（RAG 检索）
@@ -166,6 +167,7 @@ def initial_state(available_buildings: list[str] | None = None) -> AgentState:
 _INTENT_ZH: dict[str, str] = {
     "data_query":      "数据查询",
     "cop_analysis":    "COP分析",
+    "forecast":        "预测预警",
     "fault_diagnosis": "故障诊断",
     "work_order":      "工单",
     "knowledge_query": "知识库查询",

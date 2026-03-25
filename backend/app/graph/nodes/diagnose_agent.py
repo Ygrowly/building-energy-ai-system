@@ -211,11 +211,15 @@ _TOOL_LIST_BUILDINGS = _make_mcp_tool(
     "仅在上下文未提供设备列表时调用，无需参数，直接调用即可。",
 )
 
-_DIAGNOSE_BASE_TOOLS = [
+def _build_diagnose_base_tools() -> list[StructuredTool]:
+    from app.core.config import get_settings as _gs
+    _s = _gs()
+    _tr = f"{_s.DATA_TIME_START} ~ {_s.DATA_TIME_END}"
+    return [
     _make_mcp_tool(
         "query_energy_metrics",
         "查询指定建筑在时间范围内的能耗指标时序数据（事实核查用）。"
-        "默认时间范围：2016-04-01 ~ 2016-05-02。",
+        f"默认时间范围：{_tr}。",
         args_schema=QueryEnergyMetricsInput,
     ),
     _make_mcp_tool(
@@ -229,7 +233,7 @@ _DIAGNOSE_BASE_TOOLS = [
         "返回 rated_water/rated_electricity/rated_hac_energy（期望）与 actual_*（实际），"
         "以及 water/electricity/hac 三项偏差百分比。"
         "用途：向用户解释'期望是多少，实际是多少，偏差了多少'。"
-        "建议时间范围不超过 7 天，默认时间范围：2016-04-01 ~ 2016-05-02。",
+        f"建议时间范围不超过 7 天，默认时间范围：{_tr}。",
         args_schema=GetBuildingRatedValuesInput,
     ),
     _make_mcp_tool(
@@ -238,7 +242,7 @@ _DIAGNOSE_BASE_TOOLS = [
         "规则：water_leak / electricity_overload / hvac_overconsumption / db_flagged。"
         "空调异常时返回 hvac_root_cause：A_low_efficiency（主机效能衰退）/ "
         "B_small_deltaT（水力失调）/ C_unexpected_on（排程失效）。"
-        "默认时间范围：2016-04-01 ~ 2016-05-02。",
+        f"默认时间范围：{_tr}。",
         args_schema=DetectEnergyAnomaliesInput,
     ),
     _make_mcp_tool(
@@ -259,9 +263,11 @@ _DIAGNOSE_BASE_TOOLS = [
         "device_id 必须来自上下文【楼宇设备列表】中的真实设备 ID。",
         args_schema=CreateWorkOrderDraftInput,
     ),
-]
+    ]
 
-# 完整工具集（含 list_available_buildings，用于楼宇信息未知时）
+
+_DIAGNOSE_BASE_TOOLS = _build_diagnose_base_tools()
+
 DIAGNOSE_AGENT_TOOLS = [_TOOL_LIST_BUILDINGS] + _DIAGNOSE_BASE_TOOLS
 
 
@@ -378,8 +384,9 @@ async def diagnose_agent_node(state: AgentState) -> dict[str, Any]:
         context_parts.append(f"【目标设备】: {state['device_id']}")
     tc = state.get("time_context")
     if isinstance(tc, dict):
-        start = tc.get("start") or "2016-04-01"
-        end   = tc.get("end")   or "2016-05-02"
+        _cfg = get_settings()
+        start = tc.get("start") or _cfg.DATA_TIME_START
+        end   = tc.get("end")   or _cfg.DATA_TIME_END
         context_parts.append(f"【诊断时间范围】: {start} ~ {end}")
 
     history = state.get("messages", [])

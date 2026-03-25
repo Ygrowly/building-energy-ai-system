@@ -36,6 +36,7 @@ from app.schemas.mcp_schemas import (
     CompareMetricAcrossBuildingsInput,
     CompareTimePeriodsInput,
     DetectEnergyAnomaliesInput,
+    ForecastKPIInput,
     GenerateReportInput,
     GetDeviceLiveStatusInput,
     QueryDailyEnergySummaryInput,
@@ -48,7 +49,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # System Prompt — 数据分析师
 # ---------------------------------------------------------------------------
-DATA_AGENT_SYSTEM_PROMPT = """你是一个楼宇能耗管理系统的数据分析师（Data Agent）。
+_DATA_AGENT_PROMPT_TEMPLATE = """你是一个楼宇能耗管理系统的数据分析师（Data Agent）。
 你拥有只读数据库权限，负责所有数据查询、统计分析和图表生成工作。
 
 ## 你的专属工具（严格按此列表调用，不允许猜测工具名称）
@@ -62,6 +63,7 @@ DATA_AGENT_SYSTEM_PROMPT = """你是一个楼宇能耗管理系统的数据分�
 8. compare_time_periods — 同环比分析（当期 vs 基期），返回变化量和变化率
 9. render_ui_component — 生成前端图表/卡片渲染指令（有数值结果时必须调用）
 10. generate_report — 生成 CSV 报表下载链接，用户要求"导出/生成报表"时调用
+11. building_kpi_forecast_6h_12h — 基于 ML 模型预测未来 6h/12h 的 5 项 KPI 并与基线对比生成预测预警
 
 ## 建筑 ID 说明
 - building_id 使用 building_type 值：'Education'、'Office'、'Public services'
@@ -77,9 +79,9 @@ DATA_AGENT_SYSTEM_PROMPT = """你是一个楼宇能耗管理系统的数据分�
 - 调用工具时 building_id 传英文值，但在回复文本和图表 series.name 中一律使用中文名
 
 ## 数据时间范围
-- 数据库有效数据：2016-04-01 ~ 2016-05-02
-- 用户未指定时间时，优先使用上下文中的时间范围，否则默认 2016-04-01 ~ 2016-05-02
-- 禁止使用 2024/2025/2026 等数据库中不存在的日期
+- 数据库有效数据：{data_time_start} ~ {data_time_end}
+- 用户未指定时间时，优先使用上下文中的时间范围，否则默认 {data_time_start} ~ {data_time_end}
+- 禁止使用数据库中不存在的日期
 
 ## 工具选择指南（按场景选最高效工具）
 | 场景 | 首选工具 |
@@ -89,6 +91,7 @@ DATA_AGENT_SYSTEM_PROMPT = """你是一个楼宇能耗管理系统的数据分�
 | 多楼日趋势对比 | 对每栋楼各调一次 query_daily_energy_summary，再统一渲染多线图 |
 | 原始小时数据 | query_energy_metrics |
 | 故障/异常分析 | detect_energy_anomalies |
+| 预测未来能耗/预测异常 | building_kpi_forecast_6h_12h |
 
 ## 效率规范（重要）
 - **完成一个任务的工具调用次数通常不超过 5 次**（查询 + 渲染），超过说明选错了工具
@@ -100,32 +103,33 @@ DATA_AGENT_SYSTEM_PROMPT = """你是一个楼宇能耗管理系统的数据分�
 2. 有数值结果时，必须调用 render_ui_component 可视化
 3. 工具报错时，分析原因并修正参数后最多重试 2 次
 4. 数据确实不存在时，如实说明，不要编造
+5. 涉及**未来预测**（"未来会不会超标"、"预测接下来的能耗"）时，**优先调用 building_kpi_forecast_6h_12h**，不要使用 detect_energy_anomalies
 
 ## render_ui_component 的 data_payload 格式规范（严格遵守）
 
 **LineChart / BarChart（折线图/柱状图）**：
 ```json
-{
+{{
   "series": [
-    {
+    {{
       "name": "教学楼",
       "data": [1500.0, 1480.0, 1620.0],
       "timestamps": ["2016-04-01", "2016-04-02", "2016-04-03"]
-    },
-    {
+    }},
+    {{
       "name": "办公楼",
       "data": [980.0, 1020.0, 950.0],
       "timestamps": ["2016-04-01", "2016-04-02", "2016-04-03"]
-    }
+    }}
   ]
-}
+}}
 ```
 关键约束：
 - `data` 字段必须是**纯数字数组**（float），不能是对象或字符串
 - `timestamps` 是与 `data` 等长的日期字符串列表，格式 "YYYY-MM-DD"
 - 每个楼宇一个 series 对象，多楼宇合并进同一次 render_ui_component 调用
 
-**Gauge（仪表盘）**：`{"value": 3.5}`
+**Gauge（仪表盘）**：`{{"value": 3.5}}`
 
 ## 禁止事项
 - 禁止自行计算 COP、总耗电量等（必须调工具）
@@ -133,6 +137,17 @@ DATA_AGENT_SYSTEM_PROMPT = """你是一个楼宇能耗管理系统的数据分�
 - 禁止查询白名单外的建筑
 - 禁止冗余重复的工具调用
 - 禁止在 data_payload 的 data 字段中放对象（必须是数字）"""
+
+
+def _build_data_agent_prompt() -> str:
+    settings = get_settings()
+    return _DATA_AGENT_PROMPT_TEMPLATE.format(
+        data_time_start=settings.DATA_TIME_START,
+        data_time_end=settings.DATA_TIME_END,
+    )
+
+
+DATA_AGENT_SYSTEM_PROMPT = _build_data_agent_prompt()
 
 
 # ---------------------------------------------------------------------------
@@ -168,64 +183,79 @@ def _make_mcp_tool(
     )
 
 
-DATA_AGENT_TOOLS = [
-    _make_mcp_tool(
-        "list_available_buildings",
-        "列出数据库中所有楼宇（building_type, meter_device_id, sqm）。无需任何参数，直接调用即可。",
-    ),
-    _make_mcp_tool(
-        "query_energy_metrics",
-        "查询指定建筑在时间范围内的能耗指标时序数据。"
-        "默认时间范围：2016-04-01 ~ 2016-05-02。"
-        "metrics 枚举值: electricity_kwh/water_m3/hvac_energy_kwh/"
-        "hvac_supply_temp_c/hvac_return_temp_c/ambient_temp_c/humidity_rh_pct/occupancy_density_per_100sqm",
-        args_schema=QueryEnergyMetricsInput,
-    ),
-    _make_mcp_tool(
-        "get_device_live_status",
-        "获取设备最新实时状态（operation_status, ambient_temp_c 等）。",
-        args_schema=GetDeviceLiveStatusInput,
-    ),
-    _make_mcp_tool(
-        "query_daily_energy_summary",
-        "查询按天汇总的能耗趋势（从物化视图，毫秒级响应）。默认时间范围：2016-04-01 ~ 2016-05-02。",
-        args_schema=QueryDailyEnergySummaryInput,
-    ),
-    _make_mcp_tool(
-        "calculate_system_cop",
-        "计算指定建筑空调系统的能效比 COP 并与 GB 50189-2015 国标基准对比。默认时间范围：2016-04-01 ~ 2016-05-02。",
-        args_schema=CalculateSystemCOPInput,
-    ),
-    _make_mcp_tool(
-        "detect_energy_anomalies",
-        "基于物理规则检测能耗异常（夜间高功率/零人高耗/传感器尖刺）。默认时间范围：2016-04-01 ~ 2016-05-02。",
-        args_schema=DetectEnergyAnomaliesInput,
-    ),
-    _make_mcp_tool(
-        "compare_metric_across_buildings",
-        "多栋楼同一指标横向聚合对比，支持 avg/sum/max/min。"
-        "适合'哪栋楼用电最多'、'A楼B楼湿度差'等跨楼问题。"
-        "building_ids 传空列表则对比所有楼宇。默认时间范围：2016-04-01 ~ 2016-05-02。",
-        args_schema=CompareMetricAcrossBuildingsInput,
-    ),
-    _make_mcp_tool(
-        "compare_time_periods",
-        "同环比分析：对同一建筑、同一指标在两段时间之间做对比，返回变化量和变化率(%)。"
-        "适合'本周vs上周'、'4月vs3月'等时间对比问题。默认时间范围在 2016-04 ~ 2016-05 内。",
-        args_schema=CompareTimePeriodsInput,
-    ),
-    _make_mcp_tool(
-        "render_ui_component",
-        "生成前端图表/卡片渲染指令（LineChart/BarChart/Gauge/WorkOrderCard/ReportDownload）。",
-        args_schema=RenderUIComponentInput,
-    ),
-    _make_mcp_tool(
-        "generate_report",
-        "生成统计报表 CSV 下载链接。用户说'生成报表'/'导出数据'时调用。"
-        "返回下载 URL，前端渲染为下载按钮。默认时间范围：2016-04-01 ~ 2016-05-02。",
-        args_schema=GenerateReportInput,
-    ),
-]
+def _build_data_agent_tools() -> list[StructuredTool]:
+    s = get_settings()
+    tr = f"{s.DATA_TIME_START} ~ {s.DATA_TIME_END}"
+    return [
+        _make_mcp_tool(
+            "list_available_buildings",
+            "列出数据库中所有楼宇（building_type, meter_device_id, sqm）。无需任何参数，直接调用即可。",
+        ),
+        _make_mcp_tool(
+            "query_energy_metrics",
+            "查询指定建筑在时间范围内的能耗指标时序数据。"
+            f"默认时间范围：{tr}。"
+            "metrics 枚举值: electricity_kwh/water_m3/hvac_energy_kwh/"
+            "hvac_supply_temp_c/hvac_return_temp_c/ambient_temp_c/humidity_rh_pct/occupancy_density_per_100sqm",
+            args_schema=QueryEnergyMetricsInput,
+        ),
+        _make_mcp_tool(
+            "get_device_live_status",
+            "获取设备最新实时状态（operation_status, ambient_temp_c 等）。",
+            args_schema=GetDeviceLiveStatusInput,
+        ),
+        _make_mcp_tool(
+            "query_daily_energy_summary",
+            f"查询按天汇总的能耗趋势（从物化视图，毫秒级响应）。默认时间范围：{tr}。",
+            args_schema=QueryDailyEnergySummaryInput,
+        ),
+        _make_mcp_tool(
+            "calculate_system_cop",
+            f"计算指定建筑空调系统的能效比 COP 并与 GB 50189-2015 国标基准对比。默认时间范围：{tr}。",
+            args_schema=CalculateSystemCOPInput,
+        ),
+        _make_mcp_tool(
+            "detect_energy_anomalies",
+            f"基于物理规则检测能耗异常（夜间高功率/零人高耗/传感器尖刺）。默认时间范围：{tr}。",
+            args_schema=DetectEnergyAnomaliesInput,
+        ),
+        _make_mcp_tool(
+            "compare_metric_across_buildings",
+            "多栋楼同一指标横向聚合对比，支持 avg/sum/max/min。"
+            "适合'哪栋楼用电最多'、'A楼B楼湿度差'等跨楼问题。"
+            f"building_ids 传空列表则对比所有楼宇。默认时间范围：{tr}。",
+            args_schema=CompareMetricAcrossBuildingsInput,
+        ),
+        _make_mcp_tool(
+            "compare_time_periods",
+            "同环比分析：对同一建筑、同一指标在两段时间之间做对比，返回变化量和变化率(%)。"
+            f"适合'本周vs上周'、'4月vs3月'等时间对比问题。默认时间范围在 {tr} 内。",
+            args_schema=CompareTimePeriodsInput,
+        ),
+        _make_mcp_tool(
+            "render_ui_component",
+            "生成前端图表/卡片渲染指令（LineChart/BarChart/Gauge/WorkOrderCard/ReportDownload）。",
+            args_schema=RenderUIComponentInput,
+        ),
+        _make_mcp_tool(
+            "generate_report",
+            "生成统计报表 CSV 下载链接。用户说'生成报表'/'导出数据'时调用。"
+            f"返回下载 URL，前端渲染为下载按钮。默认时间范围：{tr}。",
+            args_schema=GenerateReportInput,
+        ),
+        _make_mcp_tool(
+            "building_kpi_forecast_6h_12h",
+            "基于 ML 模型预测楼宇未来第 6、12 小时的 5 项 KPI"
+            "（水耗 water_l、电耗 electricity_kwh、供水温度、回水温度、空调能耗），"
+            "并与国标基线对比生成预测预警。"
+            "适用：'未来6小时会不会超标'、'预测一下办公楼接下来的用电'。"
+            "注意：该工具会自动取数据库中该楼最新可用行作为预测基准。",
+            args_schema=ForecastKPIInput,
+        ),
+    ]
+
+
+DATA_AGENT_TOOLS = _build_data_agent_tools()
 
 
 _cached_data_agent_full = None
@@ -270,7 +300,7 @@ def _get_data_agent(include_list_available_buildings: bool):
                 api_key=settings.LLM_API_KEY or "placeholder",
                 base_url=settings.LLM_BASE_URL,
                 temperature=0.1,
-                max_tokens=1500,   # 降低：减少单次 LLM 调用的生成量
+                max_tokens=2500,
             )
             _cached_data_agent_full = create_react_agent(
                 llm,
@@ -289,7 +319,7 @@ def _get_data_agent(include_list_available_buildings: bool):
             api_key=settings.LLM_API_KEY or "placeholder",
             base_url=settings.LLM_BASE_URL,
             temperature=0.1,
-            max_tokens=1500,   # 降低：减少单次 LLM 调用的生成量
+            max_tokens=2500,
         )
         tools_wo_list = [t for t in DATA_AGENT_TOOLS if getattr(t, "name", "") != "list_available_buildings"]
         _cached_data_agent_no_list_buildings = create_react_agent(
@@ -300,6 +330,138 @@ def _get_data_agent(include_list_available_buildings: bool):
         return _cached_data_agent_no_list_buildings
     # 理论上不会到达：两种分支里都有 return。这里放一个兜底，避免异常情况下返回 None。
     return _cached_data_agent_full if include_list_available_buildings else _cached_data_agent_no_list_buildings
+
+
+_BUILDING_ZH = {
+    "Education":        "教学楼",
+    "Office":           "办公楼",
+    "Public services":  "公共楼",
+}
+
+_METRIC_ZH = {
+    "water_l":            "用水量(L)",
+    "electricity_kwh":    "用电量(kWh)",
+    "hac_energy":         "空调能耗(kWh)",
+    "sim_supply_temp_c":  "供水温度(℃)",
+    "sim_return_temp_c":  "回水温度(℃)",
+}
+
+_RISK_ZH = {"normal": "正常", "warning": "预警", "critical": "严重"}
+
+
+async def _handle_forecast_fast_path(state: AgentState, hop_count: int) -> dict[str, Any]:
+    """
+    forecast 意图快速路径：直接调用工具，不经过 ReAct LLM，
+    避免 DeepSeek 在大型 JSON tool result 后生成空响应的问题。
+    """
+    building_id = state.get("building_id") or "Education"
+    building_zh = _BUILDING_ZH.get(building_id, building_id)
+    existing_summary = state.get("context_summary", "")
+
+    # ── Step 1: 调用预测工具 ──────────────────────────────────────────
+    async with AsyncSessionLocal() as session:
+        forecast_result = await call_tool(
+            "building_kpi_forecast_6h_12h",
+            {"building_id": building_id},
+            session=session,
+        )
+
+    if isinstance(forecast_result, MCPError):
+        ai_msg = AIMessage(content=f"预测失败：{forecast_result.error}")
+        return {
+            "messages": [ai_msg],
+            "current_agent": "end",
+            "hop_count": hop_count,
+            "error": forecast_result.error,
+            "context_summary": update_context_summary(existing_summary, "forecast", "", ai_msg.content),
+        }
+
+    # ── Step 2: 整理预测指标，按 horizon 分组 ─────────────────────────
+    metrics = getattr(forecast_result, "metrics", [])
+    horizons = getattr(forecast_result, "horizons_h", [6, 12])
+    as_of = str(getattr(forecast_result, "as_of_timestamp", ""))
+    model_name = getattr(forecast_result, "model_name", "")
+    warnings_count = getattr(forecast_result, "warnings_count", 0)
+
+    # 按 horizon 分组
+    by_h: dict[int, list] = {}
+    for m in metrics:
+        by_h.setdefault(m.horizon_h, []).append(m)
+
+    # ── Step 3: 构造图表渲染指令 ──────────────────────────────────────
+    # 只渲染 electricity_kwh（最常关注指标），以折线图展示 t+6h / t+12h
+    elec_series: list[dict] = []
+    for h in sorted(horizons):
+        ms = [m for m in by_h.get(h, []) if m.metric_name == "electricity_kwh"]
+        if ms:
+            elec_series.append({
+                "name": f"预测用电量(kWh)",
+                "data": [round(ms[0].predicted_value, 4)],
+                "timestamps": [f"t+{h}h"],
+            })
+
+    # 汇总预测值用于一次性渲染
+    chart_series = [{
+        "name": "预测用电量(kWh)",
+        "data": [
+            round(next((m.predicted_value for m in by_h.get(h, []) if m.metric_name == "electricity_kwh"), 0.0), 4)
+            for h in sorted(horizons)
+        ],
+        "timestamps": [f"t+{h}h" for h in sorted(horizons)],
+    }]
+
+    render_inp = {
+        "component_type": "LineChart",
+        "title": f"{building_zh}未来6小时与12小时用电量预测",
+        "data_payload": {
+            "series": chart_series,
+            "source_info": {
+                "building": building_zh,
+                "model": model_name,
+                "as_of": as_of,
+            },
+        },
+        "options": {},
+    }
+    render_result = call_tool("render_ui_component", render_inp)
+    if hasattr(render_result, "__await__"):
+        render_result = await render_result
+    artifacts: list[dict] = list(state.get("artifacts", []))
+    if isinstance(render_result, dict) and "component_type" in render_result:
+        artifacts.append(render_result)
+
+    # ── Step 4: 生成文字总结 ──────────────────────────────────────────
+    lines = [f"**{building_zh} ML 预测结果**（基于 {as_of[:10]} 最新数据）\n"]
+    for h in sorted(horizons):
+        lines.append(f"**预测时点：t+{h}h**")
+        for m in sorted(by_h.get(h, []), key=lambda x: x.metric_name):
+            label = _METRIC_ZH.get(m.metric_name, m.metric_name)
+            risk_zh = _RISK_ZH.get(m.risk_level, m.risk_level)
+            exp_str = f"，基线期望 {m.expected_value:.2f}" if m.expected_value is not None else ""
+            dev_str = f"，偏差 {m.deviation_pct:+.1f}%" if m.deviation_pct is not None else ""
+            lines.append(f"  • {label}：预测值 **{m.predicted_value:.4f}**{exp_str}{dev_str}  [{risk_zh}]")
+        lines.append("")
+
+    if warnings_count > 0:
+        lines.append(f"⚠️ 共检测到 {warnings_count} 项预测预警，已写入预测预警记录表。")
+    else:
+        lines.append("✅ 预测结果均在正常范围内，无预警触发。")
+
+    summary_text = "\n".join(lines)
+    ai_msg = AIMessage(content=summary_text)
+
+    user_q = next(
+        (str(m.content) for m in reversed(list(state.get("messages", []))) if isinstance(m, HumanMessage)),
+        "",
+    )
+    return {
+        "messages": [ai_msg],
+        "current_agent": "end",
+        "hop_count": hop_count,
+        "artifacts": artifacts,
+        "evidence": [],
+        "context_summary": update_context_summary(existing_summary, "forecast", user_q, summary_text),
+    }
 
 
 async def data_agent_node(state: AgentState) -> dict[str, Any]:
@@ -314,6 +476,10 @@ async def data_agent_node(state: AgentState) -> dict[str, Any]:
     """
     t0 = time.time()
     hop_count = state.get("hop_count", 0) + 1
+
+    # ── forecast 快速路径：直接调用预测工具，不经过 ReAct ───────────────
+    if state.get("intent") == "forecast":
+        return await _handle_forecast_fast_path(state, hop_count)
     # 是否允许 ReAct 调用 list_available_buildings：
     # - 若我们能从 state 或预取拿到 available_buildings，就移除该工具，避免冗余调用
     agent = None
@@ -356,6 +522,7 @@ async def data_agent_node(state: AgentState) -> dict[str, Any]:
         end   = tc.get("end")   or "2016-05-02"
         context_parts.append(f"【查询时间范围】: {start} ~ {end}")
 
+
     # ── 全局 messages 已只含 Human + 最终 AI（干净紧凑），取最近 N 条 ──
     history = state.get("messages", [])
     recent  = history[-_MAX_HISTORY_MESSAGES:] if len(history) > _MAX_HISTORY_MESSAGES else history
@@ -368,6 +535,7 @@ async def data_agent_node(state: AgentState) -> dict[str, Any]:
         sub_messages = [ctx_msg] + list(recent)
     else:
         sub_messages = list(recent)
+
 
     # 在进入 ReAct 前决定工具集合
     include_list = not bool(state.get("available_buildings"))
@@ -394,6 +562,7 @@ async def data_agent_node(state: AgentState) -> dict[str, Any]:
     # ── 从 ReAct 结果中提取所有新消息 ────────────────────────────────
     all_messages = result.get("messages", [])
     new_messages = all_messages[injected_count:]
+
 
     # ── 只将最终纯文字 AIMessage 写回全局 state ───────────────────────
     # ToolMessage 和带 tool_calls 的中间 AIMessage 只在内部使用，不污染全局历史。

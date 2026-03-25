@@ -5,6 +5,7 @@ import { useBuildingStore } from '@/stores/buildingStore'
 import { apiFetch } from '@/api/http'
 import { MC, gc, EUI_BASELINE, buildHeatmapCells } from '@/utils/homeCharts'
 import HomeActionCards from './HomeActionCards.vue'
+import { useReportExport } from '@/composables/useReportExport'
 
 const props = defineProps<{
   overviewData: any
@@ -16,6 +17,7 @@ const props = defineProps<{
 }>()
 
 const buildingStore = useBuildingStore()
+const { captureChart } = useReportExport('home-charts')
 
 // HVAC 图实时数据
 const hvacApiData = ref<{ outdoorTemp: number[]; actualHvac: number[]; simOptHvac: number[] } | null>(null)
@@ -677,7 +679,22 @@ function renderAll() {
   renderRisk()
   renderSankey()
   renderAnomalyDist()
-  nextTick(() => instances.forEach((i) => i.resize()))
+  nextTick(() => {
+    instances.forEach((i) => i.resize())
+    // 图表稳定后截图注册到报表
+    setTimeout(() => captureChartsForReport(), 500)
+  })
+}
+
+function captureChartsForReport() {
+  if (sankeyEl.value) {
+    const inst = echarts.getInstanceByDom(sankeyEl.value)
+    captureChart(inst, 'home-chart-sankey', '能耗异常根因流向', 25)
+  }
+  if (compareEl.value) {
+    const inst = echarts.getInstanceByDom(compareEl.value)
+    captureChart(inst, 'home-chart-compare', '各楼宇能耗对比', 22)
+  }
 }
 
 function onResize() {

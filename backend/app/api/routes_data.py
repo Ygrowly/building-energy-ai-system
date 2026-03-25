@@ -163,11 +163,17 @@ async def get_building_status(
 async def get_building_devices(
     building_type: str,
     history_hours: int = Query(24, ge=1, le=168, description="返回最近 N 小时遥测历史（默认24h）"),
+    start_date: str | None = Query(None, description="起始日期 YYYY-MM-DD（与 end_date 同时提供时使用绝对范围）"),
+    end_date: str | None = Query(None, description="结束日期 YYYY-MM-DD（与 start_date 同时提供时使用绝对范围）"),
     db: AsyncSession = Depends(get_db_session),
 ):
     """
     返回建筑下所有设备的最新运行状态快照（device_status_latest）
-    以及最近 history_hours 小时的遥测趋势（device_telemetry_hourly）。
+    以及遥测趋势（device_telemetry_hourly）。
+
+    时间窗口：
+      - 同时提供 start_date + end_date 时，按绝对日期范围查询，忽略 history_hours
+      - 否则回退到 history_hours 相对窗口（向后兼容）
 
     包含字段：
       - running_state: running | standby
@@ -252,18 +258,20 @@ async def get_building_devices(
         }
 
     # ── 遥测历史趋势 ────────────────────────────────────────────────────────────
-    # 以 device_telemetry_hourly 最新时间戳为基点
-    max_ts_result = await db.execute(text(
-        "SELECT MAX(timestamp) FROM device_telemetry_hourly WHERE building_id = :bid"
-    ), {"bid": building_id})
-    max_ts = max_ts_result.scalar()
-
+    use_absolute_range = start_date is not None and end_date is not None
     history_records: list[dict] = []
-    if max_ts is not None:
-        if hasattr(max_ts, "tzinfo") and max_ts.tzinfo is None:
-            max_ts = max_ts.replace(tzinfo=timezone.utc)
-        from datetime import timedelta
-        window_start = max_ts - timedelta(hours=history_hours)
+
+    if use_absolute_range:
+        try:
+            t0 = datetime.strptime(start_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            t1 = datetime.strptime(end_date, "%Y-%m-%d").replace(
+                hour=23, minute=59, second=59, tzinfo=timezone.utc
+            )
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail="start_date / end_date 格式应为 YYYY-MM-DD",
+            )
 
         hist_result = await db.execute(text("""
             SELECT
@@ -282,7 +290,7 @@ async def get_building_devices(
               AND dth.timestamp >= :t0
               AND dth.timestamp <= :t1
             ORDER BY dth.timestamp ASC, dth.device_type ASC
-        """), {"bid": building_id, "t0": window_start, "t1": max_ts})
+        """), {"bid": building_id, "t0": t0, "t1": t1})
 
         for hrow in hist_result.fetchall():
             (ts, d_id, d_type, run_st, health_st,
@@ -299,13 +307,60 @@ async def get_building_devices(
                 "return_temp_c": float(ret_t) if ret_t is not None else None,
                 "ambient_temp_c": float(amb_t) if amb_t is not None else None,
             })
+    else:
+        max_ts_result = await db.execute(text(
+            "SELECT MAX(timestamp) FROM device_telemetry_hourly WHERE building_id = :bid"
+        ), {"bid": building_id})
+        max_ts = max_ts_result.scalar()
+
+        if max_ts is not None:
+            if hasattr(max_ts, "tzinfo") and max_ts.tzinfo is None:
+                max_ts = max_ts.replace(tzinfo=timezone.utc)
+            window_start = max_ts - timedelta(hours=history_hours)
+
+            hist_result = await db.execute(text("""
+                SELECT
+                    dth.timestamp,
+                    dth.device_id,
+                    dth.device_type,
+                    dth.running_state,
+                    dth.health_status,
+                    dth.power_kw,
+                    dth.flow_rate,
+                    dth.supply_temp_c,
+                    dth.return_temp_c,
+                    dth.ambient_temp_c
+                FROM device_telemetry_hourly dth
+                WHERE dth.building_id = :bid
+                  AND dth.timestamp >= :t0
+                  AND dth.timestamp <= :t1
+                ORDER BY dth.timestamp ASC, dth.device_type ASC
+            """), {"bid": building_id, "t0": window_start, "t1": max_ts})
+
+            for hrow in hist_result.fetchall():
+                (ts, d_id, d_type, run_st, health_st,
+                 p_kw, fl, sup_t, ret_t, amb_t) = hrow
+                history_records.append({
+                    "timestamp": ts.isoformat() if ts else None,
+                    "device_id": d_id,
+                    "device_type": d_type,
+                    "running_state": run_st,
+                    "health_status": health_st,
+                    "power_kw": float(p_kw) if p_kw is not None else None,
+                    "flow_rate": float(fl) if fl is not None else None,
+                    "supply_temp_c": float(sup_t) if sup_t is not None else None,
+                    "return_temp_c": float(ret_t) if ret_t is not None else None,
+                    "ambient_temp_c": float(amb_t) if amb_t is not None else None,
+                })
 
     return {
         "building_type": building_type,
         "building_id": building_id,
         "devices": device_snapshot,
         "history": history_records,
-        "history_hours": history_hours,
+        "history_hours": history_hours if not use_absolute_range else None,
+        "start_date": start_date,
+        "end_date": end_date,
         "module_status": "ok",
     }
 

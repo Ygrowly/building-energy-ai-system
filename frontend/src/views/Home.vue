@@ -52,6 +52,12 @@
           <Icon icon="mdi:bell-outline" width="17" />
           <span v-if="notifStore.unreadCount > 0" class="home-bell-dot"></span>
         </button>
+
+        <div class="header-group-divider"></div>
+
+        <button class="home-report-btn" @click="openReportPreview()" title="生成报表" aria-label="生成报表">
+          <Icon icon="mdi:file-chart-outline" width="17" />
+        </button>
       </div>
     </header>
 
@@ -111,10 +117,12 @@ import HomeTeachingSection from '@/components/home/HomeTeachingSection.vue'
 import HomeOfficeSection from '@/components/home/HomeOfficeSection.vue'
 import HomePublicSection from '@/components/home/HomePublicSection.vue'
 import { MC } from '@/utils/homeCharts'
+import { useReportExport } from '@/composables/useReportExport'
 
 const buildingStore = useBuildingStore()
 const authStore     = useAuthStore()
 const notifStore    = useNotificationStore()
+const { registerSection, setReportMeta, openPreview } = useReportExport('home')
 
 const displayName = computed(() => authStore.user?.username ?? '访客')
 
@@ -303,6 +311,70 @@ onMounted(async () => {
   await buildingStore.fetchBuildings()
   await Promise.all([fetchOverview(), fetchAnomalies(), fetchSankeyData()])
 })
+
+// ── 报表集成 ─────────────────────────────────────────────────
+watch(overviewData, (ov) => {
+  if (!ov) return
+  setReportMeta({ title: '首页总览报表' })
+
+  // KPI 段落
+  const kpisArr = kpis.value
+  if (kpisArr.length) {
+    registerSection({
+      id: 'home-kpi',
+      title: 'KPI 总览',
+      type: 'kpi',
+      order: 10,
+      kpis: kpisArr.map(k => ({
+        label: k.label,
+        value: k.value,
+        trend: k.change,
+      })),
+    })
+  }
+
+  // 楼宇汇总表格
+  const buildings: any[] = ov.buildings ?? []
+  if (buildings.length) {
+    registerSection({
+      id: 'home-buildings',
+      title: '各楼宇能耗汇总',
+      type: 'table',
+      order: 20,
+      columns: [
+        { key: 'name', label: '楼宇' },
+        { key: 'electricity', label: '日用电 (kWh)', align: 'right' },
+        { key: 'water', label: '日用水 (m³)', align: 'right' },
+        { key: 'hac', label: '空调能耗 (kWh)', align: 'right' },
+      ],
+      rows: buildings.map((b: any) => ({
+        name: buildingStore.getBuildingName(b.building_type),
+        electricity: Number(b.total_electricity_kwh ?? 0).toFixed(1),
+        water: Number(b.total_water_m3 ?? 0).toFixed(1),
+        hac: Number(b.total_hac_energy_kwh ?? 0).toFixed(1),
+      })),
+    })
+  }
+})
+
+watch(anomalyData, (data) => {
+  if (!data?.length) return
+  registerSection({
+    id: 'home-anomalies',
+    title: '近期异常概况',
+    type: 'summary',
+    order: 30,
+    summaryItems: [
+      { label: '异常事件总数', value: String(data.length) },
+      { label: '严重级别', value: String(data.filter((a: any) => a.severity === 'critical').length) + ' 条 CRITICAL' },
+      { label: '告警级别', value: String(data.filter((a: any) => a.severity === 'warning').length) + ' 条 WARNING' },
+    ],
+  })
+})
+
+function openReportPreview() {
+  openPreview()
+}
 </script>
 
 <style scoped>
@@ -444,6 +516,25 @@ onMounted(async () => {
   cursor: pointer;
   flex-shrink: 0;
   transition: background 0.18s ease, color 0.18s ease;
+}
+.home-report-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.18s ease, color 0.18s ease, border-color 0.18s ease;
+}
+.home-report-btn:hover {
+  background: var(--bg-card);
+  color: var(--accent);
+  border-color: var(--accent);
 }
 .home-bell-dot {
   position: absolute;

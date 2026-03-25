@@ -66,6 +66,11 @@
                 关闭会话
               </button>
               <div class="menu-divider" />
+              <button class="menu-item" @click="onExportConversation">
+                <Icon icon="mdi:file-chart-outline" width="14" />
+                导出对话报表
+              </button>
+              <div class="menu-divider" />
               <button class="menu-item danger" @click="onClearChat">
                 <Icon icon="mdi:trash-can-outline" width="14" />
                 清除消息
@@ -377,10 +382,13 @@ import WorkOrderCard from '@/generative-ui/WorkOrderCard.vue'
 import ReportDownload from '@/generative-ui/ReportDownload.vue'
 import EvidenceLink from '@/generative-ui/EvidenceLink.vue'
 import type { ArtifactEvent } from '@/api/stream_client'
+import { useReportStore } from '@/stores/reportStore'
+import type { ReportSection } from '@/stores/reportStore'
 
 const router = useRouter()
 const store = useChatStore()
 const pickerStore = useElementPickerStore()
+const reportStore = useReportStore()
 
 /** agent 类型 → 语义配色 */
 const _agentColors: Record<string, string> = {
@@ -620,6 +628,46 @@ function onCloseChat() {
 function onClearChat() {
   moreOpen.value = false
   store.clearSession()
+}
+
+function onExportConversation() {
+  moreOpen.value = false
+  const messages = store.messages
+  if (!messages.length) return
+
+  const sections: ReportSection[] = []
+
+  // 每条消息作为一个文本段落
+  messages.forEach((msg, idx) => {
+    if (msg.role === 'user') {
+      sections.push({
+        id: `msg-${idx}`,
+        namespace: 'agent-export',
+        title: `用户提问 ${idx + 1}`,
+        type: 'text',
+        content: msg.content,
+        order: idx * 2,
+      })
+    } else if (msg.role === 'ai' && msg.content) {
+      sections.push({
+        id: `reply-${idx}`,
+        namespace: 'agent-export',
+        title: 'AI 回答',
+        type: 'text',
+        content: msg.content,
+        order: idx * 2 + 1,
+      })
+    }
+  })
+
+  const currentSession = store.openTabs.find(s => s.session_id === store.currentSessionId)
+  reportStore.openPreviewWithPayload({
+    title: currentSession?.title ?? 'AI 对话记录',
+    subtitle: `共 ${messages.filter(m => m.role === 'user').length} 轮对话`,
+    generatedAt: new Date().toLocaleString('zh-CN'),
+    sections,
+    mode: 'snapshot',
+  })
 }
 
 // ── 消息互动操作 ──────────────────────────────────────────────────────────────

@@ -30,6 +30,10 @@
             <Icon :icon="loading ? 'mdi:loading' : 'mdi:refresh'" width="14" class="btn-icon" />
             {{ loading ? '加载中...' : '刷新' }}
           </button>
+          <button class="report-btn" @click="openReportPreview()" :disabled="!anomalies.length && !predictions.length" title="生成报表">
+            <Icon icon="mdi:file-chart-outline" width="14" class="btn-icon" />
+            报表
+          </button>
         </div>
       </div>
 
@@ -201,13 +205,15 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, watch, onMounted } from 'vue'
 import { Icon } from '@iconify/vue'
 import { RouterLink } from 'vue-router'
 import { apiFetch } from '@/api/http'
 import { useBuildingStore } from '@/stores/buildingStore'
+import { useReportExport } from '@/composables/useReportExport'
 
 const buildingStore = useBuildingStore()
+const { registerSection, setReportMeta, openPreview } = useReportExport('operations')
 
 // ── 异常告警 ───────────────────────────────────────
 const loading = ref(false)
@@ -284,6 +290,64 @@ onMounted(() => {
   fetchPredictions()
   fetchPendingOrders()
 })
+
+// ── 报表集成 ───────────────────────────────────────
+watch(anomalies, (data) => {
+  if (!data?.length) return
+  setReportMeta({ title: '智慧运维报表' })
+  registerSection({
+    id: 'ops-anomalies',
+    title: `近期异常告警（最近 ${filterHours.value} 小时）`,
+    type: 'table',
+    order: 10,
+    columns: [
+      { key: 'ts', label: '时间' },
+      { key: 'building', label: '楼宇' },
+      { key: 'message', label: '告警内容' },
+      { key: 'severity', label: '严重度' },
+      { key: 'deviation', label: '偏差', align: 'right' },
+    ],
+    rows: data.map((a: any) => ({
+      ts: a.timestamp ? new Date(a.timestamp).toLocaleString('zh-CN') : '—',
+      building: buildingStore.getBuildingName(a.building_type),
+      message: a.message ?? '—',
+      severity: a.severity === 'critical' ? 'CRITICAL' : 'WARNING',
+      deviation: a.deviation_pct != null ? `${a.deviation_pct > 0 ? '+' : ''}${Number(a.deviation_pct).toFixed(1)}%` : '—',
+    })),
+  })
+})
+
+watch(predictions, (data) => {
+  if (!data?.length) return
+  registerSection({
+    id: 'ops-predictions',
+    title: `预测预警（最近 ${predFilterHours.value} 小时）`,
+    type: 'table',
+    order: 20,
+    columns: [
+      { key: 'building', label: '楼宇' },
+      { key: 'metric', label: '指标' },
+      { key: 'horizon', label: '预测时窗' },
+      { key: 'risk', label: '风险等级' },
+      { key: 'predicted', label: '预测值', align: 'right' },
+      { key: 'expected', label: '基线值', align: 'right' },
+      { key: 'deviation', label: '偏差', align: 'right' },
+    ],
+    rows: data.map((p: any) => ({
+      building: p.building_name ?? buildingStore.getBuildingName(p.building_type),
+      metric: metricLabel(p.metric_name),
+      horizon: `${p.horizon_h}h`,
+      risk: p.risk_level === 'critical' ? 'CRITICAL' : 'WARNING',
+      predicted: p.predicted_value != null ? Number(p.predicted_value).toFixed(2) : '—',
+      expected: p.expected_value != null ? Number(p.expected_value).toFixed(2) : '—',
+      deviation: p.deviation_pct != null ? `${p.deviation_pct > 0 ? '+' : ''}${Number(p.deviation_pct).toFixed(1)}%` : '—',
+    })),
+  })
+})
+
+function openReportPreview() {
+  openPreview()
+}
 
 // ── 工具函数 ───────────────────────────────────────
 function buildingName(type: string): string {
@@ -385,6 +449,27 @@ function formatTime(iso: string): string {
 }
 .refresh-btn:hover { border-color: var(--accent); color: var(--accent); }
 .refresh-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.report-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 12px;
+  height: 32px;
+  font-size: 12px;
+  font-weight: 500;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.report-btn:hover:not(:disabled) {
+  background: rgba(91,141,238,0.1);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.report-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
 .view-all-link {
   font-size: 12px;

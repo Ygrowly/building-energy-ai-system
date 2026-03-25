@@ -160,21 +160,21 @@
         <p class="hint-sub">可以用自然语言提问，支持数据查询、故障诊断与工单生成。</p>
         <div class="hint-examples">
           <p class="hint-group-label"><Icon icon="mdi:chart-bar" width="12" class="inline-icon" /> 数据查询</p>
-          <button class="hint-chip" @click="quickSend('教学楼 2016 年 4 月 15 日的用电量是多少？')">
-            教学楼 2016-04-15 用电量
+          <button class="hint-chip" @click="quickSend(`教学楼 ${dataRangeStore.defaultStart} 的用电量是多少？`)">
+            教学楼单日用电量
           </button>
-          <button class="hint-chip" @click="quickSend('对比三栋楼 2016 年 4 月的每日用电趋势')">
+          <button class="hint-chip" @click="quickSend(`对比三栋楼 ${dataRangeStore.defaultStart} 到 ${dataRangeStore.defaultEnd} 的每日用电趋势`)">
             多楼宇趋势对比
           </button>
           <p class="hint-group-label"><Icon icon="mdi:microscope" width="12" class="inline-icon" /> 故障诊断</p>
-          <button class="hint-chip" @click="quickSend('办公楼 2016-04-15 凌晨 3 点的能耗有没有问题？帮我处理一下')">
+          <button class="hint-chip" @click="quickSend(`办公楼 ${dataRangeStore.defaultStart} 凌晨 3 点的能耗有没有问题？帮我处理一下`)">
             凌晨异常能耗诊断
           </button>
-          <button class="hint-chip" @click="quickSend('计算教学楼 2016 年 4 月的制冷能效比 COP')">
+          <button class="hint-chip" @click="quickSend(`计算教学楼 ${dataRangeStore.defaultStart} 到 ${dataRangeStore.defaultEnd} 的制冷能效比 COP`)">
             COP 计算
           </button>
           <p class="hint-group-label"><Icon icon="mdi:file-chart" width="12" class="inline-icon" /> 报表生成</p>
-          <button class="hint-chip" @click="quickSend('帮我导出办公楼 2016-04-01 到 2016-05-01 的每日能耗报表')">
+          <button class="hint-chip" @click="quickSend(`帮我导出办公楼 ${dataRangeStore.defaultStart} 到 ${dataRangeStore.defaultEnd} 的每日能耗报表`)">
             导出能耗报表 CSV
           </button>
         </div>
@@ -202,23 +202,55 @@
           >
             <div class="ai-content">
               <div class="ai-bubble">
-                <!-- 分片渲染：文字段落与内嵌图表交替显示 -->
+                <!-- 分片渲染：文字段落 / 占位条 / 骨架屏 / 图表 交替显示 -->
                 <!-- eslint-disable-next-line vue/no-v-for-template-key -->
                 <template v-for="(seg, sIdx) in buildInlineSegments(msg)">
                   <!-- 文字片段 -->
-                  <span v-if="seg.type === 'text'" :key="'t'+sIdx" v-html="formatMarkdown(seg.text || '')"></span>
-                  <!-- 内嵌图表（CSS 动画驱动淡入上浮） -->
-                  <div v-else-if="seg.type === 'chart'" :key="'c'+sIdx" class="inline-artifact">
-                    <DynamicChart
-                      v-if="seg.artifact && isChart(seg.artifact)"
-                      :artifact="ensureArtifact(seg.artifact)"
-                      :inline="true"
-                    />
-                    <ValueCard
-                      v-else-if="seg.artifact && isValueCard(seg.artifact)"
-                      :artifact="ensureArtifact(seg.artifact)"
-                      :inline="true"
-                    />
+                  <div v-if="seg.type === 'text'" :key="'t'+sIdx" class="md-block" v-html="formatMarkdown(seg.text || '')"></div>
+
+                  <!-- 流式阶段占位条：anchor 已检测到但 artifact 尚未到达 -->
+                  <div v-else-if="seg.type === 'placeholder'" :key="'p'+sIdx" class="inline-artifact-wrap placeholder-phase">
+                    <div class="chart-placeholder">
+                      <div class="placeholder-bar"></div>
+                      <Icon icon="mdi:chart-bell-curve-cumulative" width="14" class="placeholder-icon" />
+                      <span class="placeholder-label">图表生成中</span>
+                    </div>
+                  </div>
+
+                  <!-- 图表：三阶段渲染（仅当前流式消息走 stagger，历史消息直接渲染） -->
+                  <div
+                    v-else-if="seg.type === 'chart'"
+                    :key="'c'+sIdx"
+                    class="inline-artifact-wrap"
+                    :class="isStreamingArtifact(msg, seg.artifactId) ? artifactPhaseClass(seg.artifactId) : {}"
+                  >
+                    <!-- 直接渲染（历史消息 / 流完 / 已就绪） -->
+                    <div
+                      v-if="!isStreamingArtifact(msg, seg.artifactId) || readySet.has(seg.artifactId ?? '')"
+                      class="chart-reveal-inner"
+                    >
+                      <DynamicChart
+                        v-if="seg.artifact && isChart(seg.artifact)"
+                        :artifact="ensureArtifact(seg.artifact)"
+                        :inline="true"
+                        :skip-skeleton="true"
+                      />
+                      <ValueCard
+                        v-else-if="seg.artifact && isValueCard(seg.artifact)"
+                        :artifact="ensureArtifact(seg.artifact)"
+                        :inline="true"
+                      />
+                    </div>
+                    <!-- stagger 阶段 1：等待揭示 → 占位条 -->
+                    <div v-else-if="!revealedSet.has(seg.artifactId ?? '')" class="chart-placeholder">
+                      <div class="placeholder-bar"></div>
+                      <Icon icon="mdi:chart-bell-curve-cumulative" width="14" class="placeholder-icon" />
+                      <span class="placeholder-label">图表准备中</span>
+                    </div>
+                    <!-- stagger 阶段 2：已揭示 → 骨架屏 -->
+                    <Transition v-else name="skeleton-in" appear>
+                      <ChartSkeleton />
+                    </Transition>
                   </div>
                 </template>
                 <span
@@ -392,7 +424,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
+import { ref, reactive, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { Icon } from '@iconify/vue'
 import { useRouter } from 'vue-router'
 import { useChatStore } from '@/stores/chatStore'
@@ -404,11 +436,16 @@ import WorkOrderCard from '@/generative-ui/WorkOrderCard.vue'
 import ReportDownload from '@/generative-ui/ReportDownload.vue'
 import ValueCard from '@/generative-ui/ValueCard.vue'
 import EvidenceLink from '@/generative-ui/EvidenceLink.vue'
+import ChartSkeleton from '@/generative-ui/ChartSkeleton.vue'
 import type { ArtifactEvent } from '@/api/stream_client'
+import { marked } from 'marked'
+
+import { useDataRangeStore } from '@/stores/dataRangeStore'
 
 const router = useRouter()
 const store = useChatStore()
 const pickerStore = useElementPickerStore()
+const dataRangeStore = useDataRangeStore()
 
 /** agent 类型 → 语义配色 */
 const _agentColors: Record<string, string> = {
@@ -538,6 +575,7 @@ function onTrackClick(e: MouseEvent) {
 
 onMounted(() => {
   store.init()
+  dataRangeStore.fetch()
   document.addEventListener('click', onDocClick, true)
   tabListEl.value?.addEventListener('wheel', onTabWheel, { passive: false })
   nextTick(updateScrollThumb)
@@ -705,7 +743,17 @@ function quickSend(text: string) {
   store.sendMessage(text)
 }
 
-// ── 自动滚动 ────────────────────────────────────────────────────────────────
+// ── 智能滚动（只在接近底部时自动滚动，防止图表展开时跳位） ────────────────
+function _isNearBottom(): boolean {
+  const el = messagesEl.value
+  if (!el) return true
+  return el.scrollHeight - el.scrollTop - el.clientHeight < 120
+}
+
+function _scrollToBottom() {
+  if (messagesEl.value) messagesEl.value.scrollTop = messagesEl.value.scrollHeight
+}
+
 watch(
   [
     () => store.messages.length,
@@ -717,7 +765,6 @@ watch(
       const last = store.messages[store.messages.length - 1]
       return last?.content?.length ?? 0
     },
-    // 内嵌 artifact 到达时也触发滚动
     () => {
       const last = store.messages[store.messages.length - 1]
       return last?.attachedArtifacts?.length ?? 0
@@ -725,14 +772,13 @@ watch(
   ],
   async () => {
     await nextTick()
-    if (messagesEl.value) messagesEl.value.scrollTop = messagesEl.value.scrollHeight
+    if (_isNearBottom()) _scrollToBottom()
   },
 )
 
-// 切换会话时也滚动到底部
 watch(() => store.currentSessionId, async () => {
   await nextTick()
-  if (messagesEl.value) messagesEl.value.scrollTop = messagesEl.value.scrollHeight
+  _scrollToBottom()
 })
 
 // ── Artifact 类型判断 ────────────────────────────────────────────────────────
@@ -768,97 +814,195 @@ function toSourceInfo(v: unknown): Record<string, unknown> {
   return v as Record<string, unknown>
 }
 
-// ── Markdown 渲染 ────────────────────────────────────────────────────────────
+// ── Markdown 渲染（使用 marked 库）─────────────────────────────────────────────
+marked.use({ breaks: true, gfm: true })
+
 function formatMarkdown(text: string): string {
-  return text
-    // 分隔线
-    .replace(/^---+$/gm, '<hr class="md-hr"/>')
-    // 标题 h1 / h2 / h3
-    .replace(/^### (.+)$/gm, '<span class="md-h3">$1</span>')
-    .replace(/^## (.+)$/gm,  '<span class="md-h2">$1</span>')
-    .replace(/^# (.+)$/gm,   '<span class="md-h1">$1</span>')
-    // 粗体 / 斜体
-    .replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>')
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, '<em>$1</em>')
-    // 行内代码
-    .replace(/`([^`]+)`/g, '<code class="md-code">$1</code>')
-    // 无序列表（支持嵌套缩进）
-    .replace(/^([ \t]{2,})[-*] (.+)$/gm,
-      '<span class="md-li md-li-indent"><span class="md-li-bullet md-li-sub">–</span><span class="md-li-text">$2</span></span>')
-    .replace(/^[ \t]*[-*] (.+)$/gm,
-      '<span class="md-li"><span class="md-li-bullet">•</span><span class="md-li-text">$1</span></span>')
-    // 有序列表
-    .replace(/^[ \t]*(\d+)\. (.+)$/gm,
-      '<span class="md-oli"><span class="md-oli-num">$1.</span><span class="md-li-text">$2</span></span>')
-    // 引用块
-    .replace(/^> (.+)$/gm, '<span class="md-blockquote">$1</span>')
-    // block 元素（display:block 的 span）之间的换行不需要 <br/>，直接吃掉
-    .replace(/(<\/span>)\n(<span class="md-(?:h[123]|li|oli|blockquote|hr))/g, '$1$2')
-    .replace(/(<hr class="md-hr"\/>)\n/g, '$1')
-    // 段落间距（2+ 空行 → 段落分隔）
-    .replace(/\n{2,}/g, '<div class="md-para-gap"></div>')
-    // 单换行
-    .replace(/\n/g, '<br/>')
+  let clean = text.replace(/<<CHART:[^>]*>>/g, '')
+
+  // 修复中文/全角标点紧邻 ** 时 marked 无法识别粗体的问题
+  // 在 ** 与非 ASCII 字符之间插入零宽空格 \u200B 辅助断词
+  clean = clean.replace(/([\u2000-\u9fff\uff00-\uffef])(\*\*)/g, '$1\u200B$2')
+  clean = clean.replace(/(\*\*)([\u2000-\u9fff\uff00-\uffef])/g, '$1\u200B$2')
+
+  let html = marked.parse(clean, { async: false }) as string
+
+  // Fallback：若 marked 仍未解析，手动处理残留的 **...**
+  html = html.replace(/\*\*([^*]+?)\*\*/g, '<strong>$1</strong>')
+
+  return html
 }
 
-// ── 内嵌图表分片渲染 ──────────────────────────────────────────────────────────
-interface InlineSegment {
-  type: 'text' | 'chart'
-  text?: string
-  artifact?: ArtifactEvent
-}
+// ── 内嵌图表：占位符驱动 + stagger 动画 ──────────────────────────────────────
+// LLM 在文本中插入 <<CHART:锚点>> 占位符，前端据此精准插入图表
 
-/**
- * 将 AI 消息的文字内容按段落拆分，根据 artifact 的 anchor 关键词
- * 在对应段落后面插入图表，实现文字与图表交替渲染。
- *
- * 兜底策略：
- *  - anchor 匹配成功 → 插入对应段落后
- *  - anchor 匹配失败 → 图表追加到文字末尾
- *  - 无 attachedArtifacts → 纯文字，不做分片
- */
-function buildInlineSegments(msg: ChatMessage): InlineSegment[] {
-  const artifacts = msg.attachedArtifacts ?? []
-  // 过滤掉工单和报表（这些不内嵌，仍作为独立组件渲染）
-  const inlineArtifacts = artifacts.filter((a: ArtifactEvent) => isChart(a) || isValueCard(a))
+const CHART_PLACEHOLDER_RE = /<<CHART:([^>]+)>>/g
 
-  // 无可内嵌的 artifact → 纯文字
-  if (!inlineArtifacts.length || !msg.content) {
-    return [{ type: 'text', text: msg.content }]
-  }
+const revealedSet     = reactive(new Set<string>())
+const readySet        = reactive(new Set<string>())
+const deferredArtifacts = reactive(new Map<string, string>())
 
-  // 按双换行拆分段落
-  const paragraphs = msg.content.split(/\n{2,}/)
-  const segments: InlineSegment[] = []
-  const usedArtifacts = new Set<number>()
-
-  for (const para of paragraphs) {
-    if (para.trim()) {
-      segments.push({ type: 'text', text: para })
+watch(() => store.isLoading, (loading) => {
+  if (loading) {
+    revealedSet.clear()
+    readySet.clear()
+    deferredArtifacts.clear()
+  } else {
+    let idx = 0
+    for (const [id] of deferredArtifacts.entries()) {
+      _triggerStagger(id, idx * 120)
+      idx++
     }
+    deferredArtifacts.clear()
+  }
+})
 
-    // 检查这段文字是否匹配某个 artifact 的 anchor
-    for (let i = 0; i < inlineArtifacts.length; i++) {
-      if (usedArtifacts.has(i)) continue
-      const anchor = inlineArtifacts[i].anchor
-      if (anchor && para.includes(anchor)) {
-        segments.push({ type: 'chart', artifact: inlineArtifacts[i] })
-        usedArtifacts.add(i)
-        break // 一段只插一个图
+function _triggerStagger(id: string, delay: number) {
+  setTimeout(async () => {
+    revealedSet.add(id)
+    await nextTick()
+    if (_isNearBottom()) _scrollToBottom()
+    setTimeout(async () => {
+      readySet.add(id)
+      await nextTick()
+      if (_isNearBottom()) _scrollToBottom()
+    }, 200)
+  }, delay)
+}
+
+// 流式文本中出现 <<CHART:xx>> 占位符 → 释放对应 deferred 图表
+watch(
+  () => {
+    if (!store.isLoading) return null
+    const last = store.messages[store.messages.length - 1]
+    return last?.role === 'ai' ? last.content : null
+  },
+  (content) => {
+    if (!content) return
+    let staggerIdx = 0
+    for (const [id, anchor] of deferredArtifacts.entries()) {
+      if (anchor && content.includes(`<<CHART:${anchor}>>`)) {
+        deferredArtifacts.delete(id)
+        _triggerStagger(id, staggerIdx * 120)
+        staggerIdx++
       }
     }
+  },
+)
+
+// artifact 到达 → 文本已含对应占位符则立即揭示，否则 defer
+watch(
+  () => {
+    const last = store.messages[store.messages.length - 1]
+    if (last?.role !== 'ai') return 0
+    return last.attachedArtifacts?.length ?? 0
+  },
+  (newLen, oldLen) => {
+    const last = store.messages[store.messages.length - 1]
+    if (!last || last.role !== 'ai') return
+    const arts = last.attachedArtifacts ?? []
+    const content = last.content || ''
+    const startIdx = oldLen ?? 0
+    let immediateIdx = 0
+    for (let i = startIdx; i < newLen; i++) {
+      const art = arts[i]
+      const id = art?.artifact_id ?? `_art_${i}`
+      const anchor = art?.anchor || ''
+      if (anchor && content.includes(`<<CHART:${anchor}>>`)) {
+        _triggerStagger(id, immediateIdx * 120)
+        immediateIdx++
+      } else {
+        deferredArtifacts.set(id, anchor)
+      }
+    }
+  },
+)
+
+function isStreamingArtifact(msg: ChatMessage, artId?: string): boolean {
+  return store.isLoading && msg.id === lastAiMsgId.value && !!artId && !readySet.has(artId)
+}
+
+function artifactPhaseClass(id?: string): Record<string, boolean> {
+  if (!id) return {}
+  return {
+    'pending-phase':  !revealedSet.has(id),
+    'skeleton-phase': revealedSet.has(id) && !readySet.has(id),
+    'ready-phase':    readySet.has(id),
+  }
+}
+
+// ── 内嵌图表分片渲染（占位符驱动）─────────────────────────────────────────────
+interface InlineSegment {
+  type: 'text' | 'chart' | 'placeholder'
+  text?: string
+  artifact?: ArtifactEvent
+  artifactId?: string
+  anchor?: string
+}
+
+function buildInlineSegments(msg: ChatMessage): InlineSegment[] {
+  const artifacts = msg.attachedArtifacts ?? []
+  const inlineArtifacts = artifacts.filter((a: ArtifactEvent) => isChart(a) || isValueCard(a))
+  const content = msg.content || ''
+  const isStreaming = store.isLoading && msg.id === lastAiMsgId.value
+
+  if (!content) return [{ type: 'text', text: '' }]
+  if (inlineArtifacts.length === 0 && !isStreaming) {
+    return [{ type: 'text', text: content }]
   }
 
-  // 兜底：未匹配的 artifact 追加到末尾
-  inlineArtifacts.forEach((art: ArtifactEvent, i: number) => {
-    if (!usedArtifacts.has(i)) {
-      segments.push({ type: 'chart', artifact: art })
-    }
-  })
+  // 按 anchor 建立图表索引（anchor → artifact）
+  const anchorToArt = new Map<string, ArtifactEvent>()
+  for (const art of inlineArtifacts) {
+    if (art.anchor) anchorToArt.set(art.anchor, art)
+  }
 
-  // 工单/报表类型的 artifact 需要通过独立消息渲染，这里额外推送占位
-  // （实际上工单/报表不会出现在 attachedArtifacts 中，因为 chatStore 中已处理）
+  // 按 <<CHART:xxx>> 占位符分割文本
+  const segments: InlineSegment[] = []
+  const usedAnchors = new Set<string>()
+  let lastIndex = 0
+
+  // 逐个匹配占位符
+  const regex = new RegExp(CHART_PLACEHOLDER_RE.source, 'g')
+  let match: RegExpExecArray | null
+  while ((match = regex.exec(content)) !== null) {
+    const anchor = match[1]
+    const before = content.slice(lastIndex, match.index).trim()
+
+    if (before) {
+      segments.push({ type: 'text', text: before })
+    }
+
+    const art = anchorToArt.get(anchor)
+    if (art) {
+      const artId = art.artifact_id ?? `_art_${anchor}`
+      segments.push({ type: 'chart', artifact: art, artifactId: artId })
+      usedAnchors.add(anchor)
+    } else if (isStreaming) {
+      segments.push({ type: 'placeholder', anchor })
+    }
+
+    lastIndex = match.index + match[0].length
+  }
+
+  // 占位符后面剩余的文本
+  const tail = content.slice(lastIndex).trim()
+  if (tail) {
+    segments.push({ type: 'text', text: tail })
+  }
+
+  // 兜底：没有被占位符匹配到的图表追加末尾（流式期间跳过 deferred）
+  for (const art of inlineArtifacts) {
+    if (art.anchor && usedAnchors.has(art.anchor)) continue
+    const artId = art.artifact_id ?? '_art_unmatched'
+    if (isStreaming && deferredArtifacts.has(artId)) continue
+    segments.push({ type: 'chart', artifact: art, artifactId: artId })
+  }
+
+  // 安全兜底：如果文本中完全没有占位符（旧消息/LLM未遵循格式），回退到整块文本+图表追加
+  if (segments.length === 0) {
+    segments.push({ type: 'text', text: content })
+  }
 
   return segments
 }
@@ -1363,11 +1507,10 @@ html[data-theme="light"] .tab.active .tab-close {
   word-break: break-word;
 }
 
-/* ── Markdown 排版样式 ───────────────────────────────────────────────────── */
+/* ── Markdown 排版样式（marked 原生 HTML 标签） ───────────────────────────── */
 
 /* 标题 */
-.ai-bubble :deep(.md-h1) {
-  display: block;
+.ai-bubble :deep(h1) {
   font-size: 15.5px;
   font-weight: 700;
   color: var(--text-primary);
@@ -1375,8 +1518,7 @@ html[data-theme="light"] .tab.active .tab-close {
   letter-spacing: 0.01em;
   line-height: 1.4;
 }
-.ai-bubble :deep(.md-h2) {
-  display: block;
+.ai-bubble :deep(h2) {
   font-size: 14px;
   font-weight: 700;
   color: var(--text-primary);
@@ -1386,27 +1528,63 @@ html[data-theme="light"] .tab.active .tab-close {
   letter-spacing: 0.01em;
   line-height: 1.4;
 }
-.ai-bubble :deep(.md-h3) {
-  display: block;
+.ai-bubble :deep(h3) {
   font-size: 12.5px;
   font-weight: 700;
   color: var(--accent);
   margin: 10px 0 4px;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
+  line-height: 1.4;
+}
+.ai-bubble :deep(h4) {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 8px 0 3px;
+  line-height: 1.4;
+}
+.ai-bubble :deep(h5),
+.ai-bubble :deep(h6) {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin: 6px 0 2px;
   line-height: 1.4;
 }
 
+/* markdown 块容器（替代原来的 span） */
+.ai-bubble .md-block {
+  display: block;
+  min-width: 0;
+}
+
+/* 段落 */
+.ai-bubble :deep(p) {
+  margin: 4px 0;
+  line-height: 1.7;
+}
+.ai-bubble :deep(p:first-child) {
+  margin-top: 0;
+}
+
 /* 分隔线 */
-.ai-bubble :deep(.md-hr) {
+.ai-bubble :deep(hr) {
   border: none;
   border-top: 1px solid var(--border);
   margin: 10px 0;
   opacity: 0.6;
 }
 
+/* 粗体 / 斜体 */
+.ai-bubble :deep(strong) {
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.ai-bubble :deep(em) {
+  font-style: italic;
+}
+
 /* 行内代码 */
-.ai-bubble :deep(.md-code) {
+.ai-bubble :deep(:not(pre) > code) {
   background: rgba(108, 142, 245, 0.12);
   color: var(--accent);
   padding: 1px 6px;
@@ -1417,66 +1595,127 @@ html[data-theme="light"] .tab.active .tab-close {
   border: 1px solid rgba(108, 142, 245, 0.18);
 }
 
-/* 无序列表项 — display:block 避免在 span 容器内 flex 导致的换行异常 */
-.ai-bubble :deep(.md-li) {
-  display: block;
+/* 代码块 */
+.ai-bubble :deep(pre) {
+  background: rgba(0, 0, 0, 0.06);
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin: 6px 0;
+  overflow-x: auto;
+}
+.ai-bubble :deep(pre code) {
+  background: none;
+  border: none;
+  padding: 0;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-primary);
+}
+
+/* 无序列表 */
+.ai-bubble :deep(ul) {
+  margin: 4px 0;
+  padding-left: 0;
+  list-style: none;
+}
+.ai-bubble :deep(ul li) {
   padding: 1px 0 1px 16px;
   line-height: 1.7;
   position: relative;
 }
-.ai-bubble :deep(.md-li-indent) {
-  padding-left: 30px;
-}
-.ai-bubble :deep(.md-li-bullet) {
+.ai-bubble :deep(ul li::before) {
+  content: '•';
   position: absolute;
   left: 4px;
-  top: 0;
   color: var(--accent);
-  line-height: inherit;
-  font-size: 1em;
 }
-.ai-bubble :deep(.md-li-sub) {
+.ai-bubble :deep(ul ul) {
+  margin: 0;
+  padding-left: 14px;
+}
+.ai-bubble :deep(ul ul li::before) {
+  content: '–';
   color: var(--text-muted);
-  font-size: 0.9em;
-}
-.ai-bubble :deep(.md-li-text) {
-  display: inline;
 }
 
-/* 有序列表项 */
-.ai-bubble :deep(.md-oli) {
-  display: block;
+/* 有序列表 */
+.ai-bubble :deep(ol) {
+  margin: 4px 0;
+  padding-left: 0;
+  list-style: none;
+  counter-reset: md-ol;
+}
+.ai-bubble :deep(ol li) {
   padding: 1px 0 1px 24px;
   line-height: 1.7;
   position: relative;
+  counter-increment: md-ol;
 }
-.ai-bubble :deep(.md-oli-num) {
+.ai-bubble :deep(ol li::before) {
+  content: counter(md-ol) ".";
   position: absolute;
   left: 2px;
-  top: 0;
   color: var(--text-secondary);
   font-size: 0.9em;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
-  line-height: inherit;
 }
 
 /* 引用块 */
-.ai-bubble :deep(.md-blockquote) {
-  display: block;
+.ai-bubble :deep(blockquote) {
   border-left: 3px solid var(--accent);
   padding: 4px 10px 4px 12px;
-  margin: 4px 0;
+  margin: 6px 0;
   color: var(--text-secondary);
   font-style: italic;
   background: rgba(108, 142, 245, 0.05);
   border-radius: 0 4px 4px 0;
   line-height: 1.7;
 }
+.ai-bubble :deep(blockquote p) {
+  margin: 0;
+}
 
-/* 段落间距 */
-.ai-bubble :deep(.md-para-gap) {
-  height: 6px;
+/* ── 表格 ── */
+.ai-bubble :deep(table) {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 8px 0;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid var(--border, rgba(128,128,128,0.2));
+  display: block;
+  overflow-x: auto;
+}
+.ai-bubble :deep(thead) {
+  background: rgba(108, 142, 245, 0.08);
+}
+.ai-bubble :deep(th) {
+  font-weight: 600;
+  text-align: left;
+  padding: 7px 12px;
+  border-bottom: 1.5px solid var(--border, rgba(128,128,128,0.25));
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+.ai-bubble :deep(td) {
+  padding: 5px 12px;
+  border-bottom: 1px solid var(--border, rgba(128,128,128,0.12));
+  color: var(--text-secondary);
+}
+.ai-bubble :deep(tbody tr:last-child td) {
+  border-bottom: none;
+}
+.ai-bubble :deep(tbody tr:hover) {
+  background: rgba(108, 142, 245, 0.04);
+}
+.ai-bubble :deep(td strong) {
+  color: var(--text-primary);
 }
 
 .error-bubble {
@@ -1496,26 +1735,161 @@ html[data-theme="light"] .tab.active .tab-close {
 }
 @keyframes blink-cursor { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
 
-/* ── 内嵌图表 ──────────────────────────────────────────────────────────── */
-.inline-artifact {
+/* ── 内嵌图表三阶段动画系统 ──────────────────────────────────────────── */
+
+/* 容器：所有内嵌 artifact（占位/骨架/真实图表）统一容器 */
+.inline-artifact-wrap {
   margin: 12px 0;
   width: 100%;
-  animation: inlineArtifactIn 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
+  display: grid;
+  grid-template-rows: 1fr;
+  transition: grid-template-rows 0.5s cubic-bezier(0.22, 1, 0.36, 1);
+  overflow: hidden;
+}
+.inline-artifact-wrap > * {
+  min-height: 0;
+  overflow: hidden;
 }
 
-@keyframes inlineArtifactIn {
-  from {
-    opacity: 0;
-    transform: translateY(14px) scale(0.98);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
+/* ── 占位条（流式阶段 / stagger 等待） ─────────────────────────── */
+.chart-placeholder {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  height: 46px;
+  border-radius: 8px;
+  background: rgba(108, 142, 245, 0.04);
+  border: 1px dashed rgba(108, 142, 245, 0.15);
+  position: relative;
+  overflow: hidden;
+}
+
+.placeholder-bar {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(108, 142, 245, 0.06) 40%,
+    rgba(108, 142, 245, 0.1) 50%,
+    rgba(108, 142, 245, 0.06) 60%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  animation: placeholderShimmer 2s ease-in-out infinite;
+}
+
+@keyframes placeholderShimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.placeholder-icon {
+  color: var(--accent, #6c8ef5);
+  opacity: 0.5;
+  animation: placeholderPulse 2s ease-in-out infinite;
+  z-index: 1;
+}
+
+.placeholder-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  letter-spacing: 0.03em;
+  opacity: 0.7;
+  z-index: 1;
+}
+
+@keyframes placeholderPulse {
+  0%, 100% { opacity: 0.4; transform: scale(1); }
+  50%      { opacity: 0.8; transform: scale(1.05); }
+}
+
+/* 占位条淡入 */
+.placeholder-phase {
+  animation: placeholderFadeIn 0.4s ease-out both;
+}
+
+@keyframes placeholderFadeIn {
+  from { opacity: 0; grid-template-rows: 0fr; }
+  to   { opacity: 1; grid-template-rows: 1fr; }
+}
+
+/* ── 骨架屏入场（从占位条高度展开到骨架屏高度） ─────────────── */
+.skeleton-in-enter-active {
+  animation: skeletonExpand 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes skeletonExpand {
+  from { opacity: 0; max-height: 46px; transform: scaleY(0.3); transform-origin: top; }
+  to   { opacity: 1; max-height: 300px; transform: scaleY(1); transform-origin: top; }
+}
+
+/* ── 真实图表入场（从骨架屏交叉溶解） ────────────────────────── */
+.chart-in-enter-active {
+  animation: chartReveal 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes chartReveal {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* 就绪阶段入场后的微光扫过 */
+.ready-phase {
+  position: relative;
+}
+.ready-phase::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(108, 142, 245, 0.08) 45%,
+    rgba(108, 142, 245, 0.12) 50%,
+    rgba(108, 142, 245, 0.08) 55%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  animation: readyShine 0.8s ease-out 0.1s both;
+  pointer-events: none;
+  border-radius: 10px;
+  z-index: 5;
+}
+
+@keyframes readyShine {
+  0%   { background-position: -200% 0; opacity: 1; }
+  100% { background-position: 200% 0; opacity: 0; }
+}
+
+/* Light theme 适配 */
+html[data-theme="light"] .chart-placeholder {
+  background: rgba(0, 0, 0, 0.02);
+  border-color: rgba(0, 0, 0, 0.1);
+}
+html[data-theme="light"] .placeholder-bar {
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(0, 0, 0, 0.03) 40%,
+    rgba(0, 0, 0, 0.06) 50%,
+    rgba(0, 0, 0, 0.03) 60%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  animation: placeholderShimmer 2s ease-in-out infinite;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .inline-artifact { animation: none; }
+  .inline-artifact-wrap,
+  .chart-placeholder,
+  .placeholder-bar,
+  .placeholder-icon,
+  .ready-phase::after {
+    animation: none !important;
+    transition: none !important;
+  }
 }
 
 /* ── 消息互动操作栏 ──────────────────────────────────────────────────────── */

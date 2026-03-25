@@ -25,12 +25,12 @@
         <div class="form-item">
           <label class="form-label">开始日期</label>
           <input type="date" v-model="form.startDate" class="form-input"
-                 min="2016-04-01" max="2016-05-02" />
+                 :min="dataRangeStore.minDate" :max="dataRangeStore.maxDate" />
         </div>
         <div class="form-item">
           <label class="form-label">结束日期</label>
           <input type="date" v-model="form.endDate" class="form-input"
-                 min="2016-04-01" max="2016-05-02" />
+                 :min="dataRangeStore.minDate" :max="dataRangeStore.maxDate" />
         </div>
         <div class="form-item">
           <label class="form-label">监测指标</label>
@@ -52,7 +52,7 @@
           {{ loading ? '查询中...' : '查询' }}
         </button>
       </div>
-      <p class="form-hint">建议查询跨度 ≤ 3 天（逐小时数据）· 有效范围：2016-04-01 ~ 2016-05-02</p>
+      <p class="form-hint">建议查询跨度 ≤ 3 天（逐小时数据）· 有效范围：{{ dataRangeStore.minDate || '...' }} ~ {{ dataRangeStore.maxDate || '...' }}</p>
     </div>
 
     <!-- 错误提示 -->
@@ -209,10 +209,13 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, nextTick, onUnmounted } from 'vue'
+import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { Icon } from '@iconify/vue'
 import * as echarts from 'echarts'
 import { apiFetch } from '@/api/http'
+import { useDataRangeStore } from '@/stores/dataRangeStore'
+
+const dataRangeStore = useDataRangeStore()
 
 // ── Props ────────────────────────────────────────────────────────────────────
 const props = defineProps<{
@@ -223,8 +226,8 @@ const props = defineProps<{
 // ── 状态 ─────────────────────────────────────────────────────────────────────
 const form = ref({
   buildingType: props.activeBuildingType || 'Office',
-  startDate: '2016-04-01',
-  endDate: '2016-04-03',
+  startDate: '',
+  endDate: '',
   metric: 'electricity',
 })
 
@@ -563,6 +566,25 @@ function destroyChart() {
   chartInst = null
 }
 
+onMounted(async () => {
+  await dataRangeStore.fetch()
+  if (!form.value.startDate) form.value.startDate = dataRangeStore.defaultStart
+  if (!form.value.endDate) {
+    const s = new Date(dataRangeStore.defaultStart)
+    s.setDate(s.getDate() + 2)
+    form.value.endDate = s.toISOString().slice(0, 10)
+  }
+})
+
+onMounted(async () => {
+  await dataRangeStore.fetch()
+  if (!form.value.startDate) form.value.startDate = dataRangeStore.defaultStart
+  if (!form.value.endDate) {
+    const start = new Date(dataRangeStore.defaultStart)
+    start.setDate(start.getDate() + 2)
+    form.value.endDate = start.toISOString().slice(0, 10)
+  }
+})
 onUnmounted(destroyChart)
 
 // ── 工具函数 ─────────────────────────────────────────────────────────────────

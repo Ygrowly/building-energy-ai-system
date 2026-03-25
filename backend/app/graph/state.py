@@ -139,6 +139,25 @@ class AgentState(TypedDict):
     最多保留最近 5 轮摘要，超出时舍弃最早的。
     """
 
+    # -----------------------------------------------------------------------
+    # 两阶段生成（ReAct → Synthesis）中间状态
+    # -----------------------------------------------------------------------
+    chart_manifest: str
+    """
+    viz_engine 生成图表后的结构化清单，供 Synthesis LLM 精确引用。
+    示例：
+        已生成 2 张图表：
+        1. 「楼宇每日用电趋势对比」（折线图）— 锚点关键词：用电
+        2. 「楼宇每日用水趋势对比」（折线图）— 锚点关键词：用水
+    为空字符串时表示无图表。
+    """
+
+    react_data_summary: str
+    """
+    ReAct 阶段收集的工具调用结果简要摘要，供 Synthesis LLM 作为数据上下文。
+    由 data_react_node 从 ToolMessage 中程序化提取（非 LLM 生成）。
+    """
+
 
 def initial_state(available_buildings: list[str] | None = None) -> AgentState:
     """创建空白初始状态，用于新会话。"""
@@ -157,6 +176,8 @@ def initial_state(available_buildings: list[str] | None = None) -> AgentState:
         error=None,
         available_buildings=available_buildings,
         context_summary="",
+        chart_manifest="",
+        react_data_summary="",
     )
 
 

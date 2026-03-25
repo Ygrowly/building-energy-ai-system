@@ -1,14 +1,17 @@
 """
-可视化引擎 —— 确定性后处理模块。
+可视化引擎 —— 确定性后处理模块 v2。
 
-根据 Data Agent ReAct 链中的工具调用结果，自动决定是否生成可视化，
-以及生成什么类型的可视化。LLM 不参与任何可视化决策。
+改进点（相对 v1）：
+  1. 跨调用智能合并：同指标 × 多楼 → 合并为一张多系列图（Layer 1）
+  2. 多指标完整提取：daily_summary 同时生成用电/用水/空调图表（Layer 2）
+  3. 用户意图驱动筛选：解析用户问题关心的指标，过滤无关图表（Layer 3）
+  4. chart_manifest 构建：为 Synthesis LLM 提供精确的图表清单（Layer 4）
 
 规则：
-  query_daily_energy_summary  →  多天=折线图, 单天=数值卡片
+  query_daily_energy_summary  →  每个指标独立生成折线图（多楼合并为多系列）
   compare_metric_across_buildings  →  柱状图
   calculate_system_cop  →  仪表盘
-  query_energy_metrics  →  多于5条=折线图, 否则不画
+  query_energy_metrics  →  同指标多楼合并为多系列折线图
   compare_time_periods  →  对比卡片
   detect_energy_anomalies / get_device_live_status  →  不画
   generate_report  →  透传（已有 component_type）
@@ -62,7 +65,6 @@ AGG_ZH: dict[str, str] = {
     "min": "最低",
 }
 
-# 锚点关键词：用于前端将 artifact 嵌入到 AI 文本中对应指标段落的后面
 METRIC_ANCHOR: dict[str, str] = {
     "electricity_kwh": "用电",
     "water_m3": "用水",
@@ -74,6 +76,30 @@ METRIC_ANCHOR: dict[str, str] = {
     "dew_temp_c": "露点",
     "humidity_rh_pct": "湿度",
     "cop": "COP",
+    "total_electricity_kwh": "用电",
+    "total_water_m3": "用水",
+    "total_hac_energy": "空调",
+}
+
+# daily_summary 记录中可提取为图表的指标字段
+DAILY_SUMMARY_METRICS: dict[str, tuple[str, str, str]] = {
+    "total_electricity_kwh": ("用电量", "kWh", "electricity_kwh"),
+    "total_water_m3":        ("用水量", "m³",  "water_m3"),
+    "total_hac_energy":      ("空调能耗", "kWh", "hac_energy"),
+}
+
+# 用户意图 → 相关指标映射
+INTENT_METRIC_MAP: dict[str, list[str]] = {
+    "用电": ["electricity_kwh", "total_electricity_kwh"],
+    "电量": ["electricity_kwh", "total_electricity_kwh"],
+    "用水": ["water_m3", "total_water_m3"],
+    "水量": ["water_m3", "total_water_m3"],
+    "空调": ["hac_energy", "total_hac_energy"],
+    "暖通": ["hac_energy", "total_hac_energy"],
+    "温度": ["air_temp_c", "sim_supply_temp_c", "sim_return_temp_c"],
+    "湿度": ["humidity_rh_pct"],
+    "COP":  ["cop"],
+    "能效": ["cop"],
 }
 
 
@@ -83,10 +109,7 @@ METRIC_ANCHOR: dict[str, str] = {
 def _extract_tool_triples(
     messages: list[BaseMessage],
 ) -> list[tuple[str, dict[str, Any], dict[str, Any]]]:
-    """
-    从 ReAct 消息链中提取 (tool_name, tool_args, tool_result) 三元组。
-    """
-    # 建立 tool_call_id → args 的查找表
+    """从 ReAct 消息链中提取 (tool_name, tool_args, tool_result) 三元组。"""
     call_args: dict[str, dict[str, Any]] = {}
     for msg in messages:
         if isinstance(msg, AIMessage):
@@ -104,7 +127,6 @@ def _extract_tool_triples(
             continue
         if not isinstance(result, dict):
             continue
-        # 跳过错误结果
         if "error" in result and "error_code" in result:
             continue
         args = call_args.get(getattr(msg, "tool_call_id", ""), {})
@@ -143,13 +165,72 @@ def _bname(building_id: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# 各工具的可视化规则
+# Layer 3: 用户意图解析
+# ---------------------------------------------------------------------------
+def _extract_user_metrics(question: str) -> set[str] | None:
+    """
+    从用户问题中提取关心的指标集合。
+    返回 None 表示不限制（用户未明确提及指标）。
+    """
+    found: set[str] = set()
+    for keyword, metrics in INTENT_METRIC_MAP.items():
+        if keyword in question:
+            found.update(metrics)
+    return found if found else None
+
+
+def _artifact_matches_metrics(artifact: dict[str, Any], user_metrics: set[str]) -> bool:
+    """检查 artifact 的 anchor 是否与用户关心的指标匹配。"""
+    anchor = artifact.get("anchor", "")
+    if not anchor:
+        return True
+    for metric, metric_anchor in METRIC_ANCHOR.items():
+        if metric_anchor == anchor and metric in user_metrics:
+            return True
+    return False
+
+
+# ---------------------------------------------------------------------------
+# 趋势判断辅助
+# ---------------------------------------------------------------------------
+_TREND_KEYWORDS = (
+    "趋势", "变化", "走势", "波动", "时段", "各时", "逐时", "逐小时",
+    "小时", "曲线", "图", "画", "可视化", "对比", "分布",
+)
+
+
+def _wants_trend(user_question: str) -> bool:
+    """用户问题是否明确要求看趋势/图表？"""
+    return any(kw in user_question for kw in _TREND_KEYWORDS)
+
+
+def _is_single_day(args: dict[str, Any], records: list[dict]) -> bool:
+    """判断查询是否只涉及单天。"""
+    tr = args.get("time_range", {})
+    if isinstance(tr, dict):
+        start = str(tr.get("start", ""))[:10]
+        end = str(tr.get("end", ""))[:10]
+        if start and end and start == end:
+            return True
+    if records:
+        first_ts = str(records[0].get("timestamp", ""))[:10]
+        last_ts = str(records[-1].get("timestamp", ""))[:10]
+        if first_ts and last_ts and first_ts == last_ts:
+            return True
+    return False
+
+
+# ---------------------------------------------------------------------------
+# 各工具的可视化规则（Layer 1 + 2 改造）
 # ---------------------------------------------------------------------------
 def _viz_daily_summary(
     calls: list[tuple[dict[str, Any], dict[str, Any]]],
 ) -> list[dict[str, Any]]:
-    """query_daily_energy_summary → LineChart / ValueCard"""
-    # 过滤掉空结果
+    """
+    query_daily_energy_summary → 每个指标独立生成 LineChart / ValueCard。
+    多栋楼同一指标 → 合并为多系列折线图（Layer 1）。
+    提取 electricity + water + hac_energy 三个指标（Layer 2）。
+    """
     valid_calls = [
         (args, result)
         for args, result in calls
@@ -158,72 +239,74 @@ def _viz_daily_summary(
     if not valid_calls:
         return []
 
-    # 多次调用（多楼对比） → 合并成多系列折线图
-    if len(valid_calls) > 1:
-        series = []
-        for args, result in valid_calls:
+    artifacts: list[dict[str, Any]] = []
+
+    for field, (label, unit, anchor_key) in DAILY_SUMMARY_METRICS.items():
+        if len(valid_calls) > 1:
+            # 多楼对比 → 多系列折线图
+            series = []
+            for args, result in valid_calls:
+                records = result["records"]
+                if len(records) <= 1:
+                    continue
+                values = [r.get(field, 0) for r in records]
+                if all(v == 0 for v in values):
+                    continue
+                bid = result.get("building_id") or args.get("building_id", "")
+                series.append({
+                    "name": _bname(bid),
+                    "data": values,
+                    "timestamps": [r.get("day", "") for r in records],
+                })
+            if series:
+                artifacts.append(_make_artifact(
+                    "LineChart", "line-chart",
+                    f"楼宇每日{label}趋势对比",
+                    {"series": series},
+                    {"source_view": "daily_energy_summary", "base_table": "energy_data", "unit": unit},
+                    anchor=METRIC_ANCHOR.get(anchor_key),
+                ))
+        else:
+            # 单栋楼
+            args, result = valid_calls[0]
             records = result["records"]
-            if len(records) <= 1:
-                continue
             bid = result.get("building_id") or args.get("building_id", "")
-            series.append({
-                "name": _bname(bid),
-                "data": [r.get("total_electricity_kwh", 0) for r in records],
-                "timestamps": [r.get("day", "") for r in records],
-            })
-        if series:
-            return [_make_artifact(
-                "LineChart", "line-chart",
-                "楼宇每日用电趋势对比",
-                {"series": series},
-                {"source_view": "daily_energy_summary", "base_table": "energy_data"},
-                anchor=METRIC_ANCHOR.get("electricity_kwh"),
-            )]
+            building = _bname(bid)
+            values = [r.get(field, 0) for r in records]
 
-    # 单次调用
-    args, result = valid_calls[0]
-    records = result["records"]
-    bid = result.get("building_id") or args.get("building_id", "")
-    building = _bname(bid)
+            if all(v == 0 for v in values):
+                continue
 
-    if len(records) == 1:
-        # 单天 → 数值卡片
-        r = records[0]
-        return [_make_artifact(
-            "ValueCard", "value-card",
-            f"{building} {r.get('day', '')} 用电量",
-            {
-                "mode": "simple",
-                "value": r.get("total_electricity_kwh", 0),
-                "unit": "kWh",
-                "label": f"{building} {r.get('day', '')} 用电量",
-            },
-            {
-                "building_id": building,
-                "source_view": "daily_energy_summary",
-                "date": r.get("day", ""),
-            },
-            anchor=METRIC_ANCHOR.get("electricity_kwh"),
-        )]
+            if len(records) == 1:
+                r = records[0]
+                artifacts.append(_make_artifact(
+                    "ValueCard", "value-card",
+                    f"{building} {r.get('day', '')} {label}",
+                    {
+                        "mode": "simple",
+                        "value": r.get(field, 0),
+                        "unit": unit,
+                        "label": f"{building} {r.get('day', '')} {label}",
+                    },
+                    {"building_id": building, "source_view": "daily_energy_summary", "date": r.get("day", "")},
+                    anchor=METRIC_ANCHOR.get(anchor_key),
+                ))
+            else:
+                artifacts.append(_make_artifact(
+                    "LineChart", "line-chart",
+                    f"{building}每日{label}趋势",
+                    {
+                        "series": [{
+                            "name": building,
+                            "data": values,
+                            "timestamps": [r.get("day", "") for r in records],
+                        }],
+                    },
+                    {"building_id": building, "source_view": "daily_energy_summary", "unit": unit},
+                    anchor=METRIC_ANCHOR.get(anchor_key),
+                ))
 
-    # 多天 → 折线图
-    return [_make_artifact(
-        "LineChart", "line-chart",
-        f"{building}每日用电趋势",
-        {
-            "series": [{
-                "name": building,
-                "data": [r.get("total_electricity_kwh", 0) for r in records],
-                "timestamps": [r.get("day", "") for r in records],
-            }],
-        },
-        {
-            "building_id": building,
-            "source_view": "daily_energy_summary",
-            "base_table": "energy_data",
-        },
-        anchor=METRIC_ANCHOR.get("electricity_kwh"),
-    )]
+    return artifacts
 
 
 def _viz_compare_buildings(
@@ -267,7 +350,6 @@ def _viz_cop(
         cop = result.get("cop_mean", 0)
         bid = result.get("building_id") or args.get("building_id", "")
         building = _bname(bid)
-        # COP 仪表盘：低值=红（差）, 高值=绿（好），与默认色反转
         artifacts.append(_make_artifact(
             "Gauge", "gauge",
             f"{building} 空调系统 COP",
@@ -289,80 +371,88 @@ def _viz_cop(
     return artifacts
 
 
-# 用户问题中暗示需要可视化趋势的关键词
-_TREND_KEYWORDS = (
-    "趋势", "变化", "走势", "波动", "时段", "各时", "逐时", "逐小时",
-    "小时", "曲线", "图", "画", "可视化", "对比", "分布",
-)
-
-
-def _wants_trend(user_question: str) -> bool:
-    """用户问题是否明确要求看趋势/图表？"""
-    return any(kw in user_question for kw in _TREND_KEYWORDS)
-
-
-def _is_single_day(args: dict[str, Any], records: list[dict]) -> bool:
-    """判断查询是否只涉及单天（不值得画时序图）。"""
-    # 方法 1：从查询参数的 time_range 判断
-    tr = args.get("time_range", {})
-    if isinstance(tr, dict):
-        start = str(tr.get("start", ""))[:10]
-        end = str(tr.get("end", ""))[:10]
-        if start and end and start == end:
-            return True
-    # 方法 2：从实际数据的首尾时间戳判断
-    if records:
-        first_ts = str(records[0].get("timestamp", ""))[:10]
-        last_ts = str(records[-1].get("timestamp", ""))[:10]
-        if first_ts and last_ts and first_ts == last_ts:
-            return True
-    return False
-
-
 def _viz_energy_metrics(
     calls: list[tuple[dict[str, Any], dict[str, Any]]],
     user_question: str = "",
 ) -> list[dict[str, Any]]:
     """
-    query_energy_metrics → LineChart。
-    - 跨多天 → 始终画图
-    - 单天 + 用户要看趋势 → 画图
-    - 单天 + 用户只问数值 → 不画图
+    query_energy_metrics → LineChart（Layer 1 跨调用合并）。
+
+    核心改进：按 metric 分组，同一 metric 多个楼宇 → 合并为一张多系列图。
     """
-    artifacts = []
+    # Phase 1: 提取所有 (building, metric, records) 并按 metric 分组
+    MetricGroup = dict[str, list[tuple[str, list[dict]]]]
+    metric_building_groups: MetricGroup = {}
+
     for args, result in calls:
         records = result.get("records", [])
         if len(records) <= 5:
             continue
 
-        # 单天查询：只有用户明确要求看趋势时才画图
-        if _is_single_day(args, records) and not _wants_trend(user_question):
+        single_day = _is_single_day(args, records)
+        if single_day and not _wants_trend(user_question):
             logger.debug("viz_engine: 跳过单天 query_energy_metrics（%d 条，非趋势问题）", len(records))
             continue
 
         bid = result.get("building_id") or args.get("building_id", "")
-        building = _bname(bid)
 
-        # 按 metric 分组（一次查询可能包含多个指标，单位不同不能混在一张图）
-        single_day = _is_single_day(args, records)
-        metric_groups: dict[str, list[dict]] = {}
+        # 按 metric 分组（一次查询可能包含多个指标）
+        per_metric: dict[str, list[dict]] = {}
         for r in records:
             m = r.get("metric", "unknown")
-            metric_groups.setdefault(m, []).append(r)
+            per_metric.setdefault(m, []).append(r)
 
-        for metric, metric_records in metric_groups.items():
+        for metric, metric_records in per_metric.items():
             if len(metric_records) <= 3:
                 continue
-            # ★ 按时间排序，确保 x 轴从 00:00 开始
             metric_records.sort(key=lambda r: str(r.get("timestamp", "")))
+            metric_building_groups.setdefault(metric, []).append((bid, metric_records))
 
+    # Phase 2: 每个 metric 组生成一张图（多楼 → 多系列）
+    artifacts: list[dict[str, Any]] = []
+
+    for metric, buildings in metric_building_groups.items():
+        metric_zh = METRIC_ZH.get(metric, metric)
+        unit = ""
+        single_day_any = False
+
+        if len(buildings) > 1:
+            # 多楼同指标 → 多系列对比折线图
+            series = []
+            for bid, metric_records in buildings:
+                if not unit:
+                    unit = metric_records[0].get("unit", "") if metric_records else ""
+                single_day_any = single_day_any or _is_single_day({}, metric_records)
+
+                def _fmt_ts(ts_raw: str, is_single: bool) -> str:
+                    s = str(ts_raw).replace("T", " ")
+                    if is_single:
+                        return s[11:16] if len(s) >= 16 else s
+                    return s[5:16] if len(s) >= 16 else s
+
+                timestamps = [_fmt_ts(r.get("timestamp", ""), single_day_any) for r in metric_records]
+                series.append({
+                    "name": _bname(bid),
+                    "data": [r.get("value", 0) for r in metric_records],
+                    "timestamps": timestamps,
+                })
+
+            artifacts.append(_make_artifact(
+                "LineChart", "line-chart",
+                f"楼宇{metric_zh}趋势对比",
+                {"series": series},
+                {"source_table": "energy_data", "unit": unit},
+                anchor=METRIC_ANCHOR.get(metric),
+            ))
+        else:
+            # 单楼 → 单系列折线图
+            bid, metric_records = buildings[0]
+            building = _bname(bid)
             unit = metric_records[0].get("unit", "") if metric_records else ""
-            metric_zh = METRIC_ZH.get(metric, metric)
+            single_day = _is_single_day({}, metric_records)
 
-            # 提取并格式化时间标签
-            # 单天 → "15:00"; 多天 → "04-15 15:00"
             def _fmt_ts(ts_raw: str) -> str:
-                s = str(ts_raw).replace("T", " ")  # 兼容 ISO 格式
+                s = str(ts_raw).replace("T", " ")
                 if single_day:
                     return s[11:16] if len(s) >= 16 else s
                 return s[5:16] if len(s) >= 16 else s
@@ -387,6 +477,7 @@ def _viz_energy_metrics(
                 },
                 anchor=METRIC_ANCHOR.get(metric),
             ))
+
     return artifacts
 
 
@@ -429,6 +520,126 @@ def _viz_compare_periods(
 
 
 # ---------------------------------------------------------------------------
+# chart_manifest 构建（Layer 4）
+# ---------------------------------------------------------------------------
+WIDGET_ZH: dict[str, str] = {
+    "line-chart": "折线图",
+    "bar-chart": "柱状图",
+    "gauge": "仪表盘",
+    "value-card": "数值卡片",
+}
+
+
+def build_chart_manifest(artifacts: list[dict[str, Any]]) -> str:
+    """
+    将 artifact 列表转化为人类可读的图表清单，供 Synthesis LLM 精确引用。
+    """
+    chart_artifacts = [
+        a for a in artifacts
+        if a.get("component_type") not in ("ReportDownload", "WorkOrderCard")
+        and a.get("artifact_id")
+    ]
+    if not chart_artifacts:
+        return "本次查询未生成可视化图表。请仅使用文字和数据进行分析。"
+
+    lines = [f"已生成 {len(chart_artifacts)} 张图表："]
+    for i, art in enumerate(chart_artifacts, 1):
+        title = art.get("title", "未命名")
+        widget = art.get("widget", "")
+        widget_zh = WIDGET_ZH.get(widget, widget)
+        anchor = art.get("anchor", "")
+
+        # 提取 series 信息
+        series_names = ""
+        dp = art.get("data_payload", {})
+        if isinstance(dp, dict) and "series" in dp:
+            names = [s.get("name", "") for s in dp["series"] if s.get("name")]
+            if names:
+                series_names = "，".join(names)
+
+        desc = f"{i}. 「{title}」（{widget_zh}"
+        if series_names:
+            desc += f"，{series_names}"
+        desc += "）"
+        if anchor:
+            desc += f" — 锚点关键词：{anchor}"
+        lines.append(desc)
+
+    lines.append("")
+    lines.append("图表会自动嵌入到包含其「锚点关键词」的最后一个段落之后。")
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# 数据摘要提取（供 Synthesis LLM 使用）
+# ---------------------------------------------------------------------------
+def build_data_summary(messages: list[BaseMessage]) -> str:
+    """从 ReAct 消息链中程序化提取工具调用结果的简要摘要。"""
+    triples = _extract_tool_triples(messages)
+    if not triples:
+        return "（未执行工具调用）"
+
+    summaries: list[str] = []
+    for tool_name, args, result in triples:
+        if tool_name == "query_daily_energy_summary":
+            bid = result.get("building_id", "")
+            records = result.get("records", [])
+            if records:
+                total_elec = sum(r.get("total_electricity_kwh", 0) for r in records)
+                total_water = sum(r.get("total_water_m3", 0) for r in records)
+                total_hac = sum(r.get("total_hac_energy", 0) for r in records)
+                parts = [f"{len(records)}天数据"]
+                if total_elec > 0:
+                    parts.append(f"总用电{total_elec:.0f}kWh")
+                if total_water > 0:
+                    parts.append(f"总用水{total_water:.1f}m³")
+                if total_hac > 0:
+                    parts.append(f"空调总能耗{total_hac:.0f}kWh")
+                summaries.append(f"  {_bname(bid)}: {', '.join(parts)}")
+
+        elif tool_name == "query_energy_metrics":
+            bid = result.get("building_id", "")
+            records = result.get("records", [])
+            metrics: dict[str, list[float]] = {}
+            for r in records:
+                m = r.get("metric", "")
+                metrics.setdefault(m, []).append(r.get("value", 0))
+            for m, values in metrics.items():
+                avg_val = sum(values) / len(values) if values else 0
+                max_val = max(values) if values else 0
+                min_val = min(values) if values else 0
+                summaries.append(
+                    f"  {_bname(bid)} {METRIC_ZH.get(m, m)}: "
+                    f"{len(values)}条, 均值{avg_val:.1f}, 峰值{max_val:.1f}, 谷值{min_val:.1f} {UNIT_MAP.get(m, '')}"
+                )
+
+        elif tool_name == "compare_metric_across_buildings":
+            metric = result.get("metric", "")
+            results_list = result.get("results", [])
+            for r in results_list:
+                bt = r.get("building_type", "")
+                val = r.get("aggregated_value", 0)
+                unit = r.get("unit", "")
+                summaries.append(f"  {_bname(bt)} {METRIC_ZH.get(metric, metric)}: {val:.1f}{unit}")
+
+        elif tool_name == "calculate_system_cop":
+            bid = result.get("building_id", "")
+            cop = result.get("cop_mean", 0)
+            summaries.append(f"  {_bname(bid)} COP: {cop:.2f}")
+
+        elif tool_name == "compare_time_periods":
+            bid = result.get("building_id", "")
+            metric = result.get("metric", "")
+            delta_pct = result.get("delta_pct")
+            summaries.append(
+                f"  {_bname(bid)} {METRIC_ZH.get(metric, metric)} 变化率: "
+                f"{'+' if (delta_pct or 0) > 0 else ''}{delta_pct}%"
+            )
+
+    return "工具调用结果摘要：\n" + "\n".join(summaries) if summaries else "（工具返回结果为空）"
+
+
+# ---------------------------------------------------------------------------
 # 主入口
 # ---------------------------------------------------------------------------
 def generate_viz_artifacts(
@@ -438,17 +649,20 @@ def generate_viz_artifacts(
     """
     扫描 ReAct 链消息，根据工具调用结果自动生成可视化 artifact。
 
-    user_question: 用户原始问题，用于判断是否需要趋势可视化（如"变化趋势"）。
+    user_question: 用户原始问题，用于 Layer 3 意图筛选。
     返回 0~N 个 artifact dict，可直接通过 SSE 推送给前端。
     """
     triples = _extract_tool_triples(new_messages)
     if not triples:
+        logger.info("viz_engine: 未提取到任何工具调用三元组（消息数=%d）", len(new_messages))
         return []
 
     # 按工具名分组
     groups: dict[str, list[tuple[dict[str, Any], dict[str, Any]]]] = {}
     for tool_name, tool_args, tool_result in triples:
         groups.setdefault(tool_name, []).append((tool_args, tool_result))
+
+    logger.info("viz_engine: 工具组=%s", {k: len(v) for k, v in groups.items()})
 
     artifacts: list[dict[str, Any]] = []
 
@@ -461,7 +675,12 @@ def generate_viz_artifacts(
 
     # 规则引擎
     if "query_daily_energy_summary" in groups:
-        artifacts.extend(_viz_daily_summary(groups["query_daily_energy_summary"]))
+        daily_calls = groups["query_daily_energy_summary"]
+        for i, (args, result) in enumerate(daily_calls):
+            bid = result.get("building_id", "?")
+            recs = result.get("records", [])
+            logger.info("viz_engine: daily_summary[%d] building=%s records=%d", i, bid, len(recs))
+        artifacts.extend(_viz_daily_summary(daily_calls))
 
     if "compare_metric_across_buildings" in groups:
         artifacts.extend(_viz_compare_buildings(groups["compare_metric_across_buildings"]))
@@ -475,7 +694,12 @@ def generate_viz_artifacts(
     if "compare_time_periods" in groups:
         artifacts.extend(_viz_compare_periods(groups["compare_time_periods"]))
 
-    # detect_energy_anomalies / get_device_live_status / list_available_buildings → 不画
+    # Layer 3: 用户意图驱动筛选
+    user_metrics = _extract_user_metrics(user_question)
+    if user_metrics:
+        filtered = [a for a in artifacts if _artifact_matches_metrics(a, user_metrics)]
+        if filtered:
+            artifacts = filtered
 
     logger.info("viz_engine 生成 %d 个 artifact", len(artifacts))
     return artifacts

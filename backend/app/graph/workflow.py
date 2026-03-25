@@ -1,16 +1,18 @@
 """
-多智能体图编排（LangGraph StateGraph）。
+多智能体图编排（LangGraph StateGraph）—— v2 两阶段架构。
 
 拓扑结构：
     START → router_node
-    router_node --[data_query/cop_analysis]-→ data_agent_node
+    router_node --[data_query/cop_analysis]-→ data_react_node
     router_node --[fault_diagnosis/work_order]-→ diagnose_agent_node
     router_node --[clarify]-→ router_node (等待用户下一轮)
     router_node --[unknown/end]-→ END
-    data_agent_node → END
+    data_react_node → data_synthesis_node
+    data_synthesis_node → END
     diagnose_agent_node → END
 
-熔断逻辑在 router_node 内部处理（hop_count > MAX_HOPS → END）。
+data_react_node:  ReAct 工具调用 + viz_engine 生成图表
+data_synthesis_node:  Synthesis LLM 看到图表清单后生成精准分析文字
 """
 from __future__ import annotations
 
@@ -19,7 +21,7 @@ from typing import Any, Literal
 
 from langgraph.graph import END, START, StateGraph
 
-from app.graph.nodes.data_agent import data_agent_node
+from app.graph.nodes.data_agent import data_react_node, data_synthesis_node
 from app.graph.nodes.diagnose_agent import diagnose_agent_node
 from app.graph.nodes.router_agent import router_node
 from app.graph.state import AgentState, NextNode
@@ -32,16 +34,13 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 def _route_from_router(
     state: AgentState,
-) -> Literal["data_agent", "diagnose_agent", "router", "__end__"]:
-    """
-    router_node 执行完毕后的条件边函数。
-    读取 state["current_agent"] 决定下一跳目标。
-    """
+) -> Literal["data_react", "diagnose_agent", "router", "__end__"]:
+    """router_node 执行完毕后的条件边函数。"""
     next_agent: NextNode = state.get("current_agent", "end")
     mapping: dict[str, str] = {
-        "data_agent":     "data_agent",
+        "data_agent":     "data_react",
         "diagnose_agent": "diagnose_agent",
-        "router":         "router",   # clarify：回到自己等用户继续
+        "router":         "router",
         "end":            END,
     }
     destination = mapping.get(next_agent, END)
@@ -53,17 +52,14 @@ def _route_from_router(
 # 构建图
 # ---------------------------------------------------------------------------
 def build_graph() -> Any:
-    """
-    组装并编译多智能体状态机图。
-
-    返回已编译的 CompiledStateGraph，可直接调用 .invoke() / .ainvoke()。
-    """
+    """组装并编译多智能体状态机图。"""
     builder = StateGraph(AgentState)
 
     # 注册节点
-    builder.add_node("router",         router_node)
-    builder.add_node("data_agent",     data_agent_node)
-    builder.add_node("diagnose_agent", diagnose_agent_node)
+    builder.add_node("router",           router_node)
+    builder.add_node("data_react",       data_react_node)
+    builder.add_node("data_synthesis",   data_synthesis_node)
+    builder.add_node("diagnose_agent",   diagnose_agent_node)
 
     # 起点 → Router
     builder.add_edge(START, "router")
@@ -73,29 +69,31 @@ def build_graph() -> Any:
         "router",
         _route_from_router,
         {
-            "data_agent":     "data_agent",
+            "data_react":     "data_react",
             "diagnose_agent": "diagnose_agent",
             "router":         "router",
             END:              END,
         },
     )
 
-    # 专家节点完成后直接结束（Phase 4 可扩展为回到 Router 进行多轮协同）
-    builder.add_edge("data_agent",     END)
+    # data_react → data_synthesis → END（两阶段串联）
+    builder.add_edge("data_react",     "data_synthesis")
+    builder.add_edge("data_synthesis", END)
+
+    # diagnose 直接结束
     builder.add_edge("diagnose_agent", END)
 
     return builder.compile()
 
 
 # ---------------------------------------------------------------------------
-# 模块级单例（延迟初始化，P2：加锁避免并发首次调用重复构建）
+# 模块级单例
 # ---------------------------------------------------------------------------
 _compiled_graph = None
 _graph_lock: Any = None
 
 
 def _get_graph_lock() -> Any:
-    """延迟导入 threading，避免循环依赖。"""
     import threading
     global _graph_lock
     if _graph_lock is None:

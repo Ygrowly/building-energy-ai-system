@@ -492,30 +492,31 @@ async def _stream_graph(
             name = event.get("name", "")
             data = event.get("data", {})
 
-            if kind == "on_chain_start" and name in ("router", "data_agent", "diagnose_agent"):
+            if kind == "on_chain_start" and name in ("router", "data_react", "data_synthesis", "diagnose_agent"):
                 _current_parent_agent = name
                 _text_content_streamed = False
                 _t[f"node_{name}"] = time.time()
-                # 每个 agent 使用更具体的启动描述
                 chain_start_msg = {
                     "router": "正在识别意图...",
-                    "data_agent": "正在准备数据查询...",
+                    "data_react": "正在调用工具查询数据...",
+                    "data_synthesis": "数据收集完毕，正在撰写分析报告...",
                     "diagnose_agent": "正在启动故障诊断...",
                 }.get(name, "正在工作...")
-                yield _thinking_event(name, chain_start_msg, hop_count=state.get("hop_count", 0))
+                display_agent = {"data_react": "data_agent", "data_synthesis": "data_agent"}.get(name, name)
+                yield _thinking_event(display_agent, chain_start_msg, hop_count=state.get("hop_count", 0))
 
             elif kind == "on_chat_model_start":
                 agent_name = event.get("metadata", {}).get("langgraph_node", "")
                 _t[f"llm_{agent_name}"] = time.time()
-                # ReAct 内部 "agent" 节点的推理内容已通过 on_chat_model_stream 流式展示，
-                # 跳过冗余的状态标签
                 if agent_name and agent_name != "agent":
                     llm_start_msg = {
                         "router": "正在规划路由...",
-                        "data_agent": "正在推理...",
+                        "data_react": "正在规划查询策略...",
+                        "data_synthesis": "正在基于图表和数据生成分析...",
                         "diagnose_agent": "正在推理...",
                     }.get(agent_name, "正在推理...")
-                    yield _thinking_event(agent_name, llm_start_msg, hop_count=0)
+                    display_agent = {"data_react": "data_agent", "data_synthesis": "data_agent"}.get(agent_name, agent_name)
+                    yield _thinking_event(display_agent, llm_start_msg, hop_count=0)
 
             elif kind == "on_chat_model_stream":
                 # 流式推送 LLM 推理 token
@@ -548,29 +549,34 @@ async def _stream_graph(
                                     token = tc_args
                                 break
                         if token:
-                            # 内部 "agent" 节点映射回父级 agent 名，让前端知道是谁在推理
                             effective_agent = _current_parent_agent if stream_agent == "agent" and _current_parent_agent else stream_agent
+                            display_agent = {"data_react": "data_agent", "data_synthesis": "data_agent"}.get(effective_agent, effective_agent)
                             yield _sse({
                                 "type": "thinking",
-                                "agent": effective_agent,
+                                "agent": display_agent,
                                 "message": "",
                                 "content": token,
                                 "hop_count": 0,
                             })
 
                         # 3. 流式推送常规 content（最终回答文本），实现打字机效果
+                        # data_react 阶段抑制内容流式推送（由 data_synthesis 输出最终文本）
                         if not token:
-                            content_text = ""
-                            if hasattr(chunk, "content"):
-                                if isinstance(chunk.content, str):
-                                    content_text = chunk.content
-                                elif isinstance(chunk.content, list):
-                                    content_text = "".join(
-                                        c.get("text", "") for c in chunk.content if isinstance(c, dict)
-                                    )
-                            if content_text:
-                                _text_content_streamed = True
-                                yield _text_event(content_text, is_final=False)
+                            effective_agent = _current_parent_agent if stream_agent == "agent" and _current_parent_agent else stream_agent
+                            if effective_agent == "data_react":
+                                pass
+                            else:
+                                content_text = ""
+                                if hasattr(chunk, "content"):
+                                    if isinstance(chunk.content, str):
+                                        content_text = chunk.content
+                                    elif isinstance(chunk.content, list):
+                                        content_text = "".join(
+                                            c.get("text", "") for c in chunk.content if isinstance(c, dict)
+                                        )
+                                if content_text:
+                                    _text_content_streamed = True
+                                    yield _text_event(content_text, is_final=False)
 
             elif kind == "on_chat_model_end":
                 agent_name = event.get("metadata", {}).get("langgraph_node", "")
@@ -618,7 +624,7 @@ async def _stream_graph(
                     except (json.JSONDecodeError, TypeError):
                         pass
 
-            elif kind == "on_chain_end" and name in ("data_agent", "diagnose_agent", "router"):
+            elif kind == "on_chain_end" and name in ("data_react", "data_synthesis", "diagnose_agent", "router"):
                 node_elapsed = time.time() - _t.pop(f"node_{name}", time.time())
                 logger.info("节点完成: %s, 工具调用=%d, 用时=%.1fs", name, _tool_count, node_elapsed)
 
@@ -632,6 +638,27 @@ async def _stream_graph(
                             "diagnose_agent": "故障诊断专家",
                         }.get(next_agent, next_agent)
                         yield _thinking_event("router", f"已转接至{next_label}", hop_count=0)
+
+                # data_react 结束：推送 artifacts；若 ReAct 出错则也推送错误文本
+                if name == "data_react":
+                    chain_output = data.get("output", {})
+                    chain_artifacts = chain_output.get("artifacts", [])
+                    new_arts = [a for a in chain_artifacts
+                                if isinstance(a, dict) and a.get("artifact_id")
+                                and a["artifact_id"] not in _emitted_artifact_ids]
+                    if new_arts:
+                        yield _thinking_event("data_agent", f"已生成 {len(new_arts)} 张可视化图表", hop_count=0)
+                    for art in new_arts:
+                        _emitted_artifact_ids.add(art["artifact_id"])
+                        yield _artifact_event(art)
+                    if chain_output.get("error"):
+                        for msg in chain_output.get("messages", []):
+                            if isinstance(msg, AIMessage) and msg.content:
+                                yield _text_event(str(msg.content), is_final=True)
+                                break
+                    continue
+
+                # data_synthesis / diagnose_agent / router：推送最终文本
                 output_messages = data.get("output", {}).get("messages", [])
                 final_text: str | None = None
                 for msg in reversed(output_messages):
@@ -655,21 +682,19 @@ async def _stream_graph(
                     break
                 if final_text:
                     if _text_content_streamed:
-                        # 内容已通过 on_chat_model_stream 逐 token 推送，
-                        # 仅发送 is_final 标记通知前端流式结束
                         yield _text_event("", is_final=True)
                         _text_content_streamed = False
                     else:
-                        # 兜底：若未经过流式推送（如非流式模型），一次性发送全部文本
                         yield _text_event(final_text, is_final=True)
 
-                # ★ viz_engine 生成的 artifacts 在节点完成时推送
-                chain_artifacts = data.get("output", {}).get("artifacts", [])
-                for art in chain_artifacts:
-                    if isinstance(art, dict) and art.get("artifact_id"):
-                        if art["artifact_id"] not in _emitted_artifact_ids:
-                            _emitted_artifact_ids.add(art["artifact_id"])
-                            yield _artifact_event(art)
+                # diagnose_agent 可能也有 artifacts
+                if name != "data_react":
+                    chain_artifacts = data.get("output", {}).get("artifacts", [])
+                    for art in chain_artifacts:
+                        if isinstance(art, dict) and art.get("artifact_id"):
+                            if art["artifact_id"] not in _emitted_artifact_ids:
+                                _emitted_artifact_ids.add(art["artifact_id"])
+                                yield _artifact_event(art)
 
             elif kind == "on_chain_end" and name in ("LangGraph", ""):
                 output = data.get("output")

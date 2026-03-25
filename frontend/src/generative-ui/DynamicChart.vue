@@ -52,6 +52,8 @@ const props = defineProps<{
   artifact: ArtifactEvent
   /** 内嵌在 AI 气泡内时为 true，调整样式以融入气泡 */
   inline?: boolean
+  /** 骨架屏由外部管理时为 true，跳过内部延迟直接渲染图表 */
+  skipSkeleton?: boolean
 }>()
 
 const chartEl = ref<HTMLElement>()
@@ -127,11 +129,42 @@ const sourceRows = computed(() => {
 // 多系列配色盘
 const PALETTE = ['#6c8ef5', '#4ade80', '#f59e0b', '#f87171', '#a78bfa', '#38bdf8']
 
+const isLight = () => document.documentElement.getAttribute('data-theme') === 'light'
+
+/** 主题感知的图表颜色 */
+function themeColors() {
+  if (isLight()) {
+    return {
+      axisLabel: '#374151',   // gray-700
+      axisLine:  '#d1d5db',   // gray-300
+      splitLine: '#e5e7eb',   // gray-200
+      legend:    '#374151',
+      tooltip:   { bg: '#ffffff', border: '#e5e7eb', text: '#1f2937' },
+    }
+  }
+  return {
+    axisLabel: '#9399b8',
+    axisLine:  'rgba(255,255,255,0.1)',
+    splitLine: 'rgba(255,255,255,0.06)',
+    legend:    '#9399b8',
+    tooltip:   { bg: '#1e1e2e', border: '#333', text: '#e0e0e0' },
+  }
+}
+
 function buildOption() {
   const payload = props.artifact.data_payload as Record<string, unknown> | unknown[]
   const rawWidget = props.artifact.widget ?? props.artifact.component_type ?? 'LineChart'
   const isBar   = rawWidget === 'BarChart' || rawWidget === 'bar-chart'
   const isGauge = rawWidget === 'Gauge'    || rawWidget === 'gauge'
+  const tc = themeColors()
+
+  const baseTooltip = {
+    trigger: 'axis' as const,
+    backgroundColor: tc.tooltip.bg,
+    borderColor: tc.tooltip.border,
+    textStyle: { color: tc.tooltip.text, fontSize: 12 },
+    valueFormatter: (v: number) => v != null ? v.toFixed(2) : '—',
+  }
 
   // ── Gauge ───────────────────────────────────────────────────────────────
   if (isGauge) {
@@ -140,14 +173,11 @@ function buildOption() {
     const unit = (gp.unit as string) || ''
     const gMin = Number(gp.min ?? 0)
     const gMax = Number(gp.max ?? (Math.ceil(val * 1.5) || 6))
-    // splitNumber 取 5，确保刻度标签是整数或短小数
     const range = gMax - gMin
     const splitN = Number(gp.splitNumber ?? (range <= 10 ? Math.max(range, 2) : 5))
     const defaultColor: [number, string][] = [[0.3, '#4ade80'], [0.7, '#fbbf24'], [1, '#f87171']]
     const colorStops = (Array.isArray(gp.colorStops) ? gp.colorStops : defaultColor) as [number, string][]
-    // 根据量程决定刻度标签小数位：大于10取整，否则保留1位
     const labelDecimal = range > 10 ? 0 : 1
-    // 中心数值：大于1000取整，否则保留2位小数
     const detailFmt = (v: number) => {
       const s = v >= 1000 ? Math.round(v).toString() : v.toFixed(2)
       return `${s} ${unit}`
@@ -158,21 +188,32 @@ function buildOption() {
         min: gMin, max: gMax, splitNumber: splitN,
         axisLine: { lineStyle: { width: 20, color: colorStops } },
         pointer: { itemStyle: { color: 'auto' } },
-        axisLabel: { fontSize: 11, color: '#9399b8', formatter: (v: number) => v.toFixed(labelDecimal) },
+        axisLabel: { fontSize: 11, color: tc.axisLabel, formatter: (v: number) => v.toFixed(labelDecimal) },
         detail: { valueAnimation: true, fontSize: 28, color: 'auto', formatter: detailFmt, offsetCenter: [0, '70%'] },
         data: [{ value: val }],
       }],
     }
   }
 
+  const baseXAxis = (data: string[]) => ({
+    type: 'category' as const,
+    data,
+    axisLabel: { color: tc.axisLabel, fontSize: 10, rotate: 30 },
+    axisLine: { lineStyle: { color: tc.axisLine } },
+  })
+
+  const baseYAxis = () => ({
+    type: 'value' as const,
+    axisLabel: { color: tc.axisLabel, fontSize: 11 },
+    axisLine: { lineStyle: { color: tc.axisLine } },
+    splitLine: { lineStyle: { color: tc.splitLine } },
+  })
+
   // ── 多系列格式：{ series: [{ name, data, timestamps? }, ...] } ──────────
-  // 兼容：LLM 按 genui_protocol ChartPayload 结构传入多楼对比数据
-  // 同时对 AI 可能使用的非标准字段名做容错处理
   const objPayload = payload as Record<string, unknown>
   if (!Array.isArray(payload) && Array.isArray(objPayload.series)) {
     type SeriesItem = Record<string, unknown>
 
-    /** 从 series item 中提取数值数组，兼容 AI 可能使用的多种字段名 */
     function extractData(s: SeriesItem): (number | null)[] {
       const raw = (s.data ?? s.values ?? s.y ?? s.value ?? s.electricity_kwh ?? []) as unknown[]
       if (!Array.isArray(raw) || raw.length === 0) return []
@@ -190,7 +231,6 @@ function buildOption() {
       })
     }
 
-    /** 从 series item 中提取时间戳/标签数组，兼容多种字段名 */
     function extractTimestamps(s: SeriesItem): string[] {
       const raw = (s.timestamps ?? s.dates ?? s.days ?? s.labels ?? s.x ?? s.time ?? []) as unknown[]
       return Array.isArray(raw) ? raw.map(String) : []
@@ -208,11 +248,11 @@ function buildOption() {
       grid: { top: hasLegend ? 40 : 20, right: 20, bottom: 40, left: 55 },
       legend: hasLegend ? {
         top: 4,
-        textStyle: { color: '#9399b8', fontSize: 11 },
+        textStyle: { color: tc.legend, fontSize: 11 },
       } : undefined,
-      xAxis: { type: 'category', data: xAxis, axisLabel: { color: '#9399b8', fontSize: 10, rotate: 30 } },
-      yAxis: { type: 'value', axisLabel: { color: '#9399b8', fontSize: 11 } },
-      tooltip: { trigger: 'axis', valueFormatter: (v: number) => v != null ? v.toFixed(2) : '—' },
+      xAxis: baseXAxis(xAxis),
+      yAxis: baseYAxis(),
+      tooltip: baseTooltip,
       series: seriesList.map((s, i) => {
         const color = PALETTE[i % PALETTE.length]
         const yData = extractData(s)
@@ -250,35 +290,41 @@ function buildOption() {
     if (isBar) {
       return {
         grid: { top: 20, right: 20, bottom: 40, left: 55 },
-        xAxis: { type: 'category', data: xData, axisLabel: { color: '#9399b8', fontSize: 10, rotate: 30 } },
-        yAxis: { type: 'value', axisLabel: { color: '#9399b8', fontSize: 11 } },
+        xAxis: baseXAxis(xData),
+        yAxis: baseYAxis(),
         series: [{ type: 'bar', data: yData, itemStyle: { color: PALETTE[0], borderRadius: [3, 3, 0, 0] } }],
-        tooltip: { trigger: 'axis', valueFormatter: (v: number) => v != null ? v.toFixed(2) : '—' },
+        tooltip: baseTooltip,
       }
     }
     return {
       grid: { top: 20, right: 20, bottom: 40, left: 55 },
-      xAxis: { type: 'category', data: xData, axisLabel: { color: '#9399b8', fontSize: 10, rotate: 30 } },
-      yAxis: { type: 'value', axisLabel: { color: '#9399b8', fontSize: 11 } },
+      xAxis: baseXAxis(xData),
+      yAxis: baseYAxis(),
       series: [{
         type: 'line', data: yData, smooth: true,
         lineStyle: { color: PALETTE[0], width: 2 },
         areaStyle: { color: { type: 'linear', x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: 'rgba(108,142,245,0.3)' }, { offset: 1, color: 'rgba(108,142,245,0)' }] } },
         itemStyle: { color: PALETTE[0] },
       }],
-      tooltip: { trigger: 'axis', valueFormatter: (v: number) => v != null ? v.toFixed(2) : '—' },
+      tooltip: baseTooltip,
     }
   }
 
   return {}
 }
 
+function detectTheme(): string | undefined {
+  return document.documentElement.getAttribute('data-theme') === 'light' ? undefined : 'dark'
+}
+
 async function initChart() {
   await nextTick()
   if (!chartEl.value) return
 
-  _chart = echarts.init(chartEl.value, 'dark')
-  _chart.setOption(buildOption())
+  _chart = echarts.init(chartEl.value, detectTheme())
+  const opts = buildOption()
+  ;(opts as Record<string, unknown>).backgroundColor = 'transparent'
+  _chart.setOption(opts)
 
   // ResizeObserver 替代 window.resize：元素获得实际尺寸时立即触发，
   // 解决 ECharts 在 flexbox 布局中初始化时 canvas 宽度为 0 的问题
@@ -289,8 +335,7 @@ async function initChart() {
 }
 
 onMounted(async () => {
-  if (props.inline) {
-    // inline 模式：先展示 ChartSkeleton 至少 600ms，再渲染图表
+  if (props.inline && !props.skipSkeleton) {
     await new Promise(r => setTimeout(r, 600))
   }
   chartReady.value = true
@@ -413,14 +458,9 @@ onUnmounted(() => {
 
 /* ── 内嵌模式：融入 AI 气泡 ───────────────────────────────────────────── */
 .chart-card--inline {
-  background: rgba(255, 255, 255, 0.02);
-  border-color: rgba(255, 255, 255, 0.06);
+  background: var(--bg-card);
+  border-color: var(--border);
   margin: 10px 0;
   box-shadow: none;
-}
-
-html[data-theme="light"] .chart-card--inline {
-  background: rgba(0, 0, 0, 0.02);
-  border-color: rgba(0, 0, 0, 0.06);
 }
 </style>

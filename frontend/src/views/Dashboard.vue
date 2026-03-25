@@ -171,11 +171,11 @@
           </div>
           <div class="form-item">
             <label class="form-label">开始日期</label>
-            <input type="date" v-model="trendForm.startDate" class="form-input" min="2016-04-01" max="2016-05-02" />
+            <input type="date" v-model="trendForm.startDate" class="form-input" :min="dataRangeStore.minDate" :max="dataRangeStore.maxDate" />
           </div>
           <div class="form-item">
             <label class="form-label">结束日期</label>
-            <input type="date" v-model="trendForm.endDate" class="form-input" min="2016-04-01" max="2016-05-02" />
+            <input type="date" v-model="trendForm.endDate" class="form-input" :min="dataRangeStore.minDate" :max="dataRangeStore.maxDate" />
           </div>
           <div class="form-item">
             <label class="form-label">图表类型</label>
@@ -197,7 +197,7 @@
             <span>{{ p.label }}</span>
           </label>
         </div>
-        <p class="form-hint">数据库有效范围：2016-04-01 ~ 2016-05-02</p>
+        <p class="form-hint">数据库有效范围：{{ dataRangeStore.minDate || '...' }} ~ {{ dataRangeStore.maxDate || '...' }}</p>
       </div>
 
       <!-- 加载 / 错误 -->
@@ -384,9 +384,11 @@ import { Icon } from '@iconify/vue'
 import * as echarts from 'echarts'
 import { apiFetch } from '@/api/http'
 import { useBuildingStore } from '@/stores/buildingStore'
+import { useDataRangeStore } from '@/stores/dataRangeStore'
 import RatedVsActualSection from '@/components/RatedVsActualSection.vue'
 
 const buildingStore = useBuildingStore()
+const dataRangeStore = useDataRangeStore()
 
 // ── 状态 ─────────────────────────────────────────────
 const loading = ref(true)
@@ -448,10 +450,13 @@ async function fetchAnomalies() {
   }
 }
 
-onMounted(() => {
+onMounted(async () => {
   buildingStore.fetchBuildings()
   fetchOverview()
   fetchAnomalies()
+  await dataRangeStore.fetch()
+  if (!trendForm.value.startDate) trendForm.value.startDate = dataRangeStore.defaultStart
+  if (!trendForm.value.endDate) trendForm.value.endDate = dataRangeStore.defaultEnd
 })
 
 // ── KPI 卡片 ─────────────────────────────────────────
@@ -507,8 +512,8 @@ const paramOptions = [
 
 const trendForm = ref({
   buildingType: 'Office',
-  startDate: '2016-04-01',
-  endDate: '2016-05-02',
+  startDate: '',
+  endDate: '',
   chartType: 'mixed',
   params: ['electricity', 'temperature'],
 })

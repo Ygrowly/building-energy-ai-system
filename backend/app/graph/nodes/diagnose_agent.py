@@ -215,7 +215,7 @@ _DIAGNOSE_BASE_TOOLS = [
     _make_mcp_tool(
         "query_energy_metrics",
         "查询指定建筑在时间范围内的能耗指标时序数据（事实核查用）。"
-        "默认时间范围：2016-04-01 ~ 2016-05-02。",
+        "未指定时间时使用上下文中的默认范围。",
         args_schema=QueryEnergyMetricsInput,
     ),
     _make_mcp_tool(
@@ -229,7 +229,7 @@ _DIAGNOSE_BASE_TOOLS = [
         "返回 rated_water/rated_electricity/rated_hac_energy（期望）与 actual_*（实际），"
         "以及 water/electricity/hac 三项偏差百分比。"
         "用途：向用户解释'期望是多少，实际是多少，偏差了多少'。"
-        "建议时间范围不超过 7 天，默认时间范围：2016-04-01 ~ 2016-05-02。",
+        "建议时间范围不超过 7 天，未指定时间时使用上下文中的默认范围。",
         args_schema=GetBuildingRatedValuesInput,
     ),
     _make_mcp_tool(
@@ -238,7 +238,7 @@ _DIAGNOSE_BASE_TOOLS = [
         "规则：water_leak / electricity_overload / hvac_overconsumption / db_flagged。"
         "空调异常时返回 hvac_root_cause：A_low_efficiency（主机效能衰退）/ "
         "B_small_deltaT（水力失调）/ C_unexpected_on（排程失效）。"
-        "默认时间范围：2016-04-01 ~ 2016-05-02。",
+        "未指定时间时使用上下文中的默认范围。",
         args_schema=DetectEnergyAnomaliesInput,
     ),
     _make_mcp_tool(
@@ -345,16 +345,23 @@ async def diagnose_agent_node(state: AgentState) -> dict[str, Any]:
     t0 = time.time()
     hop_count = state.get("hop_count", 0) + 1
 
+    # ── 动态获取数据时间范围 ───────────────────────────────────────────
+    from app.core.data_range import get_data_range
+    data_range = await get_data_range()
+
     # ── 构建上下文注入消息 ─────────────────────────────────────────────
     context_parts: list[str] = []
+
+    context_parts.append(
+        f"【数据有效时间范围】: {data_range.get('min_date', '未知')} ~ {data_range.get('max_date', '未知')}，"
+        f"默认查询范围: {data_range.get('default_start', '未知')} ~ {data_range.get('default_end', '未知')}"
+    )
 
     existing_summary = state.get("context_summary", "")
     if existing_summary:
         context_parts.append(f"【历史对话摘要（仅供参考）】\n{existing_summary}")
 
     available = state.get("available_buildings")
-    # 若楼宇列表已在 state 中，从启动缓存提取完整设备信息注入上下文，
-    # 同时移除 list_available_buildings 工具，避免 LLM 冗余调用。
     include_list_tool = not bool(available)
     if available:
         cache = get_buildings_cache()
@@ -378,9 +385,10 @@ async def diagnose_agent_node(state: AgentState) -> dict[str, Any]:
         context_parts.append(f"【目标设备】: {state['device_id']}")
     tc = state.get("time_context")
     if isinstance(tc, dict):
-        start = tc.get("start") or "2016-04-01"
-        end   = tc.get("end")   or "2016-05-02"
-        context_parts.append(f"【诊断时间范围】: {start} ~ {end}")
+        start = tc.get("start") or data_range.get("default_start", "")
+        end   = tc.get("end")   or data_range.get("default_end", "")
+        if start and end:
+            context_parts.append(f"【诊断时间范围】: {start} ~ {end}")
 
     history = state.get("messages", [])
     recent  = history[-_MAX_HISTORY_MESSAGES:] if len(history) > _MAX_HISTORY_MESSAGES else history

@@ -88,7 +88,7 @@
         <p class="empty-icon"><Icon icon="mdi:check-circle" width="32" /></p>
         <p>当前时间窗口内未检测到规则触发异常</p>
         <p class="empty-sub">
-          提示：演示数据库的有效数据范围为 2016-04-01 ~ 2016-05-02，
+          提示：演示数据库的有效数据范围为 {{ dataRangeStore.minDate || '...' }} ~ {{ dataRangeStore.maxDate || '...' }}，
           基于当前时间的时间窗口查询将返回空结果，请通过 AI 控制台进行历史异常分析。
         </p>
       </div>
@@ -142,6 +142,9 @@ import { Icon } from '@iconify/vue'
 import { RouterLink } from 'vue-router'
 import { apiFetch } from '@/api/http'
 import { useBuildingStore } from '@/stores/buildingStore'
+import { useDataRangeStore } from '@/stores/dataRangeStore'
+
+const dataRangeStore = useDataRangeStore()
 
 const buildingStore = useBuildingStore()
 
@@ -181,6 +184,7 @@ async function fetchPendingOrders() {
 }
 
 onMounted(() => {
+  dataRangeStore.fetch()
   fetchAnomalies()
   fetchPendingOrders()
 })

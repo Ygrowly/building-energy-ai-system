@@ -36,14 +36,14 @@
             <Icon icon="mdi:calendar-start" width="13" class="label-icon" />
             开始日期
           </label>
-          <input type="date" v-model="startDate" class="filter-input" min="2016-04-01" max="2016-05-02" />
+          <input type="date" v-model="startDate" class="filter-input" :min="dataRangeStore.minDate" :max="dataRangeStore.maxDate" />
         </div>
         <div class="filter-item">
           <label class="filter-label">
             <Icon icon="mdi:calendar-end" width="13" class="label-icon" />
             结束日期
           </label>
-          <input type="date" v-model="endDate" class="filter-input" min="2016-04-01" max="2016-05-02" />
+          <input type="date" v-model="endDate" class="filter-input" :min="dataRangeStore.minDate" :max="dataRangeStore.maxDate" />
         </div>
         <div class="filter-item">
           <label class="filter-label">
@@ -219,7 +219,10 @@
 import { ref, reactive, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { Icon } from '@iconify/vue'
 import { apiFetch } from '@/api/http'
+import { useDataRangeStore } from '@/stores/dataRangeStore'
 import * as echarts from 'echarts'
+
+const dataRangeStore = useDataRangeStore()
 
 // ── 筛选状态 ──
 const buildingOptions = [
@@ -233,8 +236,8 @@ const CHART_OPTIONS = [
   { value: 'mixed', label: '混合（折线+柱状）' },
 ]
 const selectedBuilding = ref('Office')
-const startDate = ref('2016-04-01')
-const endDate = ref('2016-05-02')
+const startDate = ref('')
+const endDate = ref('')
 const chartType = ref('mixed')
 
 // ── 自定义下拉状态 ──
@@ -448,9 +451,12 @@ function renderChart(data: any, params: typeof allParams) {
 
 function onResize() { chart?.resize() }
 
-onMounted(() => {
+onMounted(async () => {
   window.addEventListener('resize', onResize)
   document.addEventListener('click', closeQsDropdowns)
+  await dataRangeStore.fetch()
+  if (!startDate.value) startDate.value = dataRangeStore.defaultStart
+  if (!endDate.value) endDate.value = dataRangeStore.defaultEnd
 })
 onUnmounted(() => {
   window.removeEventListener('resize', onResize)

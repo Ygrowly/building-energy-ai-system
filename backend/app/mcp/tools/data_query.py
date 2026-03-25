@@ -304,6 +304,57 @@ async def query_daily_energy_summary(
                 )
                 for row in rows_orm
             ]
+            # 物化视图返回空 → 降级到 energy_data 原表聚合（视图可能未刷新）
+            if not records:
+                logger.info(
+                    "daily_energy_summary 物化视图返回空，降级聚合 energy_data: building=%s range=%s..%s",
+                    inp.building_id, inp.date_range.start, inp.date_range.end,
+                )
+                fallback_result = await session.execute(
+                    text("""
+                        SELECT
+                            date_trunc('day', "timestamp")::date AS day,
+                            SUM(electricity_kwh)  AS total_electricity_kwh,
+                            AVG(air_temp_c)       AS avg_ambient_temp,
+                            SUM(water_m3)         AS total_water_m3,
+                            SUM(hac_energy)       AS total_hac_energy
+                        FROM energy_data
+                        WHERE building_id = :bid
+                          AND "timestamp" >= :start
+                          AND "timestamp" <= :end
+                        GROUP BY date_trunc('day', "timestamp")::date
+                        ORDER BY day ASC
+                    """),
+                    {"bid": actual_bid, "start": inp.date_range.start, "end": inp.date_range.end},
+                )
+                rows_raw = fallback_result.fetchall()
+                records = [
+                    DailyEnergySummaryRecord(
+                        day=str(row[0]),
+                        building_id=inp.building_id,
+                        total_electricity_kwh=float(row[1] or 0),
+                        avg_ambient_temp=float(row[2] or 0),
+                        total_water_m3=float(row[3] or 0),
+                        total_hac_energy=float(row[4] or 0),
+                    )
+                    for row in rows_raw
+                ]
+            # 物化视图不含 hac_energy，补充查询 energy_data 原表
+            if records and not any(getattr(r, 'total_hac_energy', 0) for r in records):
+                hac_result = await session.execute(
+                    text("""
+                        SELECT date_trunc('day', "timestamp")::date AS day,
+                               SUM(hac_energy) AS total_hac
+                        FROM energy_data
+                        WHERE building_id = :bid
+                          AND "timestamp" >= :start AND "timestamp" <= :end
+                        GROUP BY day ORDER BY day
+                    """),
+                    {"bid": actual_bid, "start": inp.date_range.start, "end": inp.date_range.end},
+                )
+                hac_by_day = {str(r[0]): float(r[1] or 0) for r in hac_result.fetchall()}
+                for rec in records:
+                    rec.total_hac_energy = hac_by_day.get(rec.day, 0.0)
         except ProgrammingError as exc:
             # 例如：relation "daily_energy_summary" does not exist
             msg = str(exc).lower()
@@ -321,7 +372,8 @@ async def query_daily_energy_summary(
                             date_trunc('day', "timestamp")::date AS day,
                             SUM(electricity_kwh)  AS total_electricity_kwh,
                             AVG(air_temp_c)       AS avg_ambient_temp,
-                            SUM(water_m3)         AS total_water_m3
+                            SUM(water_m3)         AS total_water_m3,
+                            SUM(hac_energy)       AS total_hac_energy
                         FROM energy_data
                         WHERE building_id = :bid
                           AND "timestamp" >= :start
@@ -343,6 +395,7 @@ async def query_daily_energy_summary(
                         total_electricity_kwh=float(row[1] or 0),
                         avg_ambient_temp=float(row[2] or 0),
                         total_water_m3=float(row[3] or 0),
+                        total_hac_energy=float(row[4] or 0),
                     )
                     for row in rows_raw
                 ]
@@ -365,7 +418,8 @@ async def query_daily_energy_summary(
                 date_trunc(:gran, "timestamp") AS period,
                 SUM(electricity_kwh)           AS total_electricity_kwh,
                 AVG(air_temp_c)                AS avg_ambient_temp,
-                SUM(water_m3)                  AS total_water_m3
+                SUM(water_m3)                  AS total_water_m3,
+                SUM(hac_energy)                AS total_hac_energy
             FROM energy_data
             WHERE building_id = :bid
               AND "timestamp" >= :start
@@ -390,6 +444,7 @@ async def query_daily_energy_summary(
                 total_electricity_kwh=float(row[1] or 0),
                 avg_ambient_temp=float(row[2] or 0),
                 total_water_m3=float(row[3] or 0),
+                total_hac_energy=float(row[4] or 0),
             )
             for row in rows_raw
         ]
@@ -622,8 +677,10 @@ async def compare_time_periods(
     row = result.fetchone()
 
     if row is None or (row[0] is None and row[2] is None):
+        from app.core.data_range import _fallback as _dr_fallback, _cached_range as _dr_cache
+        dr = _dr_cache or _dr_fallback()
         return MCPError(
-            error="两个时段均无数据，请确认时间范围是否正确（数据覆盖 2016-04-01 ~ 2016-05-02）",
+            error=f"两个时段均无数据，请确认时间范围是否正确（数据覆盖 {dr['min_date']} ~ {dr['max_date']}）",
             error_code="NO_DATA_FOUND",
             tool_name="compare_time_periods",
         )

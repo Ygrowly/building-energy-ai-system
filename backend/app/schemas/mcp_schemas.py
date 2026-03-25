@@ -360,6 +360,7 @@ class DailyEnergySummaryRecord(BaseModel):
     total_electricity_kwh: float
     avg_ambient_temp: float = Field(description="当天平均环境温度（°C）")
     total_water_m3: float = Field(default=0.0, description="当天总用水量（m³）")
+    total_hac_energy: float = Field(default=0.0, description="当天空调总能耗（kWh）")
 
 
 class QueryDailyEnergySummaryOutput(BaseModel):
@@ -675,8 +676,8 @@ class CompareTimePeriodsOutput(BaseModel):
     metric: MetricType
     aggregation: str
     unit: str
-    period_a_label: str = Field(description="当期标签，如 '2016-04-25 ~ 2016-05-02'")
-    period_b_label: str = Field(description="基期标签，如 '2016-04-18 ~ 2016-04-25'")
+    period_a_label: str = Field(description="当期标签，如 '2026-01-15 ~ 2026-01-31'")
+    period_b_label: str = Field(description="基期标签，如 '2026-01-01 ~ 2026-01-15'")
     period_a_value: float
     period_b_value: float
     delta: float = Field(description="绝对变化量：period_a - period_b")

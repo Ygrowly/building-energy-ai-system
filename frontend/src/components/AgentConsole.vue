@@ -187,7 +187,7 @@
           <div class="user-bubble">{{ msg.content }}</div>
         </div>
 
-        <!-- AI 文字回复 -->
+        <!-- AI 文字回复（支持内嵌图表/卡片） -->
         <template v-else-if="msg.role === 'ai'">
           <ThinkingBubble
             v-if="msg.thinkingSteps && (msg.thinkingSteps.length > 0 || msg.thinkingFinished === false)"
@@ -202,7 +202,26 @@
           >
             <div class="ai-content">
               <div class="ai-bubble">
-                <span v-if="msg.content" v-html="formatMarkdown(msg.content)"></span><span
+                <!-- 分片渲染：文字段落与内嵌图表交替显示 -->
+                <!-- eslint-disable-next-line vue/no-v-for-template-key -->
+                <template v-for="(seg, sIdx) in buildInlineSegments(msg)">
+                  <!-- 文字片段 -->
+                  <span v-if="seg.type === 'text'" :key="'t'+sIdx" v-html="formatMarkdown(seg.text || '')"></span>
+                  <!-- 内嵌图表（CSS 动画驱动淡入上浮） -->
+                  <div v-else-if="seg.type === 'chart'" :key="'c'+sIdx" class="inline-artifact">
+                    <DynamicChart
+                      v-if="seg.artifact && isChart(seg.artifact)"
+                      :artifact="ensureArtifact(seg.artifact)"
+                      :inline="true"
+                    />
+                    <ValueCard
+                      v-else-if="seg.artifact && isValueCard(seg.artifact)"
+                      :artifact="ensureArtifact(seg.artifact)"
+                      :inline="true"
+                    />
+                  </div>
+                </template>
+                <span
                   v-if="store.isLoading && msg.id === lastAiMsgId"
                   class="stream-cursor"
                 ></span>
@@ -249,6 +268,8 @@
             </div>
           </div>
         </template>
+
+        <!-- 兜底：独立 Artifact（工单/报表，或无 AI 消息时的图表） -->
 
         <!-- Artifact：数值卡片 -->
         <ValueCard
@@ -696,6 +717,11 @@ watch(
       const last = store.messages[store.messages.length - 1]
       return last?.content?.length ?? 0
     },
+    // 内嵌 artifact 到达时也触发滚动
+    () => {
+      const last = store.messages[store.messages.length - 1]
+      return last?.attachedArtifacts?.length ?? 0
+    },
   ],
   async () => {
     await nextTick()
@@ -774,6 +800,67 @@ function formatMarkdown(text: string): string {
     .replace(/\n{2,}/g, '<div class="md-para-gap"></div>')
     // 单换行
     .replace(/\n/g, '<br/>')
+}
+
+// ── 内嵌图表分片渲染 ──────────────────────────────────────────────────────────
+interface InlineSegment {
+  type: 'text' | 'chart'
+  text?: string
+  artifact?: ArtifactEvent
+}
+
+/**
+ * 将 AI 消息的文字内容按段落拆分，根据 artifact 的 anchor 关键词
+ * 在对应段落后面插入图表，实现文字与图表交替渲染。
+ *
+ * 兜底策略：
+ *  - anchor 匹配成功 → 插入对应段落后
+ *  - anchor 匹配失败 → 图表追加到文字末尾
+ *  - 无 attachedArtifacts → 纯文字，不做分片
+ */
+function buildInlineSegments(msg: ChatMessage): InlineSegment[] {
+  const artifacts = msg.attachedArtifacts ?? []
+  // 过滤掉工单和报表（这些不内嵌，仍作为独立组件渲染）
+  const inlineArtifacts = artifacts.filter((a: ArtifactEvent) => isChart(a) || isValueCard(a))
+
+  // 无可内嵌的 artifact → 纯文字
+  if (!inlineArtifacts.length || !msg.content) {
+    return [{ type: 'text', text: msg.content }]
+  }
+
+  // 按双换行拆分段落
+  const paragraphs = msg.content.split(/\n{2,}/)
+  const segments: InlineSegment[] = []
+  const usedArtifacts = new Set<number>()
+
+  for (const para of paragraphs) {
+    if (para.trim()) {
+      segments.push({ type: 'text', text: para })
+    }
+
+    // 检查这段文字是否匹配某个 artifact 的 anchor
+    for (let i = 0; i < inlineArtifacts.length; i++) {
+      if (usedArtifacts.has(i)) continue
+      const anchor = inlineArtifacts[i].anchor
+      if (anchor && para.includes(anchor)) {
+        segments.push({ type: 'chart', artifact: inlineArtifacts[i] })
+        usedArtifacts.add(i)
+        break // 一段只插一个图
+      }
+    }
+  }
+
+  // 兜底：未匹配的 artifact 追加到末尾
+  inlineArtifacts.forEach((art: ArtifactEvent, i: number) => {
+    if (!usedArtifacts.has(i)) {
+      segments.push({ type: 'chart', artifact: art })
+    }
+  })
+
+  // 工单/报表类型的 artifact 需要通过独立消息渲染，这里额外推送占位
+  // （实际上工单/报表不会出现在 attachedArtifacts 中，因为 chatStore 中已处理）
+
+  return segments
 }
 </script>
 
@@ -1408,6 +1495,28 @@ html[data-theme="light"] .tab.active .tab-close {
   animation: blink-cursor 0.9s infinite;
 }
 @keyframes blink-cursor { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+
+/* ── 内嵌图表 ──────────────────────────────────────────────────────────── */
+.inline-artifact {
+  margin: 12px 0;
+  width: 100%;
+  animation: inlineArtifactIn 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes inlineArtifactIn {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .inline-artifact { animation: none; }
+}
 
 /* ── 消息互动操作栏 ──────────────────────────────────────────────────────── */
 .msg-actions {

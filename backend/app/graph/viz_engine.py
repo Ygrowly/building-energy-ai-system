@@ -62,6 +62,20 @@ AGG_ZH: dict[str, str] = {
     "min": "最低",
 }
 
+# 锚点关键词：用于前端将 artifact 嵌入到 AI 文本中对应指标段落的后面
+METRIC_ANCHOR: dict[str, str] = {
+    "electricity_kwh": "用电",
+    "water_m3": "用水",
+    "hac_energy": "空调",
+    "gas_m3": "燃气",
+    "sim_supply_temp_c": "供水温度",
+    "sim_return_temp_c": "回水温度",
+    "air_temp_c": "气温",
+    "dew_temp_c": "露点",
+    "humidity_rh_pct": "湿度",
+    "cop": "COP",
+}
+
 
 # ---------------------------------------------------------------------------
 # 工具结果提取
@@ -108,8 +122,9 @@ def _make_artifact(
     title: str,
     data_payload: dict[str, Any] | list[Any],
     source_info: dict[str, Any] | None = None,
+    anchor: str | None = None,
 ) -> dict[str, Any]:
-    return {
+    art: dict[str, Any] = {
         "artifact_id": f"artifact_{uuid.uuid4().hex[:8]}",
         "component_type": component_type,
         "widget": widget,
@@ -117,6 +132,9 @@ def _make_artifact(
         "data_payload": data_payload,
         "source_info": source_info,
     }
+    if anchor:
+        art["anchor"] = anchor
+    return art
 
 
 def _bname(building_id: str) -> str:
@@ -159,6 +177,7 @@ def _viz_daily_summary(
                 "楼宇每日用电趋势对比",
                 {"series": series},
                 {"source_view": "daily_energy_summary", "base_table": "energy_data"},
+                anchor=METRIC_ANCHOR.get("electricity_kwh"),
             )]
 
     # 单次调用
@@ -184,6 +203,7 @@ def _viz_daily_summary(
                 "source_view": "daily_energy_summary",
                 "date": r.get("day", ""),
             },
+            anchor=METRIC_ANCHOR.get("electricity_kwh"),
         )]
 
     # 多天 → 折线图
@@ -202,6 +222,7 @@ def _viz_daily_summary(
             "source_view": "daily_energy_summary",
             "base_table": "energy_data",
         },
+        anchor=METRIC_ANCHOR.get("electricity_kwh"),
     )]
 
 
@@ -232,6 +253,7 @@ def _viz_compare_buildings(
                 "aggregation": agg,
                 "unit": unit,
             },
+            anchor=METRIC_ANCHOR.get(metric),
         ))
     return artifacts
 
@@ -262,6 +284,7 @@ def _viz_cop(
                 "gb_baseline": result.get("gb_baseline", ""),
                 "source_table": "energy_data",
             },
+            anchor=METRIC_ANCHOR.get("cop"),
         ))
     return artifacts
 
@@ -362,6 +385,7 @@ def _viz_energy_metrics(
                     "data_points": len(metric_records),
                     "unit": unit,
                 },
+                anchor=METRIC_ANCHOR.get(metric),
             ))
     return artifacts
 
@@ -399,6 +423,7 @@ def _viz_compare_periods(
                 "building_id": building,
                 "source_table": "energy_data",
             },
+            anchor=METRIC_ANCHOR.get(metric),
         ))
     return artifacts
 

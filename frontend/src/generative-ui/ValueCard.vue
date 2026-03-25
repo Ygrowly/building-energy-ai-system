@@ -1,5 +1,5 @@
 <template>
-  <div class="value-card">
+  <div class="value-card" :class="{ 'value-card--inline': inline }">
     <div class="card-header">
       <span class="card-title">{{ title }}</span>
       <button class="source-btn" @click="showSource = !showSource" :title="showSource ? '收起数据来源' : '展开数据来源'">
@@ -67,6 +67,8 @@ import type { ArtifactEvent } from '@/api/stream_client'
 
 const props = defineProps<{
   artifact: ArtifactEvent
+  /** 内嵌在 AI 气泡内时为 true，调整样式以融入气泡 */
+  inline?: boolean
 }>()
 
 const showSource = ref(false)
@@ -315,4 +317,17 @@ const sourceRows = computed(() => {
 .src-panel-leave-active { animation: srcUp 0.15s ease-in; overflow: hidden; }
 @keyframes srcDown { from { max-height: 0; opacity: 0; } to { max-height: 200px; opacity: 1; } }
 @keyframes srcUp   { from { max-height: 200px; opacity: 1; } to { max-height: 0; opacity: 0; } }
+
+/* ── 内嵌模式 ───────────────────────────────────────────────────────── */
+.value-card--inline {
+  background: rgba(255, 255, 255, 0.02);
+  border-color: rgba(255, 255, 255, 0.06);
+  margin: 10px 0;
+  box-shadow: none;
+}
+
+html[data-theme="light"] .value-card--inline {
+  background: rgba(0, 0, 0, 0.02);
+  border-color: rgba(0, 0, 0, 0.06);
+}
 </style>

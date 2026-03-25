@@ -32,6 +32,8 @@ export interface ArtifactEvent {
   artifact_id?: string
   /** AI 触发报表下载时后端直接返回的下载 URL（report-download widget 专用） */
   download_url?: string
+  /** 锚点关键词，用于将 artifact 嵌入到 AI 文本中对应指标段落后面 */
+  anchor?: string
 }
 
 export interface ErrorEvent {

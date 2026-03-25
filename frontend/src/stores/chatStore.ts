@@ -28,6 +28,8 @@ export interface ChatMessage {
   role: MessageRole
   content: string
   artifact?: ArtifactEvent
+  /** 内嵌在该 AI 消息气泡中的 artifacts（图表/卡片），按到达顺序排列 */
+  attachedArtifacts?: ArtifactEvent[]
   timestamp: Date
   thinkingSteps?: ThinkingStep[]
   thinkingFinished?: boolean
@@ -238,12 +240,23 @@ export const useChatStore = defineStore('chat', () => {
         thinkingFinished: true,
       }))
 
-      // 从 localStorage 恢复本会话生成的 artifact（图表、工单等），追加到文本消息之后
+      // 从 localStorage 恢复本会话生成的 artifact（图表、工单等），
+      // 将其挂载到最近的 AI 消息上（内嵌渲染）
       const cachedArtifacts = _loadArtifactsFromStorage(sessionId)
       if (cachedArtifacts.length > 0) {
-        // artifact 按原始时间戳排序，保留生成顺序
         cachedArtifacts.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime())
-        parsed.push(...cachedArtifacts)
+        for (const artMsg of cachedArtifacts) {
+          if (!artMsg.artifact) continue
+          // 找到最后一条 AI 消息并挂载
+          const lastAi = [...parsed].reverse().find(m => m.role === 'ai')
+          if (lastAi) {
+            if (!lastAi.attachedArtifacts) lastAi.attachedArtifacts = []
+            lastAi.attachedArtifacts.push(artMsg.artifact)
+          } else {
+            // 兜底：没有 AI 消息，仍作为独立消息
+            parsed.push(artMsg)
+          }
+        }
       }
 
       _msgCache.set(sessionId, parsed)
@@ -479,7 +492,28 @@ export const useChatStore = defineStore('chat', () => {
           if (e.is_final) _agentStatusBySession.value[originSessionId] = null
         },
         onArtifact(e) {
-          _addMsg('artifact', e.title ?? '生成式组件', { artifact: e }, originSessionId)
+          const wt = e.component_type ?? e.widget ?? ''
+          const isSpecial = ['WorkOrderCard', 'work-order-card', 'ReportDownload', 'report-download'].includes(wt)
+
+          if (isSpecial) {
+            // 工单和报表仍作为独立消息渲染
+            _addMsg('artifact', e.title ?? '生成式组件', { artifact: e }, originSessionId)
+          } else {
+            // 图表/卡片：挂载到最近的 AI 消息上（内嵌渲染）
+            const aiMsg = findAiMsg()
+            if (aiMsg) {
+              if (!aiMsg.attachedArtifacts) aiMsg.attachedArtifacts = []
+              aiMsg.attachedArtifacts.push(e)
+              // 持久化到 localStorage
+              if (originSessionId) {
+                _saveArtifactToStorage(originSessionId, { ...aiMsg, artifact: e })
+              }
+            } else {
+              // 兜底：无 AI 消息时仍作为独立消息
+              _addMsg('artifact', e.title ?? '生成式组件', { artifact: e }, originSessionId)
+            }
+          }
+          // 工单特殊处理
           if (e.component_type === 'WorkOrderCard' || e.widget === 'WorkOrderCard') {
             pendingWorkOrder.value = e
           }
@@ -626,7 +660,23 @@ export const useChatStore = defineStore('chat', () => {
           if (e.is_final) _agentStatusBySession.value[originSessionId] = null
         },
         onArtifact(e) {
-          _addMsg('artifact', e.title ?? '生成式组件', { artifact: e }, originSessionId)
+          const wt = e.component_type ?? e.widget ?? ''
+          const isSpecial = ['WorkOrderCard', 'work-order-card', 'ReportDownload', 'report-download'].includes(wt)
+
+          if (isSpecial) {
+            _addMsg('artifact', e.title ?? '生成式组件', { artifact: e }, originSessionId)
+          } else {
+            const aiMsg = findAiMsg()
+            if (aiMsg) {
+              if (!aiMsg.attachedArtifacts) aiMsg.attachedArtifacts = []
+              aiMsg.attachedArtifacts.push(e)
+              if (originSessionId) {
+                _saveArtifactToStorage(originSessionId, { ...aiMsg, artifact: e })
+              }
+            } else {
+              _addMsg('artifact', e.title ?? '生成式组件', { artifact: e }, originSessionId)
+            }
+          }
           if (e.component_type === 'WorkOrderCard' || e.widget === 'WorkOrderCard') {
             pendingWorkOrder.value = e
           }

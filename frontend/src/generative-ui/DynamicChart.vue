@@ -1,5 +1,5 @@
 <template>
-  <div class="chart-card">
+  <div class="chart-card" :class="{ 'chart-card--inline': inline }">
     <div class="chart-header">
       <span class="chart-title">{{ title }}</span>
       <button class="source-btn" @click="showSource = !showSource" :title="showSource ? '收起数据来源' : '展开数据来源'">
@@ -9,8 +9,9 @@
       </button>
     </div>
 
-    <!-- 骨架屏（数据加载中） -->
-    <div v-if="!chartReady" class="skeleton">
+    <!-- 骨架屏：inline 模式用 ChartSkeleton，独立模式用简易柱条 -->
+    <ChartSkeleton v-if="!chartReady && inline" />
+    <div v-else-if="!chartReady" class="skeleton">
       <div class="skeleton-bar" v-for="i in 7" :key="i" :style="{ height: `${20 + i * 10}%` }"></div>
     </div>
 
@@ -44,10 +45,13 @@
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { Icon } from '@iconify/vue'
 import * as echarts from 'echarts'
+import ChartSkeleton from '@/generative-ui/ChartSkeleton.vue'
 import type { ArtifactEvent } from '@/api/stream_client'
 
 const props = defineProps<{
   artifact: ArtifactEvent
+  /** 内嵌在 AI 气泡内时为 true，调整样式以融入气泡 */
+  inline?: boolean
 }>()
 
 const chartEl = ref<HTMLElement>()
@@ -285,6 +289,10 @@ async function initChart() {
 }
 
 onMounted(async () => {
+  if (props.inline) {
+    // inline 模式：先展示 ChartSkeleton 至少 600ms，再渲染图表
+    await new Promise(r => setTimeout(r, 600))
+  }
   chartReady.value = true
   await initChart()
 })
@@ -402,4 +410,17 @@ onUnmounted(() => {
 .src-panel-leave-active { animation: srcUp 0.15s ease-in; overflow: hidden; }
 @keyframes srcDown { from { max-height: 0; opacity: 0; } to { max-height: 200px; opacity: 1; } }
 @keyframes srcUp   { from { max-height: 200px; opacity: 1; } to { max-height: 0; opacity: 0; } }
+
+/* ── 内嵌模式：融入 AI 气泡 ───────────────────────────────────────────── */
+.chart-card--inline {
+  background: rgba(255, 255, 255, 0.02);
+  border-color: rgba(255, 255, 255, 0.06);
+  margin: 10px 0;
+  box-shadow: none;
+}
+
+html[data-theme="light"] .chart-card--inline {
+  background: rgba(0, 0, 0, 0.02);
+  border-color: rgba(0, 0, 0, 0.06);
+}
 </style>

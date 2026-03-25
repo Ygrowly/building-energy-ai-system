@@ -11,7 +11,7 @@ import { defineStore } from 'pinia'
 import { ref, computed, watch } from 'vue'
 import { sendChatMessage, approveWorkOrder } from '@/api/stream_client'
 import { apiFetch } from '@/api/http'
-import type { ArtifactEvent } from '@/api/stream_client'
+import type { ArtifactEvent, EvidenceSource } from '@/api/stream_client'
 
 export type MessageRole = 'user' | 'ai' | 'artifact' | 'error'
 
@@ -21,6 +21,8 @@ export interface ThinkingStep {
   message: string
   /** LLM 流式推理内容（逐 token 追加） */
   streamContent?: string
+  /** 后端基于 intent 的动态显示标签（覆盖前端静态映射） */
+  displayLabel?: string
 }
 
 export interface ChatMessage {
@@ -28,14 +30,14 @@ export interface ChatMessage {
   role: MessageRole
   content: string
   artifact?: ArtifactEvent
-  /** 内嵌在该 AI 消息气泡中的 artifacts（图表/卡片），按到达顺序排列 */
-  attachedArtifacts?: ArtifactEvent[]
   timestamp: Date
   thinkingSteps?: ThinkingStep[]
   thinkingFinished?: boolean
-  thinkingStartTime?: number   // performance.now() 时间戳，用于计算思考时长
-  thinkingDuration?: number    // 思考耗时（秒），完成时写入
+  thinkingStartTime?: number
+  thinkingDuration?: number
   liked?: boolean | null
+  /** RAG 引用来源列表（知识溯源） */
+  evidenceSources?: EvidenceSource[]
 }
 
 export interface AgentStatus {
@@ -86,7 +88,7 @@ function _loadArtifactsFromStorage(sessionId: string): ChatMessage[] {
     if (!stored) return []
     const parsed = JSON.parse(stored) as Record<string, Record<string, unknown>>
     return Object.values(parsed).map(m => ({
-      ...(m as unknown as ChatMessage),
+      ...(m as ChatMessage),
       timestamp: new Date(m.timestamp as string),
     }))
   } catch {
@@ -132,9 +134,6 @@ export const useChatStore = defineStore('chat', () => {
   })
   const pendingWorkOrder = ref<ArtifactEvent | null>(null)
 
-  // per-session AbortController（key = session_id），用于终止生成
-  const _abortBySession: Record<string, AbortController> = {}
-
   // per-session 联网搜索开关（key = session_id），防止跨 Tab 相互干扰
   const _webSearchBySession = ref<Record<string, boolean>>({})
 
@@ -160,10 +159,12 @@ export const useChatStore = defineStore('chat', () => {
   const agentLabelMap: Record<string, string> = {
     router: '路由前台',
     data_agent: '数据分析师',
-    diagnose_agent: '故障诊断专家',
+    diagnose_agent: '能效分析师',
     tool: '工具调用',
     web_search: '联网搜索',
   }
+  // 后端可通过 SSE display_label 覆盖此静态映射（意图驱动的动态标签）
+  const _dynamicLabelMap = new Map<string, string>()
 
   // ── 加载会话列表 ───────────────────────────────────────────────────────────
   async function loadSessionList() {
@@ -240,23 +241,12 @@ export const useChatStore = defineStore('chat', () => {
         thinkingFinished: true,
       }))
 
-      // 从 localStorage 恢复本会话生成的 artifact（图表、工单等），
-      // 将其挂载到最近的 AI 消息上（内嵌渲染）
+      // 从 localStorage 恢复本会话生成的 artifact（图表、工单等），追加到文本消息之后
       const cachedArtifacts = _loadArtifactsFromStorage(sessionId)
       if (cachedArtifacts.length > 0) {
+        // artifact 按原始时间戳排序，保留生成顺序
         cachedArtifacts.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime())
-        for (const artMsg of cachedArtifacts) {
-          if (!artMsg.artifact) continue
-          // 找到最后一条 AI 消息并挂载
-          const lastAi = [...parsed].reverse().find(m => m.role === 'ai')
-          if (lastAi) {
-            if (!lastAi.attachedArtifacts) lastAi.attachedArtifacts = []
-            lastAi.attachedArtifacts.push(artMsg.artifact)
-          } else {
-            // 兜底：没有 AI 消息，仍作为独立消息
-            parsed.push(artMsg)
-          }
-        }
+        parsed.push(...cachedArtifacts)
       }
 
       _msgCache.set(sessionId, parsed)
@@ -400,10 +390,6 @@ export const useChatStore = defineStore('chat', () => {
     if (_loadingBySession.value[originSessionId]) return
     _loadingBySession.value[originSessionId] = true
 
-    // 创建 AbortController 供终止使用
-    const abortCtrl = new AbortController()
-    _abortBySession[originSessionId] = abortCtrl
-
     // 先添加用户消息，让 UI 立即显示发送内容
     _addMsg('user', userText, undefined, originSessionId)
 
@@ -449,19 +435,21 @@ export const useChatStore = defineStore('chat', () => {
     try {
       await sendChatMessage(userText, originSessionId, {
         onThinking(e) {
-          const label = agentLabelMap[e.agent] ?? e.agent
+          // 如果后端传来了动态标签，缓存起来供后续步骤使用
+          if (e.display_label) {
+            _dynamicLabelMap.set(e.agent, e.display_label)
+          }
+          const label = _dynamicLabelMap.get(e.agent) ?? agentLabelMap[e.agent] ?? e.agent
           const m = findAiMsg()
           if (!m) return
           if (!m.thinkingSteps) m.thinkingSteps = []
 
-          // 流式推理 token：累积到同一个步骤
+          const dynLabel = _dynamicLabelMap.get(e.agent)
           if (e.content) {
             _agentStatusBySession.value[originSessionId] = { name: e.agent, label, status: 'thinking', message: '正在推理...' }
             if (_streamStepIdx >= 0 && _streamStepAgent === e.agent && _streamStepIdx < m.thinkingSteps.length) {
-              // 追加到已有流式步骤
               m.thinkingSteps[_streamStepIdx].streamContent = (m.thinkingSteps[_streamStepIdx].streamContent ?? '') + e.content
             } else {
-              // 新建流式步骤
               _streamStepIdx = m.thinkingSteps.length
               _streamStepAgent = e.agent
               m.thinkingSteps.push({
@@ -469,14 +457,14 @@ export const useChatStore = defineStore('chat', () => {
                 agent: e.agent,
                 message: '正在推理...',
                 streamContent: e.content,
+                displayLabel: dynLabel,
               })
             }
           } else {
-            // 普通状态标签（工具调用等）→ 中断流式累积
             _streamStepIdx = -1
             _streamStepAgent = ''
             _agentStatusBySession.value[originSessionId] = { name: e.agent, label, status: 'thinking', message: e.message }
-            m.thinkingSteps.push({ id: crypto.randomUUID(), agent: e.agent, message: e.message })
+            m.thinkingSteps.push({ id: crypto.randomUUID(), agent: e.agent, message: e.message, displayLabel: dynLabel })
           }
         },
         onText(e) {
@@ -492,30 +480,21 @@ export const useChatStore = defineStore('chat', () => {
           if (e.is_final) _agentStatusBySession.value[originSessionId] = null
         },
         onArtifact(e) {
-          const wt = e.component_type ?? e.widget ?? ''
-          const isSpecial = ['WorkOrderCard', 'work-order-card', 'ReportDownload', 'report-download'].includes(wt)
-
-          if (isSpecial) {
-            // 工单和报表仍作为独立消息渲染
-            _addMsg('artifact', e.title ?? '生成式组件', { artifact: e }, originSessionId)
-          } else {
-            // 图表/卡片：挂载到最近的 AI 消息上（内嵌渲染）
-            const aiMsg = findAiMsg()
-            if (aiMsg) {
-              if (!aiMsg.attachedArtifacts) aiMsg.attachedArtifacts = []
-              aiMsg.attachedArtifacts.push(e)
-              // 持久化到 localStorage
-              if (originSessionId) {
-                _saveArtifactToStorage(originSessionId, { ...aiMsg, artifact: e })
-              }
-            } else {
-              // 兜底：无 AI 消息时仍作为独立消息
-              _addMsg('artifact', e.title ?? '生成式组件', { artifact: e }, originSessionId)
-            }
-          }
-          // 工单特殊处理
+          _addMsg('artifact', e.title ?? '生成式组件', { artifact: e }, originSessionId)
           if (e.component_type === 'WorkOrderCard' || e.widget === 'WorkOrderCard') {
             pendingWorkOrder.value = e
+          }
+        },
+        onEvidence(e) {
+          const m = findAiMsg()
+          if (m && e.sources?.length) {
+            if (!m.evidenceSources) m.evidenceSources = []
+            for (const src of e.sources) {
+              const exists = m.evidenceSources.some(
+                s => s.source_doc === src.source_doc && s.page === src.page,
+              )
+              if (!exists) m.evidenceSources.push(src)
+            }
           }
         },
         onError(e) {
@@ -524,8 +503,8 @@ export const useChatStore = defineStore('chat', () => {
         },
         onDone() {
           _loadingBySession.value[originSessionId] = false
-          delete _abortBySession[originSessionId]
           _agentStatusBySession.value[originSessionId] = null
+          _dynamicLabelMap.clear()
           const m = findAiMsg()
           if (m) {
             if (!m.thinkingFinished) m.thinkingFinished = true
@@ -548,26 +527,20 @@ export const useChatStore = defineStore('chat', () => {
           setTimeout(() => _refreshSession(originSessionId), 600)
         },
         onNetworkError(err) {
-          // 被用户主动终止时不显示错误
-          if (abortCtrl.signal.aborted) return
           _addMsg('error', `网络错误：${err.message}`, undefined, originSessionId)
           _loadingBySession.value[originSessionId] = false
-          delete _abortBySession[originSessionId]
         },
-      }, webSearchEnabled.value, abortCtrl.signal)
+      }, webSearchEnabled.value)
     } catch (err) {
-      // 被用户主动终止时不显示错误
-      if (abortCtrl.signal.aborted) return
       _addMsg('error', `请求失败：${(err as Error).message}`, undefined, originSessionId)
       _loadingBySession.value[originSessionId] = false
-      delete _abortBySession[originSessionId]
     }
   }
 
   // ── 重新生成（原地替换 AI 回复） ──────────────────────────────────────────
   async function regenerateMessage(aiMsgIndex: number) {
-    if (!currentSessionId.value) return
-    const originSessionId: string = currentSessionId.value
+    const originSessionId = currentSessionId.value
+    if (!originSessionId) return
 
     // 找到 AI 消息前面最近的用户消息
     let userText = ''
@@ -581,10 +554,6 @@ export const useChatStore = defineStore('chat', () => {
 
     if (_loadingBySession.value[originSessionId]) return
     _loadingBySession.value[originSessionId] = true
-
-    // 创建 AbortController 供终止使用
-    const abortCtrl = new AbortController()
-    _abortBySession[originSessionId] = abortCtrl
 
     // 删除从 AI 消息开始到后续连续的 artifact/error 消息
     let removeEnd = aiMsgIndex + 1
@@ -660,23 +629,7 @@ export const useChatStore = defineStore('chat', () => {
           if (e.is_final) _agentStatusBySession.value[originSessionId] = null
         },
         onArtifact(e) {
-          const wt = e.component_type ?? e.widget ?? ''
-          const isSpecial = ['WorkOrderCard', 'work-order-card', 'ReportDownload', 'report-download'].includes(wt)
-
-          if (isSpecial) {
-            _addMsg('artifact', e.title ?? '生成式组件', { artifact: e }, originSessionId)
-          } else {
-            const aiMsg = findAiMsg()
-            if (aiMsg) {
-              if (!aiMsg.attachedArtifacts) aiMsg.attachedArtifacts = []
-              aiMsg.attachedArtifacts.push(e)
-              if (originSessionId) {
-                _saveArtifactToStorage(originSessionId, { ...aiMsg, artifact: e })
-              }
-            } else {
-              _addMsg('artifact', e.title ?? '生成式组件', { artifact: e }, originSessionId)
-            }
-          }
+          _addMsg('artifact', e.title ?? '生成式组件', { artifact: e }, originSessionId)
           if (e.component_type === 'WorkOrderCard' || e.widget === 'WorkOrderCard') {
             pendingWorkOrder.value = e
           }
@@ -687,7 +640,6 @@ export const useChatStore = defineStore('chat', () => {
         },
         onDone() {
           _loadingBySession.value[originSessionId] = false
-          delete _abortBySession[originSessionId]
           _agentStatusBySession.value[originSessionId] = null
           const m = findAiMsg()
           if (m) {
@@ -698,17 +650,13 @@ export const useChatStore = defineStore('chat', () => {
           }
         },
         onNetworkError(err) {
-          if (abortCtrl.signal.aborted) return
           _addMsg('error', `网络错误：${err.message}`, undefined, originSessionId)
           _loadingBySession.value[originSessionId] = false
-          delete _abortBySession[originSessionId]
         },
-      }, webSearchEnabled.value, abortCtrl.signal)
+      }, webSearchEnabled.value)
     } catch (err) {
-      if (abortCtrl.signal.aborted) return
       _addMsg('error', `请求失败：${(err as Error).message}`, undefined, originSessionId)
       _loadingBySession.value[originSessionId] = false
-      delete _abortBySession[originSessionId]
     }
   }
 
@@ -719,15 +667,10 @@ export const useChatStore = defineStore('chat', () => {
       const updated = await apiFetch<SessionInfo>(`/api/chat/sessions/${sid}`)
       const idx = sessionList.value.findIndex(s => s.session_id === sid)
       if (idx !== -1) {
-        // 防止后端异步持久化未完成时，DB 返回的旧值覆盖本地乐观更新值
+        // 防止后端异步持久化未完成时，DB 返回的旧 message_count 覆盖本地乐观更新值
         const localCount = sessionList.value[idx].message_count
         if (updated.message_count < localCount) {
           updated.message_count = localCount
-        }
-        // 防止后端返回 '新对话' 覆盖本地已更新的标题
-        const localTitle = sessionList.value[idx].title
-        if (updated.title === '新对话' && localTitle !== '新对话') {
-          updated.title = localTitle
         }
         sessionList.value[idx] = updated
       }
@@ -770,29 +713,6 @@ export const useChatStore = defineStore('chat', () => {
     webSearchEnabled.value = !webSearchEnabled.value
   }
 
-  // ── 终止当前会话生成 ──────────────────────────────────────────────────────
-  function stopGeneration() {
-    const sid = currentSessionId.value
-    if (!sid) return
-    const ctrl = _abortBySession[sid]
-    if (ctrl) {
-      ctrl.abort()
-      delete _abortBySession[sid]
-    }
-    _loadingBySession.value[sid] = false
-    _agentStatusBySession.value[sid] = null
-    // 将正在生成的 AI 消息标记为思考完成
-    const lastAi = [...messages.value].reverse().find(m => m.role === 'ai')
-    if (lastAi) {
-      if (!lastAi.thinkingFinished) lastAi.thinkingFinished = true
-      if (!lastAi.thinkingDuration && lastAi.thinkingStartTime) {
-        lastAi.thinkingDuration = Math.round((performance.now() - lastAi.thinkingStartTime) / 1000)
-      }
-      // 如果没有任何内容，标记为被终止
-      if (!lastAi.content) lastAi.content = '（已终止生成）'
-    }
-  }
-
   // ── 清除当前会话消息（前端清屏） ──────────────────────────────────────────
   function clearSession() {
     const sid = currentSessionId.value
@@ -812,6 +732,6 @@ export const useChatStore = defineStore('chat', () => {
     messages, isLoading, currentAgentStatus, pendingWorkOrder, hasMessages,
     webSearchEnabled,
     init, loadSessionList, newSession, switchSession, removeTab, closeSession,
-    sendMessage, regenerateMessage, stopGeneration, approveOrder, clearSession, renameSession, toggleWebSearch,
+    sendMessage, regenerateMessage, approveOrder, clearSession, renameSession, toggleWebSearch,
   }
 })

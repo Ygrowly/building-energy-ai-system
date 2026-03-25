@@ -199,13 +199,25 @@ def _sse(data: dict[str, Any]) -> str:
     return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
-def _thinking_event(agent: str, message: str, hop_count: int = 0) -> str:
-    return _sse({
+def _thinking_event(
+    agent: str,
+    message: str,
+    hop_count: int = 0,
+    *,
+    content: str | None = None,
+    display_label: str | None = None,
+) -> str:
+    payload: dict[str, Any] = {
         "type": "thinking",
         "agent": agent,
         "message": message,
         "hop_count": hop_count,
-    })
+    }
+    if content is not None:
+        payload["content"] = content
+    if display_label is not None:
+        payload["display_label"] = display_label
+    return _sse(payload)
 
 
 _BUILDING_LABEL = {
@@ -302,6 +314,13 @@ def _artifact_event(artifact: dict[str, Any]) -> str:
     return _sse({
         "type": "artifact",
         **artifact,
+    })
+
+
+def _evidence_event(sources: list[dict[str, Any]]) -> str:
+    return _sse({
+        "type": "evidence",
+        "sources": sources,
     })
 
 
@@ -628,16 +647,31 @@ async def _stream_graph(
                 node_elapsed = time.time() - _t.pop(f"node_{name}", time.time())
                 logger.info("节点完成: %s, 工具调用=%d, 用时=%.1fs", name, _tool_count, node_elapsed)
 
-                # 路由完成时，推送 "已转接至 XXX"
+                # 路由完成时，推送 "已转接至 XXX"（基于 intent 动态标签）
                 if name == "router":
                     chain_output = data.get("output", {})
                     next_agent = chain_output.get("current_agent", "")
+                    resolved_intent = chain_output.get("intent", "")
                     if next_agent and next_agent != "router":
-                        next_label = {
-                            "data_agent": "数据分析师",
-                            "diagnose_agent": "故障诊断专家",
-                        }.get(next_agent, next_agent)
-                        yield _thinking_event("router", f"已转接至{next_label}", hop_count=0)
+                        # 根据意图选择更精准的用户可见标签
+                        _INTENT_LABEL_MAP = {
+                            "fault_diagnosis": "故障诊断专家",
+                            "knowledge_query": "知识库顾问",
+                            "work_order":      "工单助手",
+                        }
+                        _AGENT_LABEL_FALLBACK = {
+                            "data_agent":      "数据分析师",
+                            "diagnose_agent":  "能效分析师",
+                        }
+                        next_label = _INTENT_LABEL_MAP.get(
+                            resolved_intent,
+                            _AGENT_LABEL_FALLBACK.get(next_agent, next_agent),
+                        )
+                        # 同时通过 display_label 字段传给前端，让思考气泡也能显示精准标签
+                        yield _thinking_event(
+                            next_agent, f"已转接至{next_label}",
+                            hop_count=0, display_label=next_label,
+                        )
 
                 # data_react 结束：推送 artifacts；若 ReAct 出错则也推送错误文本
                 if name == "data_react":
@@ -695,6 +729,16 @@ async def _stream_graph(
                             if art["artifact_id"] not in _emitted_artifact_ids:
                                 _emitted_artifact_ids.add(art["artifact_id"])
                                 yield _artifact_event(art)
+
+                # 推送 RAG 引用来源（知识溯源）
+                if name in ("diagnose_agent", "data_synthesis"):
+                    chain_evidence = data.get("output", {}).get("evidence", [])
+                    rag_sources = [
+                        e for e in chain_evidence
+                        if isinstance(e, dict) and e.get("type") == "rag"
+                    ]
+                    if rag_sources:
+                        yield _evidence_event(rag_sources)
 
             elif kind == "on_chain_end" and name in ("LangGraph", ""):
                 output = data.get("output")

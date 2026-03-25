@@ -31,7 +31,7 @@
           <!-- 普通状态步骤（工具调用等） -->
           <div v-if="step.streamContent == null" class="th-step" :class="isToolStep(step.agent) ? 'is-tool' : 'is-think'">
             <span class="th-step-icon" :class="{ breathing: isActiveStep(idx) }" :style="{ background: agentColor(step.agent) }"></span>
-            <span class="th-step-label" :style="{ color: agentColor(step.agent) }">{{ agentLabel(step.agent) }}</span>
+            <span class="th-step-label" :style="{ color: agentColor(step.agent) }">{{ agentLabel(step.agent, idx) }}</span>
             <span class="th-step-msg">{{ step.message }}</span>
           </div>
 
@@ -39,7 +39,7 @@
           <div v-else class="th-stream-block">
             <div class="th-stream-header">
               <span class="th-step-icon" :class="{ breathing: isActiveStep(idx) }" :style="{ background: agentColor(step.agent) }"></span>
-              <span class="th-step-label" :style="{ color: agentColor(step.agent) }">{{ agentLabel(step.agent) }}</span>
+              <span class="th-step-label" :style="{ color: agentColor(step.agent) }">{{ agentLabel(step.agent, idx) }}</span>
             </div>
             <div class="th-stream-content">
               <span>{{ step.streamContent }}</span>
@@ -151,16 +151,23 @@ function isActiveStep(index: number): boolean {
   return !props.isFinished && index === props.steps.length - 1
 }
 
-function agentLabel(agent: string): string {
-  const map: Record<string, string> = {
-    router:         '路由',
-    data_agent:     '数据分析师',
-    diagnose_agent: '故障诊断专家',
-    tool:           '工具调用',
-    agent:          '推理',
-    tools:          '工具执行',
+const _agentLabelMap: Record<string, string> = {
+  router:         '路由',
+  data_agent:     '数据分析师',
+  diagnose_agent: '能效分析师',
+  tool:           '工具调用',
+  agent:          '推理',
+  tools:          '工具执行',
+  web_search:     '联网搜索',
+}
+
+function agentLabel(agent: string, stepIdx?: number): string {
+  // 优先使用后端传来的意图驱动标签
+  if (stepIdx !== undefined) {
+    const step = props.steps[stepIdx]
+    if (step?.displayLabel) return step.displayLabel
   }
-  return map[agent] ?? agent
+  return _agentLabelMap[agent] ?? agent
 }
 </script>
 

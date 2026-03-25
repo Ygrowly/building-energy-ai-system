@@ -5,7 +5,7 @@
  * 事件类型：thinking | text | artifact | error | done
  */
 
-export type SseEventType = 'thinking' | 'text' | 'artifact' | 'error' | 'done'
+export type SseEventType = 'thinking' | 'text' | 'artifact' | 'evidence' | 'error' | 'done'
 
 export interface ThinkingEvent {
   type: 'thinking'
@@ -14,6 +14,8 @@ export interface ThinkingEvent {
   hop_count: number
   /** LLM 流式推理 token（存在时为推理内容片段，追加到当前步骤） */
   content?: string
+  /** 后端基于 intent 动态生成的显示标签，优先于前端静态映射 */
+  display_label?: string
 }
 
 export interface TextEvent {
@@ -43,18 +45,32 @@ export interface ErrorEvent {
   recoverable: boolean
 }
 
+export interface EvidenceEvent {
+  type: 'evidence'
+  sources: EvidenceSource[]
+}
+
+export interface EvidenceSource {
+  type: 'rag'
+  source_doc: string
+  page?: number | null
+  similarity?: number | null
+  parent_section?: string | null
+}
+
 export interface DoneEvent {
   type: 'done'
   session_id: string
   hop_count: number
 }
 
-export type SseEvent = ThinkingEvent | TextEvent | ArtifactEvent | ErrorEvent | DoneEvent
+export type SseEvent = ThinkingEvent | TextEvent | ArtifactEvent | EvidenceEvent | ErrorEvent | DoneEvent
 
 export interface StreamHandlers {
   onThinking?: (e: ThinkingEvent) => void
   onText?: (e: TextEvent) => void
   onArtifact?: (e: ArtifactEvent) => void
+  onEvidence?: (e: EvidenceEvent) => void
   onError?: (e: ErrorEvent) => void
   onDone?: (e: DoneEvent) => void
   onNetworkError?: (err: Error) => void
@@ -130,6 +146,7 @@ function dispatchEvent(event: SseEvent, handlers: StreamHandlers) {
     case 'thinking': handlers.onThinking?.(event); break
     case 'text':     handlers.onText?.(event); break
     case 'artifact': handlers.onArtifact?.(event); break
+    case 'evidence': handlers.onEvidence?.(event); break
     case 'error':    handlers.onError?.(event); break
     case 'done':     handlers.onDone?.(event); break
   }

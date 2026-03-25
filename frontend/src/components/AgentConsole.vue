@@ -263,6 +263,29 @@
                 v-if="msg.artifact?.source_info"
                 :source-info="toSourceInfo(msg.artifact.source_info)"
               />
+              <!-- 知识溯源：引用来源卡片 -->
+              <div
+                v-if="msg.evidenceSources?.length"
+                class="evidence-sources"
+              >
+                <div class="evidence-header" @click="($event.currentTarget as HTMLElement)?.parentElement?.classList.toggle('open')">
+                  <Icon icon="mdi:book-open-page-variant-outline" width="14" />
+                  <span>引用来源 ({{ msg.evidenceSources.length }})</span>
+                  <Icon icon="mdi:chevron-down" width="14" class="evidence-chevron" />
+                </div>
+                <div class="evidence-list">
+                  <div
+                    v-for="(src, sIdx) in msg.evidenceSources"
+                    :key="sIdx"
+                    class="evidence-item"
+                  >
+                    <Icon icon="mdi:file-document-outline" width="13" class="evidence-file-icon" />
+                    <span class="evidence-doc">{{ src.source_doc }}</span>
+                    <span v-if="src.page" class="evidence-page">P.{{ src.page }}</span>
+                    <span v-if="src.similarity" class="evidence-score">{{ (src.similarity * 100).toFixed(0) }}%</span>
+                  </div>
+                </div>
+              </div>
               <!-- 互动操作栏 -->
               <div class="msg-actions" v-if="msg.content && !store.isLoading">
                 <button
@@ -1890,6 +1913,92 @@ html[data-theme="light"] .placeholder-bar {
     animation: none !important;
     transition: none !important;
   }
+}
+
+/* ── 知识溯源：引用来源 ────────────────────────────────────────────────── */
+.evidence-sources {
+  margin-top: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  font-size: 12px;
+}
+
+.evidence-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-weight: 600;
+  background: var(--bg-hover);
+  transition: background 0.15s;
+  user-select: none;
+}
+.evidence-header:hover {
+  background: var(--bg-panel);
+}
+
+.evidence-chevron {
+  margin-left: auto;
+  transition: transform 0.2s;
+}
+.evidence-sources.open .evidence-chevron {
+  transform: rotate(180deg);
+}
+
+.evidence-list {
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height 0.25s ease;
+}
+.evidence-sources.open .evidence-list {
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.evidence-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-top: 1px solid var(--border);
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+.evidence-item:hover {
+  background: var(--bg-hover);
+}
+
+.evidence-file-icon {
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.evidence-doc {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.evidence-page {
+  color: var(--text-muted);
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.evidence-score {
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+  flex-shrink: 0;
+  background: var(--accent-glow);
+  padding: 1px 5px;
+  border-radius: 3px;
 }
 
 /* ── 消息互动操作栏 ──────────────────────────────────────────────────────── */

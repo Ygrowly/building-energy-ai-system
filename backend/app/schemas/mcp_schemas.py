@@ -366,6 +366,8 @@ class DailyEnergySummaryRecord(BaseModel):
 class QueryDailyEnergySummaryOutput(BaseModel):
     records: list[DailyEnergySummaryRecord]
     building_id: str
+    granularity: str = Field(default="day", description="实际使用的聚合粒度 (day/week/month)")
+    date_range_days: int = Field(default=0, description="查询时间跨度（天数）")
     source_view: Literal["daily_energy_summary"] = "daily_energy_summary"
     base_table: Literal["energy_data"] = "energy_data"
     query_ms: Optional[int] = Field(default=None, description="物化视图查询耗时（毫秒）")

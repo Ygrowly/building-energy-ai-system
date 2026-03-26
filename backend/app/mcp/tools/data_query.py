@@ -283,6 +283,33 @@ async def query_daily_energy_summary(
     t_start = time.perf_counter()
     granularity = inp.granularity  # "day" | "week" | "month"
 
+    # --- 智能粒度纠正 ---
+    try:
+        _start = datetime.fromisoformat(str(inp.date_range.start).replace("Z", "+00:00"))
+        _end = datetime.fromisoformat(str(inp.date_range.end).replace("Z", "+00:00"))
+        span_days = (_end - _start).days
+    except Exception:
+        span_days = 0
+
+    original_gran = granularity
+    if span_days > 0:
+        if granularity == "month" and span_days <= 180:
+            granularity = "day"
+        elif granularity == "day" and span_days > 365:
+            granularity = "week"
+        elif granularity == "week" and span_days <= 14:
+            granularity = "day"
+        if granularity != original_gran:
+            logger.info(
+                "粒度自动纠正: %s -> %s (span=%d天)", original_gran, granularity, span_days,
+            )
+
+    def _format_period(raw: str, gran: str) -> str:
+        s = str(raw)[:10]
+        if gran == "month":
+            return s[:7]  # "2026-01"
+        return s          # "2026-01-15"
+
     if granularity == "day":
         # 优先走物化视图（最快）；如果视图未创建，降级为直接聚合 energy_data。
         try:
@@ -403,6 +430,8 @@ async def query_daily_energy_summary(
                 return QueryDailyEnergySummaryOutput(
                     records=records,
                     building_id=inp.building_id,
+                    granularity=granularity,
+                    date_range_days=span_days,
                     query_ms=elapsed_ms,
                 )
 
@@ -439,7 +468,7 @@ async def query_daily_energy_summary(
         rows_raw = result.fetchall()
         records = [
             DailyEnergySummaryRecord(
-                day=str(row[0]),
+                day=_format_period(str(row[0]), granularity),
                 building_id=inp.building_id,
                 total_electricity_kwh=float(row[1] or 0),
                 avg_ambient_temp=float(row[2] or 0),
@@ -453,6 +482,8 @@ async def query_daily_energy_summary(
     return QueryDailyEnergySummaryOutput(
         records=records,
         building_id=inp.building_id,
+        granularity=granularity,
+        date_range_days=span_days,
         query_ms=elapsed_ms,
     )
 

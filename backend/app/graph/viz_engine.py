@@ -81,6 +81,41 @@ METRIC_ANCHOR: dict[str, str] = {
     "total_hac_energy": "空调",
 }
 
+GRAN_LABEL: dict[str, str] = {
+    "day": "每日",
+    "week": "每周",
+    "month": "每月",
+}
+
+GRAN_UNIT: dict[str, str] = {
+    "day": "天",
+    "week": "周",
+    "month": "月",
+}
+
+
+def _detect_granularity(args: dict[str, Any], result: dict[str, Any]) -> str:
+    """从工具返回结果或参数中推断实际粒度。"""
+    if result.get("granularity"):
+        return result["granularity"]
+    return args.get("granularity", "day")
+
+
+def _format_x_labels(timestamps: list[str], gran: str) -> list[str]:
+    """根据粒度格式化 X 轴标签。"""
+    if not timestamps:
+        return timestamps
+    if gran == "month":
+        # "2026-01" or "2026-01-01 ..." -> "2026-01"
+        return [t[:7] if len(t) >= 7 else t for t in timestamps]
+    elif gran == "week":
+        # "2026-01-06" -> "01-06"
+        return [t[5:10] if len(t) >= 10 else t for t in timestamps]
+    else:
+        # day: "2026-01-15" -> "01-15"
+        return [t[5:10] if len(t) >= 10 else t for t in timestamps]
+
+
 # daily_summary 记录中可提取为图表的指标字段
 DAILY_SUMMARY_METRICS: dict[str, tuple[str, str, str]] = {
     "total_electricity_kwh": ("用电量", "kWh", "electricity_kwh"),
@@ -227,9 +262,11 @@ def _viz_daily_summary(
     calls: list[tuple[dict[str, Any], dict[str, Any]]],
 ) -> list[dict[str, Any]]:
     """
-    query_daily_energy_summary → 每个指标独立生成 LineChart / ValueCard。
-    多栋楼同一指标 → 合并为多系列折线图（Layer 1）。
-    提取 electricity + water + hac_energy 三个指标（Layer 2）。
+    query_daily_energy_summary → 自适应图表生成。
+    - 多栋楼同一指标 → 合并为多系列图（Layer 1）
+    - 提取 electricity + water + hac_energy 三个指标（Layer 2）
+    - 根据粒度自适应标题（每日/每周/每月）
+    - 根据数据点数量自适应图表类型（LineChart/BarChart/ValueCard）
     """
     valid_calls = [
         (args, result)
@@ -239,11 +276,15 @@ def _viz_daily_summary(
     if not valid_calls:
         return []
 
+    # 从第一个有效调用推断粒度（同一批查询粒度一致）
+    gran = _detect_granularity(valid_calls[0][0], valid_calls[0][1])
+    gran_zh = GRAN_LABEL.get(gran, "每日")
+
     artifacts: list[dict[str, Any]] = []
 
     for field, (label, unit, anchor_key) in DAILY_SUMMARY_METRICS.items():
         if len(valid_calls) > 1:
-            # 多楼对比 → 多系列折线图
+            # 多楼对比
             series = []
             for args, result in valid_calls:
                 records = result["records"]
@@ -253,19 +294,23 @@ def _viz_daily_summary(
                 if all(v == 0 for v in values):
                     continue
                 bid = result.get("building_id") or args.get("building_id", "")
+                raw_ts = [r.get("day", "") for r in records]
                 series.append({
                     "name": _bname(bid),
                     "data": values,
-                    "timestamps": [r.get("day", "") for r in records],
+                    "timestamps": _format_x_labels(raw_ts, gran),
                 })
-            if series:
-                artifacts.append(_make_artifact(
-                    "LineChart", "line-chart",
-                    f"楼宇每日{label}趋势对比",
-                    {"series": series},
-                    {"source_view": "daily_energy_summary", "base_table": "energy_data", "unit": unit},
-                    anchor=METRIC_ANCHOR.get(anchor_key),
-                ))
+            if not series:
+                continue
+            max_points = max(len(s["data"]) for s in series)
+            chart_type, widget = _pick_chart_type(max_points)
+            artifacts.append(_make_artifact(
+                chart_type, widget,
+                f"楼宇{gran_zh}{label}趋势对比",
+                {"series": series} if chart_type == "LineChart" else _series_to_bar(series, label, unit),
+                {"source_view": "daily_energy_summary", "base_table": "energy_data", "unit": unit},
+                anchor=METRIC_ANCHOR.get(anchor_key),
+            ))
         else:
             # 单栋楼
             args, result = valid_calls[0]
@@ -277,36 +322,66 @@ def _viz_daily_summary(
             if all(v == 0 for v in values):
                 continue
 
-            if len(records) == 1:
-                r = records[0]
-                artifacts.append(_make_artifact(
-                    "ValueCard", "value-card",
-                    f"{building} {r.get('day', '')} {label}",
-                    {
-                        "mode": "simple",
-                        "value": r.get(field, 0),
-                        "unit": unit,
-                        "label": f"{building} {r.get('day', '')} {label}",
-                    },
-                    {"building_id": building, "source_view": "daily_energy_summary", "date": r.get("day", "")},
-                    anchor=METRIC_ANCHOR.get(anchor_key),
-                ))
+            n = len(records)
+            if n <= 2:
+                for r in records:
+                    artifacts.append(_make_artifact(
+                        "ValueCard", "value-card",
+                        f"{building} {r.get('day', '')} {label}",
+                        {
+                            "mode": "simple",
+                            "value": r.get(field, 0),
+                            "unit": unit,
+                            "label": f"{building} {r.get('day', '')} {label}",
+                        },
+                        {"building_id": building, "source_view": "daily_energy_summary", "date": r.get("day", "")},
+                        anchor=METRIC_ANCHOR.get(anchor_key),
+                    ))
             else:
-                artifacts.append(_make_artifact(
-                    "LineChart", "line-chart",
-                    f"{building}每日{label}趋势",
-                    {
-                        "series": [{
-                            "name": building,
-                            "data": values,
-                            "timestamps": [r.get("day", "") for r in records],
-                        }],
-                    },
-                    {"building_id": building, "source_view": "daily_energy_summary", "unit": unit},
-                    anchor=METRIC_ANCHOR.get(anchor_key),
-                ))
+                raw_ts = [r.get("day", "") for r in records]
+                formatted_ts = _format_x_labels(raw_ts, gran)
+                chart_type, widget = _pick_chart_type(n)
+                if chart_type == "LineChart":
+                    artifacts.append(_make_artifact(
+                        "LineChart", "line-chart",
+                        f"{building}{gran_zh}{label}趋势",
+                        {
+                            "series": [{
+                                "name": building,
+                                "data": values,
+                                "timestamps": formatted_ts,
+                            }],
+                        },
+                        {"building_id": building, "source_view": "daily_energy_summary", "unit": unit},
+                        anchor=METRIC_ANCHOR.get(anchor_key),
+                    ))
+                else:
+                    artifacts.append(_make_artifact(
+                        "BarChart", "bar-chart",
+                        f"{building}{gran_zh}{label}",
+                        [{"label": t, "value": v} for t, v in zip(formatted_ts, values)],
+                        {"building_id": building, "source_view": "daily_energy_summary", "unit": unit},
+                        anchor=METRIC_ANCHOR.get(anchor_key),
+                    ))
 
     return artifacts
+
+
+def _pick_chart_type(n_points: int) -> tuple[str, str]:
+    """根据数据点数量选择最合适的图表类型。"""
+    if n_points >= 7:
+        return "LineChart", "line-chart"
+    return "BarChart", "bar-chart"
+
+
+def _series_to_bar(
+    series: list[dict[str, Any]], label: str, unit: str,
+) -> list[dict[str, Any]]:
+    """将多系列数据转为柱状图格式（用每个楼宇的总值）。"""
+    return [
+        {"label": s["name"], "value": sum(s["data"])}
+        for s in series
+    ]
 
 
 def _viz_compare_buildings(
@@ -585,10 +660,16 @@ def build_data_summary(messages: list[BaseMessage]) -> str:
             bid = result.get("building_id", "")
             records = result.get("records", [])
             if records:
+                gran = result.get("granularity", args.get("granularity", "day"))
+                gran_unit = GRAN_UNIT.get(gran, "条")
+                date_range_days = result.get("date_range_days", 0)
+
                 total_elec = sum(r.get("total_electricity_kwh", 0) for r in records)
                 total_water = sum(r.get("total_water_m3", 0) for r in records)
                 total_hac = sum(r.get("total_hac_energy", 0) for r in records)
-                parts = [f"{len(records)}天数据"]
+                parts = [f"{len(records)}条{gran_unit}级数据"]
+                if date_range_days > 0:
+                    parts.append(f"跨度{date_range_days}天")
                 if total_elec > 0:
                     parts.append(f"总用电{total_elec:.0f}kWh")
                 if total_water > 0:

@@ -10,6 +10,10 @@
     因此本服务以"楼栋"为最小批处理单位，不支持单行独立计算。
   - UNIFY_CLIMATE_AND_PLANT_ACROSS_TYPES = True（与 notebook 一致）：
     所有建筑使用 office 的围护/设备参数，仅保留各自的 P_base/q_person/W_peak/S(h)。
+
+公开 API：
+  - calculate_rated_values()  — 单时刻快速估算，供实时风险评估接口调用
+  - compute_and_store_all_buildings() — 批量写入 kpi_expected_hourly
 """
 from __future__ import annotations
 
@@ -17,6 +21,7 @@ import json
 import logging
 import os
 import time
+from dataclasses import dataclass
 from datetime import timezone
 from typing import Any
 
@@ -524,3 +529,57 @@ async def compute_and_store_all_buildings(db: AsyncSession) -> dict[str, int]:
             logger.info("expected upsert: %s → %d rows", bid, n)
 
     return summary
+
+
+# ---------------------------------------------------------------------------
+# 单时刻快速额定值估算（供实时风险接口调用，不含滞回状态机）
+# ---------------------------------------------------------------------------
+
+@dataclass
+class RatedSnapshot:
+    """单时刻额定值快照，供 /api/buildings/risk-now 使用。"""
+    rated_hac_energy: float       # kWh，期望空调能耗
+    hvac_mode: str                # "Cooling" / "Heating" / "Ventilation"
+    schedule_factor: float        # 日程系数 S ∈ [0.08, 1.0]
+    expected_supply_temp: float   # 期望供水温度（℃）
+
+
+def calculate_rated_values(
+    *,
+    sqm: float,
+    primary_space_usage: str,
+    hour: int,
+    dayofweek: int,
+    air_temp: float,
+    dew_temp: float,
+) -> RatedSnapshot:
+    """
+    单时刻额定值快速估算（用于实时风险评估，无需历史序列）。
+
+    HVAC 模式由当前室外温度简单判定，不走滞回状态机：
+      air_temp ≥ _COOL_ON_TA  → 制冷
+      air_temp ≤ _HEAT_ON_TA  → 供暖
+      否则                    → 通风过渡
+    """
+    usage = _classify_usage("", primary_space_usage)
+    is_cooling = air_temp >= _COOL_ON_TA
+    is_heating = (not is_cooling) and (air_temp <= _HEAT_ON_TA)
+
+    row = _compute_nominal_row(
+        usage=usage,
+        sqm=float(sqm),
+        ta=float(air_temp),
+        td=float(dew_temp),
+        rh_base=60.0,
+        hour=int(hour),
+        dayofweek=int(dayofweek),
+        is_cooling=is_cooling,
+        is_heating=is_heating,
+    )
+
+    return RatedSnapshot(
+        rated_hac_energy=row["hac_energy_expected"],
+        hvac_mode=row["hvac_mode"],
+        schedule_factor=row["schedule_factor"],
+        expected_supply_temp=row["sim_supply_temp_c_expected"],
+    )

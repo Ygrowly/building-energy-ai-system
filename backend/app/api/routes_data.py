@@ -28,6 +28,7 @@ from app.core.config import get_settings
 from app.db.models import Building, DailyEnergySummary, Device, EnergyData
 from app.db.session import get_db_session
 from app.mcp.server import list_tools
+from app.services.kpi_expected_service import calculate_rated_values
 
 logger = logging.getLogger(__name__)
 

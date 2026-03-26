@@ -293,19 +293,19 @@
                     </Transition>
                   </div>
 
-                  <!-- 时间范围下拉 -->
+                  <!-- 时间范围下拉（预警通知 tab 仅显示 6h/24h） -->
                   <div class="filter-pill" :class="{ 'filter-pill--active': filterHours !== 0, 'filter-pill--open': dropdownTimeOpen }" @click.stop="dropdownTimeOpen = !dropdownTimeOpen; dropdownBuildingOpen = false">
                     <Icon icon="mdi:clock-outline" width="14" class="pill-icon" />
                     <div class="pill-inner">
-                      <span class="pill-label">时间范围</span>
-                      <span class="pill-value">{{ TIME_OPTIONS.find(o => o.value === filterHours)?.label }}</span>
+                      <span class="pill-label">{{ msgTab === 'warning' ? '预测窗口' : '时间范围' }}</span>
+                      <span class="pill-value">{{ currentTimeOptions.find(o => o.value === filterHours)?.label ?? (msgTab === 'warning' ? '6 小时' : '全部时间') }}</span>
                     </div>
                     <Icon icon="mdi:chevron-down" width="14" class="pill-chevron" :class="{ 'pill-chevron--open': dropdownTimeOpen }" />
                     <!-- 下拉列表 -->
                     <Transition name="dropdown">
                       <div v-if="dropdownTimeOpen" class="custom-dropdown" @click.stop>
                         <div
-                          v-for="opt in TIME_OPTIONS"
+                          v-for="opt in currentTimeOptions"
                           :key="opt.value"
                           class="dropdown-item"
                           :class="{ 'dropdown-item--selected': filterHours === opt.value }"
@@ -320,14 +320,27 @@
                 </div>
 
                 <div class="filter-actions">
-                  <button v-if="hasActiveFilter" class="filter-btn filter-btn--reset" @click="resetFilters()">
-                    <Icon icon="mdi:close" width="13" />
-                    重置
-                  </button>
-                  <button class="filter-btn filter-btn--apply" :class="{ 'filter-btn--active': hasActiveFilter }">
-                    <Icon icon="mdi:filter-outline" width="14" />
-                    筛选
-                  </button>
+                  <template v-if="msgTab === 'warning'">
+                    <!-- 预警通知专属：重新预测按钮 -->
+                    <button
+                      class="filter-btn filter-btn--forecast"
+                      :disabled="forecastLoading"
+                      @click="runForecast"
+                    >
+                      <Icon :icon="forecastLoading ? 'mdi:loading' : 'mdi:refresh'" width="14" :class="{ spin: forecastLoading }" />
+                      {{ forecastLoading ? '预测中...' : '重新预测' }}
+                    </button>
+                  </template>
+                  <template v-else>
+                    <button v-if="hasActiveFilter" class="filter-btn filter-btn--reset" @click="resetFilters()">
+                      <Icon icon="mdi:close" width="13" />
+                      重置
+                    </button>
+                    <button class="filter-btn filter-btn--apply" :class="{ 'filter-btn--active': hasActiveFilter }">
+                      <Icon icon="mdi:filter-outline" width="14" />
+                      筛选
+                    </button>
+                  </template>
                 </div>
               </div>
 
@@ -421,10 +434,14 @@
                   <p class="block-label">
                     <Icon icon="mdi:lightning-bolt-outline" width="13" />
                     实时能耗风险评估
-                    <button class="refresh-btn" @click="loadRisks" :disabled="riskLoading" title="刷新">
+                    <button class="refresh-btn" @click="loadRisks" :disabled="riskLoading" title="刷新数据">
                       <Icon :icon="riskLoading ? 'mdi:loading' : 'mdi:refresh'" width="12" :class="{ spin: riskLoading }" />
                     </button>
-                    <span class="block-label-hint">基于当前天气实时计算</span>
+                    <span v-if="forecastResult" class="forecast-result-hint">
+                      <Icon icon="mdi:check-circle-outline" width="12" />
+                      {{ forecastResult }}
+                    </span>
+                    <span v-else class="block-label-hint">基于当前天气实时计算 · {{ filterHours }}h 预测窗口</span>
                   </p>
                   <div v-if="riskLoading && risks.length === 0" class="empty-state">
                     <Icon icon="mdi:loading" width="24" class="empty-icon spin" />
@@ -751,6 +768,15 @@ const TIME_OPTIONS = [
   { value: 720,  label: '近 30 天' },
 ]
 
+const WARNING_TIME_OPTIONS = [
+  { value: 6,  label: '6 小时' },
+  { value: 24, label: '24 小时' },
+]
+
+const currentTimeOptions = computed(() =>
+  msgTab.value === 'warning' ? WARNING_TIME_OPTIONS : TIME_OPTIONS
+)
+
 const hasActiveFilter = computed(
   () => filterBuilding.value !== 'all' || filterHours.value !== 0
 )
@@ -783,7 +809,14 @@ const pendingSessions = computed(() =>
 
 function switchMsgTab(tab: 'workorder' | 'anomaly' | 'warning') {
   msgTab.value = tab
-  if (tab === 'warning' && risks.value.length === 0) loadRisks()
+  if (tab === 'warning') {
+    // 切到预警通知时：时间范围锁定为 6h/24h，若当前值不在选项中则重置为 6
+    if (![6, 24].includes(filterHours.value)) filterHours.value = 6
+    if (risks.value.length === 0) loadRisks()
+  } else {
+    // 离开预警通知时：若时间值是 6（仅预警专属选项），重置为 0（全部时间）
+    if (filterHours.value === 6) filterHours.value = 0
+  }
 }
 
 function gotoWorkOrder(sessionId: string) {
@@ -897,6 +930,28 @@ async function loadRisks() {
     riskError.value = (e as Error).message ?? '加载失败'
   } finally {
     riskLoading.value = false
+  }
+}
+
+const forecastLoading = ref(false)
+const forecastResult  = ref<string>('')
+
+async function runForecast() {
+  forecastLoading.value = true
+  forecastResult.value  = ''
+  riskError.value       = ''
+  try {
+    const res = await apiFetch<{ status: string; succeeded: number; total_buildings: number }>(
+      '/api/admin/run-forecast',
+      { method: 'POST' },
+    )
+    forecastResult.value = `预测完成：${res.succeeded ?? 0}/${res.total_buildings ?? 0} 栋楼`
+    await loadRisks()
+  } catch (e: unknown) {
+    riskError.value = (e as Error).message ?? '预测失败'
+  } finally {
+    forecastLoading.value = false
+    setTimeout(() => { forecastResult.value = '' }, 4000)
   }
 }
 
@@ -1511,6 +1566,18 @@ onUnmounted(() => {
   border: 1.5px solid rgba(239, 68, 68, 0.15);
 }
 .filter-btn--reset:hover { background: rgba(239, 68, 68, 0.13); border-color: rgba(239, 68, 68, 0.3); }
+.filter-btn--forecast {
+  background: linear-gradient(135deg, #3b82f6, #6366f1);
+  color: #fff; border: none;
+  box-shadow: 0 2px 8px rgba(99, 102, 241, 0.35);
+}
+.filter-btn--forecast:hover:not(:disabled) {
+  background: linear-gradient(135deg, #2563eb, #4f46e5);
+  box-shadow: 0 3px 12px rgba(99, 102, 241, 0.5);
+  transform: translateY(-1px);
+}
+.filter-btn--forecast:active:not(:disabled) { transform: translateY(0); }
+.filter-btn--forecast:disabled { opacity: 0.7; cursor: not-allowed; }
 
 .msg-tab-content { animation: tabFadeIn 0.18s ease; }
 @keyframes tabFadeIn {
@@ -1528,6 +1595,12 @@ onUnmounted(() => {
 .block-label-hint {
   font-size: 10px; font-weight: 400; color: #c4c9d4;
   text-transform: none; letter-spacing: 0;
+}
+.forecast-result-hint {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 10px; font-weight: 500; color: #22c55e;
+  text-transform: none; letter-spacing: 0;
+  animation: tabFadeIn 0.3s ease;
 }
 .count-badge {
   background: #50c878; color: #fff; font-size: 10px;

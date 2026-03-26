@@ -20,7 +20,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import Building
-from app.db.session import get_db_session as get_db
+from app.db.session import get_db_session as get_db, AsyncSessionLocal
 from app.services.kpi_expected_service import compute_and_store_all_buildings
 from app.services.anomaly_detection_service import detect_and_store_all_buildings
 from app.services.forecast_service import forecast_building_kpi
@@ -78,18 +78,23 @@ async def detect_anomalies(db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/rebuild-all")
-async def rebuild_all(db: AsyncSession = Depends(get_db)):
+async def rebuild_all():
     """
     完整重建：先计算期望值，再运行异常检测。
     这是最常用的"一键重建"入口，适合在 energy_data 更新后调用。
+
+    两步分别使用独立的 Session，避免第一步长时间运行后连接被服务器关闭，
+    导致第二步拿到死连接（asyncpg InterfaceError: underlying connection is closed）。
     """
     logger.info("admin: rebuild-all 开始 ...")
 
-    expected_summary = await compute_and_store_all_buildings(db)
+    async with AsyncSessionLocal() as db1:
+        expected_summary = await compute_and_store_all_buildings(db1)
     total_expected = sum(expected_summary.values())
     logger.info("admin: rebuild-all 期望值写入 %d 行", total_expected)
 
-    detect_summary = await detect_and_store_all_buildings(db)
+    async with AsyncSessionLocal() as db2:
+        detect_summary = await detect_and_store_all_buildings(db2)
     total_flags = sum(v["flags"] for v in detect_summary.values())
     total_events = sum(v["events"] for v in detect_summary.values())
     total_telemetry = sum(v.get("telemetry", 0) for v in detect_summary.values())

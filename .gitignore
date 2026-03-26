@@ -32,3 +32,5 @@ guide/
 
 .cursor/backend/forecast_multi_6_12h_bundle.pkl 
 .cursor/
+
+backend/forecast_multi_6_12h_bundle.pkl

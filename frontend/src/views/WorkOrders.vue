@@ -140,14 +140,16 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { Icon } from '@iconify/vue'
 import { apiFetch } from '@/api/http'
 import { useChatStore } from '@/stores/chatStore'
 import { useBuildingStore } from '@/stores/buildingStore'
+import { useReportExport } from '@/composables/useReportExport'
 
 const chatStore = useChatStore()
 const buildingStore = useBuildingStore()
+const { registerSection, setReportMeta } = useReportExport('workorders')
 
 // ── 数据 ──────────────────────────────────────────
 const loading = ref(false)
@@ -209,6 +211,62 @@ async function fetchOrders() {
 }
 
 onMounted(fetchOrders)
+
+// ── 报表集成 ──────────────────────────────────────
+const STATUS_LABELS_REPORT: Record<string, string> = {
+  pending_approval: '待审批',
+  approved: '已批准',
+  rejected: '已驳回',
+}
+
+watch(allOrders, (orders) => {
+  if (!orders.length) return
+  setReportMeta({ title: '工单管理报表' })
+
+  const pending = orders.filter(o => o.status === 'pending_approval').length
+  const approved = orders.filter(o => o.status === 'approved').length
+  const rejected = orders.filter(o => o.status === 'rejected').length
+
+  registerSection({
+    id: 'wo-kpi',
+    title: '工单统计概览',
+    type: 'kpi',
+    kpis: [
+      { label: '工单总数', value: String(orders.length) },
+      { label: '待审批', value: String(pending) },
+      { label: '已批准', value: String(approved) },
+      { label: '已驳回', value: String(rejected) },
+    ],
+    order: 10,
+  })
+
+  registerSection({
+    id: 'wo-table',
+    title: '工单列表',
+    type: 'table',
+    columns: [
+      { key: 'ticket_id', label: '工单 ID', align: 'left' },
+      { key: 'device_id', label: '设备 ID', align: 'left' },
+      { key: 'building', label: '楼宇', align: 'left' },
+      { key: 'priority', label: '优先级', align: 'left' },
+      { key: 'issue', label: '问题描述', align: 'left' },
+      { key: 'action', label: '建议操作', align: 'left' },
+      { key: 'status', label: '状态', align: 'left' },
+      { key: 'created_at', label: '创建时间', align: 'left' },
+    ],
+    rows: orders.map(wo => ({
+      ticket_id: wo.ticket_id,
+      device_id: wo.device_id ?? '—',
+      building: buildingName(wo.building_id),
+      priority: wo.priority ?? '—',
+      issue: wo.issue_description ?? '—',
+      action: wo.suggested_action ?? '—',
+      status: STATUS_LABELS_REPORT[wo.status] ?? wo.status,
+      created_at: formatTime(wo.created_at),
+    })),
+    order: 20,
+  })
+})
 
 // ── 交互 ──────────────────────────────────────────
 function switchTab(val: string) {

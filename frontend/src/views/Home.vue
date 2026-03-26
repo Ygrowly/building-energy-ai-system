@@ -53,11 +53,6 @@
           <span v-if="notifStore.unreadCount > 0" class="home-bell-dot"></span>
         </button>
 
-        <div class="header-group-divider"></div>
-
-        <button class="home-report-btn" @click="openReportPreview()" title="生成报表" aria-label="生成报表">
-          <Icon icon="mdi:file-chart-outline" width="17" />
-        </button>
       </div>
     </header>
 
@@ -122,7 +117,7 @@ import { useReportExport } from '@/composables/useReportExport'
 const buildingStore = useBuildingStore()
 const authStore     = useAuthStore()
 const notifStore    = useNotificationStore()
-const { registerSection, setReportMeta, openPreview } = useReportExport('home')
+const { registerSection, setReportMeta } = useReportExport('home')
 
 const displayName = computed(() => authStore.user?.username ?? '访客')
 
@@ -372,9 +367,6 @@ watch(anomalyData, (data) => {
   })
 })
 
-function openReportPreview() {
-  openPreview()
-}
 </script>
 
 <style scoped>
@@ -516,25 +508,6 @@ function openReportPreview() {
   cursor: pointer;
   flex-shrink: 0;
   transition: background 0.18s ease, color 0.18s ease;
-}
-.home-report-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 34px;
-  height: 34px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: transparent;
-  color: var(--text-secondary);
-  cursor: pointer;
-  flex-shrink: 0;
-  transition: background 0.18s ease, color 0.18s ease, border-color 0.18s ease;
-}
-.home-report-btn:hover {
-  background: var(--bg-card);
-  color: var(--accent);
-  border-color: var(--accent);
 }
 .home-bell-dot {
   position: absolute;

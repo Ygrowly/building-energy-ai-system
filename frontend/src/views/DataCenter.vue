@@ -583,16 +583,18 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { Icon } from '@iconify/vue'
 import * as api from '@/api/datacenter'
 import type { DatasetSummary, DatasetDetail, RagDocument, EnergyDataRecord, ImportResult } from '@/api/datacenter'
+import { useReportExport } from '@/composables/useReportExport'
 
 // ── 状态 ─────────────────────────────────────────────────────
 const route = useRoute()
 const initialTab = route.query.tab === 'knowledge' ? 'knowledge' : 'datasets'
 const activeTab = ref<'datasets' | 'knowledge'>(initialTab)
+const { registerSection, setReportMeta } = useReportExport('datacenter')
 
 // 数据集状态
 const datasetFileInput = ref<HTMLInputElement | null>(null)
@@ -682,6 +684,91 @@ const deleteConfirm = ref<DeleteConfirmState | null>(null)
 onMounted(() => {
   loadDatasets()
   if (initialTab === 'knowledge') loadDocuments()
+})
+
+// ── 报表集成 ─────────────────────────────────────────────────
+watch(selectedDataset, (ds) => {
+  if (!ds) return
+  setReportMeta({ title: `数据中心 — ${ds.original_name}` })
+
+  registerSection({
+    id: 'dc-dataset-info',
+    title: '数据集信息',
+    type: 'kpi',
+    kpis: [
+      { label: '文件名', value: ds.original_name },
+      { label: '行数', value: ds.row_count?.toLocaleString() ?? '—' },
+      { label: '列数', value: String(ds.column_count ?? '—') },
+      { label: '文件类型', value: ds.file_type.toUpperCase() },
+    ],
+    order: 10,
+  })
+
+  const statsObj = ds.stats as Record<string, any>
+  const statEntries = Object.entries(statsObj).filter(([k]) => !k.startsWith('_'))
+  if (statEntries.length > 0) {
+    registerSection({
+      id: 'dc-stats',
+      title: '数值统计',
+      type: 'table',
+      columns: [
+        { key: 'col', label: '列名', align: 'left' },
+        { key: 'min', label: '最小值', align: 'right' },
+        { key: 'max', label: '最大值', align: 'right' },
+        { key: 'mean', label: '均值', align: 'right' },
+        { key: 'std', label: '标准差', align: 'right' },
+        { key: 'median', label: '中位数', align: 'right' },
+      ],
+      rows: statEntries.map(([col, s]: [string, any]) => ({
+        col,
+        min: formatNum(s.min),
+        max: formatNum(s.max),
+        mean: formatNum(s.mean),
+        std: formatNum(s.std),
+        median: formatNum(s.median),
+      })),
+      order: 20,
+    })
+  }
+})
+
+watch(energyDataRecords, (records) => {
+  if (!records.length) return
+  registerSection({
+    id: 'dc-energy-data',
+    title: 'energy_data 数据',
+    type: 'table',
+    columns: [
+      { key: 'timestamp', label: '时间戳', align: 'left' },
+      { key: 'building_id', label: '楼宇ID', align: 'left' },
+      { key: 'electricity_kwh', label: '电耗(kWh)', align: 'right' },
+      { key: 'water_m3', label: '水耗(m³)', align: 'right' },
+      { key: 'hac_energy', label: '空调(kWh)', align: 'right' },
+      { key: 'air_temp_c', label: '室外℃', align: 'right' },
+      { key: 'humidity_rh_pct', label: '湿度%', align: 'right' },
+    ],
+    rows: records.map(r => ({
+      timestamp: formatTsShort(r.timestamp),
+      building_id: r.building_id,
+      electricity_kwh: formatNum(r.electricity_kwh),
+      water_m3: formatNum(r.water_m3),
+      hac_energy: formatNum(r.hac_energy),
+      air_temp_c: formatNum(r.air_temp_c),
+      humidity_rh_pct: formatNum(r.humidity_rh_pct),
+    })),
+    order: 30,
+  })
+})
+
+watch(analysisResult, (text) => {
+  if (!text) return
+  registerSection({
+    id: 'dc-ai-analysis',
+    title: 'AI 分析结果',
+    type: 'text',
+    content: text,
+    order: 40,
+  })
 })
 
 // ── 计算属性 ─────────────────────────────────────────────────

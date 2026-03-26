@@ -49,6 +49,15 @@
           <Icon icon="mdi:history" width="16" />
         </button>
 
+        <!-- 导出报表 -->
+        <button
+          class="top-btn"
+          :title="reportStore.sections.length > 0 ? '导出页面报表' : '导出对话报表'"
+          @click="onReportBtnClick"
+        >
+          <Icon icon="mdi:file-chart-outline" width="16" />
+        </button>
+
         <!-- 更多操作 -->
         <div class="dropdown-wrap" ref="moreWrapEl">
           <button
@@ -628,6 +637,14 @@ function onCloseChat() {
 function onClearChat() {
   moreOpen.value = false
   store.clearSession()
+}
+
+function onReportBtnClick() {
+  if (reportStore.sections.length > 0) {
+    reportStore.openPreview()
+  } else {
+    onExportConversation()
+  }
 }
 
 function onExportConversation() {

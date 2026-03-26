@@ -86,9 +86,6 @@
     <!-- 个人中心弹窗 -->
     <PersonalModal :visible="showPersonalModal" :initial-section="modalSection" @close="showPersonalModal = false" />
 
-    <!-- 报表浮动按钮 -->
-    <ReportFab />
-
     <!-- 报表预览弹窗（内部使用 Teleport 到 body） -->
     <ReportPreviewModal />
 
@@ -147,7 +144,6 @@ import { Icon } from '@iconify/vue'
 import AgentConsole from '@/components/AgentConsole.vue'
 import ElementPickerOverlay from '@/components/ElementPickerOverlay.vue'
 import PersonalModal from '@/components/PersonalModal.vue'
-import ReportFab from '@/components/ReportFab.vue'
 import ReportPreviewModal from '@/components/report/ReportPreviewModal.vue'
 import { useBuildingStore } from '@/stores/buildingStore'
 import { useAuthStore } from '@/stores/authStore'

@@ -30,10 +30,6 @@
             <Icon :icon="loading ? 'mdi:loading' : 'mdi:refresh'" width="14" class="btn-icon" />
             {{ loading ? '加载中...' : '刷新' }}
           </button>
-          <button class="report-btn" @click="openReportPreview()" :disabled="!anomalies.length && !predictions.length" title="生成报表">
-            <Icon icon="mdi:file-chart-outline" width="14" class="btn-icon" />
-            报表
-          </button>
         </div>
       </div>
 
@@ -213,7 +209,7 @@ import { useBuildingStore } from '@/stores/buildingStore'
 import { useReportExport } from '@/composables/useReportExport'
 
 const buildingStore = useBuildingStore()
-const { registerSection, setReportMeta, openPreview } = useReportExport('operations')
+const { registerSection, setReportMeta } = useReportExport('operations')
 
 // ── 异常告警 ───────────────────────────────────────
 const loading = ref(false)
@@ -345,10 +341,6 @@ watch(predictions, (data) => {
   })
 })
 
-function openReportPreview() {
-  openPreview()
-}
-
 // ── 工具函数 ───────────────────────────────────────
 function buildingName(type: string): string {
   return buildingStore.getBuildingName(type)
@@ -449,28 +441,6 @@ function formatTime(iso: string): string {
 }
 .refresh-btn:hover { border-color: var(--accent); color: var(--accent); }
 .refresh-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.report-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 5px 12px;
-  height: 32px;
-  font-size: 12px;
-  font-weight: 500;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--bg-card);
-  color: var(--text-secondary);
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s, border-color 0.15s;
-}
-.report-btn:hover:not(:disabled) {
-  background: rgba(91,141,238,0.1);
-  color: var(--accent);
-  border-color: var(--accent);
-}
-.report-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-
 .view-all-link {
   font-size: 12px;
   color: var(--accent);

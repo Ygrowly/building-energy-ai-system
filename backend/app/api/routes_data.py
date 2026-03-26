@@ -1296,6 +1296,7 @@ async def get_overview(
 async def get_recent_anomalies(
     hours: int = Query(168, ge=1, le=8760, description="查询最近 N 小时内的异常（默认 7 天，最大 1 年）"),
     building_type: str | None = Query(None, description="按建筑类型过滤"),
+    only_unresolved: bool = Query(False, description="是否只返回未解决的异常，默认返回全部"),
     db: AsyncSession = Depends(get_db_session),
 ):
     # 以 anomaly_events 表中最新数据时间戳为窗口终点（数据集是历史数据）
@@ -1319,6 +1320,7 @@ async def get_recent_anomalies(
 
     # 可选：按建筑类型过滤
     building_filter = ""
+    resolved_filter = " AND ae.is_resolved = false" if only_unresolved else ""
     params: dict[str, Any] = {"t0": window_start, "t1": max_ts}
     if building_type:
         bld_result = await db.execute(
@@ -1351,7 +1353,7 @@ async def get_recent_anomalies(
         FROM anomaly_events ae
         WHERE ae.data_timestamp >= :t0
           AND ae.data_timestamp <= :t1
-          AND ae.is_resolved = false
+          {resolved_filter}
           {building_filter}
         ORDER BY ae.data_timestamp DESC
         LIMIT 200

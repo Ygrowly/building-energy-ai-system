@@ -81,16 +81,6 @@
           <Icon :icon="loading ? 'mdi:loading' : 'mdi:magnify'" width="16" :class="{ spin: loading }" />
           {{ loading ? '查询中...' : '查询' }}
         </button>
-        <button
-          class="report-btn"
-          @click="openReportPreview()"
-          :disabled="!queryResult && !devicesData"
-          title="生成报表"
-          aria-label="生成报表"
-        >
-          <Icon icon="mdi:file-chart-outline" width="15" />
-          报表
-        </button>
       </div>
 
       <!-- 分隔线 -->
@@ -448,7 +438,7 @@ import * as echarts from 'echarts'
 import { useReportExport } from '@/composables/useReportExport'
 
 // ── 报表集成 ──
-const { registerSection, captureChart, setReportMeta, openPreview } = useReportExport('querystats')
+const { registerSection, captureChart, setReportMeta } = useReportExport('querystats')
 
 // ── 筛选状态 ──
 const buildingOptions = [
@@ -723,14 +713,6 @@ function registerReportSections(energyParams: typeof allParams, wantDevice: bool
       }
     }, 400)
   }
-}
-
-function openReportPreview() {
-  // 如果已有数据但在数据视图，先截一次图表（如果存在）
-  if (viewMode.value === 'data' && chart) {
-    captureChart(chart, 'qs-chart-energy', '能耗趋势图', 20)
-  }
-  openPreview()
 }
 
 const PARAM_FIELD_MAP: Record<string, string> = {
@@ -1421,29 +1403,6 @@ onUnmounted(() => {
   transform: none;
   box-shadow: none;
 }
-.report-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 0 14px;
-  height: 36px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--bg-card);
-  color: var(--text-secondary);
-  font-size: 13px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s, border-color 0.15s;
-  flex-shrink: 0;
-}
-.report-btn:hover:not(:disabled) {
-  background: rgba(91,141,238,0.1);
-  color: var(--accent);
-  border-color: var(--accent);
-}
-.report-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-
 /* ── 分隔线 ── */
 .filter-divider {
   height: 1px;

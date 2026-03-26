@@ -386,9 +386,11 @@ import { apiFetch } from '@/api/http'
 import { useBuildingStore } from '@/stores/buildingStore'
 import { useDataRangeStore } from '@/stores/dataRangeStore'
 import RatedVsActualSection from '@/components/RatedVsActualSection.vue'
+import { useReportExport } from '@/composables/useReportExport'
 
 const buildingStore = useBuildingStore()
 const dataRangeStore = useDataRangeStore()
+const { registerSection, captureChart, setReportMeta } = useReportExport('dashboard')
 
 // ── 状态 ─────────────────────────────────────────────
 const loading = ref(true)
@@ -476,11 +478,14 @@ const kpis = computed(() => {
     ? buildings.reduce((s: number, b: any) => s + (b.total_electricity_kwh ?? 0), 0) / totalSqm
     : 0
 
+  const predCount = k.prediction_warning_count ?? 0
+
   return [
-    { icon: 'mdi:lightning-bolt', label: '日总用电 (kWh)',       value: Number(k.total_electricity_kwh).toFixed(1), trend: null },
-    { icon: 'mdi:water',          label: '当前用水 (m³)',         value: Number(k.total_water_m3).toFixed(1),        trend: null },
-    { icon: 'mdi:ruler-square',   label: '综合能耗强度 (kWh/㎡)', value: intensity.toFixed(3),                       trend: null },
-    { icon: 'mdi:alert-circle',   label: '异常楼宇数',            value: String(k.anomaly_count),                    trend: null },
+    { icon: 'mdi:lightning-bolt',  label: '日总用电 (kWh)',       value: Number(k.total_electricity_kwh).toFixed(1), trend: null },
+    { icon: 'mdi:water',           label: '当前用水 (m³)',         value: Number(k.total_water_m3).toFixed(1),        trend: null },
+    { icon: 'mdi:ruler-square',    label: '综合能耗强度 (kWh/㎡)', value: intensity.toFixed(3),                       trend: null },
+    { icon: 'mdi:alert-circle',    label: '异常楼宇数',            value: String(k.anomaly_count),                    trend: null },
+    { icon: 'mdi:crystal-ball',    label: '预测预警',              value: String(predCount),                          trend: null },
   ]
 })
 
@@ -818,6 +823,133 @@ function exportJSON() {
   URL.revokeObjectURL(url)
 }
 
+// ── 报表集成 ─────────────────────────────────────────
+watch(overviewData, (ov) => {
+  if (!ov) return
+  setReportMeta({ title: '驾驶舱 — 能耗总览报表' })
+
+  registerSection({
+    id: 'dash-kpi',
+    title: '核心指标概览',
+    type: 'kpi',
+    kpis: kpis.value.map(k => ({ label: k.label, value: k.value })),
+    order: 10,
+  })
+
+  const bd = currentBuildingData.value
+  if (bd) {
+    registerSection({
+      id: 'dash-building',
+      title: `${bd.display_name} — 设备状态`,
+      type: 'table',
+      columns: [
+        { key: 'metric', label: '指标', align: 'left' },
+        { key: 'value', label: '数值', align: 'right' },
+      ],
+      rows: [
+        { metric: '日用电 (kWh)', value: (bd.total_electricity_kwh ?? 0).toFixed(1) },
+        { metric: '日用水 (m³)', value: (bd.total_water_m3 ?? 0).toFixed(1) },
+        { metric: '平均气温 (°C)', value: (bd.avg_ambient_temp ?? 0).toFixed(1) },
+        { metric: '能耗强度 (kWh/㎡)', value: bd.energy_intensity_kwh_per_sqm ?? '—' },
+        { metric: '在场人数', value: String(bd.occupancy_count ?? '—') },
+      ],
+      order: 20,
+    })
+  }
+})
+
+watch([anomalyBuildings, recentAnomalies], ([abList, raList]) => {
+  const allAnomalies = [
+    ...abList.map((b: any) => ({
+      level: 'HIGH',
+      description: `${b.display_name} — 运行状态异常 (${b.operation_status})`,
+      detail: `最新用电：${(b.total_electricity_kwh ?? 0).toFixed(1)} kWh`,
+    })),
+    ...raList.slice(0, 10).map((a: any) => ({
+      level: 'RULE',
+      description: a.message,
+      detail: `设备 ${a.meter_device_id}`,
+    })),
+  ]
+  if (allAnomalies.length > 0) {
+    registerSection({
+      id: 'dash-anomalies',
+      title: '异常告警',
+      type: 'table',
+      columns: [
+        { key: 'level', label: '级别', align: 'left' },
+        { key: 'description', label: '描述', align: 'left' },
+        { key: 'detail', label: '详情', align: 'left' },
+      ],
+      rows: allAnomalies,
+      order: 30,
+    })
+  }
+})
+
+watch(trendData, (data) => {
+  if (!data.length) return
+  const { params } = trendForm.value
+
+  const columns: { key: string; label: string; align: 'left' | 'right' }[] = [
+    { key: 'day', label: '日期', align: 'left' as const },
+  ]
+  if (params.includes('electricity')) columns.push({ key: 'elec', label: '日用电 (kWh)', align: 'right' as const })
+  if (params.includes('water')) columns.push({ key: 'water', label: '日用水 (m³)', align: 'right' as const })
+  if (params.includes('temperature')) columns.push({ key: 'temp', label: '平均气温 (°C)', align: 'right' as const })
+
+  registerSection({
+    id: 'dash-trend-table',
+    title: `${trendBuildingName.value} · 能耗数据明细`,
+    type: 'table',
+    columns,
+    rows: data.map((r: any) => ({
+      day: formatDay(r.day),
+      elec: r.total_electricity_kwh != null ? Number(r.total_electricity_kwh).toFixed(2) : '—',
+      water: r.total_water_m3 != null ? Number(r.total_water_m3).toFixed(2) : '—',
+      temp: r.avg_ambient_temp != null ? Number(r.avg_ambient_temp).toFixed(1) : '—',
+    })),
+    order: 50,
+  })
+
+  const s = stats.value
+  const summaryItems: { label: string; value: string }[] = []
+  if (params.includes('electricity')) {
+    summaryItems.push(
+      { label: '用电合计 (kWh)', value: s.elec.total.toFixed(1) },
+      { label: '用电日均', value: s.elec.avg.toFixed(2) },
+      { label: '用电最大', value: s.elec.max.toFixed(2) },
+    )
+  }
+  if (params.includes('water')) {
+    summaryItems.push(
+      { label: '用水合计 (m³)', value: s.water.total.toFixed(1) },
+      { label: '用水日均', value: s.water.avg.toFixed(2) },
+    )
+  }
+  if (params.includes('temperature')) {
+    summaryItems.push(
+      { label: '平均气温 (°C)', value: s.temp.avg.toFixed(1) },
+      { label: '最高气温', value: s.temp.max.toFixed(1) },
+      { label: '最低气温', value: s.temp.min.toFixed(1) },
+    )
+  }
+  if (summaryItems.length > 0) {
+    registerSection({
+      id: 'dash-stats',
+      title: `${trendBuildingName.value} · 统计报表`,
+      type: 'summary',
+      summaryItems,
+      order: 60,
+    })
+  }
+
+  // Capture chart after next tick
+  nextTick(() => {
+    captureChart(chartInstance, 'dash-trend-chart', `${trendBuildingName.value} · 能耗趋势`, 40)
+  })
+})
+
 // ── 工具函数 ─────────────────────────────────────────
 const BUILDING_ICONS: Record<string, string> = {
   Office:    'mdi:office-building',
@@ -855,7 +987,7 @@ function formatDay(iso: string): string {
 /* ── KPI ── */
 .kpi-grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   gap: 12px;
   margin-bottom: 28px;
 }

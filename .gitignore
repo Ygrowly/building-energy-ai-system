@@ -4,6 +4,7 @@ __pycache__/
 *.egg-info/
 .eggs/
 venv/
+.venv-forecast/
 .env
 .env.local
 
@@ -29,4 +30,5 @@ Thumbs.db
 
 guide/
 
+.cursor/backend/forecast_multi_6_12h_bundle.pkl 
 .cursor/

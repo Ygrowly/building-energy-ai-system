@@ -18,6 +18,31 @@ docker compose up -d --build
 
 ```
 
+数据库迁移（若 psql 不在 PATH，用 Python 脚本代替）
+```
+cd backend
+# 执行 014_predicted_anomaly_events 迁移（创建预测预警表）
+python scripts/run_migration_014.py
+```
+
+预测模型环境（.venv-forecast，ML 库隔离运行）
+```
+cd backend
+# 首次创建隔离环境
+python -m venv .venv-forecast
+.venv-forecast\Scripts\activate
+pip install "scikit-learn>=1.7.2,<1.8.0" "numpy>=2.0" "joblib>=1.4"
+deactivate
+
+# 验证模型可加载
+.venv-forecast\Scripts\python.exe -c "import joblib; a=joblib.load('forecast_multi_6_12h_bundle.pkl'); print(a['model_name'])"
+```
+
+手动触发批量预测
+```
+curl -X POST http://localhost:8000/api/admin/run-forecast
+```
+
 RAG 端到端测试（上传 PDF → 向量化 → 对话引用知识库）
 ```
 # 1. 确保后端已启动；RAGFlow 已启动且 .env 中 RAGFLOW_API_URL、RAGFLOW_API_KEY、RAGFLOW_DATASET_ID 已配置

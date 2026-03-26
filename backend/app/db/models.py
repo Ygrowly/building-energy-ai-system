@@ -512,3 +512,43 @@ class DatasetFile(Base):
         Index("idx_dataset_files_uploader", "uploader_id"),
         Index("idx_dataset_files_uploaded_at", "uploaded_at"),
     )
+
+
+# ---------------------------------------------------------------------------
+# predicted_anomaly_events — ML 模型预测的未来异常预警（迁移 014）
+# ---------------------------------------------------------------------------
+
+class PredictedAnomalyEvent(Base):
+    """
+    ML 模型预测的未来 6h/12h KPI 异常预警。
+    与已发生异常 anomaly_events 分离存储，支持事后命中率评估。
+    """
+    __tablename__ = "predicted_anomaly_events"
+
+    id: str = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    created_at = Column(TIMESTAMP(timezone=True), nullable=False, server_default=func.now())
+
+    as_of_timestamp = Column(TIMESTAMP(timezone=True), nullable=False)
+    forecast_for_timestamp = Column(TIMESTAMP(timezone=True), nullable=False)
+    horizon_h: int = Column(Integer, nullable=False)
+
+    building_id: str = Column(
+        String,
+        ForeignKey("buildings.building_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+
+    metric_name: str = Column(String, nullable=False)
+    predicted_value: float = Column(Float, nullable=False)
+    expected_value: float = Column(Float, nullable=True)
+    deviation_pct: float = Column(Float, nullable=True)
+
+    risk_level: str = Column(String, nullable=False, default="normal")
+    rule_triggered: str = Column(String, nullable=True)
+
+    model_name: str = Column(String, nullable=False)
+    is_confirmed: bool = Column(Boolean, nullable=True)
+
+    __table_args__ = (
+        Index("idx_predicted_anomaly_building_ts", "building_id", "as_of_timestamp"),
+    )

@@ -211,7 +211,11 @@ _TOOL_LIST_BUILDINGS = _make_mcp_tool(
     "仅在上下文未提供设备列表时调用，无需参数，直接调用即可。",
 )
 
-_DIAGNOSE_BASE_TOOLS = [
+def _build_diagnose_base_tools() -> list[StructuredTool]:
+    from app.core.config import get_settings as _gs
+    _s = _gs()
+    _tr = f"{_s.DATA_TIME_START} ~ {_s.DATA_TIME_END}"
+    return [
     _make_mcp_tool(
         "query_energy_metrics",
         "查询指定建筑在时间范围内的能耗指标时序数据（事实核查用）。"
@@ -259,9 +263,11 @@ _DIAGNOSE_BASE_TOOLS = [
         "device_id 必须来自上下文【楼宇设备列表】中的真实设备 ID。",
         args_schema=CreateWorkOrderDraftInput,
     ),
-]
+    ]
 
-# 完整工具集（含 list_available_buildings，用于楼宇信息未知时）
+
+_DIAGNOSE_BASE_TOOLS = _build_diagnose_base_tools()
+
 DIAGNOSE_AGENT_TOOLS = [_TOOL_LIST_BUILDINGS] + _DIAGNOSE_BASE_TOOLS
 
 

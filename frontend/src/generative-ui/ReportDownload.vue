@@ -31,9 +31,14 @@
 
     <!-- 操作 -->
     <div class="rd-footer">
+      <button class="btn-preview" @click="triggerPreview" :disabled="previewing">
+        <Icon v-if="!previewing" icon="mdi:eye-outline" width="14" />
+        <Icon v-else icon="mdi:loading" width="14" class="spin" />
+        {{ previewing ? '加载中...' : '预览报表' }}
+      </button>
       <button class="btn-download" @click="triggerDownload" :disabled="downloading">
         <Icon v-if="!downloading" icon="mdi:download" width="14" />
-        {{ downloading ? '下载中...' : '立即下载 CSV' }}
+        {{ downloading ? '下载中...' : 'CSV' }}
       </button>
       <span class="dl-hint" v-if="downloaded"><Icon icon="mdi:check-circle" width="14" /> 已开始下载</span>
     </div>
@@ -45,12 +50,17 @@ import { ref, computed } from 'vue'
 import { Icon } from '@iconify/vue'
 import type { ArtifactEvent } from '@/api/stream_client'
 import { useBuildingStore } from '@/stores/buildingStore'
+import { useReportStore } from '@/stores/reportStore'
+import type { ReportSection } from '@/stores/reportStore'
+import { parseCSV } from '@/utils/reportExportEngine'
 
 const props = defineProps<{ artifact: ArtifactEvent }>()
 const buildingStore = useBuildingStore()
+const reportStore = useReportStore()
 
 const downloading = ref(false)
 const downloaded = ref(false)
+const previewing = ref(false)
 
 // 报表类型为后端 API 固定枚举值，静态映射合理
 const REPORT_TYPE_LABELS: Record<string, string> = {
@@ -95,7 +105,6 @@ function triggerDownload() {
   try {
     const a = document.createElement('a')
     a.href = fullUrl.value
-    // 从 URL 推断文件名
     const bt = parsedParams.value.building_type ?? 'report'
     const rt = parsedParams.value.report_type ?? 'export'
     const sd = parsedParams.value.start_date ?? ''
@@ -108,6 +117,60 @@ function triggerDownload() {
     setTimeout(() => { downloaded.value = false }, 3000)
   } finally {
     downloading.value = false
+  }
+}
+
+async function triggerPreview() {
+  if (!props.artifact.download_url || previewing.value) return
+  previewing.value = true
+  try {
+    const resp = await fetch(fullUrl.value)
+    const csvText = await resp.text()
+    const rows = parseCSV(csvText)
+    if (rows.length < 2) return
+
+    const headers = rows[0]
+    const dataRows = rows.slice(1)
+    const columns = headers.map((h, i) => ({
+      key: h,
+      label: h,
+      align: (i === 0 ? 'left' : 'right') as 'left' | 'right' | 'center',
+    }))
+
+    const tableRows = dataRows.map(row => {
+      const obj: Record<string, string> = {}
+      headers.forEach((h, i) => { obj[h] = row[i] ?? '' })
+      return obj
+    })
+
+    const sections: ReportSection[] = [{
+      id: 'ai-report-table',
+      namespace: 'ai-report',
+      title: title.value,
+      type: 'table',
+      columns,
+      rows: tableRows,
+      order: 10,
+    }]
+
+    const bt = parsedParams.value.building_type
+    const buildingName = bt ? buildingStore.getBuildingName(bt) : undefined
+
+    reportStore.openPreviewWithPayload({
+      title: `${title.value}`,
+      buildingName,
+      dateRange: parsedParams.value.start_date
+        ? { start: parsedParams.value.start_date, end: parsedParams.value.end_date ?? '' }
+        : undefined,
+      generatedAt: new Date().toLocaleString('zh-CN'),
+      sections,
+      mode: 'snapshot',
+    })
+  } catch {
+    // 网络错误降级为直接下载
+    triggerDownload()
+  } finally {
+    previewing.value = false
   }
 }
 </script>
@@ -173,6 +236,22 @@ function triggerDownload() {
   background: var(--bg-panel);
 }
 
+.btn-preview {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: transparent;
+  border: 1px solid var(--success);
+  border-radius: 6px;
+  color: var(--success);
+  font-size: 13px;
+  font-weight: 600;
+  padding: 7px 16px;
+  cursor: pointer;
+  transition: background 0.2s, opacity 0.2s;
+}
+.btn-preview:hover:not(:disabled) { background: rgba(52,211,153,0.1); }
+.btn-preview:disabled { opacity: 0.5; cursor: not-allowed; }
 .btn-download {
   display: inline-flex;
   align-items: center;
@@ -183,12 +262,14 @@ function triggerDownload() {
   color: #000;
   font-size: 13px;
   font-weight: 600;
-  padding: 8px 20px;
+  padding: 8px 16px;
   cursor: pointer;
   transition: opacity 0.2s;
 }
 .btn-download:hover    { opacity: 0.85; }
 .btn-download:disabled { opacity: 0.5; cursor: not-allowed; }
+.spin { animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
 
 .dl-hint {
   display: inline-flex;

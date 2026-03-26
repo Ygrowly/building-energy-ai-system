@@ -88,6 +88,12 @@ async def lifespan(app: FastAPI):
     # 定期清理过期/已吊销的 refresh token（每 24 小时一次）
     token_cleanup_task = asyncio.create_task(_cleanup_refresh_tokens(interval_seconds=86400))
 
+    # ── 预测预警自动调度接入点（第一版不启用，手动通过 POST /api/admin/run-forecast 触发）
+    # 下一步可在此处接入 APScheduler 或 asyncio 定时任务：
+    #   from app.services.forecast_service import forecast_building_kpi
+    #   forecast_task = asyncio.create_task(_run_periodic_forecast(interval_seconds=3600))
+    # 批量逻辑复用 routes_admin.run_forecast 中已有的 forecast_building_kpi 调用。
+
     yield
 
     # 关闭时取消定期任务

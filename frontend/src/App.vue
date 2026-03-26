@@ -86,6 +86,9 @@
     <!-- 个人中心弹窗 -->
     <PersonalModal :visible="showPersonalModal" :initial-section="modalSection" @close="showPersonalModal = false" />
 
+    <!-- 报表预览弹窗（内部使用 Teleport 到 body） -->
+    <ReportPreviewModal />
+
     <!-- 用户菜单弹出 + 主题弹出面板（Teleport 到 body） -->
     <Teleport to="body">
       <Transition name="picker-fade">
@@ -141,6 +144,7 @@ import { Icon } from '@iconify/vue'
 import AgentConsole from '@/components/AgentConsole.vue'
 import ElementPickerOverlay from '@/components/ElementPickerOverlay.vue'
 import PersonalModal from '@/components/PersonalModal.vue'
+import ReportPreviewModal from '@/components/report/ReportPreviewModal.vue'
 import { useBuildingStore } from '@/stores/buildingStore'
 import { useAuthStore } from '@/stores/authStore'
 import { useNotificationStore } from '@/stores/notificationStore'

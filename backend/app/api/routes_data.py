@@ -2,14 +2,16 @@
 普通数据查询接口（非 AI，直接查 DB）。
 
 端点：
-  GET /api/buildings                       — 获取所有建筑列表
-  GET /api/buildings/{building_type}/status — 获取建筑最新设备状态（按 building_type）
-  GET /api/buildings/{building_type}/energy — 获取建筑每日能耗趋势（按 building_type）
+  GET /api/buildings                              — 获取所有建筑列表
+  GET /api/buildings/{building_type}/status       — 获取建筑最新设备状态（按 building_type）
+  GET /api/buildings/{building_type}/devices      — 获取设备运行状态快照 + 遥测历史（方案A）
+  GET /api/buildings/{building_type}/energy       — 获取建筑每日能耗趋势（按 building_type）
   GET /api/buildings/{building_type}/load-profile — 按小时/星期聚合负荷曲线
   GET /api/buildings/{building_type}/peak-valley-stats — 峰谷与夜间高耗统计
-  GET /api/overview                         — 获取 Dashboard KPI 汇总（全局总览）
-  GET /api/anomalies/sankey                  — 异常根因桑基图聚合数据
-  GET /api/tools                            — 列出所有可用 MCP 工具（调试用）
+  GET /api/overview                               — 获取 Dashboard KPI 汇总（全局总览）
+  GET /api/anomalies/sankey                       — 异常根因桑基图聚合数据
+  GET /api/anomalies/attributions                 — 异常设备归因列表（方案A）
+  GET /api/tools                                  — 列出所有可用 MCP 工具（调试用）
 """
 from __future__ import annotations
 
@@ -43,6 +45,11 @@ _BUILDING_NAMES = {
     "Office": "办公楼",
     "Public": "公共楼",
     "Public services": "公共楼",
+}
+_bid_to_type: dict[str, str] = {
+    "Fox_education_Louie": "Education",
+    "Fox_office_Alice": "Office",
+    "Fox_public_Henry": "Public services",
 }
 
 
@@ -156,6 +163,355 @@ async def get_building_status(
         "air_temp_c": latest.air_temp_c,
         "dew_temp_c": latest.dew_temp_c,
         "humidity_rh_pct": latest.humidity_rh_pct,
+    }
+
+
+# ---------------------------------------------------------------------------
+# 设备运行状态（方案A：从 device_status_latest + device_telemetry_hourly 读取）
+# ---------------------------------------------------------------------------
+@router.get("/buildings/{building_type}/devices", summary="获取建筑设备运行状态")
+async def get_building_devices(
+    building_type: str,
+    history_hours: int = Query(24, ge=1, le=168, description="返回最近 N 小时遥测历史（默认24h）"),
+    start_date: str | None = Query(None, description="起始日期 YYYY-MM-DD（与 end_date 同时提供时使用绝对范围）"),
+    end_date: str | None = Query(None, description="结束日期 YYYY-MM-DD（与 start_date 同时提供时使用绝对范围）"),
+    db: AsyncSession = Depends(get_db_session),
+):
+    """
+    返回建筑下所有设备的最新运行状态快照（device_status_latest）
+    以及遥测趋势（device_telemetry_hourly）。
+
+    时间窗口：
+      - 同时提供 start_date + end_date 时，按绝对日期范围查询，忽略 history_hours
+      - 否则回退到 history_hours 相对窗口（向后兼容）
+
+    包含字段：
+      - running_state: running | standby
+      - health_status: healthy | degraded | warning
+      - online_status: online | offline
+      - latest_power_kw / latest_flow_rate（电表/水表能量或流量）
+      - latest_supply_temp_c / latest_return_temp_c（空调供回水温）
+    """
+    bld_result = await db.execute(
+        select(Building.building_id).where(Building.primary_space_usage == building_type)
+    )
+    building_id = bld_result.scalar_one_or_none()
+    if not building_id:
+        raise HTTPException(status_code=404, detail=f"建筑类型 {building_type} 不存在")
+
+    # ── 最新状态快照 ──────────────────────────────────────────────────────────
+    latest_result = await db.execute(text("""
+        SELECT
+            dsl.device_id,
+            dsl.device_type,
+            dsl.last_seen_at,
+            dsl.online_status,
+            dsl.running_state,
+            dsl.health_status,
+            dsl.latest_power_kw,
+            dsl.latest_flow_rate,
+            dsl.latest_supply_temp_c,
+            dsl.latest_return_temp_c,
+            dsl.latest_payload_json
+        FROM device_status_latest dsl
+        WHERE dsl.building_id = :bid
+        ORDER BY dsl.device_type
+    """), {"bid": building_id})
+    latest_rows = latest_result.fetchall()
+
+    device_snapshot: list[dict] = []
+    device_ids: list[str] = []
+    for row in latest_rows:
+        (dev_id, dev_type, seen_at, online, running, health,
+         power_kw, flow_rate, supply_t, return_t, payload_json) = row
+        device_ids.append(dev_id)
+        device_snapshot.append({
+            "device_id": dev_id,
+            "device_type": dev_type,
+            "last_seen_at": seen_at.isoformat() if seen_at else None,
+            "online_status": online,
+            "running_state": running,
+            "health_status": health,
+            "latest_power_kw": float(power_kw) if power_kw is not None else None,
+            "latest_flow_rate": float(flow_rate) if flow_rate is not None else None,
+            "latest_supply_temp_c": float(supply_t) if supply_t is not None else None,
+            "latest_return_temp_c": float(return_t) if return_t is not None else None,
+            "latest_payload": payload_json if isinstance(payload_json, dict) else None,
+        })
+
+    # 若 device_status_latest 为空（未运行 rebuild-all），回退到 devices 表
+    if not device_snapshot:
+        dev_result = await db.execute(text(
+            "SELECT device_id, device_type FROM devices WHERE building_id = :bid ORDER BY device_type"
+        ), {"bid": building_id})
+        for drow in dev_result.fetchall():
+            device_snapshot.append({
+                "device_id": drow[0],
+                "device_type": drow[1],
+                "last_seen_at": None,
+                "online_status": "unknown",
+                "running_state": "unknown",
+                "health_status": "unknown",
+                "latest_power_kw": None,
+                "latest_flow_rate": None,
+                "latest_supply_temp_c": None,
+                "latest_return_temp_c": None,
+                "latest_payload": None,
+            })
+        return {
+            "building_type": building_type,
+            "building_id": building_id,
+            "devices": device_snapshot,
+            "history": [],
+            "module_status": "no_telemetry_data",
+            "message": "device_status_latest 暂无数据，请先调用 /api/admin/rebuild-all",
+        }
+
+    # ── 遥测历史趋势 ────────────────────────────────────────────────────────────
+    use_absolute_range = start_date is not None and end_date is not None
+    history_records: list[dict] = []
+
+    if use_absolute_range:
+        try:
+            t0 = datetime.strptime(start_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            t1 = datetime.strptime(end_date, "%Y-%m-%d").replace(
+                hour=23, minute=59, second=59, tzinfo=timezone.utc
+            )
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail="start_date / end_date 格式应为 YYYY-MM-DD",
+            )
+
+        hist_result = await db.execute(text("""
+            SELECT
+                dth.timestamp,
+                dth.device_id,
+                dth.device_type,
+                dth.running_state,
+                dth.health_status,
+                dth.power_kw,
+                dth.flow_rate,
+                dth.supply_temp_c,
+                dth.return_temp_c,
+                dth.ambient_temp_c
+            FROM device_telemetry_hourly dth
+            WHERE dth.building_id = :bid
+              AND dth.timestamp >= :t0
+              AND dth.timestamp <= :t1
+            ORDER BY dth.timestamp ASC, dth.device_type ASC
+        """), {"bid": building_id, "t0": t0, "t1": t1})
+
+        for hrow in hist_result.fetchall():
+            (ts, d_id, d_type, run_st, health_st,
+             p_kw, fl, sup_t, ret_t, amb_t) = hrow
+            history_records.append({
+                "timestamp": ts.isoformat() if ts else None,
+                "device_id": d_id,
+                "device_type": d_type,
+                "running_state": run_st,
+                "health_status": health_st,
+                "power_kw": float(p_kw) if p_kw is not None else None,
+                "flow_rate": float(fl) if fl is not None else None,
+                "supply_temp_c": float(sup_t) if sup_t is not None else None,
+                "return_temp_c": float(ret_t) if ret_t is not None else None,
+                "ambient_temp_c": float(amb_t) if amb_t is not None else None,
+            })
+    else:
+        max_ts_result = await db.execute(text(
+            "SELECT MAX(timestamp) FROM device_telemetry_hourly WHERE building_id = :bid"
+        ), {"bid": building_id})
+        max_ts = max_ts_result.scalar()
+
+        if max_ts is not None:
+            if hasattr(max_ts, "tzinfo") and max_ts.tzinfo is None:
+                max_ts = max_ts.replace(tzinfo=timezone.utc)
+            window_start = max_ts - timedelta(hours=history_hours)
+
+            hist_result = await db.execute(text("""
+                SELECT
+                    dth.timestamp,
+                    dth.device_id,
+                    dth.device_type,
+                    dth.running_state,
+                    dth.health_status,
+                    dth.power_kw,
+                    dth.flow_rate,
+                    dth.supply_temp_c,
+                    dth.return_temp_c,
+                    dth.ambient_temp_c
+                FROM device_telemetry_hourly dth
+                WHERE dth.building_id = :bid
+                  AND dth.timestamp >= :t0
+                  AND dth.timestamp <= :t1
+                ORDER BY dth.timestamp ASC, dth.device_type ASC
+            """), {"bid": building_id, "t0": window_start, "t1": max_ts})
+
+            for hrow in hist_result.fetchall():
+                (ts, d_id, d_type, run_st, health_st,
+                 p_kw, fl, sup_t, ret_t, amb_t) = hrow
+                history_records.append({
+                    "timestamp": ts.isoformat() if ts else None,
+                    "device_id": d_id,
+                    "device_type": d_type,
+                    "running_state": run_st,
+                    "health_status": health_st,
+                    "power_kw": float(p_kw) if p_kw is not None else None,
+                    "flow_rate": float(fl) if fl is not None else None,
+                    "supply_temp_c": float(sup_t) if sup_t is not None else None,
+                    "return_temp_c": float(ret_t) if ret_t is not None else None,
+                    "ambient_temp_c": float(amb_t) if amb_t is not None else None,
+                })
+
+    return {
+        "building_type": building_type,
+        "building_id": building_id,
+        "devices": device_snapshot,
+        "history": history_records,
+        "history_hours": history_hours if not use_absolute_range else None,
+        "start_date": start_date,
+        "end_date": end_date,
+        "module_status": "ok",
+    }
+
+
+# ---------------------------------------------------------------------------
+# 异常设备归因列表（方案A：从 anomaly_device_attributions 读取）
+# ---------------------------------------------------------------------------
+@router.get("/anomalies/attributions", summary="异常事件的设备归因列表")
+async def get_anomaly_attributions(
+    building_type: str | None = Query(None, description="按建筑类型过滤（如 Office）"),
+    hours: int = Query(168, ge=1, le=8760, description="查询最近 N 小时，默认 7 天"),
+    db: AsyncSession = Depends(get_db_session),
+):
+    """
+    从 anomaly_device_attributions 返回异常归因到设备的记录列表。
+    每条记录包含：事件ID、设备ID、设备类型、归因角色、归因得分和归因原因。
+    可用于前端"异常归因分析"和"设备故障统计"展示。
+    """
+    building_filter = ""
+    params: dict[str, Any] = {}
+
+    if building_type:
+        bld_result = await db.execute(
+            select(Building.building_id).where(Building.primary_space_usage == building_type)
+        )
+        bid = bld_result.scalar_one_or_none()
+        if bid:
+            building_filter = " AND ada.building_id = :bid"
+            params["bid"] = bid
+
+    # 以 anomaly_device_attributions 最新时间戳为基点
+    max_ts_sql = "SELECT MAX(timestamp) FROM anomaly_device_attributions"
+    max_ts_params: dict[str, Any] = {}
+    if "bid" in params:
+        max_ts_sql += " WHERE building_id = :bid"
+        max_ts_params["bid"] = params["bid"]
+    max_ts_result = await db.execute(text(max_ts_sql), max_ts_params)
+    max_ts = max_ts_result.scalar()
+
+    if max_ts is None:
+        return {
+            "attributions": [],
+            "total": 0,
+            "module_status": "no_data",
+            "message": "anomaly_device_attributions 暂无数据，请先调用 /api/admin/rebuild-all",
+        }
+
+    if hasattr(max_ts, "tzinfo") and max_ts.tzinfo is None:
+        max_ts = max_ts.replace(tzinfo=timezone.utc)
+    from datetime import timedelta
+    window_start = max_ts - timedelta(hours=hours)
+    params["t0"] = window_start
+    params["t1"] = max_ts
+
+    atr_result = await db.execute(text(f"""
+        SELECT
+            ada.id,
+            ada.building_id,
+            ada.timestamp,
+            ada.event_id,
+            ada.device_id,
+            ada.device_type,
+            ada.attribution_role,
+            ada.attribution_score,
+            ada.attribution_reason,
+            ada.evidence_json,
+            ae.rule_triggered,
+            ae.actual_value,
+            ae.expected_value,
+            ae.deviation_pct,
+            ae.hvac_root_cause,
+            ae.message AS anomaly_message
+        FROM anomaly_device_attributions ada
+        LEFT JOIN anomaly_events ae ON ae.id::text = ada.event_id
+        WHERE ada.timestamp >= :t0
+          AND ada.timestamp <= :t1
+          {building_filter}
+        ORDER BY ada.timestamp DESC, ada.attribution_score DESC
+        LIMIT 500
+    """), params)
+
+    rows = atr_result.fetchall()
+    attributions: list[dict] = []
+    for row in rows:
+        (atr_id, bid, ts, ev_id, dev_id, dev_type, role, score, reason,
+         evidence, rule, actual, expected, dev_pct, hvac_rc, msg) = row
+        attributions.append({
+            "id": atr_id,
+            "building_id": bid,
+            "timestamp": ts.isoformat() if ts else None,
+            "event_id": ev_id,
+            "device_id": dev_id,
+            "device_type": dev_type,
+            "attribution_role": role,
+            "attribution_score": float(score) if score is not None else None,
+            "attribution_reason": reason,
+            "evidence": evidence if isinstance(evidence, dict) else None,
+            "rule_triggered": rule,
+            "actual_value": actual,
+            "expected_value": expected,
+            "deviation_pct": dev_pct,
+            "hvac_root_cause": hvac_rc,
+            "anomaly_message": msg,
+        })
+
+    # 按设备汇总统计
+    device_stats: dict[str, dict] = {}
+    for a in attributions:
+        did = a["device_id"]
+        if did not in device_stats:
+            device_stats[did] = {
+                "device_id": did,
+                "device_type": a["device_type"],
+                "building_id": a["building_id"],
+                "anomaly_count": 0,
+                "avg_deviation_pct": 0.0,
+                "max_score": 0.0,
+            }
+        s = device_stats[did]
+        s["anomaly_count"] += 1
+        s["avg_deviation_pct"] = (
+            (s["avg_deviation_pct"] * (s["anomaly_count"] - 1) + (a["deviation_pct"] or 0))
+            / s["anomaly_count"]
+        )
+        if (a["attribution_score"] or 0) > s["max_score"]:
+            s["max_score"] = a["attribution_score"] or 0
+
+    return {
+        "attributions": attributions,
+        "total": len(attributions),
+        "device_summary": sorted(
+            device_stats.values(),
+            key=lambda x: x["anomaly_count"],
+            reverse=True,
+        ),
+        "check_period": {
+            "start": window_start.isoformat(),
+            "end": max_ts.isoformat(),
+            "hours": hours,
+        },
+        "module_status": "ok",
     }
 
 
@@ -886,6 +1242,42 @@ async def get_overview(
             "total_carbon_pct": _pct(total_electricity * 0.5703, yest_total_elec * 0.5703),
         }
 
+        # ---------- 预测预警摘要 ----------
+        prediction_warning_count = 0
+        prediction_building_map: dict[str, dict] = {}
+        try:
+            pred_result = await db.execute(text("""
+                SELECT
+                    p.building_id,
+                    COUNT(*) AS cnt,
+                    MAX(CASE WHEN p.risk_level = 'critical' THEN 1 ELSE 0 END) AS has_critical
+                FROM predicted_anomaly_events p
+                WHERE p.created_at >= (
+                    SELECT MAX(created_at) FROM predicted_anomaly_events
+                ) - INTERVAL '24 hours'
+                GROUP BY p.building_id
+            """))
+            for row in pred_result.fetchall():
+                pbid, pcnt, pcrit = row
+                prediction_warning_count += pcnt
+                prediction_building_map[pbid] = {
+                    "count": pcnt,
+                    "risk_level": "critical" if pcrit else "warning",
+                }
+        except Exception:
+            pass
+
+        for bd in buildings_detail:
+            bt = bd["building_type"]
+            bid_for_pred = None
+            for k, v in _bid_to_type.items():
+                if v == bt:
+                    bid_for_pred = k
+                    break
+            pred_info = prediction_building_map.get(bid_for_pred or "", {})
+            bd["prediction_warning_count"] = pred_info.get("count", 0)
+            bd["prediction_status"] = pred_info.get("risk_level", "normal")
+
         return {
             "data_date": target_day.isoformat() if hasattr(target_day, "isoformat") else str(target_day),
             "kpis": {
@@ -894,6 +1286,7 @@ async def get_overview(
                 "total_hac_energy_kwh": round(total_hac, 2),
                 "total_carbon_kg": round(total_electricity * 0.5703, 2),
                 "anomaly_count": len(anomaly_building_ids),
+                "prediction_warning_count": prediction_warning_count,
             },
             "kpis_change": kpis_change,
             "weather": {
@@ -913,6 +1306,7 @@ async def get_overview(
 async def get_recent_anomalies(
     hours: int = Query(168, ge=1, le=8760, description="查询最近 N 小时内的异常（默认 7 天，最大 1 年）"),
     building_type: str | None = Query(None, description="按建筑类型过滤"),
+    only_unresolved: bool = Query(False, description="是否只返回未解决的异常，默认返回全部"),
     db: AsyncSession = Depends(get_db_session),
 ):
     # 以 anomaly_events 表中最新数据时间戳为窗口终点（数据集是历史数据）
@@ -936,6 +1330,7 @@ async def get_recent_anomalies(
 
     # 可选：按建筑类型过滤
     building_filter = ""
+    resolved_filter = " AND ae.is_resolved = false" if only_unresolved else ""
     params: dict[str, Any] = {"t0": window_start, "t1": max_ts}
     if building_type:
         bld_result = await db.execute(
@@ -968,7 +1363,7 @@ async def get_recent_anomalies(
         FROM anomaly_events ae
         WHERE ae.data_timestamp >= :t0
           AND ae.data_timestamp <= :t1
-          AND ae.is_resolved = false
+          {resolved_filter}
           {building_filter}
         ORDER BY ae.data_timestamp DESC
         LIMIT 200
@@ -1198,6 +1593,173 @@ async def get_risk_now(db: AsyncSession = Depends(get_db_session)):
     risk_items.sort(key=lambda x: _order.get(x["risk_level"], 9))
 
     return {"risks": risk_items, "evaluated_at": now.isoformat()}
+
+
+# ---------------------------------------------------------------------------
+# 预测预警查询
+# ---------------------------------------------------------------------------
+@router.get("/predictions/recent", summary="获取近期预测预警")
+async def get_recent_predictions(
+    hours: int = Query(168, ge=1, le=8760, description="查询最近 N 小时内的预测预警（默认 7 天）"),
+    building_type: str | None = Query(None, description="按建筑类型过滤"),
+    risk_level: str | None = Query(None, description="按风险等级过滤（warning/critical）"),
+    db: AsyncSession = Depends(get_db_session),
+):
+    """
+    从 predicted_anomaly_events 表查询近期预测预警。
+    返回结构与 /anomalies/recent 对齐，方便前端复用组件。
+    """
+    max_ts_result = await db.execute(
+        text("SELECT MAX(created_at) FROM predicted_anomaly_events")
+    )
+    max_ts = max_ts_result.scalar()
+
+    if max_ts is None:
+        return {
+            "predictions": [],
+            "total": 0,
+            "check_period": {"start": None, "end": None, "hours": hours},
+            "message": "predicted_anomaly_events 暂无数据，请先调用 /api/admin/run-forecast",
+        }
+
+    if hasattr(max_ts, "tzinfo") and max_ts.tzinfo is None:
+        max_ts = max_ts.replace(tzinfo=timezone.utc)
+
+    window_start = max_ts - timedelta(hours=hours)
+
+    conditions = "WHERE p.created_at >= :t0 AND p.created_at <= :t1"
+    params: dict[str, Any] = {"t0": window_start, "t1": max_ts}
+
+    if building_type:
+        bld_result = await db.execute(
+            select(Building.building_id).where(
+                Building.primary_space_usage == building_type
+            )
+        )
+        bid = bld_result.scalar_one_or_none()
+        if bid:
+            conditions += " AND p.building_id = :bid"
+            params["bid"] = bid
+
+    if risk_level:
+        conditions += " AND p.risk_level = :rlevel"
+        params["rlevel"] = risk_level
+
+    result = await db.execute(text(f"""
+        SELECT
+            p.id,
+            p.created_at,
+            p.as_of_timestamp,
+            p.forecast_for_timestamp,
+            p.horizon_h,
+            p.building_id,
+            p.metric_name,
+            p.predicted_value,
+            p.expected_value,
+            p.deviation_pct,
+            p.risk_level,
+            p.rule_triggered,
+            p.model_name,
+            p.is_confirmed
+        FROM predicted_anomaly_events p
+        {conditions}
+        ORDER BY p.created_at DESC
+        LIMIT 200
+    """), params)
+
+    rows = result.fetchall()
+    predictions = []
+    for row in rows:
+        (pid, created, as_of, forecast_for, horizon, bid, metric,
+         pred_val, exp_val, dev_pct, rlevel, rule, model, confirmed) = row
+        bt = _bid_to_type.get(bid, bid)
+        predictions.append({
+            "id": pid,
+            "created_at": created.isoformat() if created else None,
+            "as_of_timestamp": as_of.isoformat() if as_of else None,
+            "forecast_for_timestamp": forecast_for.isoformat() if forecast_for else None,
+            "horizon_h": horizon,
+            "building_id": bid,
+            "building_name": _BUILDING_NAMES.get(bt, bt),
+            "building_type": bt,
+            "metric_name": metric,
+            "predicted_value": pred_val,
+            "expected_value": exp_val,
+            "deviation_pct": dev_pct,
+            "risk_level": rlevel,
+            "rule_triggered": rule,
+            "model_name": model,
+            "is_confirmed": confirmed,
+        })
+
+    return {
+        "predictions": predictions,
+        "total": len(predictions),
+        "check_period": {
+            "start": window_start.isoformat(),
+            "end": max_ts.isoformat(),
+            "hours": hours,
+        },
+    }
+
+
+@router.get("/predictions/summary", summary="预测预警按楼宇聚合摘要")
+async def get_predictions_summary(
+    hours: int = Query(168, ge=1, le=8760, description="统计最近 N 小时（默认 7 天）"),
+    db: AsyncSession = Depends(get_db_session),
+):
+    """
+    按楼宇聚合最近一段时间的预测预警数，返回最新预测时间与风险摘要。
+    对齐 /buildings/risk-now 的返回结构。
+    """
+    max_ts_result = await db.execute(
+        text("SELECT MAX(created_at) FROM predicted_anomaly_events")
+    )
+    max_ts = max_ts_result.scalar()
+
+    if max_ts is None:
+        return {"buildings": [], "latest_prediction_at": None, "total_warnings": 0}
+
+    if hasattr(max_ts, "tzinfo") and max_ts.tzinfo is None:
+        max_ts = max_ts.replace(tzinfo=timezone.utc)
+
+    window_start = max_ts - timedelta(hours=hours)
+
+    result = await db.execute(text("""
+        SELECT
+            p.building_id,
+            COUNT(*) AS warning_count,
+            MAX(p.created_at) AS latest,
+            COUNT(DISTINCT p.metric_name) AS metric_count,
+            MAX(CASE WHEN p.risk_level = 'critical' THEN 1 ELSE 0 END) AS has_critical
+        FROM predicted_anomaly_events p
+        WHERE p.created_at >= :t0 AND p.created_at <= :t1
+        GROUP BY p.building_id
+        ORDER BY warning_count DESC
+    """), {"t0": window_start, "t1": max_ts})
+
+    rows = result.fetchall()
+    buildings = []
+    total_warnings = 0
+    for row in rows:
+        bid, cnt, latest, metric_cnt, has_crit = row
+        bt = _bid_to_type.get(bid, bid)
+        total_warnings += cnt
+        buildings.append({
+            "building_id": bid,
+            "building_type": bt,
+            "building_name": _BUILDING_NAMES.get(bt, bt),
+            "warning_count": cnt,
+            "latest_prediction_at": latest.isoformat() if latest else None,
+            "metric_count": metric_cnt,
+            "risk_level": "critical" if has_crit else "warning",
+        })
+
+    return {
+        "buildings": buildings,
+        "latest_prediction_at": max_ts.isoformat(),
+        "total_warnings": total_warnings,
+    }
 
 
 # ---------------------------------------------------------------------------

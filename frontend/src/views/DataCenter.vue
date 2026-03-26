@@ -1,5 +1,13 @@
 <template>
   <div class="datacenter">
+    <!-- 全局 Toast 通知 -->
+    <Transition name="toast">
+      <div v-if="toast" :class="['global-toast', `toast-${toast.type}`]">
+        <Icon :icon="toast.type === 'success' ? 'mdi:check-circle-outline' : toast.type === 'error' ? 'mdi:alert-circle-outline' : 'mdi:information-outline'" width="18" />
+        <span>{{ toast.msg }}</span>
+      </div>
+    </Transition>
+
     <!-- 页面标题 + Tab 切换 -->
     <div class="page-header">
       <div class="page-header-left">
@@ -108,7 +116,7 @@
           </div>
         </div>
 
-        <!-- 右侧：数据集详情 -->
+        <!-- 右侧：数据集详情 + CRUD -->
         <div class="detail-panel">
           <div v-if="!selectedDataset && !loadingDetail" class="detail-empty">
             <Icon icon="mdi:cursor-default-click-outline" width="32" />
@@ -128,21 +136,161 @@
                   <Icon :icon="selectedDataset.file_type === 'csv' ? 'mdi:file-delimited-outline' : 'mdi:microsoft-excel'" width="18" />
                   {{ selectedDataset.original_name }}
                 </div>
-                <button
-                  class="analyze-btn"
-                  :disabled="analyzing"
-                  @click="runAIAnalysis"
-                >
-                  <Icon :icon="analyzing ? 'mdi:loading' : 'mdi:brain'" width="16" :class="{ spin: analyzing }" />
-                  {{ analyzing ? 'AI 分析中...' : 'AI 洞察分析' }}
-                </button>
+                <div class="detail-actions">
+                  <!-- 导入按钮 -->
+                  <button
+                    class="import-btn"
+                    :disabled="importing"
+                    @click="runImport"
+                    :title="importMeta ? `已导入 ${importMeta.imported_rows} 条，点击重新导入` : '导入到 energy_data 表'"
+                  >
+                    <Icon :icon="importing ? 'mdi:loading' : (importMeta ? 'mdi:database-check' : 'mdi:database-import')" width="15" :class="{ spin: importing }" />
+                    {{ importing ? '导入中...' : (importMeta ? '重新导入' : '导入到 energy_data') }}
+                  </button>
+                  <!-- AI 分析按钮 -->
+                  <button
+                    class="analyze-btn"
+                    :disabled="analyzing"
+                    @click="runAIAnalysis"
+                  >
+                    <Icon :icon="analyzing ? 'mdi:loading' : 'mdi:brain'" width="15" :class="{ spin: analyzing }" />
+                    {{ analyzing ? 'AI 分析中...' : 'AI 洞察' }}
+                  </button>
+                </div>
               </div>
               <div class="detail-meta-row">
                 <span class="meta-badge">{{ selectedDataset.row_count?.toLocaleString() }} 行</span>
                 <span class="meta-badge">{{ selectedDataset.column_count }} 列</span>
                 <span class="meta-badge">{{ selectedDataset.file_type.toUpperCase() }}</span>
+                <span v-if="importMeta" class="meta-badge imported-badge">
+                  <Icon icon="mdi:check-circle" width="11" />
+                  已导入 {{ importMeta.imported_rows.toLocaleString() }} 条
+                </span>
               </div>
             </div>
+
+            <!-- 导入进度条 -->
+            <div v-if="importing" class="import-progress-wrap">
+              <div class="import-progress-header">
+                <Icon icon="mdi:database-import" width="14" />
+                <span>{{ importProgressMsg }}</span>
+                <span v-if="importTotal > 0" class="import-count">
+                  {{ importProcessed.toLocaleString() }} / {{ importTotal.toLocaleString() }} 行
+                </span>
+              </div>
+              <div class="import-progress-track">
+                <div class="import-progress-bar" :style="{ width: `${importProgress * 100}%` }"></div>
+              </div>
+              <div class="import-progress-pct">{{ Math.round(importProgress * 100) }}%</div>
+            </div>
+
+            <!-- 导入错误提示 -->
+            <div v-if="importError" class="error-bar">
+              <Icon icon="mdi:alert-circle-outline" width="14" />
+              {{ importError }}
+            </div>
+            <div v-if="importSuccess && !importing" class="success-bar">
+              <Icon icon="mdi:check-circle-outline" width="14" />
+              {{ importSuccess }}
+            </div>
+
+            <!-- 导入后的 CRUD 区（可折叠） -->
+            <div v-if="importMeta" class="crud-section">
+              <!-- CRUD 标题栏（带折叠） -->
+              <div class="crud-header" @click="showCrud = !showCrud" style="cursor:pointer">
+                <div class="crud-title">
+                  <Icon
+                    :icon="showCrud ? 'mdi:chevron-down' : 'mdi:chevron-right'"
+                    width="16"
+                    class="crud-toggle-icon"
+                  />
+                  <Icon icon="mdi:table-edit" width="15" />
+                  energy_data 数据管理
+                  <span class="crud-total">共 {{ energyDataTotal.toLocaleString() }} 条</span>
+                </div>
+                <div class="crud-actions" @click.stop>
+                  <button class="crud-btn add-btn" @click="openAddModal">
+                    <Icon icon="mdi:plus" width="14" />
+                    新增行
+                  </button>
+                  <button class="crud-btn refresh-btn" @click="loadEnergyData" :disabled="loadingEnergyData">
+                    <Icon icon="mdi:refresh" width="14" :class="{ spin: loadingEnergyData }" />
+                    刷新
+                  </button>
+                  <button class="crud-btn" @click="showCrud = !showCrud" :title="showCrud ? '折叠' : '展开'">
+                    <Icon :icon="showCrud ? 'mdi:chevron-up' : 'mdi:chevron-down'" width="15" />
+                  </button>
+                </div>
+              </div>
+
+              <!-- 折叠内容 -->
+              <div v-if="showCrud">
+              <!-- 加载状态 -->
+              <div v-if="loadingEnergyData" class="crud-loading">
+                <Icon icon="mdi:loading" width="18" class="spin" /> 加载数据...
+              </div>
+
+              <!-- 数据表格 -->
+              <div v-else class="crud-table-wrap">
+                <table class="crud-table">
+                  <thead>
+                    <tr>
+                      <th class="col-ts">时间戳</th>
+                      <th class="col-bid">楼宇ID</th>
+                      <th class="col-num">电耗(kWh)</th>
+                      <th class="col-num">水耗(m³)</th>
+                      <th class="col-num">空调(kWh)</th>
+                      <th class="col-num">供水℃</th>
+                      <th class="col-num">回水℃</th>
+                      <th class="col-num">室外℃</th>
+                      <th class="col-num">湿度%</th>
+                      <th class="col-actions">操作</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-if="energyDataRecords.length === 0">
+                      <td colspan="10" class="empty-row">暂无数据</td>
+                    </tr>
+                    <tr
+                      v-for="row in energyDataRecords"
+                      :key="`${row.timestamp}-${row.building_id}`"
+                      class="data-row"
+                    >
+                      <td class="col-ts ts-cell" :title="row.timestamp">{{ formatTsShort(row.timestamp) }}</td>
+                      <td class="col-bid"><span class="bid-badge">{{ row.building_id }}</span></td>
+                      <td class="col-num">{{ formatNum(row.electricity_kwh) }}</td>
+                      <td class="col-num">{{ formatNum(row.water_m3) }}</td>
+                      <td class="col-num">{{ formatNum(row.hac_energy) }}</td>
+                      <td class="col-num">{{ formatNum(row.sim_supply_temp_c) }}</td>
+                      <td class="col-num">{{ formatNum(row.sim_return_temp_c) }}</td>
+                      <td class="col-num">{{ formatNum(row.air_temp_c) }}</td>
+                      <td class="col-num">{{ formatNum(row.humidity_rh_pct) }}</td>
+                      <td class="col-actions">
+                        <button class="row-btn edit-row" @click="openEditModal(row)" title="编辑">
+                          <Icon icon="mdi:pencil-outline" width="13" />
+                        </button>
+                        <button class="row-btn del-row" @click="confirmDeleteRow(row)" title="删除">
+                          <Icon icon="mdi:delete-outline" width="13" />
+                        </button>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
+              <!-- 分页 -->
+              <div v-if="energyDataTotal > 0" class="pagination">
+                <button class="page-btn" :disabled="energyPage <= 1" @click="changePage(energyPage - 1)">
+                  <Icon icon="mdi:chevron-left" width="15" />
+                </button>
+                <span class="page-info">{{ energyPage }} / {{ totalPages }}</span>
+                <button class="page-btn" :disabled="energyPage >= totalPages" @click="changePage(energyPage + 1)">
+                  <Icon icon="mdi:chevron-right" width="15" />
+                </button>
+                <span class="page-size-info">每页 {{ energyPageSize }} 条</span>
+              </div>
+              </div><!-- end v-if="showCrud" -->
+            </div><!-- end crud-section -->
 
             <!-- AI 分析结果 -->
             <div v-if="analysisResult || analyzing" class="analysis-box">
@@ -154,80 +302,146 @@
               <div v-if="analyzing" class="analysis-cursor">|</div>
             </div>
 
-            <!-- 列信息 -->
-            <div class="section">
-              <div class="section-title">
-                <Icon icon="mdi:table-column" width="14" />
-                列信息
-              </div>
-              <div class="col-grid">
-                <div v-for="col in selectedDataset.columns" :key="col.name" class="col-card">
-                  <div class="col-name" :title="col.name">{{ col.name }}</div>
-                  <div class="col-dtype">{{ col.dtype }}</div>
-                  <div class="col-stats-row">
-                    <span class="col-stat">空值 {{ col.null_count }}</span>
-                    <span class="col-stat">唯一 {{ col.unique_count }}</span>
+            <!-- 数据预览区（折叠） -->
+            <div class="preview-section">
+              <button class="preview-toggle" @click="showPreview = !showPreview">
+                <Icon :icon="showPreview ? 'mdi:chevron-up' : 'mdi:chevron-down'" width="15" />
+                数据预览
+                <span class="preview-sub">列信息 · 统计 · 样本</span>
+              </button>
+
+              <div v-if="showPreview">
+                <!-- 列信息 -->
+                <div class="section">
+                  <div class="section-title">
+                    <Icon icon="mdi:table-column" width="14" />
+                    列信息
+                  </div>
+                  <div class="col-grid">
+                    <div v-for="col in selectedDataset.columns" :key="col.name" class="col-card">
+                      <div class="col-name" :title="col.name">{{ col.name }}</div>
+                      <div class="col-dtype">{{ col.dtype }}</div>
+                      <div class="col-stats-row">
+                        <span class="col-stat">空值 {{ col.null_count }}</span>
+                        <span class="col-stat">唯一 {{ col.unique_count }}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- 数值统计 -->
+                <div v-if="Object.keys(selectedDataset.stats).length > 0" class="section">
+                  <div class="section-title">
+                    <Icon icon="mdi:chart-box-outline" width="14" />
+                    数值统计
+                  </div>
+                  <div class="stats-table-wrap">
+                    <table class="stats-table">
+                      <thead>
+                        <tr>
+                          <th>列名</th><th>最小值</th><th>最大值</th><th>均值</th><th>标准差</th><th>中位数</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr v-for="(s, col) in previewStats" :key="col">
+                          <td class="col-name-cell">{{ col }}</td>
+                          <td>{{ formatNum(s.min) }}</td>
+                          <td>{{ formatNum(s.max) }}</td>
+                          <td>{{ formatNum(s.mean) }}</td>
+                          <td>{{ formatNum(s.std) }}</td>
+                          <td>{{ formatNum(s.median) }}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                <!-- 样本数据 -->
+                <div v-if="selectedDataset.sample_rows.length > 0" class="section">
+                  <div class="section-title">
+                    <Icon icon="mdi:table-eye" width="14" />
+                    样本数据（前 10 行）
+                  </div>
+                  <div class="sample-table-wrap">
+                    <table class="sample-table">
+                      <thead>
+                        <tr><th v-for="col in sampleColumns" :key="col">{{ col }}</th></tr>
+                      </thead>
+                      <tbody>
+                        <tr v-for="(row, i) in selectedDataset.sample_rows" :key="i">
+                          <td v-for="col in sampleColumns" :key="col">{{ row[col] ?? '—' }}</td>
+                        </tr>
+                      </tbody>
+                    </table>
                   </div>
                 </div>
               </div>
             </div>
+          </div>
+        </div>
+      </div>
+    </div>
 
-            <!-- 数值统计 -->
-            <div v-if="Object.keys(selectedDataset.stats).length > 0" class="section">
-              <div class="section-title">
-                <Icon icon="mdi:chart-box-outline" width="14" />
-                数值统计
-              </div>
-              <div class="stats-table-wrap">
-                <table class="stats-table">
-                  <thead>
-                    <tr>
-                      <th>列名</th>
-                      <th>最小值</th>
-                      <th>最大值</th>
-                      <th>均值</th>
-                      <th>标准差</th>
-                      <th>中位数</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr v-for="(s, col) in selectedDataset.stats" :key="col">
-                      <td class="col-name-cell">{{ col }}</td>
-                      <td>{{ formatNum(s.min) }}</td>
-                      <td>{{ formatNum(s.max) }}</td>
-                      <td>{{ formatNum(s.mean) }}</td>
-                      <td>{{ formatNum(s.std) }}</td>
-                      <td>{{ formatNum(s.median) }}</td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
+    <!-- ═══════════════ 编辑/新增弹窗 ═══════════════ -->
+    <div v-if="showEditModal || showAddModal" class="modal-mask" @click.self="closeDataModal">
+      <div class="data-modal">
+        <div class="data-modal-header">
+          <Icon :icon="showAddModal ? 'mdi:plus-circle-outline' : 'mdi:pencil-circle-outline'" width="18" />
+          <span>{{ showAddModal ? '新增 energy_data 记录' : '编辑记录' }}</span>
+          <button class="modal-close" @click="closeDataModal">
+            <Icon icon="mdi:close" width="16" />
+          </button>
+        </div>
+        <div class="data-modal-body">
+          <div class="form-row">
+            <label>时间戳 *</label>
+            <input v-model="editForm.timestamp" type="text" placeholder="2024-01-01T00:00:00+00:00" :disabled="showEditModal" />
+          </div>
+          <div class="form-row">
+            <label>楼宇 ID *</label>
+            <input v-model="editForm.building_id" type="text" placeholder="如 Kassandra_M" :disabled="showEditModal" />
+          </div>
+          <div class="form-grid">
+            <div class="form-field">
+              <label>电耗 (kWh)</label>
+              <input v-model.number="editForm.electricity_kwh" type="number" step="any" placeholder="—" />
             </div>
-
-            <!-- 样本数据 -->
-            <div v-if="selectedDataset.sample_rows.length > 0" class="section">
-              <div class="section-title">
-                <Icon icon="mdi:table-eye" width="14" />
-                样本数据（前 10 行）
-              </div>
-              <div class="sample-table-wrap">
-                <table class="sample-table">
-                  <thead>
-                    <tr>
-                      <th v-for="col in sampleColumns" :key="col">{{ col }}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr v-for="(row, i) in selectedDataset.sample_rows" :key="i">
-                      <td v-for="col in sampleColumns" :key="col">
-                        {{ row[col] ?? '—' }}
-                      </td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
+            <div class="form-field">
+              <label>水耗 (m³)</label>
+              <input v-model.number="editForm.water_m3" type="number" step="any" placeholder="—" />
+            </div>
+            <div class="form-field">
+              <label>空调能耗 (kWh)</label>
+              <input v-model.number="editForm.hac_energy" type="number" step="any" placeholder="—" />
+            </div>
+            <div class="form-field">
+              <label>供水温度 (℃)</label>
+              <input v-model.number="editForm.sim_supply_temp_c" type="number" step="any" placeholder="—" />
+            </div>
+            <div class="form-field">
+              <label>回水温度 (℃)</label>
+              <input v-model.number="editForm.sim_return_temp_c" type="number" step="any" placeholder="—" />
+            </div>
+            <div class="form-field">
+              <label>室外温度 (℃)</label>
+              <input v-model.number="editForm.air_temp_c" type="number" step="any" placeholder="—" />
+            </div>
+            <div class="form-field">
+              <label>露点温度 (℃)</label>
+              <input v-model.number="editForm.dew_temp_c" type="number" step="any" placeholder="—" />
+            </div>
+            <div class="form-field">
+              <label>相对湿度 (%)</label>
+              <input v-model.number="editForm.humidity_rh_pct" type="number" step="any" placeholder="—" />
             </div>
           </div>
+        </div>
+        <div class="data-modal-footer">
+          <button class="modal-btn cancel" @click="closeDataModal">取消</button>
+          <button class="modal-btn confirm" @click="submitDataModal" :disabled="savingRow">
+            <Icon :icon="savingRow ? 'mdi:loading' : 'mdi:check'" width="14" :class="{ spin: savingRow }" />
+            {{ savingRow ? '保存中...' : '保存' }}
+          </button>
         </div>
       </div>
     </div>
@@ -351,6 +565,14 @@
           <Icon icon="mdi:alert-outline" width="28" />
         </div>
         <p class="modal-text">{{ deleteConfirm.message }}</p>
+        <!-- 若有 energy_data 导入记录，提示同步删除 -->
+        <div v-if="deleteConfirm.hasImport" class="delete-energy-opt">
+          <label class="opt-label">
+            <input type="checkbox" v-model="deleteConfirm.deleteEnergyData" />
+            <span>同时删除已导入到 energy_data 的 <strong>{{ deleteConfirm.importedRows?.toLocaleString() }}</strong> 条记录</span>
+          </label>
+          <p class="opt-hint">取消勾选则仅删除数据集文件，energy_data 数据保留</p>
+        </div>
         <div class="modal-actions">
           <button class="modal-btn cancel" @click="deleteConfirm = null">取消</button>
           <button class="modal-btn confirm" @click="executeDelete">确认删除</button>
@@ -361,16 +583,18 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { Icon } from '@iconify/vue'
 import * as api from '@/api/datacenter'
-import type { DatasetSummary, DatasetDetail, RagDocument } from '@/api/datacenter'
+import type { DatasetSummary, DatasetDetail, RagDocument, EnergyDataRecord, ImportResult } from '@/api/datacenter'
+import { useReportExport } from '@/composables/useReportExport'
 
 // ── 状态 ─────────────────────────────────────────────────────
 const route = useRoute()
 const initialTab = route.query.tab === 'knowledge' ? 'knowledge' : 'datasets'
 const activeTab = ref<'datasets' | 'knowledge'>(initialTab)
+const { registerSection, setReportMeta } = useReportExport('datacenter')
 
 // 数据集状态
 const datasetFileInput = ref<HTMLInputElement | null>(null)
@@ -383,6 +607,54 @@ const datasetError = ref('')
 const datasets = ref<DatasetSummary[]>([])
 const selectedDataset = ref<DatasetDetail | null>(null)
 const analysisResult = ref('')
+
+// 导入状态
+const importing = ref(false)
+const importError = ref('')
+const importSuccess = ref('')
+const importMeta = ref<ImportResult | null>(null)
+const importProgress = ref(0)       // 0-1
+const importProgressMsg = ref('')   // 进度描述文字
+const importProcessed = ref(0)      // 已处理行数
+const importTotal = ref(0)          // 总行数
+
+// energy_data CRUD 状态
+const loadingEnergyData = ref(false)
+const energyDataRecords = ref<EnergyDataRecord[]>([])
+const energyDataTotal = ref(0)
+const energyPage = ref(1)
+const energyPageSize = 50
+const showCrud = ref(true)          // CRUD 区域折叠控制
+
+// 编辑/新增弹窗
+const showEditModal = ref(false)
+const showAddModal = ref(false)
+const savingRow = ref(false)
+const editForm = ref<EnergyDataRecord>({
+  timestamp: '',
+  building_id: '',
+  electricity_kwh: null,
+  water_m3: null,
+  hac_energy: null,
+  sim_supply_temp_c: null,
+  sim_return_temp_c: null,
+  air_temp_c: null,
+  dew_temp_c: null,
+  humidity_rh_pct: null,
+})
+
+// 预览折叠
+const showPreview = ref(false)
+
+// ── Toast 通知 ────────────────────────────────────────────────
+const toast = ref<{ msg: string; type: 'success' | 'error' | 'info' } | null>(null)
+let toastTimer: ReturnType<typeof setTimeout> | null = null
+
+function showToast(msg: string, type: 'success' | 'error' | 'info' = 'success', duration = 3000) {
+  if (toastTimer) clearTimeout(toastTimer)
+  toast.value = { msg, type }
+  toastTimer = setTimeout(() => { toast.value = null }, duration)
+}
 
 // 知识库状态
 const docFileInput = ref<HTMLInputElement | null>(null)
@@ -399,12 +671,104 @@ const pollJobIdByDoc = ref<Record<string, number>>({})
 let pollJobCounter = 0
 
 // 删除确认
-const deleteConfirm = ref<{ message: string; action: () => Promise<void> } | null>(null)
+interface DeleteConfirmState {
+  message: string
+  action: () => Promise<void>
+  hasImport?: boolean       // 是否有已导入的 energy_data 数据
+  importedRows?: number     // 已导入行数
+  deleteEnergyData?: boolean // 是否同步删除 energy_data
+}
+const deleteConfirm = ref<DeleteConfirmState | null>(null)
 
 // ── 生命周期 ─────────────────────────────────────────────────
 onMounted(() => {
   loadDatasets()
   if (initialTab === 'knowledge') loadDocuments()
+})
+
+// ── 报表集成 ─────────────────────────────────────────────────
+watch(selectedDataset, (ds) => {
+  if (!ds) return
+  setReportMeta({ title: `数据中心 — ${ds.original_name}` })
+
+  registerSection({
+    id: 'dc-dataset-info',
+    title: '数据集信息',
+    type: 'kpi',
+    kpis: [
+      { label: '文件名', value: ds.original_name },
+      { label: '行数', value: ds.row_count?.toLocaleString() ?? '—' },
+      { label: '列数', value: String(ds.column_count ?? '—') },
+      { label: '文件类型', value: ds.file_type.toUpperCase() },
+    ],
+    order: 10,
+  })
+
+  const statsObj = ds.stats as Record<string, any>
+  const statEntries = Object.entries(statsObj).filter(([k]) => !k.startsWith('_'))
+  if (statEntries.length > 0) {
+    registerSection({
+      id: 'dc-stats',
+      title: '数值统计',
+      type: 'table',
+      columns: [
+        { key: 'col', label: '列名', align: 'left' },
+        { key: 'min', label: '最小值', align: 'right' },
+        { key: 'max', label: '最大值', align: 'right' },
+        { key: 'mean', label: '均值', align: 'right' },
+        { key: 'std', label: '标准差', align: 'right' },
+        { key: 'median', label: '中位数', align: 'right' },
+      ],
+      rows: statEntries.map(([col, s]: [string, any]) => ({
+        col,
+        min: formatNum(s.min),
+        max: formatNum(s.max),
+        mean: formatNum(s.mean),
+        std: formatNum(s.std),
+        median: formatNum(s.median),
+      })),
+      order: 20,
+    })
+  }
+})
+
+watch(energyDataRecords, (records) => {
+  if (!records.length) return
+  registerSection({
+    id: 'dc-energy-data',
+    title: 'energy_data 数据',
+    type: 'table',
+    columns: [
+      { key: 'timestamp', label: '时间戳', align: 'left' },
+      { key: 'building_id', label: '楼宇ID', align: 'left' },
+      { key: 'electricity_kwh', label: '电耗(kWh)', align: 'right' },
+      { key: 'water_m3', label: '水耗(m³)', align: 'right' },
+      { key: 'hac_energy', label: '空调(kWh)', align: 'right' },
+      { key: 'air_temp_c', label: '室外℃', align: 'right' },
+      { key: 'humidity_rh_pct', label: '湿度%', align: 'right' },
+    ],
+    rows: records.map(r => ({
+      timestamp: formatTsShort(r.timestamp),
+      building_id: r.building_id,
+      electricity_kwh: formatNum(r.electricity_kwh),
+      water_m3: formatNum(r.water_m3),
+      hac_energy: formatNum(r.hac_energy),
+      air_temp_c: formatNum(r.air_temp_c),
+      humidity_rh_pct: formatNum(r.humidity_rh_pct),
+    })),
+    order: 30,
+  })
+})
+
+watch(analysisResult, (text) => {
+  if (!text) return
+  registerSection({
+    id: 'dc-ai-analysis',
+    title: 'AI 分析结果',
+    type: 'text',
+    content: text,
+    order: 40,
+  })
 })
 
 // ── 计算属性 ─────────────────────────────────────────────────
@@ -417,6 +781,14 @@ const sampleColumns = computed(() =>
 const renderedAnalysis = computed(() => {
   if (!analysisResult.value) return ''
   return markdownToHtml(analysisResult.value)
+})
+
+const totalPages = computed(() => Math.max(1, Math.ceil(energyDataTotal.value / energyPageSize)))
+
+// 过滤掉 _import 元信息键，只显示真实统计列
+const previewStats = computed(() => {
+  const s = selectedDataset.value?.stats ?? {}
+  return Object.fromEntries(Object.entries(s).filter(([k]) => !k.startsWith('_')))
 })
 
 // ── 数据集操作 ────────────────────────────────────────────────
@@ -435,12 +807,157 @@ async function selectDataset(id: string) {
   if (selectedDataset.value?.id === id) return
   loadingDetail.value = true
   analysisResult.value = ''
+  importError.value = ''
+  importSuccess.value = ''
+  importMeta.value = null
+  energyDataRecords.value = []
+  energyDataTotal.value = 0
+  energyPage.value = 1
+  showPreview.value = false
   try {
     selectedDataset.value = await api.getDataset(id)
+    // 检查是否已有导入记录（存储在 stats._import）
+    const stats = selectedDataset.value.stats as Record<string, unknown>
+    const prevImport = stats['_import'] as ImportResult | undefined
+    if (prevImport?.imported_rows) {
+      importMeta.value = prevImport
+      await loadEnergyData()
+    }
   } catch (e) {
     datasetError.value = (e as Error).message
   } finally {
     loadingDetail.value = false
+  }
+}
+
+// ── 导入操作（SSE 流式） ─────────────────────────────────────
+async function runImport() {
+  if (!selectedDataset.value || importing.value) return
+  importError.value = ''
+  importSuccess.value = ''
+  importProgress.value = 0
+  importProgressMsg.value = '准备中...'
+  importProcessed.value = 0
+  importTotal.value = 0
+  importing.value = true
+
+  const stageLabel: Record<string, string> = {
+    parsing:    '解析文件...',
+    validating: '校验楼宇 ID...',
+    preparing:  '预处理数据...',
+    importing:  '批量写入数据库...',
+  }
+
+  await api.importDatasetToEnergyData(
+    selectedDataset.value.id,
+    (e) => {
+      importProgress.value = e.progress
+      importProgressMsg.value = e.msg ?? stageLabel[e.stage] ?? e.stage
+      if (e.imported !== undefined) importProcessed.value = e.imported
+      if (e.total    !== undefined) importTotal.value    = e.total
+    },
+    async (result) => {
+      importMeta.value = result
+      importProgress.value = 1
+      importProgressMsg.value = '导入完成'
+      importSuccess.value = `导入完成：成功 ${result.imported_rows.toLocaleString()} 条，失败 ${result.failed_rows} 条`
+      if (result.invalid_building_ids?.length > 0) {
+        importError.value = `以下楼宇 ID 不存在于 buildings 表，对应行已跳过：${result.invalid_building_ids.join(', ')}`
+      }
+      importing.value = false
+      if (result.imported_rows > 0) {
+        showCrud.value = true
+        energyPage.value = 1
+        await loadEnergyData()
+      }
+    },
+    (err) => {
+      importError.value = err
+      importProgressMsg.value = '导入失败'
+      importing.value = false
+    },
+  )
+}
+
+// ── energy_data CRUD ─────────────────────────────────────────
+async function loadEnergyData() {
+  if (!importMeta.value?.building_ids?.length) return
+  loadingEnergyData.value = true
+  try {
+    const res = await api.listEnergyData(
+      importMeta.value.building_ids,
+      importMeta.value.min_ts!,
+      importMeta.value.max_ts!,
+      energyPage.value,
+      energyPageSize,
+    )
+    energyDataRecords.value = res.records
+    energyDataTotal.value = res.total
+  } catch (e) {
+    importError.value = (e as Error).message
+  } finally {
+    loadingEnergyData.value = false
+  }
+}
+
+async function changePage(p: number) {
+  energyPage.value = p
+  await loadEnergyData()
+}
+
+function openAddModal() {
+  editForm.value = {
+    timestamp: new Date().toISOString(),
+    building_id: importMeta.value?.building_ids?.[0] ?? '',
+    electricity_kwh: null,
+    water_m3: null,
+    hac_energy: null,
+    sim_supply_temp_c: null,
+    sim_return_temp_c: null,
+    air_temp_c: null,
+    dew_temp_c: null,
+    humidity_rh_pct: null,
+  }
+  showAddModal.value = true
+}
+
+function openEditModal(row: EnergyDataRecord) {
+  editForm.value = { ...row }
+  showEditModal.value = true
+}
+
+function closeDataModal() {
+  showEditModal.value = false
+  showAddModal.value = false
+}
+
+async function submitDataModal() {
+  savingRow.value = true
+  try {
+    if (showAddModal.value) {
+      await api.createEnergyDataRow(editForm.value)
+      importSuccess.value = '记录已新增'
+    } else {
+      await api.updateEnergyDataRow(editForm.value)
+      importSuccess.value = '记录已更新'
+    }
+    closeDataModal()
+    await loadEnergyData()
+  } catch (e) {
+    importError.value = (e as Error).message
+  } finally {
+    savingRow.value = false
+  }
+}
+
+function confirmDeleteRow(row: EnergyDataRecord) {
+  deleteConfirm.value = {
+    message: `确认删除 ${formatTsShort(row.timestamp)}（${row.building_id}）的记录？`,
+    action: async () => {
+      await api.deleteEnergyDataRow(row.timestamp, row.building_id)
+      showToast('记录已删除')
+      await loadEnergyData()
+    },
   }
 }
 
@@ -480,15 +997,38 @@ async function uploadDatasetFile(file: File) {
 
 function confirmDeleteDataset(id: string) {
   const ds = datasets.value.find(d => d.id === id)
+
+  // 尝试从当前选中的数据集或 importMeta 中读取已导入行数（仅用于显示提示）
+  // 不用于决定是否删除——始终由后端判断
+  let importedRows = 0
+  let hasImport = false
+  if (selectedDataset.value?.id === id) {
+    const imp = (selectedDataset.value.stats as Record<string, unknown>)?.['_import'] as { imported_rows?: number } | undefined
+    importedRows = imp?.imported_rows ?? 0
+    hasImport = importedRows > 0
+  } else if (importMeta.value?.imported_rows) {
+    // 当前 importMeta 可能属于同一个已选中但未展示统计的数据集
+    importedRows = importMeta.value.imported_rows
+    hasImport = true
+  }
+
   deleteConfirm.value = {
     message: `确认删除数据集「${ds?.original_name}」？此操作不可恢复。`,
+    hasImport,
+    importedRows,
+    deleteEnergyData: true,   // ★ 始终默认为 true，让后端自行判断
     action: async () => {
-      await api.deleteDataset(id)
+      const doDeleteEnergy = deleteConfirm.value?.deleteEnergyData ?? true
+      const res = await api.deleteDataset(id, doDeleteEnergy)
       datasets.value = datasets.value.filter(d => d.id !== id)
       if (selectedDataset.value?.id === id) {
         selectedDataset.value = null
         analysisResult.value = ''
+        importMeta.value = null
+        energyDataRecords.value = []
+        energyDataTotal.value = 0
       }
+      showToast(res?.message ?? '数据集已删除')
     },
   }
 }
@@ -594,7 +1134,7 @@ function confirmDeleteDoc(docId: string, name: string) {
       pollJobIdByDoc.value[docId] = -1
       await api.deleteDocument(docId)
       documents.value = documents.value.filter(d => d.id !== docId)
-      docSuccess.value = '文档已删除'
+      showToast('文档已删除')
     },
   }
 }
@@ -617,6 +1157,16 @@ function formatDate(iso: string): string {
     month: '2-digit', day: '2-digit',
     hour: '2-digit', minute: '2-digit',
   })
+}
+
+function formatTsShort(iso: string): string {
+  if (!iso) return '—'
+  try {
+    const d = new Date(iso)
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:00`
+  } catch {
+    return iso.slice(0, 16)
+  }
 }
 
 function formatNum(val: number | null | undefined): string {
@@ -1017,12 +1567,32 @@ html[data-theme="light"] .datacenter {
   color: var(--text-secondary);
 }
 
+/* ── 详情操作按钮组 ── */
+.detail-actions { display: flex; gap: 8px; align-items: center; }
+
+/* ── 导入按钮 ── */
+.import-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border-radius: 8px;
+  border: 1px solid #3b82f6;
+  background: rgba(59,130,246,0.08);
+  color: #3b82f6;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.18s;
+}
+.import-btn:hover:not(:disabled) { background: #3b82f6; color: #fff; }
+.import-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+
 /* ── AI 分析按钮 ── */
 .analyze-btn {
   display: flex;
   align-items: center;
-  gap: 7px;
-  padding: 8px 18px;
+  gap: 6px;
+  padding: 7px 14px;
   border-radius: 8px;
   border: 1px solid var(--accent);
   background: var(--accent-glow);
@@ -1034,6 +1604,16 @@ html[data-theme="light"] .datacenter {
 }
 .analyze-btn:hover:not(:disabled) { background: var(--accent); color: #fff; }
 .analyze-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+
+/* ── 已导入徽章 ── */
+.imported-badge {
+  background: rgba(34,197,94,0.12) !important;
+  color: #22c55e !important;
+  border-color: rgba(34,197,94,0.3) !important;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
 
 /* ── AI 分析结果框 ── */
 .analysis-box {
@@ -1257,6 +1837,336 @@ html[data-theme="light"] .datacenter {
 }
 .delete-btn:hover { background: rgba(248,113,113,0.1); color: var(--danger); border-color: rgba(248,113,113,0.3); }
 
+/* ── 导入进度条 ── */
+.import-progress-wrap {
+  border: 1px solid var(--border-accent);
+  border-radius: 10px;
+  background: var(--accent-glow);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.import-progress-header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  color: var(--accent);
+  font-weight: 500;
+}
+.import-count {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+.import-progress-track {
+  height: 6px;
+  background: var(--border);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.import-progress-bar {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+.import-progress-pct {
+  font-size: 11px;
+  color: var(--accent);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+/* ── 预览折叠区 ── */
+.preview-section {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.preview-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  background: var(--bg-panel);
+  border: none;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  transition: background 0.15s;
+  text-align: left;
+}
+.preview-toggle:hover { background: var(--bg-hover); color: var(--text-primary); }
+.preview-sub {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-muted);
+  margin-left: 4px;
+}
+.preview-section .section { padding: 14px 14px 0; }
+.preview-section .col-grid { padding: 0 14px; }
+.preview-section .stats-table-wrap,
+.preview-section .sample-table-wrap { margin: 0 14px 14px; }
+
+/* ── CRUD 区域 ── */
+.crud-section {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--bg-card);
+}
+.crud-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-panel);
+}
+.crud-toggle-icon {
+  color: var(--text-muted);
+  transition: color 0.15s;
+  flex-shrink: 0;
+}
+.crud-header:hover .crud-toggle-icon { color: var(--accent); }
+.crud-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.crud-total {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-muted);
+  margin-left: 4px;
+}
+.crud-actions { display: flex; gap: 6px; }
+.crud-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+  background: var(--bg-card);
+  color: var(--text-secondary);
+}
+.crud-btn:hover:not(:disabled) { background: var(--bg-hover); color: var(--text-primary); }
+.crud-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.add-btn { color: var(--accent); border-color: var(--border-accent); background: var(--accent-glow); }
+.add-btn:hover:not(:disabled) { background: var(--accent); color: #fff; }
+
+.crud-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 20px;
+  color: var(--text-muted);
+  font-size: 13px;
+  justify-content: center;
+}
+
+/* ── CRUD 数据表格 ── */
+.crud-table-wrap { overflow-x: auto; }
+.crud-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  min-width: 900px;
+}
+.crud-table th {
+  padding: 8px 10px;
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+  font-weight: 600;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+.crud-table td {
+  padding: 7px 10px;
+  color: var(--text-primary);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.crud-table tr:last-child td { border-bottom: none; }
+.crud-table tr.data-row:hover td { background: var(--bg-hover); }
+
+.col-ts { min-width: 130px; }
+.col-bid { min-width: 110px; }
+.col-num { min-width: 80px; text-align: right; }
+.col-num td { text-align: right; font-variant-numeric: tabular-nums; }
+.col-actions { min-width: 70px; text-align: center; }
+
+.ts-cell { color: var(--text-secondary); font-size: 11px; }
+.bid-badge {
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: var(--accent-glow);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 500;
+  max-width: 100px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.empty-row { text-align: center; padding: 24px; color: var(--text-muted); }
+
+.row-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 5px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  transition: all 0.15s;
+  color: var(--text-muted);
+}
+.row-btn + .row-btn { margin-left: 3px; }
+.edit-row:hover { background: var(--accent-glow); color: var(--accent); }
+.del-row:hover { background: rgba(248,113,113,0.1); color: var(--danger); }
+
+/* ── 分页 ── */
+.pagination {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-panel);
+}
+.page-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  cursor: pointer;
+  color: var(--text-secondary);
+  transition: all 0.15s;
+}
+.page-btn:hover:not(:disabled) { background: var(--bg-hover); color: var(--text-primary); }
+.page-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.page-info { font-size: 12px; color: var(--text-secondary); min-width: 60px; text-align: center; }
+.page-size-info { font-size: 11px; color: var(--text-muted); margin-left: 4px; }
+
+/* ── 编辑/新增弹窗 ── */
+.data-modal {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  width: 560px;
+  max-width: 95vw;
+  max-height: 85vh;
+  overflow-y: auto;
+  box-shadow: var(--panel-shadow);
+}
+.data-modal-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.modal-close {
+  margin-left: auto;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  border-radius: 6px;
+  color: var(--text-muted);
+  transition: all 0.15s;
+}
+.modal-close:hover { background: var(--bg-hover); color: var(--danger); }
+.data-modal-body { padding: 16px 20px; display: flex; flex-direction: column; gap: 12px; }
+.form-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.form-row label {
+  width: 80px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+.form-row input {
+  flex: 1;
+  padding: 7px 10px;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--text-primary);
+  font-size: 13px;
+  outline: none;
+  transition: border 0.15s;
+}
+.form-row input:focus { border-color: var(--accent); }
+.form-row input:disabled { opacity: 0.6; cursor: not-allowed; }
+.form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.form-field label {
+  display: block;
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+}
+.form-field input {
+  width: 100%;
+  padding: 7px 10px;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--text-primary);
+  font-size: 13px;
+  outline: none;
+  box-sizing: border-box;
+  transition: border 0.15s;
+}
+.form-field input:focus { border-color: var(--accent); }
+.data-modal-footer {
+  display: flex;
+  gap: 10px;
+  padding: 14px 20px;
+  border-top: 1px solid var(--border);
+  justify-content: flex-end;
+}
+
 /* ── 删除确认弹窗 ── */
 .modal-mask {
   position: fixed;
@@ -1296,7 +2206,62 @@ html[data-theme="light"] .datacenter {
 .modal-btn.confirm { background: var(--danger); color: #fff; border-color: var(--danger); }
 .modal-btn.confirm:hover { opacity: 0.85; }
 
+/* ── 删除选项（同步清除 energy_data） ── */
+.delete-energy-opt {
+  width: 100%;
+  background: rgba(248,113,113,0.07);
+  border: 1px solid rgba(248,113,113,0.2);
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.opt-label {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+.opt-label input[type="checkbox"] {
+  margin-top: 2px;
+  accent-color: var(--danger);
+  flex-shrink: 0;
+}
+.opt-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-left: 20px;
+}
+
 /* ── 动画 ── */
 .spin { animation: spin 1s linear infinite; }
 @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+
+/* ── 全局 Toast ── */
+.global-toast {
+  position: fixed;
+  top: 32px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 20px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  box-shadow: 0 4px 16px rgba(0,0,0,.18);
+  white-space: nowrap;
+  pointer-events: none;
+}
+.toast-success { background: #18a058; color: #fff; }
+.toast-error   { background: #d03050; color: #fff; }
+.toast-info    { background: #2080f0; color: #fff; }
+
+.toast-enter-active, .toast-leave-active { transition: opacity .3s, transform .3s; }
+.toast-enter-from, .toast-leave-to       { opacity: 0; transform: translateX(-50%) translateY(-12px); }
 </style>

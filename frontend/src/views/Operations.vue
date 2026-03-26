@@ -94,6 +94,70 @@
       </div>
     </section>
 
+    <!-- 预测预警列表 -->
+    <section class="section">
+      <div class="section-header">
+        <h2 class="section-title"><Icon icon="mdi:crystal-ball" width="16" class="title-icon" /> 预测预警</h2>
+        <div class="header-actions">
+          <select v-model="predFilterHours" @change="fetchPredictions" class="hours-select">
+            <option value="24">最近 24 小时</option>
+            <option value="72">最近 3 天</option>
+            <option value="168">最近 7 天</option>
+          </select>
+          <button class="refresh-btn" @click="fetchPredictions" :disabled="predLoading">
+            <Icon :icon="predLoading ? 'mdi:loading' : 'mdi:refresh'" width="14" class="btn-icon" />
+            {{ predLoading ? '加载中...' : '刷新' }}
+          </button>
+        </div>
+      </div>
+
+      <div v-if="predLoading" class="loading-bar">正在查询预测预警...</div>
+      <div v-if="predError" class="error-bar"><Icon icon="mdi:alert" width="14" class="bar-icon" /> {{ predError }}</div>
+
+      <div v-if="!predLoading && predictions.length > 0" class="anomaly-list">
+        <div class="anomaly-item item-prediction" v-for="p in predictions" :key="p.id">
+          <div class="anomaly-left">
+            <span class="anomaly-priority pred-badge"
+                  :class="p.risk_level === 'critical' ? 'high' : 'medium'">
+              {{ p.risk_level === 'critical' ? 'CRIT' : 'WARN' }}
+            </span>
+            <div>
+              <p class="anomaly-title">
+                {{ p.building_name }} · {{ metricLabel(p.metric_name) }} · {{ p.horizon_h }}h 预测
+              </p>
+              <p class="anomaly-meta">
+                预测基准 {{ formatTime(p.as_of_timestamp) }} →
+                预计发生 {{ formatTime(p.forecast_for_timestamp) }}
+              </p>
+              <div class="anomaly-tags">
+                <span class="tag pred-tag">
+                  <Icon icon="mdi:chart-timeline-variant" width="11" />
+                  {{ p.rule_triggered ?? '偏差预警' }}
+                </span>
+                <span class="tag flag">{{ p.model_name }}</span>
+              </div>
+            </div>
+          </div>
+          <div class="anomaly-right">
+            <span v-if="p.deviation_pct != null" class="anomaly-dev"
+                  :class="Math.abs(p.deviation_pct) > 30 ? 'dev-high' : 'dev-med'">
+              {{ p.deviation_pct > 0 ? '+' : '' }}{{ Number(p.deviation_pct).toFixed(1) }}%
+            </span>
+            <span class="anomaly-val">
+              预测 {{ Number(p.predicted_value).toFixed(2) }} {{ metricUnit(p.metric_name) }}
+            </span>
+            <span v-if="p.expected_value != null" class="anomaly-threshold">
+              基线 {{ Number(p.expected_value).toFixed(2) }} {{ metricUnit(p.metric_name) }}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <div v-if="!predLoading && predictions.length === 0 && !predError" class="empty-state-small">
+        暂无预测预警。可通过 /api/admin/run-forecast 手动触发批量预测。
+      </div>
+    </section>
+
     <!-- 工单快速入口 -->
     <section class="section">
       <div class="section-header">
@@ -137,16 +201,18 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, watch, onMounted } from 'vue'
 import { Icon } from '@iconify/vue'
 import { RouterLink } from 'vue-router'
 import { apiFetch } from '@/api/http'
 import { useBuildingStore } from '@/stores/buildingStore'
 import { useDataRangeStore } from '@/stores/dataRangeStore'
+import { useReportExport } from '@/composables/useReportExport'
 
 const dataRangeStore = useDataRangeStore()
 
 const buildingStore = useBuildingStore()
+const { registerSection, setReportMeta } = useReportExport('operations')
 
 // ── 异常告警 ───────────────────────────────────────
 const loading = ref(false)
@@ -165,6 +231,41 @@ async function fetchAnomalies() {
   } finally {
     loading.value = false
   }
+}
+
+// ── 预测预警 ───────────────────────────────────────
+const predLoading = ref(false)
+const predError = ref('')
+const predictions = ref<any[]>([])
+const predFilterHours = ref('168')
+
+async function fetchPredictions() {
+  predLoading.value = true
+  predError.value = ''
+  try {
+    const data = await apiFetch<any>(`/api/predictions/recent?hours=${predFilterHours.value}`)
+    predictions.value = data?.predictions ?? []
+  } catch (e: any) {
+    predError.value = e.message
+  } finally {
+    predLoading.value = false
+  }
+}
+
+const _METRIC_LABELS: Record<string, string> = {
+  water_l: '水耗 (L)',
+  electricity_kwh: '电耗 (kWh)',
+  sim_supply_temp_c: '供水温度 (℃)',
+  sim_return_temp_c: '回水温度 (℃)',
+  hac_energy: '空调能耗 (kWh)',
+}
+function metricLabel(name: string): string {
+  return _METRIC_LABELS[name] ?? name
+}
+function metricUnit(name: string): string {
+  if (name.includes('temp')) return '℃'
+  if (name === 'water_l') return 'L'
+  return 'kWh'
 }
 
 // ── 工单快速预览 ───────────────────────────────────
@@ -186,7 +287,62 @@ async function fetchPendingOrders() {
 onMounted(() => {
   dataRangeStore.fetch()
   fetchAnomalies()
+  fetchPredictions()
   fetchPendingOrders()
+})
+
+// ── 报表集成 ───────────────────────────────────────
+watch(anomalies, (data) => {
+  if (!data?.length) return
+  setReportMeta({ title: '智慧运维报表' })
+  registerSection({
+    id: 'ops-anomalies',
+    title: `近期异常告警（最近 ${filterHours.value} 小时）`,
+    type: 'table',
+    order: 10,
+    columns: [
+      { key: 'ts', label: '时间' },
+      { key: 'building', label: '楼宇' },
+      { key: 'message', label: '告警内容' },
+      { key: 'severity', label: '严重度' },
+      { key: 'deviation', label: '偏差', align: 'right' },
+    ],
+    rows: data.map((a: any) => ({
+      ts: a.timestamp ? new Date(a.timestamp).toLocaleString('zh-CN') : '—',
+      building: buildingStore.getBuildingName(a.building_type),
+      message: a.message ?? '—',
+      severity: a.severity === 'critical' ? 'CRITICAL' : 'WARNING',
+      deviation: a.deviation_pct != null ? `${a.deviation_pct > 0 ? '+' : ''}${Number(a.deviation_pct).toFixed(1)}%` : '—',
+    })),
+  })
+})
+
+watch(predictions, (data) => {
+  if (!data?.length) return
+  registerSection({
+    id: 'ops-predictions',
+    title: `预测预警（最近 ${predFilterHours.value} 小时）`,
+    type: 'table',
+    order: 20,
+    columns: [
+      { key: 'building', label: '楼宇' },
+      { key: 'metric', label: '指标' },
+      { key: 'horizon', label: '预测时窗' },
+      { key: 'risk', label: '风险等级' },
+      { key: 'predicted', label: '预测值', align: 'right' },
+      { key: 'expected', label: '基线值', align: 'right' },
+      { key: 'deviation', label: '偏差', align: 'right' },
+    ],
+    rows: data.map((p: any) => ({
+      building: p.building_name ?? buildingStore.getBuildingName(p.building_type),
+      metric: metricLabel(p.metric_name),
+      horizon: `${p.horizon_h}h`,
+      risk: p.risk_level === 'critical' ? 'CRITICAL' : 'WARNING',
+      predicted: p.predicted_value != null ? Number(p.predicted_value).toFixed(2) : '—',
+      expected: p.expected_value != null ? Number(p.expected_value).toFixed(2) : '—',
+      deviation: p.deviation_pct != null ? `${p.deviation_pct > 0 ? '+' : ''}${Number(p.deviation_pct).toFixed(1)}%` : '—',
+    })),
+  })
 })
 
 // ── 工具函数 ───────────────────────────────────────
@@ -289,7 +445,6 @@ function formatTime(iso: string): string {
 }
 .refresh-btn:hover { border-color: var(--accent); color: var(--accent); }
 .refresh-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-
 .view-all-link {
   font-size: 12px;
   color: var(--accent);
@@ -385,6 +540,12 @@ function formatTime(iso: string): string {
 .anomaly-dev.dev-med  { color: var(--warning); }
 .anomaly-val       { font-size: 14px; font-weight: 700; color: var(--danger); }
 .anomaly-threshold { font-size: 11px; color: var(--text-muted); }
+
+/* 预测预警 */
+.item-prediction { border-left: 3px solid rgba(147, 130, 255, 0.5); }
+.pred-badge { background: rgba(147,130,255,0.15); color: #9382ff; }
+.pred-badge.high { background: rgba(248,113,113,0.15); color: var(--danger); }
+.pred-tag { background: rgba(147,130,255,0.12); color: #9382ff; }
 
 /* 空状态 */
 .empty-state {

@@ -52,6 +52,7 @@
           <Icon icon="mdi:bell-outline" width="17" />
           <span v-if="notifStore.unreadCount > 0" class="home-bell-dot"></span>
         </button>
+
       </div>
     </header>
 
@@ -111,10 +112,12 @@ import HomeTeachingSection from '@/components/home/HomeTeachingSection.vue'
 import HomeOfficeSection from '@/components/home/HomeOfficeSection.vue'
 import HomePublicSection from '@/components/home/HomePublicSection.vue'
 import { MC } from '@/utils/homeCharts'
+import { useReportExport } from '@/composables/useReportExport'
 
 const buildingStore = useBuildingStore()
 const authStore     = useAuthStore()
 const notifStore    = useNotificationStore()
+const { registerSection, setReportMeta } = useReportExport('home')
 
 const displayName = computed(() => authStore.user?.username ?? '访客')
 
@@ -205,6 +208,14 @@ const kpis = computed(() => {
   }
   const carbon = elec * CARBON_FACTOR
 
+  let predCount = 0
+  if (sel === 'all') {
+    predCount = Number(ov.kpis?.prediction_warning_count ?? 0)
+  } else {
+    const b = buildings.find((x: any) => x.building_type === sel)
+    predCount = b ? Number(b.prediction_warning_count ?? 0) : 0
+  }
+
   return [
     {
       icon: 'mdi:lightning-bolt',
@@ -246,6 +257,16 @@ const kpis = computed(() => {
       color: MC.terra,
       anim: 'anim-breathe',
     },
+    {
+      icon: 'mdi:crystal-ball',
+      label: '预测预警',
+      value: String(predCount),
+      change: null,
+      tag: '预测',
+      bg: 'rgba(147,130,255,0.14)',
+      color: '#9382ff',
+      anim: 'anim-breathe',
+    },
   ]
 })
 
@@ -285,6 +306,67 @@ onMounted(async () => {
   await buildingStore.fetchBuildings()
   await Promise.all([fetchOverview(), fetchAnomalies(), fetchSankeyData()])
 })
+
+// ── 报表集成 ─────────────────────────────────────────────────
+watch(overviewData, (ov) => {
+  if (!ov) return
+  setReportMeta({ title: '首页总览报表' })
+
+  // KPI 段落
+  const kpisArr = kpis.value
+  if (kpisArr.length) {
+    registerSection({
+      id: 'home-kpi',
+      title: 'KPI 总览',
+      type: 'kpi',
+      order: 10,
+      kpis: kpisArr.map(k => ({
+        label: k.label,
+        value: k.value,
+        trend: k.change,
+      })),
+    })
+  }
+
+  // 楼宇汇总表格
+  const buildings: any[] = ov.buildings ?? []
+  if (buildings.length) {
+    registerSection({
+      id: 'home-buildings',
+      title: '各楼宇能耗汇总',
+      type: 'table',
+      order: 20,
+      columns: [
+        { key: 'name', label: '楼宇' },
+        { key: 'electricity', label: '日用电 (kWh)', align: 'right' },
+        { key: 'water', label: '日用水 (m³)', align: 'right' },
+        { key: 'hac', label: '空调能耗 (kWh)', align: 'right' },
+      ],
+      rows: buildings.map((b: any) => ({
+        name: buildingStore.getBuildingName(b.building_type),
+        electricity: Number(b.total_electricity_kwh ?? 0).toFixed(1),
+        water: Number(b.total_water_m3 ?? 0).toFixed(1),
+        hac: Number(b.total_hac_energy_kwh ?? 0).toFixed(1),
+      })),
+    })
+  }
+})
+
+watch(anomalyData, (data) => {
+  if (!data?.length) return
+  registerSection({
+    id: 'home-anomalies',
+    title: '近期异常概况',
+    type: 'summary',
+    order: 30,
+    summaryItems: [
+      { label: '异常事件总数', value: String(data.length) },
+      { label: '严重级别', value: String(data.filter((a: any) => a.severity === 'critical').length) + ' 条 CRITICAL' },
+      { label: '告警级别', value: String(data.filter((a: any) => a.severity === 'warning').length) + ' 条 WARNING' },
+    ],
+  })
+})
+
 </script>
 
 <style scoped>
@@ -494,7 +576,7 @@ onMounted(async () => {
 
 .kpi-strip {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 10px;
   flex-shrink: 0;
 }

@@ -684,6 +684,379 @@ async def generate_anomaly_events(
 
 
 # ---------------------------------------------------------------------------
+# 设备状态派生：从 energy_data 填充 device_telemetry_hourly + device_status_latest
+# ---------------------------------------------------------------------------
+
+# rule_triggered → 受影响的设备类型（用于归因）
+_RULE_TO_DEVICE_TYPE: dict[str, str] = {
+    "water_leak":            "water",
+    "electricity_overload":  "electricity",
+    "hvac_overconsumption":  "ac",
+    "supply_temp_deviation": "ac",
+    "return_temp_deviation": "ac",
+}
+
+# 设备类型 → 归因角色
+_RULE_TO_ROLE: dict[str, str] = {
+    "water_leak":            "primary",
+    "electricity_overload":  "primary",
+    "hvac_overconsumption":  "primary",
+    "supply_temp_deviation": "primary",
+    "return_temp_deviation": "supporting",
+}
+
+
+def _infer_running_state(
+    hvac_mode: str | None,
+    hac_energy: float | None,
+    electricity_kwh: float | None,
+    schedule_factor: float | None,
+) -> str:
+    """根据能耗和HVAC模式推断设备运行状态。"""
+    s = schedule_factor or 0.0
+    mode = (hvac_mode or "").lower()
+
+    if "cooling" in mode or "heating" in mode:
+        return "running"
+    if s <= 0.08 and (hac_energy is None or hac_energy < 2.0):
+        return "standby"
+    if electricity_kwh is not None and electricity_kwh > 0:
+        return "running"
+    return "standby"
+
+
+def _infer_health_status(
+    has_anomaly: bool,
+    hvac_diagnosis: str | None,
+) -> str:
+    """根据异常标志推断设备健康状态。"""
+    if not has_anomaly:
+        return "healthy"
+    if hvac_diagnosis in ("A_low_efficiency", "B_small_deltaT"):
+        return "degraded"
+    return "warning"
+
+
+async def derive_device_status(
+    building_id: str,
+    db: AsyncSession,
+) -> tuple[int, int]:
+    """
+    从 energy_data + kpi_expected_hourly + kpi_anomaly_flags 派生设备状态，
+    写入 device_telemetry_hourly（全量历史）和 device_status_latest（最新快照）。
+    返回 (telemetry_rows, status_updated) 计数。
+    """
+    # 获取该楼所有设备
+    dev_result = await db.execute(text(
+        "SELECT device_id, device_type FROM devices WHERE building_id = :bid ORDER BY device_type"
+    ), {"bid": building_id})
+    devices = {row[1]: row[0] for row in dev_result.fetchall()}  # type → device_id
+    if not devices:
+        logger.warning("derive_device_status: 楼 %s 无设备记录", building_id)
+        return 0, 0
+
+    # 联合查询 energy_data + kpi_expected_hourly + kpi_anomaly_flags
+    rows_result = await db.execute(text("""
+        SELECT
+            e.timestamp,
+            e.electricity_kwh,
+            e.water_m3,
+            e.hac_energy,
+            e.sim_supply_temp_c,
+            e.sim_return_temp_c,
+            e.air_temp_c,
+            x.hvac_mode,
+            x.schedule_factor,
+            x.hac_energy_expected,
+            COALESCE(f.flag_water, false)            AS flag_water,
+            COALESCE(f.flag_electricity, false)      AS flag_electricity,
+            COALESCE(f.flag_hvac_energy, false)      AS flag_hvac_energy,
+            COALESCE(f.flag_supply_deviation, false) AS flag_supply_dev,
+            COALESCE(f.flag_return_deviation, false) AS flag_return_dev,
+            f.hvac_diagnosis,
+            f.anomaly_phase
+        FROM energy_data e
+        LEFT JOIN kpi_expected_hourly x
+            ON x.building_id = e.building_id AND x.timestamp = e.timestamp
+        LEFT JOIN kpi_anomaly_flags f
+            ON f.building_id = e.building_id AND f.timestamp = e.timestamp
+        WHERE e.building_id = :bid
+        ORDER BY e.timestamp ASC
+    """), {"bid": building_id})
+    rows = rows_result.fetchall()
+
+    if not rows:
+        return 0, 0
+
+    telemetry_rows: list[dict] = []
+
+    for row in rows:
+        (ts, elec, water, hac, supply, ret, air_t,
+         hvac_mode, sched_f, hac_e,
+         fw, fe, fh, fs, fr, hvac_diag, phase) = row
+
+        if hasattr(ts, "tzinfo") and ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+
+        has_any_anomaly = any([fw, fe, fh, fs, fr])
+        running_state = _infer_running_state(hvac_mode, hac, elec, sched_f)
+        health_status = _infer_health_status(has_any_anomaly, hvac_diag)
+
+        # 每个设备类型生成一行遥测记录
+        for dev_type, device_id in devices.items():
+            if dev_type == "ac":
+                power_kw = float(hac) if hac is not None else None
+                flow_rate = None
+                supply_t = float(supply) if supply is not None else None
+                return_t = float(ret) if ret is not None else None
+                has_dev_anomaly = fh or fs or fr
+                dev_diag = hvac_diag if (fh or fs) else None
+            elif dev_type == "electricity":
+                power_kw = float(elec) if elec is not None else None
+                flow_rate = None
+                supply_t = None
+                return_t = None
+                has_dev_anomaly = fe
+                dev_diag = None
+            elif dev_type == "water":
+                power_kw = None
+                flow_rate = float(water) if water is not None else None
+                supply_t = None
+                return_t = None
+                has_dev_anomaly = fw
+                dev_diag = None
+            else:
+                continue
+
+            dev_running = running_state if dev_type == "ac" else (
+                "running" if (power_kw is not None and power_kw > 0) or
+                             (flow_rate is not None and flow_rate > 0) else "standby"
+            )
+            dev_health = _infer_health_status(has_dev_anomaly, dev_diag)
+
+            payload = {
+                "anomaly_phase": phase,
+                "hvac_mode": hvac_mode,
+                "schedule_factor": float(sched_f) if sched_f is not None else None,
+                "flag_water": fw, "flag_electricity": fe,
+                "flag_hvac_energy": fh,
+                "flag_supply_deviation": fs, "flag_return_deviation": fr,
+            }
+
+            telemetry_rows.append({
+                "device_id": device_id,
+                "building_id": building_id,
+                "timestamp": ts,
+                "device_type": dev_type,
+                "online_status": "online",
+                "running_state": dev_running,
+                "health_status": dev_health,
+                "power_kw": power_kw,
+                "flow_rate": flow_rate,
+                "supply_temp_c": supply_t,
+                "return_temp_c": return_t,
+                "ambient_temp_c": float(air_t) if air_t is not None else None,
+                "metric_payload_json": json.dumps(payload, default=str),
+                "source": "energy_data_derived",
+            })
+
+    if not telemetry_rows:
+        return 0, 0
+
+    # 批量 upsert device_telemetry_hourly
+    await db.execute(text("""
+        INSERT INTO device_telemetry_hourly
+          (device_id, building_id, timestamp, device_type,
+           online_status, running_state, health_status,
+           power_kw, flow_rate, supply_temp_c, return_temp_c, ambient_temp_c,
+           metric_payload_json, source)
+        VALUES
+          (:device_id, :building_id, :timestamp, :device_type,
+           :online_status, :running_state, :health_status,
+           :power_kw, :flow_rate, :supply_temp_c, :return_temp_c, :ambient_temp_c,
+           :metric_payload_json, :source)
+        ON CONFLICT (device_id, timestamp)
+        DO UPDATE SET
+          running_state        = EXCLUDED.running_state,
+          health_status        = EXCLUDED.health_status,
+          power_kw             = EXCLUDED.power_kw,
+          flow_rate            = EXCLUDED.flow_rate,
+          supply_temp_c        = EXCLUDED.supply_temp_c,
+          return_temp_c        = EXCLUDED.return_temp_c,
+          ambient_temp_c       = EXCLUDED.ambient_temp_c,
+          metric_payload_json  = EXCLUDED.metric_payload_json,
+          source               = EXCLUDED.source
+    """), telemetry_rows)
+    await db.commit()
+
+    # 更新 device_status_latest（每个设备取最新一行）
+    latest_by_device: dict[str, dict] = {}
+    for row in telemetry_rows:
+        did = row["device_id"]
+        if did not in latest_by_device or row["timestamp"] > latest_by_device[did]["timestamp"]:
+            latest_by_device[did] = row
+
+    status_rows = [
+        {
+            "device_id": r["device_id"],
+            "building_id": r["building_id"],
+            "device_type": r["device_type"],
+            "last_seen_at": r["timestamp"],
+            "online_status": r["online_status"],
+            "running_state": r["running_state"],
+            "health_status": r["health_status"],
+            "latest_power_kw": r["power_kw"],
+            "latest_flow_rate": r["flow_rate"],
+            "latest_supply_temp_c": r["supply_temp_c"],
+            "latest_return_temp_c": r["return_temp_c"],
+            "latest_payload_json": r["metric_payload_json"],
+        }
+        for r in latest_by_device.values()
+    ]
+
+    await db.execute(text("""
+        INSERT INTO device_status_latest
+          (device_id, building_id, device_type,
+           last_seen_at, online_status, running_state, health_status,
+           latest_power_kw, latest_flow_rate,
+           latest_supply_temp_c, latest_return_temp_c, latest_payload_json)
+        VALUES
+          (:device_id, :building_id, :device_type,
+           :last_seen_at, :online_status, :running_state, :health_status,
+           :latest_power_kw, :latest_flow_rate,
+           :latest_supply_temp_c, :latest_return_temp_c, :latest_payload_json)
+        ON CONFLICT (device_id)
+        DO UPDATE SET
+          last_seen_at         = EXCLUDED.last_seen_at,
+          online_status        = EXCLUDED.online_status,
+          running_state        = EXCLUDED.running_state,
+          health_status        = EXCLUDED.health_status,
+          latest_power_kw      = EXCLUDED.latest_power_kw,
+          latest_flow_rate     = EXCLUDED.latest_flow_rate,
+          latest_supply_temp_c = EXCLUDED.latest_supply_temp_c,
+          latest_return_temp_c = EXCLUDED.latest_return_temp_c,
+          latest_payload_json  = EXCLUDED.latest_payload_json
+    """), status_rows)
+    await db.commit()
+
+    logger.info(
+        "derive_device_status: 楼 %s → telemetry=%d, status_updated=%d",
+        building_id, len(telemetry_rows), len(status_rows),
+    )
+    return len(telemetry_rows), len(status_rows)
+
+
+# ---------------------------------------------------------------------------
+# 异常归因：anomaly_events → anomaly_device_attributions
+# ---------------------------------------------------------------------------
+
+async def attribute_anomalies_to_devices(
+    building_id: str,
+    db: AsyncSession,
+) -> int:
+    """
+    从 anomaly_events 按 rule_triggered 归因到具体设备，
+    写入 anomaly_device_attributions。
+    返回写入行数。
+    """
+    # 获取该楼所有设备（type → device_id）
+    dev_result = await db.execute(text(
+        "SELECT device_id, device_type FROM devices WHERE building_id = :bid"
+    ), {"bid": building_id})
+    devices = {row[1]: row[0] for row in dev_result.fetchall()}
+    if not devices:
+        return 0
+
+    # 查该楼所有异常事件
+    ev_result = await db.execute(text("""
+        SELECT id, data_timestamp, rule_triggered, actual_value, expected_value,
+               deviation_pct, hvac_root_cause, symptom_flags_json, anomaly_phase
+        FROM anomaly_events
+        WHERE building_id = :bid
+        ORDER BY data_timestamp ASC
+    """), {"bid": building_id})
+    events = ev_result.fetchall()
+
+    if not events:
+        return 0
+
+    attribution_rows: list[dict] = []
+
+    for ev in events:
+        (ev_id, ev_ts, rule, actual, expected, dev_pct,
+         hvac_rc, sym_flags, phase) = ev
+
+        # asyncpg 可能将 UUID 主键自动反序列化为 uuid.UUID 对象，统一转为 str
+        ev_id = str(ev_id)
+
+        if hasattr(ev_ts, "tzinfo") and ev_ts.tzinfo is None:
+            ev_ts = ev_ts.replace(tzinfo=timezone.utc)
+
+        dev_type = _RULE_TO_DEVICE_TYPE.get(rule)
+        if dev_type is None or dev_type not in devices:
+            continue
+
+        device_id = devices[dev_type]
+        role = _RULE_TO_ROLE.get(rule, "primary")
+
+        # 归因得分：偏差越大得分越高（0~1 归一化，最大 200% 满分）
+        score: float = 1.0
+        if dev_pct is not None:
+            score = min(abs(dev_pct) / 200.0, 1.0)
+
+        # 归因原因文字
+        reason_parts = [f"规则 {rule} 触发"]
+        if dev_pct is not None:
+            reason_parts.append(f"偏差 {dev_pct:+.1f}%")
+        if hvac_rc:
+            reason_parts.append(f"根因 {hvac_rc}")
+        reason = "；".join(reason_parts)
+
+        evidence = {
+            "event_id": ev_id,
+            "rule_triggered": rule,
+            "actual_value": actual,
+            "expected_value": expected,
+            "deviation_pct": dev_pct,
+            "hvac_root_cause": hvac_rc,
+            "anomaly_phase": phase,
+        }
+
+        attribution_rows.append({
+            "id": str(uuid.uuid4()),
+            "building_id": building_id,
+            "timestamp": ev_ts,
+            "event_id": ev_id,
+            "device_id": device_id,
+            "device_type": dev_type,
+            "attribution_role": role,
+            "attribution_score": round(score, 4),
+            "attribution_reason": reason,
+            "evidence_json": json.dumps(evidence, default=str),
+        })
+
+    if not attribution_rows:
+        return 0
+
+    await db.execute(text("""
+        INSERT INTO anomaly_device_attributions
+          (id, building_id, timestamp, event_id, device_id, device_type,
+           attribution_role, attribution_score, attribution_reason, evidence_json)
+        VALUES
+          (:id, :building_id, :timestamp, :event_id, :device_id, :device_type,
+           :attribution_role, :attribution_score, :attribution_reason, :evidence_json)
+        ON CONFLICT (id) DO NOTHING
+    """), attribution_rows)
+    await db.commit()
+
+    logger.info(
+        "attribute_anomalies_to_devices: 楼 %s → 写入 %d 条归因",
+        building_id, len(attribution_rows),
+    )
+    return len(attribution_rows)
+
+
+# ---------------------------------------------------------------------------
 # 批处理入口：所有楼栋
 # ---------------------------------------------------------------------------
 async def detect_and_store_all_buildings(db: AsyncSession) -> dict[str, dict[str, int]]:
@@ -696,6 +1069,8 @@ async def detect_and_store_all_buildings(db: AsyncSession) -> dict[str, dict[str
 
     async with AsyncSessionLocal() as cleanup_session:
         await cleanup_session.execute(text("TRUNCATE TABLE anomaly_events"))
+        await cleanup_session.execute(text("TRUNCATE TABLE anomaly_device_attributions"))
+        await cleanup_session.execute(text("TRUNCATE TABLE device_telemetry_hourly"))
         await cleanup_session.commit()
 
     bld_result = await db.execute(
@@ -712,7 +1087,24 @@ async def detect_and_store_all_buildings(db: AsyncSession) -> dict[str, dict[str
         async with AsyncSessionLocal() as session:
             n_events = await generate_anomaly_events(bid, session)
 
-        summary[bid] = {"flags": n_flags, "events": n_events}
-        logger.info("anomaly detect: %s → flags=%d, events=%d", bid, n_flags, n_events)
+        # 方案A：派生设备遥测历史 + 设备状态快照
+        async with AsyncSessionLocal() as session:
+            n_telemetry, n_status = await derive_device_status(bid, session)
+
+        # 方案A：异常归因到具体设备
+        async with AsyncSessionLocal() as session:
+            n_attrib = await attribute_anomalies_to_devices(bid, session)
+
+        summary[bid] = {
+            "flags": n_flags,
+            "events": n_events,
+            "telemetry": n_telemetry,
+            "device_status": n_status,
+            "attributions": n_attrib,
+        }
+        logger.info(
+            "anomaly detect: %s → flags=%d, events=%d, telemetry=%d, status=%d, attrib=%d",
+            bid, n_flags, n_events, n_telemetry, n_status, n_attrib,
+        )
 
     return summary

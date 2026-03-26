@@ -49,6 +49,15 @@
           <Icon icon="mdi:history" width="16" />
         </button>
 
+        <!-- 导出报表 -->
+        <button
+          class="top-btn"
+          :title="reportStore.sections.length > 0 ? '导出页面报表' : '导出对话报表'"
+          @click="onReportBtnClick"
+        >
+          <Icon icon="mdi:file-chart-outline" width="16" />
+        </button>
+
         <!-- 更多操作 -->
         <div class="dropdown-wrap" ref="moreWrapEl">
           <button
@@ -64,6 +73,11 @@
               <button class="menu-item" @click="onCloseChat">
                 <Icon icon="mdi:close" width="14" />
                 关闭会话
+              </button>
+              <div class="menu-divider" />
+              <button class="menu-item" @click="onExportConversation">
+                <Icon icon="mdi:file-chart-outline" width="14" />
+                导出对话报表
               </button>
               <div class="menu-divider" />
               <button class="menu-item danger" @click="onClearChat">
@@ -505,14 +519,23 @@ import ValueCard from '@/generative-ui/ValueCard.vue'
 import EvidenceLink from '@/generative-ui/EvidenceLink.vue'
 import ChartSkeleton from '@/generative-ui/ChartSkeleton.vue'
 import type { ArtifactEvent } from '@/api/stream_client'
+<<<<<<< HEAD
 import { marked } from 'marked'
 
 import { useDataRangeStore } from '@/stores/dataRangeStore'
+=======
+import { useReportStore } from '@/stores/reportStore'
+import type { ReportSection } from '@/stores/reportStore'
+>>>>>>> origin/feat/back
 
 const router = useRouter()
 const store = useChatStore()
 const pickerStore = useElementPickerStore()
+<<<<<<< HEAD
 const dataRangeStore = useDataRangeStore()
+=======
+const reportStore = useReportStore()
+>>>>>>> origin/feat/back
 
 /** agent 类型 → 语义配色 */
 const _agentColors: Record<string, string> = {
@@ -757,6 +780,54 @@ function onCloseChat() {
 function onClearChat() {
   moreOpen.value = false
   store.clearSession()
+}
+
+function onReportBtnClick() {
+  if (reportStore.sections.length > 0) {
+    reportStore.openPreview()
+  } else {
+    onExportConversation()
+  }
+}
+
+function onExportConversation() {
+  moreOpen.value = false
+  const messages = store.messages
+  if (!messages.length) return
+
+  const sections: ReportSection[] = []
+
+  // 每条消息作为一个文本段落
+  messages.forEach((msg, idx) => {
+    if (msg.role === 'user') {
+      sections.push({
+        id: `msg-${idx}`,
+        namespace: 'agent-export',
+        title: `用户提问 ${idx + 1}`,
+        type: 'text',
+        content: msg.content,
+        order: idx * 2,
+      })
+    } else if (msg.role === 'ai' && msg.content) {
+      sections.push({
+        id: `reply-${idx}`,
+        namespace: 'agent-export',
+        title: 'AI 回答',
+        type: 'text',
+        content: msg.content,
+        order: idx * 2 + 1,
+      })
+    }
+  })
+
+  const currentSession = store.openTabs.find(s => s.session_id === store.currentSessionId)
+  reportStore.openPreviewWithPayload({
+    title: currentSession?.title ?? 'AI 对话记录',
+    subtitle: `共 ${messages.filter(m => m.role === 'user').length} 轮对话`,
+    generatedAt: new Date().toLocaleString('zh-CN'),
+    sections,
+    mode: 'snapshot',
+  })
 }
 
 // ── 消息互动操作 ──────────────────────────────────────────────────────────────

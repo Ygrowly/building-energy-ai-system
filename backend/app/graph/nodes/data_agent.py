@@ -106,15 +106,16 @@ SYNTHESIS_PROMPT = """你是一个楼宇能耗管理系统的高级数据分析�
 ## 写作规则
 
 ### 图表占位符（最重要！必须严格遵守）
-- 对于图表清单中的每一张图表，你**必须**在分析该图表的段落**前面**单独一行插入占位符
+- 对于图表清单中的每一张图表，你**必须**在分析该图表的段落**结尾**单独一行插入占位符
 - 占位符格式：`<<CHART:锚点关键词>>`（锚点关键词来自图表清单）
 - 示例：如果有锚点为"用电"的图表，则写：
   ```
-  <<CHART:用电>>
-
   从用电趋势图可以看出，教学楼日均用电量最高...
+
+  <<CHART:用电>>
   ```
-- 每个图表的占位符**只能出现一次**，放在对应分析段落之前
+- 先写该图表的文字分析，分析结束后紧跟占位符，这样图表出现在分析文字下方
+- 每个图表的占位符**只能出现一次**
 - 占位符必须独占一行，前后各空一行
 - 总结段落**不要**放任何占位符
 
@@ -257,7 +258,7 @@ def _get_react_agent(include_list_available_buildings: bool):
                 return _cached_react_agent_full
             settings = get_settings()
             llm = ChatOpenAI(
-                model=settings.LLM_MODEL,
+                model=settings.LLM_MODEL_REACT or settings.LLM_MODEL,
                 api_key=settings.LLM_API_KEY or "placeholder",
                 base_url=settings.LLM_BASE_URL,
                 temperature=0.1,
@@ -273,7 +274,7 @@ def _get_react_agent(include_list_available_buildings: bool):
 
         settings = get_settings()
         llm = ChatOpenAI(
-            model=settings.LLM_MODEL,
+            model=settings.LLM_MODEL_REACT or settings.LLM_MODEL,
             api_key=settings.LLM_API_KEY or "placeholder",
             base_url=settings.LLM_BASE_URL,
             temperature=0.1,
@@ -381,7 +382,7 @@ async def data_react_node(state: AgentState) -> dict[str, Any]:
     sub_state = {"messages": sub_messages}
 
     try:
-        result = await agent.ainvoke(sub_state)
+        result = await agent.ainvoke(sub_state, config={"recursion_limit": 12})
     except Exception as exc:
         logger.error("Data Agent ReAct 执行失败: %s", exc)
         error_msg = AIMessage(
@@ -440,7 +441,8 @@ async def data_react_node(state: AgentState) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Phase 2: data_synthesis_node — Synthesis LLM 生成精准分析
 # ---------------------------------------------------------------------------
-_cached_synthesis_llm: ChatOpenAI | None = None
+_cached_synthesis_llm_fast: ChatOpenAI | None = None
+_cached_synthesis_llm_deep: ChatOpenAI | None = None
 _synthesis_llm_lock: Any = None
 
 
@@ -452,21 +454,35 @@ def _get_synthesis_llm_lock() -> Any:
     return _synthesis_llm_lock
 
 
-def _get_synthesis_llm() -> ChatOpenAI:
-    """获取 Synthesis LLM 单例（高 max_tokens，专注文字生成）。"""
-    global _cached_synthesis_llm
+def _get_synthesis_llm(thinking_mode: str = "fast") -> ChatOpenAI:
+    """获取 Synthesis LLM（fast / deep 各缓存一份）。"""
+    global _cached_synthesis_llm_fast, _cached_synthesis_llm_deep
     with _get_synthesis_llm_lock():
-        if _cached_synthesis_llm is not None:
-            return _cached_synthesis_llm
         settings = get_settings()
-        _cached_synthesis_llm = ChatOpenAI(
-            model=settings.LLM_MODEL,
-            api_key=settings.LLM_API_KEY or "placeholder",
-            base_url=settings.LLM_BASE_URL,
-            temperature=0.3,
-            max_tokens=2000,
-        )
-        return _cached_synthesis_llm
+        if thinking_mode == "deep" and settings.LLM_MODEL_DEEP:
+            if _cached_synthesis_llm_deep is not None:
+                return _cached_synthesis_llm_deep
+            _cached_synthesis_llm_deep = ChatOpenAI(
+                model=settings.LLM_MODEL_DEEP,
+                api_key=settings.LLM_API_KEY or "placeholder",
+                base_url=settings.LLM_BASE_URL,
+                temperature=0.3,
+                max_tokens=3000,
+                streaming=True,
+            )
+            return _cached_synthesis_llm_deep
+        else:
+            if _cached_synthesis_llm_fast is not None:
+                return _cached_synthesis_llm_fast
+            _cached_synthesis_llm_fast = ChatOpenAI(
+                model=settings.LLM_MODEL_SYNTHESIS or settings.LLM_MODEL,
+                api_key=settings.LLM_API_KEY or "placeholder",
+                base_url=settings.LLM_BASE_URL,
+                temperature=0.3,
+                max_tokens=2000,
+                streaming=True,
+            )
+            return _cached_synthesis_llm_fast
 
 
 async def data_synthesis_node(state: AgentState) -> dict[str, Any]:
@@ -498,7 +514,8 @@ async def data_synthesis_node(state: AgentState) -> dict[str, Any]:
         HumanMessage(content=f"用户问题：{user_q}\n\n{data_summary}"),
     ]
 
-    llm = _get_synthesis_llm()
+    thinking_mode = state.get("thinking_mode", "fast")
+    llm = _get_synthesis_llm(thinking_mode)
 
     try:
         response = await llm.ainvoke(messages)
@@ -508,7 +525,7 @@ async def data_synthesis_node(state: AgentState) -> dict[str, Any]:
         answer_text = f"数据分析完成，但生成分析报告时遇到问题：{exc}"
 
     elapsed = time.time() - t0
-    logger.info("Data Synthesis 完成: 用时=%.1fs 字数=%d", elapsed, len(answer_text))
+    logger.info("Data Synthesis 完成: mode=%s 用时=%.1fs 字数=%d", thinking_mode, elapsed, len(answer_text))
 
     # 更新滚动摘要
     existing_summary = state.get("context_summary", "")

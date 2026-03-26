@@ -172,6 +172,7 @@ class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=2000, description="用户消息")
     session_id: str | None = Field(None, description="会话 ID，为空则新建")
     enable_web_search: bool = Field(False, description="是否启用 Tavily 联网搜索")
+    thinking_mode: str = Field("fast", description="思考模式：fast（快速）/ deep（深度）")
 
     @field_validator("session_id")
     @classmethod
@@ -409,6 +410,7 @@ async def _stream_graph(
     user_id: str | None = None,
     request_id: str | None = None,
     enable_web_search: bool = False,
+    thinking_mode: str = "fast",
 ) -> AsyncGenerator[str, None]:
     """
     执行 LangGraph 图并将过程以 SSE 事件流方式推出。
@@ -423,10 +425,9 @@ async def _stream_graph(
     # 对"你好"/"谢谢"等简单问候，立即推流回复，DB 持久化放到后台任务。
     if not enable_web_search:
         fast_reply = _router_fast_path(user_message)
-        if fast_reply is not None:
+        if fast_reply is not None and isinstance(fast_reply, str):
             yield _text_event(fast_reply, is_final=True)
             yield _done_event(session_id, hop_count=1, request_id=request_id)
-            # 后台补齐 DB 会话记录（不阻塞响应）
             asyncio.create_task(_ensure_fast_session(
                 session_id=session_id,
                 user_message=user_message,
@@ -449,6 +450,9 @@ async def _stream_graph(
         asyncio.create_task(session_store.create(session_id, title=auto_title, user_id=user_id))
 
     is_first_message = len(state.get("messages", [])) == 0
+
+    # ── 注入思考模式（每次请求动态传入，不持久化到会话历史）────────────────
+    state["thinking_mode"] = thinking_mode
 
     # ── 始终将原始消息写入 state（持久化到 DB 的历史）────────────────────────
     state["messages"] = list(state["messages"]) + [HumanMessage(content=user_message)]
@@ -647,6 +651,13 @@ async def _stream_graph(
                 node_elapsed = time.time() - _t.pop(f"node_{name}", time.time())
                 logger.info("节点完成: %s, 工具调用=%d, 用时=%.1fs", name, _tool_count, node_elapsed)
 
+                # 增量填充 final_state_holder，防止后续异常导致 fallback 双重调用
+                node_output = data.get("output")
+                if isinstance(node_output, dict):
+                    for k, v in node_output.items():
+                        if v is not None:
+                            final_state_holder[k] = v
+
                 # 路由完成时，推送 "已转接至 XXX"（基于 intent 动态标签）
                 if name == "router":
                     chain_output = data.get("output", {})
@@ -773,6 +784,10 @@ async def _stream_graph(
             from app.api.routes_workorder import register_pending_order
             register_pending_order(pa)
     else:
+        logger.warning(
+            "final_state_holder 为空，触发 fallback ainvoke: session=%s request_id=%s",
+            session_id, request_id,
+        )
         try:
             fallback_state = await graph.ainvoke(graph_input)
             # 同样恢复原始消息
@@ -897,6 +912,7 @@ async def chat(
             user_id=user_id,
             request_id=request_id,
             enable_web_search=req.enable_web_search,
+            thinking_mode=req.thinking_mode,
         ),
         media_type="text/event-stream",
         headers={

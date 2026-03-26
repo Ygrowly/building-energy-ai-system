@@ -14,13 +14,39 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import Any
+from typing import Any, Literal, Optional
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
+from pydantic import BaseModel, Field
 
 from app.core.config import get_settings
 from app.graph.state import AgentState, IntentType, NextNode
+
+
+# ---------------------------------------------------------------------------
+# Router 结构化输出 Schema
+# ---------------------------------------------------------------------------
+class RouterDecision(BaseModel):
+    """Router LLM 的结构化输出。"""
+    intent: Literal[
+        "data_query", "cop_analysis", "fault_diagnosis",
+        "work_order", "knowledge_query", "general_chat",
+        "clarify", "unknown",
+    ] = Field(description="用户意图类型")
+    confidence: float = Field(ge=0.0, le=1.0, description="置信度 0.0~1.0")
+    next_agent: Literal["data_agent", "diagnose_agent", "end"] = Field(
+        description="路由目标节点"
+    )
+    building_id: Optional[str] = Field(default=None, description="building_type 值")
+    device_id: Optional[str] = Field(default=None, description="设备类型或 ID")
+    time_context: Optional[dict] = Field(
+        default=None, description='{"start": "ISO8601", "end": "ISO8601"}'
+    )
+    direct_reply: Optional[str] = Field(
+        default=None,
+        description="当 intent=general_chat/clarify 时的直接回复文字"
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +77,7 @@ _ROUTER_SYSTEM_PROMPT_TEMPLATE = """你是楼宇能耗管理系统的智能助�
 | general_chat | 通用对话，Router 直接友好回复 | "你好"、"你是谁"、"你能做什么"、"谢谢"、"再见"、"帮我介绍一下系统" |
 | data_query | 查询能耗/设备状态/对比数据/楼宇列表 | "用了多少电"、"昨天图书馆的数据"、"哪栋楼最费电"、"有哪些楼宇"、"有哪些设备" |
 | cop_analysis | 计算空调能效比 COP | "能效比"、"COP"、"制冷效率"、"HVAC 性能" |
-| fault_diagnosis | 故障诊断/异常分析 | "为什么这么高"、"有没有问题"、"凌晨异常"、"传感器跳变" |
+| fault_diagnosis | 故障诊断/异常分析/优化建议/节能意见 | "为什么这么高"、"有没有问题"、"凌晨异常"、"传感器跳变"、"有什么建议"、"优化措施"、"怎么改进"、"有什么意见"、"节能方案"、"怎么省电"、"如何降低能耗" |
 | work_order | 生成维修工单 | "派单"、"报修"、"维修"、"工单" |
 | knowledge_query | 查询建筑规范/技术标准/运维知识/节能法规 | "GB 55015 规定"、"建筑节能标准"、"供暖设计规范"、"预测性维护要求"、"设施管理标准"、"能效等级限值"、"智能化系统规范"、"建筑电气规范"、"设施运维指南"、"知识库"、"手册"、"规范要求"、"标准规定" |
 | clarify | 问题太模糊需追问 | 代词不明确、缺少关键实体时 |
@@ -73,6 +99,9 @@ _ROUTER_SYSTEM_PROMPT_TEMPLATE = """你是楼宇能耗管理系统的智能助�
    - 询问设备维护规程、运维手册、设施管理知识
    - 含"规定"、"标准"、"规范"、"要求"、"指南"、"手册"、"知识库"等词
    - 询问节能、建筑电气、暖通空调、智能化系统的技术规定
+10. 用户基于之前的数据分析结果请求建议、意见、优化方案、改进措施时，识别为 fault_diagnosis（路由到 diagnose_agent），不要重复调用 data_agent 查数据
+   - 例如："针对上面的分析有什么意见"、"给我一些优化建议"、"怎么改进"、"有什么节能方案"
+   - 这类问题需要的是专家诊断和建议，不是重新查数据
 
 ## 输出格式（严格 JSON，不要加 Markdown 代码块）
 {{
@@ -170,24 +199,98 @@ _FAST_PATH_RULES: list[tuple[re.Pattern[str], str]] = [
     ),
 ]
 
-_FAST_PATH_MAX_LEN = 30  # 超过此长度不走快速通道，避免误匹配
+_FAST_PATH_MAX_LEN = 30  # 问候类快速通道的长度上限
+
+# ---------------------------------------------------------------------------
+# 业务路由快速通道（跳过 LLM，直接确定 intent + next_agent）
+# 格式：(编译好的正则, intent)
+# 长度上限独立控制（业务问题通常更长）
+# ---------------------------------------------------------------------------
+_FAST_ROUTE_RULES: list[tuple[re.Pattern[str], str]] = [
+    # 数据查询类
+    (
+        re.compile(
+            r'(?:对比|查询|查看|查一下|分析|统计|趋势|走势|汇总|报表|导出)'
+            r'.*(?:用电|用水|电量|水量|空调|能耗|冷量|电费|水费|kwh|kWh)',
+            re.IGNORECASE,
+        ),
+        "data_query",
+    ),
+    (
+        re.compile(
+            r'(?:用电|用水|电量|水量|空调|能耗|冷量)'
+            r'.*(?:对比|趋势|走势|多少|情况|数据|查询|统计|汇总)',
+            re.IGNORECASE,
+        ),
+        "data_query",
+    ),
+    (
+        re.compile(r'(?:哪栋|哪个).*(?:最多|最少|最高|最低|最大|最小)', re.IGNORECASE),
+        "data_query",
+    ),
+    # COP 分析
+    (
+        re.compile(r'(?:COP|cop|能效比|制冷效率|HVAC)', re.IGNORECASE),
+        "cop_analysis",
+    ),
+    # 故障诊断 / 优化建议
+    (
+        re.compile(
+            r'(?:建议|优化|改进|意见|诊断|异常|故障|问题|原因|为什么.*高|为什么.*低'
+            r'|节能|省电|降低能耗|怎么.*减少)',
+            re.IGNORECASE,
+        ),
+        "fault_diagnosis",
+    ),
+    # 工单
+    (
+        re.compile(r'(?:工单|派单|报修|维修|维护)', re.IGNORECASE),
+        "work_order",
+    ),
+    # 知识库 / 规范
+    (
+        re.compile(
+            r'(?:规范|标准|规定|手册|知识库|GB|国标|指南)',
+            re.IGNORECASE,
+        ),
+        "knowledge_query",
+    ),
+]
+
+_FAST_ROUTE_MAX_LEN = 80  # 业务路由快速通道的长度上限
 
 
-def _try_fast_path(message: str) -> str | None:
+def _try_fast_path(message: str) -> str | dict | None:
     """
-    检查消息是否匹配关键词快速通道。
-    匹配则返回直接回复字符串；否则返回 None，走正常 LLM 路径。
+    检查消息是否匹配快速通道。
+
+    返回值:
+    - str:  直接回复文字（问候/闲聊类）
+    - dict: 路由信息 {"intent": ..., "next_agent": ...}（业务查询类）
+    - None: 未匹配，走正常 LLM 路径
     """
     msg = message.strip()
-    if len(msg) > _FAST_PATH_MAX_LEN:
-        return None
-    for pattern, reply in _FAST_PATH_RULES:
-        if pattern.match(msg):
-            return reply
+
+    # 1) 问候 / 闲聊快速回复（短消息）
+    if len(msg) <= _FAST_PATH_MAX_LEN:
+        for pattern, reply in _FAST_PATH_RULES:
+            if pattern.match(msg):
+                return reply
+
+    # 2) 业务路由快速匹配（中等长度消息）
+    if len(msg) <= _FAST_ROUTE_MAX_LEN:
+        for pattern, intent in _FAST_ROUTE_RULES:
+            if pattern.search(msg):
+                return {
+                    "intent": intent,
+                    "next_agent": _INTENT_ROUTING.get(intent, "end"),
+                }
+
     return None
 
 
 _cached_router_llm: ChatOpenAI | None = None
+_cached_structured_router: Any = None
 _router_llm_lock: Any = None
 
 
@@ -210,24 +313,35 @@ def _get_router_llm() -> ChatOpenAI:
                     "LLM_API_KEY 未配置，将使用 placeholder；生产环境请在 .env 中设置 LLM_API_KEY"
                 )
             _cached_router_llm = ChatOpenAI(
-                model=settings.LLM_MODEL,
+                model=settings.LLM_MODEL_ROUTER or settings.LLM_MODEL,
                 api_key=settings.LLM_API_KEY or "placeholder",
                 base_url=settings.LLM_BASE_URL,
-                temperature=0.0,   # 路由不需要创意，确定性优先
+                temperature=0.0,
                 max_tokens=512,
             )
     return _cached_router_llm
 
 
-def reset_router_llm_cache() -> None:
-    """
-    Reset cached Router LLM instance.
+def _get_structured_router():
+    """获取绑定了结构化输出的 Router LLM（首次调用时尝试创建，失败则返回 None）。"""
+    global _cached_structured_router
+    with _get_router_llm_lock():
+        if _cached_structured_router is not None:
+            return _cached_structured_router
+        try:
+            base_llm = _get_router_llm()
+            _cached_structured_router = base_llm.with_structured_output(RouterDecision)
+            return _cached_structured_router
+        except Exception as exc:
+            logger.warning("结构化输出初始化失败，将使用 free-form JSON 模式: %s", exc)
+            return None
 
-    Used by the eval harness / tests to avoid cross-case leakage when monkeypatching
-    ChatOpenAI.
-    """
-    global _cached_router_llm, _router_llm_lock
+
+def reset_router_llm_cache() -> None:
+    """Reset cached Router LLM instances (used by eval/tests)."""
+    global _cached_router_llm, _cached_structured_router, _router_llm_lock
     _cached_router_llm = None
+    _cached_structured_router = None
     _router_llm_lock = None
 
 
@@ -277,21 +391,38 @@ async def router_node(state: AgentState) -> dict[str, Any]:
             "confidence": 0.0,
         }
 
-    # ── 关键词快速通道（跳过 LLM，零延迟回复常见问候/闲聊）──────────────────
+    # ── 关键词快速通道（跳过 LLM，零延迟回复常见问候/闲聊 + 业务路由）───────
     history = state.get("messages", [])
     last_human = next(
         (m for m in reversed(history) if isinstance(m, HumanMessage)), None
     )
     if last_human:
-        fast_reply = _try_fast_path(str(last_human.content))
-        if fast_reply is not None:
-            logger.debug("Router 快速通道命中: %r", str(last_human.content)[:40])
+        fast_result = _try_fast_path(str(last_human.content))
+        if isinstance(fast_result, str):
+            logger.debug("Router 快速通道(回复)命中: %r", str(last_human.content)[:40])
             return {
-                "messages": [AIMessage(content=fast_reply)],
+                "messages": [AIMessage(content=fast_result)],
                 "current_agent": "end",
                 "intent": "general_chat",
                 "confidence": 1.0,
                 "hop_count": hop_count,
+            }
+        if isinstance(fast_result, dict):
+            fast_intent = fast_result["intent"]
+            fast_next = fast_result["next_agent"]
+            logger.info("Router 快速通道(路由)命中: intent=%s → %s, msg=%r",
+                        fast_intent, fast_next, str(last_human.content)[:60])
+            return {
+                "messages": [AIMessage(
+                    content=f"[Router] 快速路由：{fast_intent}，正在转接 {fast_next}..."
+                )],
+                "current_agent": fast_next,
+                "intent": fast_intent,
+                "confidence": 0.95,
+                "hop_count": hop_count,
+                "building_id": state.get("building_id"),
+                "device_id": state.get("device_id"),
+                "time_context": state.get("time_context"),
             }
 
     # ── 准备历史消息（history 已在快速通道处取出）──
@@ -323,29 +454,40 @@ async def router_node(state: AgentState) -> dict[str, Any]:
 
     llm_messages = [SystemMessage(content=system_content)] + list(recent_history)
 
-    # ── 调用 LLM ──
-    llm = _get_router_llm()
-    try:
-        response = await llm.ainvoke(llm_messages)
-        # P3：多模态返回 content 可能为 list，统一转为 str 再解析
-        content = response.content
-        if isinstance(content, list):
-            raw_output = "".join(
-                c.get("text", "") for c in content if isinstance(c, dict)
-            )
-        else:
-            raw_output = str(content or "")
-    except Exception as exc:
-        logger.error("Router LLM 调用失败: %s", exc)
-        error_msg = AIMessage(content="系统暂时无法处理您的请求，请稍后重试。")
-        return {
-            "messages": [error_msg],
-            "current_agent": "end",
-            "hop_count": hop_count,
-            "error": str(exc),
-        }
+    # ── 调用 LLM（优先结构化输出，fallback 到 free-form JSON）──
+    parsed: dict[str, Any] | None = None
 
-    parsed = _parse_router_output(raw_output)
+    structured_llm = _get_structured_router()
+    if structured_llm is not None:
+        try:
+            decision: RouterDecision = await structured_llm.ainvoke(llm_messages)
+            parsed = decision.model_dump()
+            logger.debug("Router 结构化输出成功: intent=%s", parsed.get("intent"))
+        except Exception as exc:
+            logger.warning("Router 结构化输出失败，降级到 free-form: %s", exc)
+            parsed = None
+
+    if parsed is None:
+        llm = _get_router_llm()
+        try:
+            response = await llm.ainvoke(llm_messages)
+            content = response.content
+            if isinstance(content, list):
+                raw_output = "".join(
+                    c.get("text", "") for c in content if isinstance(c, dict)
+                )
+            else:
+                raw_output = str(content or "")
+            parsed = _parse_router_output(raw_output)
+        except Exception as exc:
+            logger.error("Router LLM 调用失败: %s", exc)
+            error_msg = AIMessage(content="系统暂时无法处理您的请求，请稍后重试。")
+            return {
+                "messages": [error_msg],
+                "current_agent": "end",
+                "hop_count": hop_count,
+                "error": str(exc),
+            }
 
     intent: IntentType = parsed.get("intent", "unknown")
     confidence: float = float(parsed.get("confidence", 0.0))
@@ -354,7 +496,6 @@ async def router_node(state: AgentState) -> dict[str, Any]:
     device_id: str | None = parsed.get("device_id") or state.get("device_id")
     raw_time = parsed.get("time_context")
     time_context = raw_time if isinstance(raw_time, dict) else state.get("time_context")
-    # direct_reply 统一承接 general_chat 直接回复 和 clarify 反问
     direct_reply: str | None = parsed.get("direct_reply") or parsed.get("clarification_question")
 
     # 验证 next_agent

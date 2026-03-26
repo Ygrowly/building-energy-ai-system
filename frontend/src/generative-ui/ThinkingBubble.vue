@@ -27,29 +27,31 @@
     <!-- 折叠内容区 -->
     <Transition name="th-slide">
       <div v-if="!collapsed" class="th-body" ref="bodyEl">
-        <template v-for="(step, idx) in steps" :key="step.id">
-          <!-- 普通状态步骤（工具调用等） -->
-          <div v-if="step.streamContent == null" class="th-step" :class="isToolStep(step.agent) ? 'is-tool' : 'is-think'">
-            <span class="th-step-icon" :class="{ breathing: isActiveStep(idx) }" :style="{ background: agentColor(step.agent) }"></span>
-            <span class="th-step-label" :style="{ color: agentColor(step.agent) }">{{ agentLabel(step.agent, idx) }}</span>
-            <span class="th-step-msg">{{ step.message }}</span>
-          </div>
-
-          <!-- 流式推理内容 -->
-          <div v-else class="th-stream-block">
-            <div class="th-stream-header">
-              <span class="th-step-icon" :class="{ breathing: isActiveStep(idx) }" :style="{ background: agentColor(step.agent) }"></span>
+        <TransitionGroup name="th-step-appear" tag="div">
+          <template v-for="(step, idx) in visibleSteps" :key="step.id">
+            <!-- 普通状态步骤（工具调用等） -->
+            <div v-if="step.streamContent == null" class="th-step" :class="isToolStep(step.agent) ? 'is-tool' : 'is-think'">
+              <span class="th-step-icon" :class="{ breathing: isVisibleActive(idx) }" :style="{ background: agentColor(step.agent) }"></span>
               <span class="th-step-label" :style="{ color: agentColor(step.agent) }">{{ agentLabel(step.agent, idx) }}</span>
+              <span class="th-step-msg">{{ typewriterText(step) }}<span v-if="isTyping(step)" class="th-type-cursor"></span></span>
             </div>
-            <div class="th-stream-content">
-              <span>{{ step.streamContent }}</span>
-              <span v-if="!isFinished" class="th-stream-cursor"></span>
+
+            <!-- 流式推理内容 -->
+            <div v-else class="th-stream-block">
+              <div class="th-stream-header">
+                <span class="th-step-icon" :class="{ breathing: isVisibleActive(idx) }" :style="{ background: agentColor(step.agent) }"></span>
+                <span class="th-step-label" :style="{ color: agentColor(step.agent) }">{{ agentLabel(step.agent, idx) }}</span>
+              </div>
+              <div class="th-stream-content">
+                <span>{{ step.streamContent }}</span>
+                <span v-if="!isFinished" class="th-stream-cursor"></span>
+              </div>
             </div>
-          </div>
-        </template>
+          </template>
+        </TransitionGroup>
 
         <!-- 加载中 -->
-        <div v-if="!isFinished && steps.length === 0" class="th-step is-loading">
+        <div v-if="!isFinished && visibleSteps.length === 0" class="th-step is-loading">
           <span class="th-step-icon breathing" style="background: #D1C4BC"></span>
           <span class="th-step-label thinking-anim">推理中</span>
           <span class="th-loading-dots">
@@ -77,6 +79,70 @@ const bodyEl = ref<HTMLElement>()
 const elapsedSeconds = ref(0)
 let timer: ReturnType<typeof setInterval> | null = null
 
+// ── 逐行显示队列 ──
+const _visibleCount = ref(0)
+const _STEP_DELAY = 350 // 行间延迟 ms
+let _revealTimer: ReturnType<typeof setTimeout> | null = null
+
+const visibleSteps = computed(() => props.steps.slice(0, _visibleCount.value))
+
+function _scheduleReveal() {
+  if (_revealTimer) return
+  if (_visibleCount.value >= props.steps.length) return
+  _revealTimer = setTimeout(() => {
+    _revealTimer = null
+    _visibleCount.value++
+    // 对新可见的步骤启动打字机
+    const step = props.steps[_visibleCount.value - 1]
+    if (step && step.streamContent == null) _startTypewriter(step)
+    // 还有更多？继续排队
+    if (_visibleCount.value < props.steps.length) _scheduleReveal()
+  }, _STEP_DELAY)
+}
+
+function isVisibleActive(visibleIdx: number): boolean {
+  return !props.isFinished && visibleIdx === visibleSteps.value.length - 1
+}
+
+// ── 打字机效果 ──
+const _twProgress = ref<Record<string, number>>({})
+const _twTimers: Record<string, ReturnType<typeof setInterval>> = {}
+const _TW_SPEED = 25 // 每字符间隔 ms
+
+function typewriterText(step: ThinkingStep): string {
+  const msg = step.message || ''
+  const progress = _twProgress.value[step.id]
+  if (progress === undefined || progress >= msg.length) return msg
+  return msg.slice(0, progress)
+}
+
+function isTyping(step: ThinkingStep): boolean {
+  const progress = _twProgress.value[step.id]
+  return progress !== undefined && progress < (step.message?.length ?? 0)
+}
+
+function _startTypewriter(step: ThinkingStep) {
+  if (!step.message || _twTimers[step.id]) return
+  _twProgress.value[step.id] = 0
+  _twTimers[step.id] = setInterval(() => {
+    const current = _twProgress.value[step.id] ?? 0
+    if (current >= (step.message?.length ?? 0)) {
+      clearInterval(_twTimers[step.id])
+      delete _twTimers[step.id]
+      return
+    }
+    _twProgress.value[step.id] = current + 1
+  }, _TW_SPEED)
+}
+
+function _finishTypewriter(stepId: string) {
+  if (_twTimers[stepId]) {
+    clearInterval(_twTimers[stepId])
+    delete _twTimers[stepId]
+  }
+  delete _twProgress.value[stepId]
+}
+
 // 思考进行中：实时计时
 onMounted(() => {
   if (!props.isFinished && props.startTime) {
@@ -88,21 +154,36 @@ onMounted(() => {
 
 onUnmounted(() => {
   if (timer) clearInterval(timer)
-})
-
-// 思考完成时停止计时
-watch(() => props.isFinished, (finished) => {
-  if (finished && timer) {
-    clearInterval(timer)
-    timer = null
+  if (_revealTimer) { clearTimeout(_revealTimer); _revealTimer = null }
+  for (const id of Object.keys(_twTimers)) {
+    clearInterval(_twTimers[id])
+    delete _twTimers[id]
   }
 })
 
-// 有流式内容时自动展开
-watch(() => props.steps.length, () => {
-  const hasStream = props.steps.some(s => s.streamContent != null)
-  if (hasStream && collapsed.value) {
+// 思考完成时：立即显示全部 + 停止动画
+watch(() => props.isFinished, (finished) => {
+  if (finished) {
+    if (timer) { clearInterval(timer); timer = null }
+    if (_revealTimer) { clearTimeout(_revealTimer); _revealTimer = null }
+    _visibleCount.value = props.steps.length
+    for (const id of Object.keys(_twTimers)) _finishTypewriter(id)
+  }
+})
+
+// 新步骤出现时触发逐行显示队列
+watch(() => props.steps.length, (newLen) => {
+  if (newLen > 0 && collapsed.value) {
     collapsed.value = false
+  }
+  // 有新步骤待显示，启动逐行队列
+  if (newLen > _visibleCount.value) {
+    // 已显示的步骤中，正在打字的立即完成（让位给新行）
+    for (let i = 0; i < _visibleCount.value; i++) {
+      const step = props.steps[i]
+      if (step && step.streamContent == null) _finishTypewriter(step.id)
+    }
+    _scheduleReveal()
   }
 })
 
@@ -303,6 +384,18 @@ function agentLabel(agent: string, stepIdx?: number): string {
   letter-spacing: 0.01em;
 }
 
+/* 打字机光标 */
+.th-type-cursor {
+  display: inline-block;
+  width: 1.5px;
+  height: 12px;
+  background: currentColor;
+  vertical-align: middle;
+  margin-left: 1px;
+  opacity: 0.6;
+  animation: blink-cursor 0.8s infinite;
+}
+
 /* 工具调用步骤 */
 .is-tool .th-step-msg {
   font-size: 11.5px;
@@ -395,5 +488,14 @@ function agentLabel(agent: string, stepIdx?: number): string {
 @keyframes slide-up {
   from { max-height: 400px; opacity: 1; }
   to   { max-height: 0; opacity: 0; }
+}
+
+/* 逐行出现动画 */
+.th-step-appear-enter-active {
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+.th-step-appear-enter-from {
+  opacity: 0;
+  transform: translateY(6px);
 }
 </style>

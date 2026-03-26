@@ -91,6 +91,7 @@ export async function sendChatMessage(
   sessionId: string | null,
   handlers: StreamHandlers,
   enableWebSearch = false,
+  thinkingMode: 'fast' | 'deep' = 'fast',
   signal?: AbortSignal,
 ): Promise<string> {
   const token = _getToken()
@@ -100,7 +101,12 @@ export async function sendChatMessage(
   const response = await fetch('/api/chat', {
     method: 'POST',
     headers,
-    body: JSON.stringify({ message, session_id: sessionId, enable_web_search: enableWebSearch }),
+    body: JSON.stringify({
+      message,
+      session_id: sessionId,
+      enable_web_search: enableWebSearch,
+      thinking_mode: thinkingMode,
+    }),
     signal,
   })
 

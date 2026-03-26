@@ -265,8 +265,8 @@ _DIAGNOSE_BASE_TOOLS = [
 DIAGNOSE_AGENT_TOOLS = [_TOOL_LIST_BUILDINGS] + _DIAGNOSE_BASE_TOOLS
 
 
-_cached_diagnose_agent_full = None     # 含 list_available_buildings
-_cached_diagnose_agent_no_list = None  # 不含（楼宇已注入上下文时使用）
+# 缓存键: (include_list_buildings, thinking_mode)
+_diagnose_agent_cache: dict[tuple[bool, str], Any] = {}
 _diagnose_agent_lock: Any = None
 
 
@@ -279,57 +279,45 @@ def _get_diagnose_agent_lock() -> Any:
 
 
 def reset_diagnose_agent_cache() -> None:
-    """Reset cached Diagnose Agent instance (used by eval/tests)."""
-    global _cached_diagnose_agent, _diagnose_agent_lock
-    _cached_diagnose_agent = None
+    """Reset cached Diagnose Agent instances (used by eval/tests)."""
+    global _diagnose_agent_cache, _diagnose_agent_lock
+    _diagnose_agent_cache = {}
     _diagnose_agent_lock = None
 
 
-# 历史消息最大条数（与 data_agent 保持一致）
 _MAX_HISTORY_MESSAGES = 8
 
 
-def _get_diagnose_agent(include_list_buildings: bool = True):
+def _get_diagnose_agent(include_list_buildings: bool = True, thinking_mode: str = "fast"):
     """
-    获取 Diagnose Agent 单例。
-
-    - include_list_buildings=True ：提供 list_available_buildings 工具（楼宇未知时）
-    - include_list_buildings=False：移除该工具，避免 LLM 在已知设备列表时冗余调用
+    获取 Diagnose Agent 实例（按 include_list + mode 缓存）。
+    deep 模式使用 LLM_MODEL_DEEP，fast 模式使用 LLM_MODEL_DIAGNOSE / LLM_MODEL。
     """
-    global _cached_diagnose_agent_full, _cached_diagnose_agent_no_list
+    cache_key = (include_list_buildings, thinking_mode)
     with _get_diagnose_agent_lock():
-        if include_list_buildings:
-            if _cached_diagnose_agent_full is None:
-                settings = get_settings()
-                llm = ChatOpenAI(
-                    model=settings.LLM_MODEL,
-                    api_key=settings.LLM_API_KEY or "placeholder",
-                    base_url=settings.LLM_BASE_URL,
-                    temperature=0.2,
-                    max_tokens=2048,
-                )
-                _cached_diagnose_agent_full = create_react_agent(
-                    llm,
-                    tools=DIAGNOSE_AGENT_TOOLS,
-                    prompt=DIAGNOSE_AGENT_SYSTEM_PROMPT,
-                )
-            return _cached_diagnose_agent_full
+        if cache_key in _diagnose_agent_cache:
+            return _diagnose_agent_cache[cache_key]
+
+        settings = get_settings()
+        if thinking_mode == "deep" and settings.LLM_MODEL_DEEP:
+            model = settings.LLM_MODEL_DEEP
+            max_tok = 3000
         else:
-            if _cached_diagnose_agent_no_list is None:
-                settings = get_settings()
-                llm = ChatOpenAI(
-                    model=settings.LLM_MODEL,
-                    api_key=settings.LLM_API_KEY or "placeholder",
-                    base_url=settings.LLM_BASE_URL,
-                    temperature=0.2,
-                    max_tokens=2048,
-                )
-                _cached_diagnose_agent_no_list = create_react_agent(
-                    llm,
-                    tools=_DIAGNOSE_BASE_TOOLS,
-                    prompt=DIAGNOSE_AGENT_SYSTEM_PROMPT,
-                )
-            return _cached_diagnose_agent_no_list
+            model = settings.LLM_MODEL_DIAGNOSE or settings.LLM_MODEL
+            max_tok = 2048
+
+        llm = ChatOpenAI(
+            model=model,
+            api_key=settings.LLM_API_KEY or "placeholder",
+            base_url=settings.LLM_BASE_URL,
+            temperature=0.2,
+            max_tokens=max_tok,
+            streaming=True,
+        )
+        tools = DIAGNOSE_AGENT_TOOLS if include_list_buildings else _DIAGNOSE_BASE_TOOLS
+        agent = create_react_agent(llm, tools=tools, prompt=DIAGNOSE_AGENT_SYSTEM_PROMPT)
+        _diagnose_agent_cache[cache_key] = agent
+        return agent
 
 
 async def diagnose_agent_node(state: AgentState) -> dict[str, Any]:
@@ -405,10 +393,11 @@ async def diagnose_agent_node(state: AgentState) -> dict[str, Any]:
     injected_count = len(sub_messages)
     sub_state = {"messages": sub_messages}
 
-    agent = _get_diagnose_agent(include_list_buildings=include_list_tool)
+    thinking_mode = state.get("thinking_mode", "fast")
+    agent = _get_diagnose_agent(include_list_buildings=include_list_tool, thinking_mode=thinking_mode)
 
     try:
-        result = await agent.ainvoke(sub_state)
+        result = await agent.ainvoke(sub_state, config={"recursion_limit": 15})
     except Exception as exc:
         logger.error("Diagnose Agent 执行失败: %s", exc)
         error_msg = AIMessage(

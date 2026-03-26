@@ -30,6 +30,8 @@ export interface ChatMessage {
   role: MessageRole
   content: string
   artifact?: ArtifactEvent
+  /** 内嵌在该 AI 消息气泡中的 artifacts（图表/卡片），按到达顺序排列 */
+  attachedArtifacts?: ArtifactEvent[]
   timestamp: Date
   thinkingSteps?: ThinkingStep[]
   thinkingFinished?: boolean
@@ -134,6 +136,9 @@ export const useChatStore = defineStore('chat', () => {
   })
   const pendingWorkOrder = ref<ArtifactEvent | null>(null)
 
+  // per-session AbortController（用于终止生成）
+  const _abortControllers = new Map<string, AbortController>()
+
   // per-session 联网搜索开关（key = session_id），防止跨 Tab 相互干扰
   const _webSearchBySession = ref<Record<string, boolean>>({})
 
@@ -143,6 +148,20 @@ export const useChatStore = defineStore('chat', () => {
       if (currentSessionId.value) _webSearchBySession.value[currentSessionId.value] = v
     },
   })
+
+  // per-session 思考模式开关
+  const _thinkingModeBySession = ref<Record<string, 'fast' | 'deep'>>({})
+
+  const thinkingMode = computed<'fast' | 'deep'>({
+    get: () => (currentSessionId.value ? (_thinkingModeBySession.value[currentSessionId.value] ?? 'fast') : 'fast'),
+    set: (v: 'fast' | 'deep') => {
+      if (currentSessionId.value) _thinkingModeBySession.value[currentSessionId.value] = v
+    },
+  })
+
+  function toggleThinkingMode() {
+    thinkingMode.value = thinkingMode.value === 'fast' ? 'deep' : 'fast'
+  }
 
   /** 顶栏 Tab 列表（按 openTabIds 顺序，来自 sessionList） */
   const openTabs = computed<SessionInfo[]>(() =>
@@ -432,6 +451,9 @@ export const useChatStore = defineStore('chat', () => {
       return cache?.find(x => x.id === aiMsgId)
     }
 
+    const abortCtrl = new AbortController()
+    _abortControllers.set(originSessionId, abortCtrl)
+
     try {
       await sendChatMessage(userText, originSessionId, {
         onThinking(e) {
@@ -480,6 +502,16 @@ export const useChatStore = defineStore('chat', () => {
           if (e.is_final) _agentStatusBySession.value[originSessionId] = null
         },
         onArtifact(e) {
+          const isInline = ['LineChart', 'BarChart', 'Gauge', 'ValueCard',
+            'line-chart', 'bar-chart', 'gauge', 'value-card']
+            .includes(e.widget ?? e.component_type ?? '')
+          if (isInline) {
+            const m = findAiMsg()
+            if (m) {
+              if (!m.attachedArtifacts) m.attachedArtifacts = []
+              m.attachedArtifacts.push(e)
+            }
+          }
           _addMsg('artifact', e.title ?? '生成式组件', { artifact: e }, originSessionId)
           if (e.component_type === 'WorkOrderCard' || e.widget === 'WorkOrderCard') {
             pendingWorkOrder.value = e
@@ -527,13 +559,18 @@ export const useChatStore = defineStore('chat', () => {
           setTimeout(() => _refreshSession(originSessionId), 600)
         },
         onNetworkError(err) {
+          if (abortCtrl.signal.aborted) return
           _addMsg('error', `网络错误：${err.message}`, undefined, originSessionId)
           _loadingBySession.value[originSessionId] = false
         },
-      }, webSearchEnabled.value)
+      }, webSearchEnabled.value, thinkingMode.value, abortCtrl.signal)
     } catch (err) {
-      _addMsg('error', `请求失败：${(err as Error).message}`, undefined, originSessionId)
+      if (!abortCtrl.signal.aborted) {
+        _addMsg('error', `请求失败：${(err as Error).message}`, undefined, originSessionId)
+      }
       _loadingBySession.value[originSessionId] = false
+    } finally {
+      _abortControllers.delete(originSessionId)
     }
   }
 
@@ -586,6 +623,9 @@ export const useChatStore = defineStore('chat', () => {
       const cache = _msgCache.get(originSessionId)
       return cache?.find(x => x.id === aiMsgId)
     }
+
+    const abortCtrl = new AbortController()
+    _abortControllers.set(originSessionId, abortCtrl)
 
     try {
       await sendChatMessage(userText, originSessionId, {
@@ -650,13 +690,18 @@ export const useChatStore = defineStore('chat', () => {
           }
         },
         onNetworkError(err) {
+          if (abortCtrl.signal.aborted) return
           _addMsg('error', `网络错误：${err.message}`, undefined, originSessionId)
           _loadingBySession.value[originSessionId] = false
         },
-      }, webSearchEnabled.value)
+      }, webSearchEnabled.value, thinkingMode.value, abortCtrl.signal)
     } catch (err) {
-      _addMsg('error', `请求失败：${(err as Error).message}`, undefined, originSessionId)
+      if (!abortCtrl.signal.aborted) {
+        _addMsg('error', `请求失败：${(err as Error).message}`, undefined, originSessionId)
+      }
       _loadingBySession.value[originSessionId] = false
+    } finally {
+      _abortControllers.delete(originSessionId)
     }
   }
 
@@ -708,6 +753,26 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
+  // ── 终止生成 ─────────────────────────────────────────────────────────────
+  function stopGeneration() {
+    const sid = currentSessionId.value
+    if (!sid) return
+    const ctrl = _abortControllers.get(sid)
+    if (ctrl) {
+      ctrl.abort()
+      _abortControllers.delete(sid)
+    }
+    _loadingBySession.value[sid] = false
+    _agentStatusBySession.value[sid] = null
+    // 标记当前 AI 消息的思考为已完成
+    const aiMsg = [...messages.value].reverse().find((m: ChatMessage) => m.role === 'ai')
+    if (aiMsg && !aiMsg.thinkingFinished) {
+      aiMsg.thinkingFinished = true
+      if (!aiMsg.content) aiMsg.content = '（已终止生成）'
+    }
+    _dynamicLabelMap.clear()
+  }
+
   // ── 联网搜索开关（当前会话级别）──────────────────────────────────────────
   function toggleWebSearch() {
     webSearchEnabled.value = !webSearchEnabled.value
@@ -730,8 +795,9 @@ export const useChatStore = defineStore('chat', () => {
     sessionList, openTabs, sessionListLoading,
     currentSessionId, currentSession,
     messages, isLoading, currentAgentStatus, pendingWorkOrder, hasMessages,
-    webSearchEnabled,
+    webSearchEnabled, thinkingMode,
     init, loadSessionList, newSession, switchSession, removeTab, closeSession,
-    sendMessage, regenerateMessage, approveOrder, clearSession, renameSession, toggleWebSearch,
+    sendMessage, regenerateMessage, approveOrder, clearSession, renameSession,
+    toggleWebSearch, toggleThinkingMode, stopGeneration,
   }
 })

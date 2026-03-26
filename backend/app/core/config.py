@@ -24,6 +24,18 @@ class Settings(BaseSettings):
     LLM_BASE_URL: str = "https://api.deepseek.com/v1"
     LLM_MODEL: str = "deepseek-chat"
 
+    # 按角色独立配置模型（留空则 fallback 到 LLM_MODEL）
+    LLM_MODEL_ROUTER: str = ""
+    LLM_MODEL_REACT: str = ""
+    LLM_MODEL_SYNTHESIS: str = ""
+    LLM_MODEL_DIAGNOSE: str = ""
+
+    # 深度思考模式使用的强模型（留空则 fallback 到 LLM_MODEL）
+    LLM_MODEL_DEEP: str = ""
+
+    # 深度思考模式使用的强模型（留空则 fallback 到 LLM_MODEL）
+    LLM_MODEL_DEEP: str = ""
+
     # -----------------------------------------------------------------------
     # RAGFlow 知识库 API
     # -----------------------------------------------------------------------

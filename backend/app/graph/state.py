@@ -158,6 +158,15 @@ class AgentState(TypedDict):
     由 data_react_node 从 ToolMessage 中程序化提取（非 LLM 生成）。
     """
 
+    # -----------------------------------------------------------------------
+    # 思考模式（由前端传入，影响 Synthesis / Diagnose 的模型选择）
+    # -----------------------------------------------------------------------
+    thinking_mode: str
+    """
+    "fast" — 全链路使用快速模型（默认）
+    "deep" — Synthesis 和 Diagnose 使用深度思考模型（LLM_MODEL_DEEP）
+    """
+
 
 def initial_state(available_buildings: list[str] | None = None) -> AgentState:
     """创建空白初始状态，用于新会话。"""
@@ -178,6 +187,7 @@ def initial_state(available_buildings: list[str] | None = None) -> AgentState:
         context_summary="",
         chart_manifest="",
         react_data_summary="",
+        thinking_mode="fast",
     )
 
 

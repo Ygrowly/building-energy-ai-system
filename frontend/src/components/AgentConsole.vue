@@ -181,7 +181,7 @@
       </div>
 
       <!-- eslint-disable-next-line vue/no-v-for-template-key -->
-      <template v-for="msg in store.messages" :key="msg.id">
+      <template v-for="(msg, mIdx) in store.messages" :key="msg.id">
         <!-- 用户消息 -->
         <div class="msg msg-user" v-if="msg.role === 'user'">
           <div class="user-bubble">{{ msg.content }}</div>
@@ -325,16 +325,17 @@
         </template>
 
         <!-- 兜底：独立 Artifact（工单/报表，或无 AI 消息时的图表） -->
+        <!-- 已内嵌到 AI 气泡中的图表/卡片不再独立渲染 -->
 
         <!-- Artifact：数值卡片 -->
         <ValueCard
-          v-else-if="msg.role === 'artifact' && isValueCard(msg.artifact)"
+          v-else-if="msg.role === 'artifact' && isValueCard(msg.artifact) && !isArtifactInlined(msg, mIdx)"
           :artifact="ensureArtifact(msg.artifact)"
         />
 
         <!-- Artifact：图表 -->
         <DynamicChart
-          v-else-if="msg.role === 'artifact' && isChart(msg.artifact)"
+          v-else-if="msg.role === 'artifact' && isChart(msg.artifact) && !isArtifactInlined(msg, mIdx)"
           :artifact="ensureArtifact(msg.artifact)"
         />
 
@@ -394,6 +395,49 @@
             >
               <Icon icon="mdi:cursor-default-click-outline" width="18" />
             </button>
+            <div class="thinking-mode-dropdown" :class="{ disabled: store.isLoading }">
+              <button
+                class="tag-btn thinking-mode-trigger"
+                :class="{ 'thinking-mode-deep': store.thinkingMode === 'deep' }"
+                :disabled="store.isLoading"
+                @click="showThinkingModeMenu = !showThinkingModeMenu"
+              >
+                <Icon
+                  :icon="store.thinkingMode === 'deep' ? 'mdi:brain' : 'mdi:flash'"
+                  width="16"
+                />
+                {{ store.thinkingMode === 'deep' ? '深度思考' : '快速' }}
+                <Icon icon="mdi:chevron-up" width="14" class="dropdown-arrow" :class="{ open: showThinkingModeMenu }" />
+              </button>
+              <Transition name="dropdown-fade">
+                <div v-if="showThinkingModeMenu" class="thinking-mode-menu" @click.stop>
+                  <button
+                    class="thinking-mode-option"
+                    :class="{ active: store.thinkingMode === 'fast' }"
+                    @click="store.thinkingMode = 'fast'; showThinkingModeMenu = false"
+                  >
+                    <Icon icon="mdi:flash" width="16" />
+                    <div class="option-info">
+                      <span class="option-label">快速</span>
+                      <span class="option-desc">响应更快，适合日常查询</span>
+                    </div>
+                    <Icon v-if="store.thinkingMode === 'fast'" icon="mdi:check" width="16" class="option-check" />
+                  </button>
+                  <button
+                    class="thinking-mode-option"
+                    :class="{ active: store.thinkingMode === 'deep' }"
+                    @click="store.thinkingMode = 'deep'; showThinkingModeMenu = false"
+                  >
+                    <Icon icon="mdi:brain" width="16" />
+                    <div class="option-info">
+                      <span class="option-label">深度思考</span>
+                      <span class="option-desc">更精准的分析，适合复杂问题</span>
+                    </div>
+                    <Icon v-if="store.thinkingMode === 'deep'" icon="mdi:check" width="16" class="option-check" />
+                  </button>
+                </div>
+              </Transition>
+            </div>
             <button class="tag-btn" title="MCP 工具">
               <Icon icon="mdi:puzzle-outline" width="18" />
               MCP
@@ -486,6 +530,7 @@ function agentDotColor(name: string): string {
 
 const inputText = ref('')
 const inputFocused = ref(false)
+const showThinkingModeMenu = ref(false)
 const messagesEl = ref<HTMLElement>()
 const tabListEl = ref<HTMLElement>()
 const fileInputEl = ref<HTMLInputElement>()
@@ -527,11 +572,14 @@ function closeAllDropdowns() {
 function onDocClick(e: MouseEvent) {
   const target = e.target as Node
   if (historyPanelEl.value && !historyPanelEl.value.contains(target)) {
-    // 排除 history 按钮自身（它有自己的 toggle 逻辑）
     historyOpen.value = false
   }
   if (moreWrapEl.value && !moreWrapEl.value.contains(target)) {
     moreOpen.value = false
+  }
+  const dropdownEl = document.querySelector('.thinking-mode-dropdown')
+  if (dropdownEl && !dropdownEl.contains(target)) {
+    showThinkingModeMenu.value = false
   }
 }
 /* 自定义滚动条状态 */
@@ -807,6 +855,20 @@ watch(() => store.currentSessionId, async () => {
 // ── Artifact 类型判断 ────────────────────────────────────────────────────────
 function ensureArtifact(a: ArtifactEvent | undefined): ArtifactEvent {
   return a!
+}
+
+/** 检查独立 artifact 消息是否已被前面的 AI 消息内嵌（避免重复渲染） */
+function isArtifactInlined(msg: ChatMessage, msgIdx: number): boolean {
+  const artId = msg.artifact?.artifact_id
+  if (!artId) return false
+  for (let i = msgIdx - 1; i >= 0; i--) {
+    const prev = store.messages[i]
+    if (prev.role === 'ai' && prev.attachedArtifacts?.some(a => a.artifact_id === artId)) {
+      return true
+    }
+    if (prev.role === 'user') break
+  }
+  return false
 }
 
 function isValueCard(artifact?: ArtifactEvent): boolean {
@@ -2137,7 +2199,7 @@ textarea::placeholder { color: var(--text-muted); }
 .toolbar-left {
   display: flex;
   align-items: center;
-  gap: 0px;
+  gap: 2px;
 }
 
 .tag-btn {
@@ -2162,6 +2224,105 @@ textarea::placeholder { color: var(--text-muted); }
 .tag-btn.active {
   color: var(--accent);
   background: var(--accent-glow, rgba(96, 165, 250, 0.1));
+}
+
+/* ── 思考模式下拉 ── */
+.thinking-mode-dropdown {
+  position: relative;
+}
+.thinking-mode-dropdown.disabled {
+  pointer-events: none;
+  opacity: 0.5;
+}
+.thinking-mode-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 28px;
+  padding: 0 7px;
+  font-size: 11px;
+  cursor: pointer;
+  user-select: none;
+}
+.thinking-mode-trigger .dropdown-arrow {
+  transition: transform 0.2s ease;
+}
+.thinking-mode-trigger .dropdown-arrow.open {
+  transform: rotate(180deg);
+}
+.thinking-mode-deep {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: rgba(108, 142, 245, 0.1);
+}
+.thinking-mode-deep:hover {
+  background: rgba(108, 142, 245, 0.16);
+}
+
+.thinking-mode-menu {
+  position: absolute;
+  bottom: calc(100% + 2px);
+  left: 0;
+  min-width: 220px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.1);
+  padding: 4px;
+  z-index: 100;
+}
+.thinking-mode-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  background: transparent;
+  border-radius: 8px;
+  cursor: pointer;
+  color: var(--text-primary);
+  font-size: 13px;
+  text-align: left;
+  transition: background 0.15s;
+}
+.thinking-mode-option:hover {
+  background: var(--hover-bg, rgba(0, 0, 0, 0.04));
+}
+.thinking-mode-option.active {
+  background: rgba(108, 142, 245, 0.08);
+}
+.option-info {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+.option-label {
+  font-weight: 600;
+  font-size: 13px;
+  line-height: 1.3;
+}
+.option-desc {
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.3;
+  margin-top: 1px;
+}
+.option-check {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+/* dropdown transition */
+.dropdown-fade-enter-active,
+.dropdown-fade-leave-active {
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+.dropdown-fade-enter-from,
+.dropdown-fade-leave-to {
+  opacity: 0;
+  transform: translateY(4px);
 }
 
 .web-search-btn {

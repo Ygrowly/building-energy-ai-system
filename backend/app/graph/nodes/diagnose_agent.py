@@ -39,6 +39,7 @@ from app.schemas.mcp_schemas import (
     QueryEnergyMetricsInput,
     RAGHybridSearchInput,
     RenderUIComponentInput,
+    WebSearchInput,
 )
 
 logger = logging.getLogger(__name__)
@@ -70,7 +71,7 @@ DIAGNOSE_AGENT_SYSTEM_PROMPT = """你是一个楼宇能耗管理系统的专家�
 
 ⚠️ 重要：device_id 必须严格使用上表中的值，禁止自行编造或修改！
 
-## 你的专属工具（共 7 个）
+## 你的专属工具
 1. query_energy_metrics         — 查询时序原始数据（事实核查用）
 2. get_device_live_status       — 查询楼宇下所有设备实时状态（device_id、online_status、power_kw 等）
 3. get_building_rated_values    — ⭐ 查询国标（GB）期望值 vs 实际值逐小时对比（解释异常的核心依据）
@@ -78,6 +79,7 @@ DIAGNOSE_AGENT_SYSTEM_PROMPT = """你是一个楼宇能耗管理系统的专家�
 5. rag_hybrid_search            — 检索建筑规范/运维手册/技术标准
 6. render_ui_component          — 渲染诊断报告卡片或工单卡片
 7. create_work_order_draft      — 生成维修工单草稿（须人工确认才能提交）
+8. web_search（仅联网模式可用）  — 联网搜索补充信息，RAG 知识库不足时使用
 
 ---
 
@@ -123,7 +125,9 @@ DIAGNOSE_AGENT_SYSTEM_PROMPT = """你是一个楼宇能耗管理系统的专家�
 > **相关条文**：[检索到的具体内容摘要]
 > **补充说明**：[如有必要，给出专业解读]
 
-- 若检索结果 similarity < 0.2，提示"知识库中未找到直接相关条文，建议查阅对应原始标准"
+- 若检索结果 similarity < 0.2 或结果不充分：
+  - 若 web_search 工具可用（联网模式），调用 web_search 搜索相关规范/标准/技术方案作为补充
+  - 若 web_search 不可用，提示"知识库中未找到直接相关条文，建议查阅对应原始标准"
 
 ---
 
@@ -140,7 +144,8 @@ DIAGNOSE_AGENT_SYSTEM_PROMPT = """你是一个楼宇能耗管理系统的专家�
    - hvac_root_cause=B_small_deltaT  → 搜索"压差旁通阀 水力失调 大流量小温差"
    - hvac_root_cause=C_unexpected_on → 搜索"BMS 排程控制 非预期开机"
    - rule_triggered=water_leak       → 搜索"管网漏水 检测 排查"
-5. 【归因分析】结合规则诊断码 + 期望值偏差数据 + 规范条文，形成完整推理链
+4.5【联网补充】（可选）若 RAG 检索结果不充分且 web_search 可用，搜索故障类型的行业解决方案
+5. 【归因分析】结合规则诊断码 + 期望值偏差数据 + 规范条文（+ 联网参考），形成完整推理链
 6. 【结论输出】格式见下方
 7. 【工单生成】若需维修，先确认 device_id，再调用 create_work_order_draft
 
@@ -268,11 +273,19 @@ def _build_diagnose_base_tools() -> list[StructuredTool]:
 
 _DIAGNOSE_BASE_TOOLS = _build_diagnose_base_tools()
 
+_WEB_SEARCH_TOOL = _make_mcp_tool(
+    "web_search",
+    "联网搜索：RAG 知识库信息不足时，调用此工具从互联网获取补充信息。"
+    "传入简洁的搜索关键词（如'建筑空调系统节能优化方案'），返回多条参考摘要。"
+    "优先使用 rag_hybrid_search，仅在 RAG 结果不充分时才调用。",
+    args_schema=WebSearchInput,
+)
+
 DIAGNOSE_AGENT_TOOLS = [_TOOL_LIST_BUILDINGS] + _DIAGNOSE_BASE_TOOLS
 
 
-# 缓存键: (include_list_buildings, thinking_mode)
-_diagnose_agent_cache: dict[tuple[bool, str], Any] = {}
+# 缓存键: (include_list_buildings, thinking_mode, enable_web_search)
+_diagnose_agent_cache: dict[tuple[bool, str, bool], Any] = {}
 _diagnose_agent_lock: Any = None
 
 
@@ -294,12 +307,17 @@ def reset_diagnose_agent_cache() -> None:
 _MAX_HISTORY_MESSAGES = 8
 
 
-def _get_diagnose_agent(include_list_buildings: bool = True, thinking_mode: str = "fast"):
+def _get_diagnose_agent(
+    include_list_buildings: bool = True,
+    thinking_mode: str = "fast",
+    enable_web_search: bool = False,
+):
     """
-    获取 Diagnose Agent 实例（按 include_list + mode 缓存）。
+    获取 Diagnose Agent 实例（按 include_list + mode + web_search 缓存）。
     deep 模式使用 LLM_MODEL_DEEP，fast 模式使用 LLM_MODEL_DIAGNOSE / LLM_MODEL。
+    enable_web_search 为 True 时，额外注入 web_search 工具。
     """
-    cache_key = (include_list_buildings, thinking_mode)
+    cache_key = (include_list_buildings, thinking_mode, enable_web_search)
     with _get_diagnose_agent_lock():
         if cache_key in _diagnose_agent_cache:
             return _diagnose_agent_cache[cache_key]
@@ -321,6 +339,8 @@ def _get_diagnose_agent(include_list_buildings: bool = True, thinking_mode: str 
             streaming=True,
         )
         tools = DIAGNOSE_AGENT_TOOLS if include_list_buildings else _DIAGNOSE_BASE_TOOLS
+        if enable_web_search:
+            tools = list(tools) + [_WEB_SEARCH_TOOL]
         agent = create_react_agent(llm, tools=tools, prompt=DIAGNOSE_AGENT_SYSTEM_PROMPT)
         _diagnose_agent_cache[cache_key] = agent
         return agent
@@ -400,7 +420,12 @@ async def diagnose_agent_node(state: AgentState) -> dict[str, Any]:
     sub_state = {"messages": sub_messages}
 
     thinking_mode = state.get("thinking_mode", "fast")
-    agent = _get_diagnose_agent(include_list_buildings=include_list_tool, thinking_mode=thinking_mode)
+    enable_web_search = state.get("enable_web_search", False)
+    agent = _get_diagnose_agent(
+        include_list_buildings=include_list_tool,
+        thinking_mode=thinking_mode,
+        enable_web_search=enable_web_search,
+    )
 
     try:
         result = await agent.ainvoke(sub_state, config={"recursion_limit": 15})

@@ -1,131 +1,177 @@
 <template>
   <div class="chart-skeleton">
-    <!-- 微弱网格线暗示图表结构 -->
-    <div class="skeleton-grid">
-      <div class="grid-line" v-for="i in 4" :key="'h'+i"></div>
+    <!-- Y 轴刻度模拟 -->
+    <div class="skeleton-y-axis">
+      <div class="y-tick" v-for="i in 4" :key="'y'+i"></div>
     </div>
 
-    <!-- 模拟波形曲线（暗示折线图即将出现） -->
-    <svg class="skeleton-wave" viewBox="0 0 400 120" preserveAspectRatio="none">
-      <path
-        d="M0,90 C40,85 60,70 100,60 C140,50 160,75 200,55 C240,35 260,45 300,30 C340,15 370,25 400,20"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="2"
-        stroke-linecap="round"
-      />
-      <path
-        d="M0,90 C40,85 60,70 100,60 C140,50 160,75 200,55 C240,35 260,45 300,30 C340,15 370,25 400,20 L400,120 L0,120 Z"
-        fill="url(#skeleton-gradient)"
-      />
-      <defs>
-        <linearGradient id="skeleton-gradient" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stop-color="currentColor" stop-opacity="0.08" />
-          <stop offset="100%" stop-color="currentColor" stop-opacity="0" />
-        </linearGradient>
-      </defs>
-    </svg>
-
-    <!-- 中心加载指示器 -->
-    <div class="skeleton-center">
-      <div class="skeleton-icon">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-          <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
-        </svg>
+    <!-- 图表区域 -->
+    <div class="skeleton-chart-area">
+      <!-- 网格线 -->
+      <div class="skeleton-grid">
+        <div class="grid-line" v-for="i in 4" :key="'h'+i"></div>
       </div>
-      <span class="skeleton-label">图表加载中...</span>
+
+      <!-- 模拟柱状图骨架（底部对齐） -->
+      <div class="skeleton-bars">
+        <div class="bar-group" v-for="(h, i) in barHeights" :key="'b'+i">
+          <div class="bar" :style="{ height: h + '%', animationDelay: (i * 0.12) + 's' }"></div>
+        </div>
+      </div>
+
+      <!-- 模拟折线曲线叠加 -->
+      <svg class="skeleton-wave" viewBox="0 0 400 120" preserveAspectRatio="none">
+        <path
+          d="M0,90 C40,85 60,70 100,60 C140,50 160,75 200,55 C240,35 260,45 300,30 C340,15 370,25 400,20"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+        />
+        <path
+          d="M0,90 C40,85 60,70 100,60 C140,50 160,75 200,55 C240,35 260,45 300,30 C340,15 370,25 400,20 L400,120 L0,120 Z"
+          fill="url(#skel-grad)"
+        />
+        <defs>
+          <linearGradient id="skel-grad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="currentColor" stop-opacity="0.06" />
+            <stop offset="100%" stop-color="currentColor" stop-opacity="0" />
+          </linearGradient>
+        </defs>
+      </svg>
+
+      <!-- 横向扫光 -->
+      <div class="shimmer-overlay"></div>
     </div>
 
-    <!-- 横向扫光动画 -->
-    <div class="shimmer-overlay"></div>
+    <!-- X 轴刻度模拟 -->
+    <div class="skeleton-x-axis">
+      <div class="x-tick" v-for="i in 6" :key="'x'+i"></div>
+    </div>
   </div>
 </template>
+
+<script setup lang="ts">
+const barHeights = [45, 62, 38, 78, 55, 70, 42, 65, 50, 72, 48, 58]
+</script>
 
 <style scoped>
 .chart-skeleton {
   position: relative;
   width: 100%;
-  height: 200px;
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.02);
-  border: 1px solid rgba(255, 255, 255, 0.04);
+  height: 180px;
+  border-radius: 10px;
+  background: var(--bg-card, rgba(255, 255, 255, 0.02));
+  border: 1px solid rgba(108, 142, 245, 0.08);
   overflow: hidden;
+  display: grid;
+  grid-template-columns: 28px 1fr;
+  grid-template-rows: 1fr 20px;
+  padding: 14px 12px 6px 4px;
+  gap: 0;
+}
+
+/* Y 轴 */
+.skeleton-y-axis {
+  grid-row: 1;
+  grid-column: 1;
   display: flex;
-  align-items: center;
-  justify-content: center;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 2px 0;
+}
+.y-tick {
+  width: 20px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--skel-muted, rgba(108, 142, 245, 0.08));
+}
+
+/* 图表区域 */
+.skeleton-chart-area {
+  grid-row: 1;
+  grid-column: 2;
+  position: relative;
+  overflow: hidden;
+  border-radius: 4px;
 }
 
 /* 网格线 */
 .skeleton-grid {
   position: absolute;
-  inset: 20px 16px;
+  inset: 0;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
 }
-
 .grid-line {
   height: 1px;
-  background: rgba(255, 255, 255, 0.03);
-  border-radius: 1px;
+  background: var(--skel-line, rgba(108, 142, 245, 0.05));
 }
 
-/* 波形曲线 */
+/* 柱状图骨架 */
+.skeleton-bars {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 100%;
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  padding: 0 4px;
+  z-index: 1;
+}
+.bar-group {
+  flex: 1;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+.bar {
+  width: 70%;
+  max-width: 24px;
+  border-radius: 3px 3px 0 0;
+  background: var(--skel-bar, rgba(108, 142, 245, 0.08));
+  animation: barPulse 2.4s ease-in-out infinite;
+}
+@keyframes barPulse {
+  0%, 100% { opacity: 0.5; }
+  50%      { opacity: 1; }
+}
+
+/* 折线叠加 */
 .skeleton-wave {
   position: absolute;
-  bottom: 20px;
-  left: 16px;
-  right: 16px;
-  height: 60%;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 65%;
   color: var(--accent, #6c8ef5);
-  opacity: 0.12;
+  opacity: 0.1;
   animation: wavePulse 2.5s ease-in-out infinite;
-}
-
-@keyframes wavePulse {
-  0%, 100% { opacity: 0.08; }
-  50%      { opacity: 0.18; }
-}
-
-/* 中心图标 + 文字 */
-.skeleton-center {
-  position: relative;
   z-index: 2;
+  pointer-events: none;
+}
+@keyframes wavePulse {
+  0%, 100% { opacity: 0.06; }
+  50%      { opacity: 0.15; }
+}
+
+/* X 轴 */
+.skeleton-x-axis {
+  grid-row: 2;
+  grid-column: 2;
   display: flex;
-  flex-direction: column;
+  justify-content: space-between;
   align-items: center;
-  gap: 8px;
+  padding: 4px 4px 0;
 }
-
-.skeleton-icon {
-  width: 36px;
-  height: 36px;
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--text-muted, #6b7280);
-  animation: iconPulse 2s ease-in-out infinite;
-}
-
-@keyframes iconPulse {
-  0%, 100% { opacity: 0.5; transform: scale(1); }
-  50%      { opacity: 0.9; transform: scale(1.04); }
-}
-
-.skeleton-label {
-  font-size: 11px;
-  color: var(--text-muted, #6b7280);
-  letter-spacing: 0.03em;
-  opacity: 0.6;
-  animation: labelPulse 2s ease-in-out infinite;
-}
-
-@keyframes labelPulse {
-  0%, 100% { opacity: 0.4; }
-  50%      { opacity: 0.7; }
+.x-tick {
+  width: 26px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--skel-muted, rgba(108, 142, 245, 0.08));
 }
 
 /* 横向扫光 */
@@ -135,60 +181,56 @@
   background: linear-gradient(
     90deg,
     transparent 0%,
-    rgba(255, 255, 255, 0.03) 40%,
-    rgba(255, 255, 255, 0.06) 50%,
-    rgba(255, 255, 255, 0.03) 60%,
+    rgba(108, 142, 245, 0.03) 40%,
+    rgba(108, 142, 245, 0.06) 50%,
+    rgba(108, 142, 245, 0.03) 60%,
     transparent 100%
   );
   background-size: 200% 100%;
   animation: shimmerSlide 2s ease-in-out infinite;
   pointer-events: none;
+  z-index: 3;
 }
-
 @keyframes shimmerSlide {
   0%   { background-position: -200% 0; }
   100% { background-position: 200% 0; }
 }
 
-/* Light theme */
+/* ── Light theme ── */
 html[data-theme="light"] .chart-skeleton {
-  background: rgba(0, 0, 0, 0.02);
-  border-color: rgba(0, 0, 0, 0.04);
+  background: rgba(248, 250, 252, 0.6);
+  border-color: rgba(0, 0, 0, 0.06);
 }
-
+html[data-theme="light"] .y-tick,
+html[data-theme="light"] .x-tick {
+  background: rgba(0, 0, 0, 0.06);
+}
 html[data-theme="light"] .grid-line {
   background: rgba(0, 0, 0, 0.04);
 }
-
-html[data-theme="light"] .skeleton-icon {
-  background: rgba(0, 0, 0, 0.03);
-  border-color: rgba(0, 0, 0, 0.06);
+html[data-theme="light"] .bar {
+  background: rgba(108, 142, 245, 0.1);
 }
-
 html[data-theme="light"] .shimmer-overlay {
   background: linear-gradient(
     90deg,
     transparent 0%,
-    rgba(0, 0, 0, 0.02) 40%,
-    rgba(0, 0, 0, 0.04) 50%,
-    rgba(0, 0, 0, 0.02) 60%,
+    rgba(0, 0, 0, 0.015) 40%,
+    rgba(0, 0, 0, 0.03) 50%,
+    rgba(0, 0, 0, 0.015) 60%,
     transparent 100%
   );
   background-size: 200% 100%;
   animation: shimmerSlide 2s ease-in-out infinite;
 }
 
-/* prefers-reduced-motion: 关闭所有动画 */
+/* prefers-reduced-motion */
 @media (prefers-reduced-motion: reduce) {
-  .skeleton-wave,
-  .skeleton-icon,
-  .skeleton-label,
-  .shimmer-overlay {
+  .bar, .skeleton-wave, .shimmer-overlay {
     animation: none;
   }
-  .skeleton-wave   { opacity: 0.12; }
-  .skeleton-icon   { opacity: 0.6; }
-  .skeleton-label  { opacity: 0.5; }
+  .bar            { opacity: 0.7; }
+  .skeleton-wave  { opacity: 0.1; }
   .shimmer-overlay { display: none; }
 }
 </style>

@@ -796,3 +796,17 @@ class ForecastFromFeaturesOutput(BaseModel):
     )
     feature_count_received: int
     feature_count_expected: int
+
+
+# ---------------------------------------------------------------------------
+# 联网搜索
+# ---------------------------------------------------------------------------
+
+class WebSearchInput(BaseModel):
+    """联网搜索工具入参。"""
+    query: str = Field(
+        ...,
+        min_length=2,
+        max_length=200,
+        description="搜索关键词，应为简洁的中文或英文短语，如'建筑空调系统节能优化方案'"
+    )

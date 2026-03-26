@@ -222,48 +222,40 @@
                   <!-- 文字片段 -->
                   <div v-if="seg.type === 'text'" :key="'t'+sIdx" class="md-block" v-html="formatMarkdown(seg.text || '')"></div>
 
-                  <!-- 流式阶段占位条：anchor 已检测到但 artifact 尚未到达 -->
+                  <!-- 流式阶段：anchor 已检测到但 artifact 尚未到达 → 骨架屏 -->
                   <div v-else-if="seg.type === 'placeholder'" :key="'p'+sIdx" class="inline-artifact-wrap placeholder-phase">
-                    <div class="chart-placeholder">
-                      <div class="placeholder-bar"></div>
-                      <Icon icon="mdi:chart-bell-curve-cumulative" width="14" class="placeholder-icon" />
-                      <span class="placeholder-label">图表生成中</span>
-                    </div>
+                    <Transition name="skeleton-in" appear>
+                      <ChartSkeleton />
+                    </Transition>
                   </div>
 
-                  <!-- 图表：三阶段渲染（仅当前流式消息走 stagger，历史消息直接渲染） -->
+                  <!-- 图表：非流式直接渲染 / 流式中 active→骨架屏 / ready→真实图 -->
                   <div
                     v-else-if="seg.type === 'chart'"
                     :key="'c'+sIdx"
                     class="inline-artifact-wrap"
-                    :class="isStreamingArtifact(msg, seg.artifactId) ? artifactPhaseClass(seg.artifactId) : {}"
                   >
-                    <!-- 直接渲染（历史消息 / 流完 / 已就绪） -->
-                    <div
-                      v-if="!isStreamingArtifact(msg, seg.artifactId) || readySet.has(seg.artifactId ?? '')"
-                      class="chart-reveal-inner"
-                    >
-                      <DynamicChart
-                        v-if="seg.artifact && isChart(seg.artifact)"
-                        :artifact="ensureArtifact(seg.artifact)"
-                        :inline="true"
-                        :skip-skeleton="true"
-                      />
-                      <ValueCard
-                        v-else-if="seg.artifact && isValueCard(seg.artifact)"
-                        :artifact="ensureArtifact(seg.artifact)"
-                        :inline="true"
-                      />
-                    </div>
-                    <!-- stagger 阶段 1：等待揭示 → 占位条 -->
-                    <div v-else-if="!revealedSet.has(seg.artifactId ?? '')" class="chart-placeholder">
-                      <div class="placeholder-bar"></div>
-                      <Icon icon="mdi:chart-bell-curve-cumulative" width="14" class="placeholder-icon" />
-                      <span class="placeholder-label">图表准备中</span>
-                    </div>
-                    <!-- stagger 阶段 2：已揭示 → 骨架屏 -->
-                    <Transition v-else name="skeleton-in" appear>
-                      <ChartSkeleton />
+                    <Transition name="chart-in" mode="out-in">
+                      <div
+                        v-if="!(store.isLoading && msg.id === lastAiMsgId) || readySet.has(seg.artifactId ?? '')"
+                        :key="'real-'+seg.artifactId"
+                        class="chart-reveal-inner"
+                      >
+                        <DynamicChart
+                          v-if="seg.artifact && isChart(seg.artifact)"
+                          :artifact="ensureArtifact(seg.artifact)"
+                          :inline="true"
+                          :skip-skeleton="true"
+                        />
+                        <ValueCard
+                          v-else-if="seg.artifact && isValueCard(seg.artifact)"
+                          :artifact="ensureArtifact(seg.artifact)"
+                          :inline="true"
+                        />
+                      </div>
+                      <div v-else :key="'skel-'+seg.artifactId">
+                        <ChartSkeleton />
+                      </div>
                     </Transition>
                   </div>
                 </template>
@@ -465,7 +457,7 @@
             <button
               class="tool-btn web-search-btn"
               :class="{ 'web-search-active': store.webSearchEnabled }"
-              :title="store.webSearchEnabled ? '关闭联网搜索' : '开启联网搜索（Tavily）'"
+              :title="store.webSearchEnabled ? '关闭联网搜索' : '开启联网搜索（Agent 自主决策补充 RAG 不足信息）'"
               :disabled="store.isLoading"
               @click="store.toggleWebSearch()"
             >
@@ -519,23 +511,17 @@ import ValueCard from '@/generative-ui/ValueCard.vue'
 import EvidenceLink from '@/generative-ui/EvidenceLink.vue'
 import ChartSkeleton from '@/generative-ui/ChartSkeleton.vue'
 import type { ArtifactEvent } from '@/api/stream_client'
-<<<<<<< HEAD
 import { marked } from 'marked'
 
 import { useDataRangeStore } from '@/stores/dataRangeStore'
-=======
 import { useReportStore } from '@/stores/reportStore'
 import type { ReportSection } from '@/stores/reportStore'
->>>>>>> origin/feat/back
 
 const router = useRouter()
 const store = useChatStore()
 const pickerStore = useElementPickerStore()
-<<<<<<< HEAD
 const dataRangeStore = useDataRangeStore()
-=======
 const reportStore = useReportStore()
->>>>>>> origin/feat/back
 
 /** agent 类型 → 语义配色 */
 const _agentColors: Record<string, string> = {
@@ -682,13 +668,14 @@ onUnmounted(() => {
 /* tab 数量变化时更新滚动条 */
 watch(() => store.openTabs.length, () => nextTick(updateScrollThumb))
 
-// ── 最后一条 AI 消息 ID（用于流式光标定位）────────────────────────────────────
-const lastAiMsgId = computed(() => {
+// ── 最后一条 AI 消息（用于流式光标 + 图表释放定位）────────────────────────────
+const lastAiMsg = computed(() => {
   for (let i = store.messages.length - 1; i >= 0; i--) {
-    if (store.messages[i].role === 'ai') return store.messages[i].id
+    if (store.messages[i].role === 'ai') return store.messages[i]
   }
   return null
 })
+const lastAiMsgId = computed(() => lastAiMsg.value?.id ?? null)
 
 // ── 历史记录分组 ────────────────────────────────────────────────────────────
 interface HistoryGroup { label: string; sessions: SessionInfo[] }
@@ -994,98 +981,87 @@ function formatMarkdown(text: string): string {
 
 const CHART_PLACEHOLDER_RE = /<<CHART:([^>]+)>>/g
 
-const revealedSet     = reactive(new Set<string>())
-const readySet        = reactive(new Set<string>())
+// ── 图表队列式逐个释放 ──────────────────────────────────────────────────────
+// readySet: 图表已就绪 → 渲染真实图表
+// activeChartId: 当前正在「骨架屏→真实图」过渡的图表 ID
+// 只有 readySet 或 activeChartId 里的图表才会被 buildInlineSegments 输出
+const readySet         = reactive(new Set<string>())
+const activeChartId    = ref<string | null>(null)
 const deferredArtifacts = reactive(new Map<string, string>())
+const _chartQueue: string[] = []
+let _queueTimer: ReturnType<typeof setTimeout> | null = null
+
+function _processChartQueue() {
+  if (activeChartId.value || _chartQueue.length === 0) return
+  const id = _chartQueue.shift()!
+  activeChartId.value = id
+  _queueTimer = setTimeout(async () => {
+    readySet.add(id)
+    activeChartId.value = null
+    await nextTick()
+    if (_isNearBottom()) _scrollToBottom()
+    _processChartQueue()
+  }, 400)
+}
 
 watch(() => store.isLoading, (loading) => {
   if (loading) {
-    revealedSet.clear()
     readySet.clear()
+    activeChartId.value = null
     deferredArtifacts.clear()
+    _chartQueue.length = 0
+    if (_queueTimer) { clearTimeout(_queueTimer); _queueTimer = null }
   } else {
-    let idx = 0
+    // 流式结束：把剩余 deferred 全部入队
     for (const [id] of deferredArtifacts.entries()) {
-      _triggerStagger(id, idx * 120)
-      idx++
+      if (!_chartQueue.includes(id)) _chartQueue.push(id)
     }
     deferredArtifacts.clear()
+    _processChartQueue()
   }
 })
 
-function _triggerStagger(id: string, delay: number) {
-  setTimeout(async () => {
-    revealedSet.add(id)
-    await nextTick()
-    if (_isNearBottom()) _scrollToBottom()
-    setTimeout(async () => {
-      readySet.add(id)
-      await nextTick()
-      if (_isNearBottom()) _scrollToBottom()
-    }, 200)
-  }, delay)
-}
-
-// 流式文本中出现 <<CHART:xx>> 占位符 → 释放对应 deferred 图表
+// 流式文本中出现 <<CHART:xx>> → 入队等待逐个释放
 watch(
   () => {
     if (!store.isLoading) return null
-    const last = store.messages[store.messages.length - 1]
-    return last?.role === 'ai' ? last.content : null
+    return lastAiMsg.value?.content ?? null
   },
   (content) => {
     if (!content) return
-    let staggerIdx = 0
     for (const [id, anchor] of deferredArtifacts.entries()) {
       if (anchor && content.includes(`<<CHART:${anchor}>>`)) {
         deferredArtifacts.delete(id)
-        _triggerStagger(id, staggerIdx * 120)
-        staggerIdx++
+        _chartQueue.push(id)
       }
     }
+    _processChartQueue()
   },
 )
 
-// artifact 到达 → 文本已含对应占位符则立即揭示，否则 defer
+// artifact 到达 → 若锚点已在文本中则立即入队，否则 defer
 watch(
-  () => {
-    const last = store.messages[store.messages.length - 1]
-    if (last?.role !== 'ai') return 0
-    return last.attachedArtifacts?.length ?? 0
-  },
+  () => lastAiMsg.value?.attachedArtifacts?.length ?? 0,
   (newLen, oldLen) => {
-    const last = store.messages[store.messages.length - 1]
-    if (!last || last.role !== 'ai') return
-    const arts = last.attachedArtifacts ?? []
-    const content = last.content || ''
+    const msg = lastAiMsg.value
+    if (!msg) return
+    const arts = msg.attachedArtifacts ?? []
+    const content = msg.content || ''
     const startIdx = oldLen ?? 0
-    let immediateIdx = 0
     for (let i = startIdx; i < newLen; i++) {
       const art = arts[i]
       const id = art?.artifact_id ?? `_art_${i}`
       const anchor = art?.anchor || ''
       if (anchor && content.includes(`<<CHART:${anchor}>>`)) {
-        _triggerStagger(id, immediateIdx * 120)
-        immediateIdx++
+        _chartQueue.push(id)
       } else {
         deferredArtifacts.set(id, anchor)
       }
     }
+    _processChartQueue()
   },
 )
 
-function isStreamingArtifact(msg: ChatMessage, artId?: string): boolean {
-  return store.isLoading && msg.id === lastAiMsgId.value && !!artId && !readySet.has(artId)
-}
-
-function artifactPhaseClass(id?: string): Record<string, boolean> {
-  if (!id) return {}
-  return {
-    'pending-phase':  !revealedSet.has(id),
-    'skeleton-phase': revealedSet.has(id) && !readySet.has(id),
-    'ready-phase':    readySet.has(id),
-  }
-}
 
 // ── 内嵌图表分片渲染（占位符驱动）─────────────────────────────────────────────
 interface InlineSegment {
@@ -1132,10 +1108,11 @@ function buildInlineSegments(msg: ChatMessage): InlineSegment[] {
     const art = anchorToArt.get(anchor)
     if (art) {
       const artId = art.artifact_id ?? `_art_${anchor}`
-      segments.push({ type: 'chart', artifact: art, artifactId: artId })
       usedAnchors.add(anchor)
-    } else if (isStreaming) {
-      segments.push({ type: 'placeholder', anchor })
+      // 流式期间：只有轮到的图表（active 或 ready）才渲染，其余跳过
+      if (!isStreaming || readySet.has(artId) || activeChartId.value === artId) {
+        segments.push({ type: 'chart', artifact: art, artifactId: artId })
+      }
     }
 
     lastIndex = match.index + match[0].length
@@ -1907,61 +1884,7 @@ html[data-theme="light"] .tab.active .tab-close {
   overflow: hidden;
 }
 
-/* ── 占位条（流式阶段 / stagger 等待） ─────────────────────────── */
-.chart-placeholder {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 12px 16px;
-  height: 46px;
-  border-radius: 8px;
-  background: rgba(108, 142, 245, 0.04);
-  border: 1px dashed rgba(108, 142, 245, 0.15);
-  position: relative;
-  overflow: hidden;
-}
-
-.placeholder-bar {
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(
-    90deg,
-    transparent 0%,
-    rgba(108, 142, 245, 0.06) 40%,
-    rgba(108, 142, 245, 0.1) 50%,
-    rgba(108, 142, 245, 0.06) 60%,
-    transparent 100%
-  );
-  background-size: 200% 100%;
-  animation: placeholderShimmer 2s ease-in-out infinite;
-}
-
-@keyframes placeholderShimmer {
-  0%   { background-position: -200% 0; }
-  100% { background-position: 200% 0; }
-}
-
-.placeholder-icon {
-  color: var(--accent, #6c8ef5);
-  opacity: 0.5;
-  animation: placeholderPulse 2s ease-in-out infinite;
-  z-index: 1;
-}
-
-.placeholder-label {
-  font-size: 11px;
-  color: var(--text-muted);
-  letter-spacing: 0.03em;
-  opacity: 0.7;
-  z-index: 1;
-}
-
-@keyframes placeholderPulse {
-  0%, 100% { opacity: 0.4; transform: scale(1); }
-  50%      { opacity: 0.8; transform: scale(1.05); }
-}
-
-/* 占位条淡入 */
+/* 占位/骨架屏淡入 */
 .placeholder-phase {
   animation: placeholderFadeIn 0.4s ease-out both;
 }
@@ -2019,29 +1942,8 @@ html[data-theme="light"] .tab.active .tab-close {
   100% { background-position: 200% 0; opacity: 0; }
 }
 
-/* Light theme 适配 */
-html[data-theme="light"] .chart-placeholder {
-  background: rgba(0, 0, 0, 0.02);
-  border-color: rgba(0, 0, 0, 0.1);
-}
-html[data-theme="light"] .placeholder-bar {
-  background: linear-gradient(
-    90deg,
-    transparent 0%,
-    rgba(0, 0, 0, 0.03) 40%,
-    rgba(0, 0, 0, 0.06) 50%,
-    rgba(0, 0, 0, 0.03) 60%,
-    transparent 100%
-  );
-  background-size: 200% 100%;
-  animation: placeholderShimmer 2s ease-in-out infinite;
-}
-
 @media (prefers-reduced-motion: reduce) {
   .inline-artifact-wrap,
-  .chart-placeholder,
-  .placeholder-bar,
-  .placeholder-icon,
   .ready-phase::after {
     animation: none !important;
     transition: none !important;

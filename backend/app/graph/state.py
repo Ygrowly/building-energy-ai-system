@@ -168,6 +168,12 @@ class AgentState(TypedDict):
     "deep" — Synthesis 和 Diagnose 使用深度思考模型（LLM_MODEL_DEEP）
     """
 
+    enable_web_search: bool
+    """
+    是否启用联网搜索。True 时 Diagnose Agent 可调用 web_search 工具
+    从互联网获取 RAG 知识库不足的补充信息。由前端 toggle 控制。
+    """
+
 
 def initial_state(available_buildings: list[str] | None = None) -> AgentState:
     """创建空白初始状态，用于新会话。"""
@@ -189,6 +195,7 @@ def initial_state(available_buildings: list[str] | None = None) -> AgentState:
         chart_manifest="",
         react_data_summary="",
         thinking_mode="fast",
+        enable_web_search=False,
     )
 
 

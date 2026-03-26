@@ -45,7 +45,6 @@ from app.graph.state import initial_state
 from app.graph.workflow import get_graph
 from app.graph.nodes.router_agent import _try_fast_path as _router_fast_path
 from app.mcp.tools.data_query import list_available_buildings
-from app.services.web_search import tavily_search
 from app.schemas.genui_protocol import (
     SessionInfo,
     SessionListResponse,
@@ -296,6 +295,11 @@ def _describe_tool_call(tool_name: str, tool_input: dict) -> str:
         query = tool_input.get("query", "")
         return f"检索知识库：{query[:30]}" if query else "检索知识库"
 
+    # ── 联网搜索 ──
+    if tool_name == "web_search":
+        query = tool_input.get("query", "")
+        return f"联网搜索：{query[:30]}" if query else "联网搜索补充信息"
+
     # ── 兜底：从参数中提取关键信息 ──
     parts = [tool_name]
     if building:
@@ -417,7 +421,7 @@ async def _stream_graph(
     每轮结束后异步持久化会话状态到 PostgreSQL。
     user_id：当前用户 ID，首次创建会话时写入归属。
     request_id：本请求追踪 ID，用于日志与 done 事件（P3 可观测性）。
-    enable_web_search：若为 True，先调用 Tavily 搜索，将结果注入为上下文。
+    enable_web_search：若为 True，注入到 graph state，Agent 可自主调用 web_search 工具。
     """
     request_id = request_id or str(uuid.uuid4())
 
@@ -451,45 +455,14 @@ async def _stream_graph(
 
     is_first_message = len(state.get("messages", [])) == 0
 
-    # ── 注入思考模式（每次请求动态传入，不持久化到会话历史）────────────────
+    # ── 注入思考模式和联网搜索开关（每次请求动态传入）────────────────────────
     state["thinking_mode"] = thinking_mode
+    state["enable_web_search"] = enable_web_search
 
     # ── 始终将原始消息写入 state（持久化到 DB 的历史）────────────────────────
     state["messages"] = list(state["messages"]) + [HumanMessage(content=user_message)]
 
-    # ── 联网搜索：构造仅用于当次 LLM 调用的 graph_input，不污染持久化历史 ──
-    # graph_input 与 state 的唯一区别是最后一条 HumanMessage 携带搜索上下文。
-    # 搜索完成后 final_state_holder["messages"] 可能包含注入内容，
-    # 在合并 merged 时需还原为原始消息（见下方"恢复原始消息"注释块）。
     graph_input = state
-    augmented_message = user_message
-
-    if enable_web_search:
-        yield _thinking_event("web_search", "正在联网搜索最新信息...", hop_count=0)
-        try:
-            summary = await tavily_search(user_message)
-            if summary and summary.context_block:
-                augmented_message = f"{summary.context_block}\n\n用户问题：{user_message}"
-                # graph_input 是 state 的浅拷贝，messages 替换为带搜索上下文的版本
-                graph_input = dict(state)
-                graph_input["messages"] = list(state["messages"][:-1]) + [
-                    HumanMessage(content=augmented_message)
-                ]
-                yield _thinking_event(
-                    "web_search",
-                    f"已获取 {len(summary.results)} 条参考资料，正在分析...",
-                    hop_count=0,
-                )
-                logger.info(
-                    "联网搜索注入上下文: session=%s results=%d",
-                    session_id, len(summary.results),
-                )
-            else:
-                yield _thinking_event("web_search", "未找到相关资料，将基于已有知识回答", hop_count=0)
-                logger.warning("联网搜索未返回结果: session=%s", session_id)
-        except Exception as exc:
-            yield _thinking_event("web_search", "联网搜索暂时不可用，将基于已有知识回答", hop_count=0)
-            logger.error("联网搜索异常，降级: %s", exc)
 
     graph = get_graph()
 
@@ -765,18 +738,6 @@ async def _stream_graph(
     if final_state_holder:
         merged = dict(state)
         merged.update(final_state_holder)
-
-        # ── 恢复原始用户消息（防止搜索上下文污染持久化的对话历史）──────────
-        # final_state_holder["messages"] 可能含有带搜索上下文的 HumanMessage，
-        # 找到并替换回 user_message，确保 DB 中存储的是原始消息而非注入内容。
-        if augmented_message != user_message and "messages" in merged:
-            msgs = list(merged["messages"])
-            for i in range(len(msgs) - 1, -1, -1):
-                if isinstance(msgs[i], HumanMessage) and msgs[i].content == augmented_message:
-                    msgs[i] = HumanMessage(content=user_message)
-                    merged["messages"] = msgs
-                    break
-
         _sessions[session_id] = merged
         hop = merged.get("hop_count", 0)
         pa = merged.get("pending_action")
@@ -790,14 +751,6 @@ async def _stream_graph(
         )
         try:
             fallback_state = await graph.ainvoke(graph_input)
-            # 同样恢复原始消息
-            if augmented_message != user_message and "messages" in fallback_state:
-                msgs = list(fallback_state["messages"])
-                for i in range(len(msgs) - 1, -1, -1):
-                    if isinstance(msgs[i], HumanMessage) and msgs[i].content == augmented_message:
-                        msgs[i] = HumanMessage(content=user_message)
-                        fallback_state["messages"] = msgs
-                        break
             _sessions[session_id] = fallback_state
             merged = fallback_state
             hop = fallback_state.get("hop_count", 0)
@@ -1147,7 +1100,13 @@ async def get_session_messages(
             elif isinstance(msg, AIMessage) and msg.content:
                 if "[Router]" in str(msg.content):
                     continue
-                result.append({"role": "assistant", "content": msg.content})
+                if getattr(msg, "tool_calls", None):
+                    continue
+                entry = {"role": "assistant", "content": msg.content}
+                if result and result[-1]["role"] == "assistant":
+                    result[-1] = entry
+                else:
+                    result.append(entry)
 
         return {
             "session_id": session_id,

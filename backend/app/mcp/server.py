@@ -38,6 +38,7 @@ from app.mcp.tools.ui_render import (
 )
 from app.mcp.tools.rag_search import rag_hybrid_search
 from app.mcp.tools.forecast import building_kpi_forecast, building_kpi_forecast_debug
+from app.mcp.tools.web_search_tool import web_search
 
 # Schema 导入（用于参数校验）
 from app.schemas.mcp_schemas import (
@@ -55,6 +56,7 @@ from app.schemas.mcp_schemas import (
     QueryEnergyMetricsInput,
     RAGHybridSearchInput,
     RenderUIComponentInput,
+    WebSearchInput,
 )
 
 
@@ -230,6 +232,18 @@ _register(ToolDefinition(
     input_schema=ForecastFromFeaturesInput,
     requires_db=False,
     func=building_kpi_forecast_debug,
+))
+
+_register(ToolDefinition(
+    name="web_search",
+    description=(
+        "联网搜索：当 RAG 知识库信息不足时，调用此工具从互联网获取补充信息。"
+        "传入简洁的搜索关键词（中文或英文），返回多条带来源 URL 的参考摘要。"
+        "仅在用户开启联网开关时可用。"
+    ),
+    input_schema=WebSearchInput,
+    requires_db=False,
+    func=web_search,
 ))
 
 

@@ -263,8 +263,32 @@ export const useChatStore = defineStore('chat', () => {
       // 从 localStorage 恢复本会话生成的 artifact（图表、工单等），追加到文本消息之后
       const cachedArtifacts = _loadArtifactsFromStorage(sessionId)
       if (cachedArtifacts.length > 0) {
-        // artifact 按原始时间戳排序，保留生成顺序
         cachedArtifacts.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime())
+
+        const INLINE_WIDGETS = new Set([
+          'LineChart', 'BarChart', 'Gauge', 'ValueCard',
+          'line-chart', 'bar-chart', 'gauge', 'value-card',
+        ])
+        // 将内联类型 artifact 重新挂到包含对应 <<CHART:anchor>> 的 AI 消息上
+        for (const artMsg of cachedArtifacts) {
+          const art = artMsg.artifact
+          if (!art) continue
+          const widget = art.widget ?? art.component_type ?? ''
+          if (!INLINE_WIDGETS.has(widget)) continue
+          const anchor = art.anchor
+          if (!anchor) continue
+          for (let i = parsed.length - 1; i >= 0; i--) {
+            const m = parsed[i]
+            if (m.role === 'ai' && m.content.includes(`<<CHART:${anchor}>>`)) {
+              if (!m.attachedArtifacts) m.attachedArtifacts = []
+              if (!m.attachedArtifacts.some((a: ArtifactEvent) => a.artifact_id === art.artifact_id)) {
+                m.attachedArtifacts.push(art)
+              }
+              break
+            }
+          }
+        }
+
         parsed.push(...cachedArtifacts)
       }
 

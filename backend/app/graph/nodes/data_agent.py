@@ -25,6 +25,7 @@ from langgraph.prebuilt import create_react_agent
 from pydantic import BaseModel
 
 from app.core.config import get_settings
+from app.core.data_range import get_data_range
 from app.db.session import AsyncSessionLocal
 from app.graph.state import AgentState, update_context_summary
 from app.graph.evidence import extract_evidence
@@ -40,7 +41,6 @@ from app.schemas.mcp_schemas import (
     GetDeviceLiveStatusInput,
     QueryDailyEnergySummaryInput,
     QueryEnergyMetricsInput,
-    RenderUIComponentInput,
 )
 from app.graph.viz_engine import generate_viz_artifacts, build_chart_manifest, build_data_summary
 
@@ -49,29 +49,44 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # System Prompt — ReAct 阶段（只做工具调用 + 简要摘要）
 # ---------------------------------------------------------------------------
-DATA_AGENT_SYSTEM_PROMPT = """你是一个楼宇能耗管理系统的数据分析师（Data Agent）。
-你拥有只读数据库权限，负责所有数据查询、统计分析和图表生成工作。
+DATA_REACT_PROMPT = """你是一个楼宇能耗管理系统的数据分析师（Data Agent）。
+你拥有只读数据库权限，负责通过工具调用收集数据。
+**你只需要调用工具收集数据，不需要生成详细分析文本。**
+分析文本会由下游 Synthesis 模块基于你收集的数据自动生成。
 
-## 你的专属工具（严格按此列表调用，不允许猜测工具名称）
+## 你的专属工具
 1. list_available_buildings — 列出全部楼宇。**仅当上下文未提供楼宇列表时才调用**
 2. query_energy_metrics — 查询指定建筑、时间段、指标的原始时序数据（小时级）
 3. get_device_live_status — 查询楼宇下所有设备实时状态
-4. query_daily_energy_summary — 查询单栋楼按天汇总的能耗趋势（含用电、用水、空调三个指标）
+4. query_daily_energy_summary — 查询单栋楼按天/周/月汇总的能耗趋势（含用电、用水、空调三个指标）
 5. calculate_system_cop — 计算空调系统能效比（严禁自己算）
 6. detect_energy_anomalies — 基于规则检测能耗异常
-7. compare_metric_across_buildings — 多栋楼同一指标横向汇总对比，building_ids 传空则自动对比全部楼宇
-8. compare_time_periods — 同环比分析（当期 vs 基期），返回变化量和变化率
-9. render_ui_component — 生成前端图表/卡片渲染指令（有数值结果时必须调用）
-10. generate_report — 生成 CSV 报表下载链接，用户要求"导出/生成报表"时调用
+7. compare_metric_across_buildings — 多栋楼同一指标横向汇总对比
+8. compare_time_periods — 同环比分析（当期 vs 基期）
+9. generate_report — 生成 CSV 报表下载链接
+10. building_kpi_forecast_6h_12h — 预测楼宇未来 6/12 小时 KPI
 
 ## 建筑 ID 说明
 - building_id 使用 building_type 值：'Education'、'Office'、'Public services'
 - **上下文已提供楼宇列表时，直接使用，禁止再调用 list_available_buildings**
 
 ## 数据时间范围
-- 数据库有效数据：2016-04-01 ~ 2016-05-02
-- 用户未指定时间时，优先使用上下文中的时间范围，否则默认 2016-04-01 ~ 2016-05-02
-- 禁止使用 2024/2025/2026 等数据库中不存在的日期
+- 使用上下文注入的【数据有效时间范围】，禁止硬编码日期
+- 用户未指定时间时，使用上下文中的默认查询范围
+
+## 粒度选择指南（query_daily_energy_summary 的 granularity 参数）
+| 用户意图/时间跨度 | 推荐粒度 | 说明 |
+|---|---|---|
+| 某一天的详细数据 | day | 单天只有 1 条日汇总 |
+| 1~2 周趋势 | day | 7~14 个数据点，适合折线图 |
+| 1~3 个月趋势 | day | 30~90 个数据点，清晰展示波动 |
+| 3~6 个月趋势 | week | 12~26 个数据点，避免过密 |
+| 半年~1年趋势 | month | 6~12 个数据点 |
+| 1年以上趋势 | month | 避免数据点过多 |
+| "春季"/"夏季"等季节性分析 | day | 约 90 天，能看到季节内部波动 |
+| 不确定时 | day | 默认选 day，后端会自动纠正 |
+
+**核心原则：趋势分析至少需要 7 个数据点。如果预计数据点不足 7，降低粒度。**
 
 ## 工具选择指南
 | 场景 | 首选工具 |
@@ -83,51 +98,17 @@ DATA_AGENT_SYSTEM_PROMPT = """你是一个楼宇能耗管理系统的数据分�
 | 故障/异常分析 | detect_energy_anomalies |
 | 预测未来能耗/预测异常 | building_kpi_forecast_6h_12h |
 
-## 效率规范（重要）
-- **完成一个任务的工具调用次数通常不超过 5 次**（查询 + 渲染），超过说明选错了工具
-- 开始前先制定查询计划，每种数据只查一次，不重复调用相同工具
-- 多楼数据渲染时，把所有系列合并进一个 render_ui_component 调用
-
-## 工作规范
-1. 先调工具获取真实数据，再组织自然语言回答
-2. 有数值结果时，必须调用 render_ui_component 可视化
-3. 工具报错时，分析原因并修正参数后最多重试 2 次
-4. 数据确实不存在时，如实说明，不要编造
-
-## render_ui_component 的 data_payload 格式规范（严格遵守）
-
-**LineChart / BarChart（折线图/柱状图）**：
-```json
-{
-  "series": [
-    {
-      "name": "教学楼",
-      "data": [1500.0, 1480.0, 1620.0],
-      "timestamps": ["2016-04-01", "2016-04-02", "2016-04-03"]
-    },
-    {
-      "name": "办公楼",
-      "data": [980.0, 1020.0, 950.0],
-      "timestamps": ["2016-04-01", "2016-04-02", "2016-04-03"]
-    }
-  ]
-}
-```
-关键约束：
-- `data` 字段必须是**纯数字数组**（float），不能是对象或字符串
-- `timestamps` 是与 `data` 等长的日期字符串列表，格式 "YYYY-MM-DD"
-- 每个楼宇一个 series 对象，多楼宇合并进同一次 render_ui_component 调用
-
-**Gauge（仪表盘）**：`{"value": 3.5}`
+## 效率规范
+- **完成一个任务的工具调用次数通常不超过 5 次**
+- 开始前先制定查询计划，每种数据只查一次
+- 多楼趋势对比：对每栋楼调用一次 query_daily_energy_summary（图表由 viz_engine 自动合并）
 
 ## 禁止事项
 - 禁止自行计算 COP、总耗电量等（必须调工具）
 - 禁止输出未经工具返回的数字
 - 禁止查询白名单外的建筑
 - 禁止冗余重复的工具调用
-- 禁止在 data_payload 的 data 字段中放对象（必须是数字）"""
-
-DATA_REACT_PROMPT = DATA_AGENT_SYSTEM_PROMPT
+- 禁止生成详细分析文本（只做简要的数据确认即可）"""
 
 
 # ---------------------------------------------------------------------------
@@ -165,9 +146,8 @@ DATA_AGENT_TOOLS = [
     _make_mcp_tool(
         "query_energy_metrics",
         "查询指定建筑在时间范围内的能耗指标时序数据。"
-        "默认时间范围：2016-04-01 ~ 2016-05-02。"
-        "metrics 枚举值: electricity_kwh/water_m3/hvac_energy_kwh/"
-        "hvac_supply_temp_c/hvac_return_temp_c/ambient_temp_c/humidity_rh_pct/occupancy_density_per_100sqm",
+        "metrics 枚举值: electricity_kwh/water_m3/hac_energy/"
+        "sim_supply_temp_c/sim_return_temp_c/air_temp_c/humidity_rh_pct",
         args_schema=QueryEnergyMetricsInput,
     ),
     _make_mcp_tool(
@@ -177,41 +157,37 @@ DATA_AGENT_TOOLS = [
     ),
     _make_mcp_tool(
         "query_daily_energy_summary",
-        "查询按天汇总的能耗趋势（从物化视图，毫秒级响应）。默认时间范围：2016-04-01 ~ 2016-05-02。",
+        "查询按天/周/月汇总的能耗趋势（从物化视图，毫秒级响应）。"
+        "granularity 参数: day（默认）/week/month。后端有智能粒度纠正。",
         args_schema=QueryDailyEnergySummaryInput,
     ),
     _make_mcp_tool(
         "calculate_system_cop",
-        "计算指定建筑空调系统的能效比 COP 并与 GB 50189-2015 国标基准对比。默认时间范围：2016-04-01 ~ 2016-05-02。",
+        "计算指定建筑空调系统的能效比 COP 并与 GB 50189-2015 国标基准对比。",
         args_schema=CalculateSystemCOPInput,
     ),
     _make_mcp_tool(
         "detect_energy_anomalies",
-        "基于物理规则检测能耗异常（夜间高功率/零人高耗/传感器尖刺）。默认时间范围：2016-04-01 ~ 2016-05-02。",
+        "基于物理规则检测能耗异常（水漏/电过载/空调过耗）。",
         args_schema=DetectEnergyAnomaliesInput,
     ),
     _make_mcp_tool(
         "compare_metric_across_buildings",
         "多栋楼同一指标横向聚合对比，支持 avg/sum/max/min。"
         "适合'哪栋楼用电最多'、'A楼B楼湿度差'等跨楼问题。"
-        "building_ids 传空列表则对比所有楼宇。默认时间范围：2016-04-01 ~ 2016-05-02。",
+        "building_ids 传空列表则对比所有楼宇。",
         args_schema=CompareMetricAcrossBuildingsInput,
     ),
     _make_mcp_tool(
         "compare_time_periods",
         "同环比分析：对同一建筑、同一指标在两段时间之间做对比，返回变化量和变化率(%)。"
-        "适合'本周vs上周'、'4月vs3月'等时间对比问题。默认时间范围在 2016-04 ~ 2016-05 内。",
+        "适合'本周vs上周'、'4月vs3月'等时间对比问题。",
         args_schema=CompareTimePeriodsInput,
-    ),
-    _make_mcp_tool(
-        "render_ui_component",
-        "生成前端图表/卡片渲染指令（LineChart/BarChart/Gauge/WorkOrderCard/ReportDownload）。",
-        args_schema=RenderUIComponentInput,
     ),
     _make_mcp_tool(
         "generate_report",
         "生成统计报表 CSV 下载链接。用户说'生成报表'/'导出数据'时调用。"
-        "返回下载 URL，前端渲染为下载按钮。默认时间范围：2016-04-01 ~ 2016-05-02。",
+        "返回下载 URL，前端渲染为下载按钮。",
         args_schema=GenerateReportInput,
     ),
     _make_mcp_tool(
@@ -253,7 +229,7 @@ _MAX_HISTORY_MESSAGES = 8
 
 
 def _get_react_agent(include_list_available_buildings: bool):
-    """获取 ReAct Agent 单例。max_tokens 降低到 500，只做工具选择 + 简要确认。"""
+    """获取 ReAct Agent 单例。max_tokens=1500，只做工具选择 + 简要确认。"""
     global _cached_react_agent_full, _cached_react_agent_no_list
     with _get_react_agent_lock():
         if include_list_available_buildings:
@@ -265,7 +241,7 @@ def _get_react_agent(include_list_available_buildings: bool):
                 api_key=settings.LLM_API_KEY or "placeholder",
                 base_url=settings.LLM_BASE_URL,
                 temperature=0.1,
-                max_tokens=1500,   # 降低：减少单次 LLM 调用的生成量
+                max_tokens=1500,
             )
             _cached_react_agent_full = create_react_agent(
                 llm, tools=DATA_AGENT_TOOLS, prompt=DATA_REACT_PROMPT,
@@ -281,47 +257,30 @@ def _get_react_agent(include_list_available_buildings: bool):
             api_key=settings.LLM_API_KEY or "placeholder",
             base_url=settings.LLM_BASE_URL,
             temperature=0.1,
-            max_tokens=1500,   # 降低：减少单次 LLM 调用的生成量
+            max_tokens=1500,
         )
         tools_wo_list = [t for t in DATA_AGENT_TOOLS if getattr(t, "name", "") != "list_available_buildings"]
         _cached_react_agent_no_list = create_react_agent(
             llm, tools=tools_wo_list, prompt=DATA_REACT_PROMPT,
         )
-        return _cached_data_agent_no_list_buildings
-    # 理论上不会到达：两种分支里都有 return。这里放一个兜底，避免异常情况下返回 None。
-    return _cached_data_agent_full if include_list_available_buildings else _cached_data_agent_no_list_buildings
+        return _cached_react_agent_no_list
 
 
 async def data_react_node(state: AgentState) -> dict[str, Any]:
     """
-    LangGraph 节点函数：Data Agent。
+    LangGraph 节点：Data Agent Phase 1（ReAct 工具调用）。
 
-    优化要点：
-    1. 把路由器提取的楼宇列表/时间范围/目标楼宇注入为 SystemMessage，
-       避免 agent 浪费工具调用去"发现"已知信息。
-    2. 限制传入的历史消息数量，防止 token 随对话增长而膨胀。
-    3. 记录耗时以便性能诊断。
+    优化：
+    1. 动态注入数据时间范围、楼宇列表、时间上下文
+    2. 限制历史消息数量
+    3. viz_engine 自动生成图表
     """
     t0 = time.time()
     hop_count = state.get("hop_count", 0) + 1
 
-    # 预取楼宇列表
-    available = state.get("available_buildings")
-    if not available:
-        try:
-            async with AsyncSessionLocal() as session:
-                res = await call_tool("list_available_buildings", {}, session=session)
-            if not isinstance(res, MCPError):
-                fetched = [b.building_type for b in (res.buildings or []) if b.building_type]
-                if fetched:
-                    available = fetched
-                    state["available_buildings"] = fetched
-        except Exception as exc:
-            logger.warning("prefetch available_buildings 失败: %s", exc)
-
-    from app.core.data_range import get_data_range
     dr = await get_data_range()
 
+    # ── 构建上下文注入消息 ─────────────────────────────────────────────
     context_parts: list[str] = []
 
     context_parts.append(
@@ -348,7 +307,7 @@ async def data_react_node(state: AgentState) -> dict[str, Any]:
         if start and end:
             context_parts.append(f"【查询时间范围】: {start} ~ {end}")
 
-    # ── 全局 messages 已只含 Human + 最终 AI（干净紧凑），取最近 N 条 ──
+    # ── 取最近 N 条历史消息 ──
     history = state.get("messages", [])
     recent = history[-_MAX_HISTORY_MESSAGES:] if len(history) > _MAX_HISTORY_MESSAGES else history
 
@@ -361,7 +320,12 @@ async def data_react_node(state: AgentState) -> dict[str, Any]:
     else:
         sub_messages = list(recent)
 
-    # 在进入 ReAct 前决定工具集合
+    # 提取用户问题（供 viz_engine 意图筛选）
+    user_q = next(
+        (str(m.content) for m in reversed(list(history)) if isinstance(m, HumanMessage)),
+        "",
+    )
+
     include_list = not bool(state.get("available_buildings"))
     agent = _get_react_agent(include_list_available_buildings=include_list)
 
@@ -385,7 +349,6 @@ async def data_react_node(state: AgentState) -> dict[str, Any]:
     all_messages = result.get("messages", [])
     new_messages = all_messages[injected_count:]
 
-
     # 提取 evidence
     artifacts = list(state.get("artifacts", []))
     evidence = list(state.get("evidence", []))
@@ -399,12 +362,7 @@ async def data_react_node(state: AgentState) -> dict[str, Any]:
         if isinstance(payload, dict):
             evidence.extend(extract_evidence(payload))
 
-    user_q = next(
-        (str(m.content) for m in reversed(list(history)) if isinstance(m, HumanMessage)),
-        "",
-    )
-
-    # viz_engine: 生成图表
+    # ★ viz_engine: 生成图表
     viz_artifacts = generate_viz_artifacts(new_messages, user_question=user_q)
     artifacts.extend(viz_artifacts)
 
@@ -432,55 +390,50 @@ async def data_react_node(state: AgentState) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# System Prompt — Synthesis 阶段（看到图表清单 → 写精准分析）
+# Phase 2: Synthesis Prompt + LLM
 # ---------------------------------------------------------------------------
-SYNTHESIS_PROMPT = """你是一个楼宇能耗管理系统的高级数据分析师。
-系统已经帮你查询了数据并生成了可视化图表，现在请你撰写完整的分析报告。
 
+SYNTHESIS_PROMPT = """你是一个楼宇能耗管理系统的高级数据分析师。
+你的任务是根据工具查询结果和已生成的图表清单，撰写精准、专业的分析报告。
+
+## 已生成的图表清单
 {chart_manifest}
 
-## 写作规则
+## 输出规范
 
-### 图表占位符（最重要！必须严格遵守）
-- 对于图表清单中的每一张图表，你**必须**在分析该图表的段落**结尾**单独一行插入占位符
-- 占位符格式：`<<CHART:锚点关键词>>`（锚点关键词来自图表清单）
-- 示例：如果有锚点为"用电"的图表，则写：
+### 结构
+1. 用 Markdown 格式组织
+2. 每个指标/维度一个分析段落
+3. 在**每个分析段落的结尾**插入对应图表的占位符 `<<CHART:锚点关键词>>`
+
+### 图表占位符规则
+- 格式：`<<CHART:锚点关键词>>`
+- 锚点关键词从上方图表清单中获取
+- 占位符必须放在对应分析段落的**最后一行**（分析完再放图）
+- 每个图表的占位符只能出现一次
+- 示例：
   ```
-  从用电趋势图可以看出，教学楼日均用电量最高...
-
+  ## 用电量分析
+  教学楼1月用电总量为 12,345 kWh，日均约 398 kWh。月中出现明显峰值...
   <<CHART:用电>>
+
+  ## 用水量分析
+  总用水量为 567 m³，整体较为平稳...
+  <<CHART:用水>>
   ```
-- 先写该图表的文字分析，分析结束后紧跟占位符，这样图表出现在分析文字下方
-- 每个图表的占位符**只能出现一次**
-- 占位符必须独占一行，前后各空一行
-- 总结段落**不要**放任何占位符
 
 ### 内容质量
-- 先给结论，再展开数据支撑
-- 使用中文建筑名称：教学楼、办公楼、公共楼
-- 引用具体数值（从数据摘要中获取）
-- 可以用"从趋势图可以看出""如图所示"等措辞引用图表
-- 若某指标未生成图表，仅用文字和数据说明，不要提及不存在的图表
+- 使用工具返回的真实数据，禁止编造数字
+- 给出具体数值和趋势判断
 - 注意数据的时间粒度（日/周/月），使用正确的时间单位描述
-  - 数据摘要中标注了"X条日级/周级/月级数据"，请据此选择描述方式
-  - 月级数据说"X月份"而非"X天"，周级数据说"第X周"而非"X天"
+- 最后给出简明的管理建议
 
-### 格式
-- 使用 Markdown 格式：标题(###)、加粗(**重点**)、有序/无序列表
-- 段落之间用空行分隔
-- 总字数控制在 300-800 字
-
-## 建筑中文名映射
-| building_type | 中文名 |
-|--------------|--------|
-| Education | 教学楼 |
-| Office | 办公楼 |
-| Public services | 公共楼 |"""
+### 禁止事项
+- 禁止编造工具未返回的数据
+- 禁止在总结/结论段落重复放置已用过的图表占位符
+- 禁止使用 render_ui_component（图表已自动生成）"""
 
 
-# ---------------------------------------------------------------------------
-# Phase 2: data_synthesis_node — Synthesis LLM 生成精准分析
-# ---------------------------------------------------------------------------
 _cached_synthesis_llm_fast: ChatOpenAI | None = None
 _cached_synthesis_llm_deep: ChatOpenAI | None = None
 _synthesis_llm_lock: Any = None
@@ -528,11 +481,10 @@ def _get_synthesis_llm(thinking_mode: str = "fast") -> ChatOpenAI:
 async def data_synthesis_node(state: AgentState) -> dict[str, Any]:
     """
     Phase 2: 基于 chart_manifest + 数据摘要生成精准分析文字。
-    文字中的锚点关键词与图表完美对齐。
+    文字中的占位符 <<CHART:锚点>> 与图表完美对齐。
     """
     t0 = time.time()
 
-    # 如果 ReAct 阶段出错（messages 中有 error AIMessage），直接结束
     recent_msgs = state.get("messages", [])
     if recent_msgs and isinstance(recent_msgs[-1], AIMessage) and state.get("error"):
         return {"current_agent": "end"}
@@ -540,14 +492,12 @@ async def data_synthesis_node(state: AgentState) -> dict[str, Any]:
     chart_manifest = state.get("chart_manifest", "")
     data_summary = state.get("react_data_summary", "")
 
-    # 提取用户问题
     history = state.get("messages", [])
     user_q = next(
         (str(m.content) for m in reversed(list(history)) if isinstance(m, HumanMessage)),
         "",
     )
 
-    # 构建 Synthesis 消息
     system_content = SYNTHESIS_PROMPT.format(chart_manifest=chart_manifest)
     messages = [
         SystemMessage(content=system_content),
@@ -567,7 +517,6 @@ async def data_synthesis_node(state: AgentState) -> dict[str, Any]:
     elapsed = time.time() - t0
     logger.info("Data Synthesis 完成: mode=%s 用时=%.1fs 字数=%d", thinking_mode, elapsed, len(answer_text))
 
-    # 更新滚动摘要
     existing_summary = state.get("context_summary", "")
     new_summary = update_context_summary(
         existing_summary, state.get("intent"), user_q, answer_text,

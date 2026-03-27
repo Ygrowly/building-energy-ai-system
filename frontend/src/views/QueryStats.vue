@@ -165,22 +165,28 @@
       </div>
     </div>
 
-    <!-- ══════════════ 统计分析：能耗图表 ══════════════ -->
-    <div class="chart-card" v-if="queryResult && checkedParams.length && viewMode === 'analysis'">
-      <div class="chart-card-header">
-        <div class="chart-card-title">
-          <Icon icon="mdi:chart-areaspline" width="18" class="chart-title-icon" />
-          <span>{{ buildingLabel }} 能耗趋势</span>
-          <span class="chart-date-range">{{ startDate }} ~ {{ endDate }}</span>
+    <!-- ══════════════ 统计分析：多图表 ══════════════ -->
+    <template v-if="queryResult && viewMode === 'analysis'">
+      <div
+        v-for="group in activeChartGroups"
+        :key="group.id"
+        class="chart-card"
+      >
+        <div class="chart-card-header">
+          <div class="chart-card-title">
+            <Icon :icon="group.icon" width="18" class="chart-title-icon" />
+            <span>{{ buildingLabel }} {{ group.title }}</span>
+            <span class="chart-date-range">{{ startDate }} ~ {{ endDate }}</span>
+          </div>
+          <div class="chart-card-actions">
+            <button class="card-action-btn" title="刷新数据" @click="handleQuery" aria-label="刷新数据">
+              <Icon icon="mdi:refresh" width="16" />
+            </button>
+          </div>
         </div>
-        <div class="chart-card-actions">
-          <button class="card-action-btn" title="刷新数据" @click="handleQuery" aria-label="刷新数据">
-            <Icon icon="mdi:refresh" width="16" />
-          </button>
-        </div>
+        <div class="chart-container" :ref="(el: any) => setChartRef(group.id, el)"></div>
       </div>
-      <div class="chart-container" ref="chartRef"></div>
-    </div>
+    </template>
 
     <!-- ══════════════ 空状态 ══════════════ -->
     <div class="content-placeholder" v-if="!queryResult && !loading">
@@ -289,7 +295,7 @@ watch(viewMode, async () => {
   updateSlider()
   if (viewMode.value === 'analysis' && queryResult.value && checkedParams.value.length) {
     await nextTick()
-    renderChart(queryResult.value, checkedParams.value)
+    renderAllCharts()
   }
 })
 onMounted(() => nextTick(updateSlider))
@@ -324,9 +330,56 @@ const checkedParams = computed(() => {
   return base
 })
 
-// ── ECharts（能耗） ──
-const chartRef = ref<HTMLElement>()
-let chart: echarts.ECharts | null = null
+// ── 图表分组定义 ──
+interface ChartGroup {
+  id: string
+  title: string
+  icon: string
+  paramKeys: string[]
+}
+
+const CHART_GROUPS: ChartGroup[] = [
+  {
+    id: 'energy',
+    title: '能耗总览',
+    icon: 'mdi:lightning-bolt',
+    paramKeys: ['electricity_kwh', 'water_m3', 'hac_energy'],
+  },
+  {
+    id: 'cop',
+    title: 'COP 与空调性能分析',
+    icon: 'mdi:air-conditioner',
+    paramKeys: ['ac_cop'],
+  },
+  {
+    id: 'temperature',
+    title: '环境与温度',
+    icon: 'mdi:thermometer',
+    paramKeys: ['air_temp_c', 'sim_supply_temp_c', 'sim_return_temp_c', 'dew_temp_c', 'humidity_rh_pct'],
+  },
+]
+
+const activeChartGroups = computed(() => {
+  const checked = new Set(checkedParams.value.map(p => p.key))
+  const groups: ChartGroup[] = []
+  for (const g of CHART_GROUPS) {
+    if (g.id === 'cop') {
+      groups.push(g)
+    } else {
+      if (g.paramKeys.some(k => checked.has(k))) groups.push(g)
+    }
+  }
+  return groups
+})
+
+// ── ECharts 多实例管理 ──
+const chartRefs = new Map<string, HTMLElement>()
+const chartInstances = new Map<string, echarts.ECharts>()
+
+function setChartRef(groupId: string, el: any) {
+  if (el) chartRefs.set(groupId, el as HTMLElement)
+  else chartRefs.delete(groupId)
+}
 
 const PARAM_COLORS: Record<string, string> = {
   electricity_kwh: '#3ba272',
@@ -352,16 +405,16 @@ async function handleQuery() {
   queryResult.value = null
 
   try {
-    const devFlag = deviceStatusChecked.value ? '&include_device_status=true' : ''
     const resp = await apiFetch<any>(
-      `/api/buildings/${selectedBuilding.value}/energy?start_date=${startDate.value}&end_date=${endDate.value}&include_water=true${devFlag}`
+      `/api/buildings/${selectedBuilding.value}/energy?start_date=${startDate.value}&end_date=${endDate.value}&include_water=true&include_device_status=true`
     )
     queryResult.value = resp
 
     await nextTick()
 
     if (viewMode.value === 'analysis' && queryResult.value) {
-      renderChart(queryResult.value, params)
+      await nextTick()
+      renderAllCharts()
     }
 
     registerReportSections(params)
@@ -414,7 +467,14 @@ function registerReportSections(params: typeof allParams) {
 
   if (viewMode.value === 'analysis') {
     setTimeout(() => {
-      if (chartRef.value && chart) captureChart(chart, 'qs-chart-energy', '能耗趋势图', 20)
+      let order = 20
+      for (const group of activeChartGroups.value) {
+        const inst = chartInstances.get(group.id)
+        if (inst) {
+          captureChart(inst, `qs-chart-${group.id}`, group.title, order)
+          order += 10
+        }
+      }
     }, 400)
   }
 }
@@ -461,82 +521,255 @@ function formatTableVal(v: any, paramKey?: string, row?: any): string {
   return isNaN(n) ? String(v) : n.toFixed(2)
 }
 
-function renderChart(data: any, params: typeof allParams) {
-  if (!chartRef.value) return
-  if (chart) chart.dispose()
-  chart = echarts.init(chartRef.value)
+// ── 公共 tooltip / xAxis 配置 ──
+function sharedTooltip() {
+  return {
+    trigger: 'axis' as const,
+    backgroundColor: 'rgba(255,255,255,0.96)',
+    borderColor: '#eaedf0', borderWidth: 1,
+    textStyle: { color: '#2d3239', fontSize: 12 },
+    padding: [10, 14],
+    extraCssText: 'box-shadow:0 4px 16px rgba(0,0,0,0.08);border-radius:8px;',
+  }
+}
+function sharedXAxis(days: string[]) {
+  return {
+    type: 'category' as const, data: days,
+    axisLabel: { rotate: days.length > 15 ? 45 : 0, color: '#8c939a', fontSize: 11 },
+    axisLine: { lineStyle: { color: '#e8ebee' } },
+    axisTick: { show: false },
+  }
+}
+function makeSeriesData(records: any[], paramKey: string) {
+  return records.map((r: any) => {
+    const v = getRowValue(r, paramKey)
+    return v != null ? Number(Number(v).toFixed(2)) : null
+  })
+}
 
-  const days = (data.records || []).map((r: any) => r.day?.slice(0, 10) || '')
+// ── 渲染入口：遍历所有可见分组 ──
+function renderAllCharts() {
+  const data = queryResult.value
+  if (!data?.records?.length) return
 
-  const tempParams = ['air_temp_c', 'sim_supply_temp_c', 'sim_return_temp_c', 'supply_return_delta', 'dew_temp_c', 'humidity_rh_pct', 'ac_cop', 'device_normal_rate']
-  const hasTemp = params.some(p => tempParams.includes(p.key))
-  const hasEnergy = params.some(p => !tempParams.includes(p.key))
+  for (const [id, inst] of chartInstances) {
+    inst.dispose()
+    chartInstances.delete(id)
+  }
+
+  for (const group of activeChartGroups.value) {
+    const el = chartRefs.get(group.id)
+    if (!el) continue
+
+    const inst = echarts.init(el)
+    chartInstances.set(group.id, inst)
+
+    if (group.id === 'energy') renderEnergyChart(inst, data)
+    else if (group.id === 'cop') renderCOPChart(inst, data)
+    else if (group.id === 'temperature') renderTempChart(inst, data)
+  }
+}
+
+// ── 图表 1: 能耗总览 ──
+function renderEnergyChart(inst: echarts.ECharts, data: any) {
+  const records: any[] = data.records || []
+  const days = records.map((r: any) => r.day?.slice(0, 10) || '')
+  const checked = new Set(checkedParams.value.map(p => p.key))
+
+  const kwhKeys = ['electricity_kwh', 'hac_energy'].filter(k => checked.has(k))
+  const hasWater = checked.has('water_m3')
+  const kwhLabels: Record<string, string> = { electricity_kwh: '日用电 (kWh)', hac_energy: '暖通空调能耗 (kWh)' }
 
   const yAxis: any[] = []
-  if (hasEnergy) yAxis.push({
-    type: 'value', name: '能耗', position: 'left',
+  if (kwhKeys.length > 0) yAxis.push({
+    type: 'value', name: 'kWh', position: 'left',
     nameTextStyle: { color: '#8c939a', fontSize: 12 },
     axisLine: { show: false }, axisTick: { show: false },
     splitLine: { lineStyle: { color: '#f0f2f5', type: 'dashed' } },
     axisLabel: { color: '#8c939a', fontSize: 11 },
   })
-  if (hasTemp) yAxis.push({
-    type: 'value', name: '温度', position: 'right',
-    nameTextStyle: { color: '#8c939a', fontSize: 12 },
+  if (hasWater) yAxis.push({
+    type: 'value', name: 'm³', position: kwhKeys.length > 0 ? 'right' : 'left',
+    nameTextStyle: { color: '#5470c6', fontSize: 12 },
     axisLine: { show: false }, axisTick: { show: false },
-    splitLine: { show: false },
+    splitLine: kwhKeys.length > 0 ? { show: false } : { lineStyle: { color: '#f0f2f5', type: 'dashed' } },
     axisLabel: { color: '#8c939a', fontSize: 11 },
   })
   if (yAxis.length === 0) yAxis.push({ type: 'value' })
 
-  const series = params.map((p) => {
-    const isTemp = tempParams.includes(p.key)
-    const yAxisIndex = hasEnergy && hasTemp ? (isTemp ? 1 : 0) : 0
+  const series: any[] = []
+  for (const k of kwhKeys) {
+    series.push({
+      name: kwhLabels[k] || k, type: 'bar', yAxisIndex: 0,
+      data: makeSeriesData(records, k),
+      itemStyle: { color: PARAM_COLORS[k], borderRadius: [3, 3, 0, 0] },
+      barMaxWidth: 40, barGap: '35%', barCategoryGap: '40%',
+      emphasis: { focus: 'series' }, animationDuration: 800,
+    })
+  }
+  if (hasWater) {
+    const waterYIdx = kwhKeys.length > 0 ? 1 : 0
+    series.push({
+      name: '日用水 (m³)', type: 'bar', yAxisIndex: waterYIdx,
+      data: makeSeriesData(records, 'water_m3'),
+      itemStyle: { color: PARAM_COLORS.water_m3, borderRadius: [3, 3, 0, 0] },
+      barMaxWidth: 40, barGap: '35%', barCategoryGap: '40%',
+      emphasis: { focus: 'series' }, animationDuration: 800,
+    })
+  }
 
-    let seriesType = 'line'
-    if (chartType.value === 'bar') seriesType = 'bar'
-    else if (chartType.value === 'mixed') seriesType = isTemp ? 'line' : 'bar'
-
-    return {
-      name: p.label,
-      type: seriesType,
-      yAxisIndex,
-      data: (data.records || []).map((r: any) => {
-        const v = getRowValue(r, p.key)
-        return v != null ? Number(Number(v).toFixed(2)) : null
-      }),
-      itemStyle: { color: PARAM_COLORS[p.key], borderRadius: seriesType === 'bar' ? [3, 3, 0, 0] : undefined },
-      lineStyle: { width: 2.5 },
-      smooth: true,
-      barMaxWidth: 28,
-      barGap: '20%',
-      emphasis: { focus: 'series' },
-      animationDuration: 800,
-      animationEasing: 'cubicOut',
-    }
+  const hasZoom = days.length > 14
+  inst.setOption({
+    tooltip: sharedTooltip(),
+    legend: { data: series.map(s => s.name), bottom: hasZoom ? 36 : 0, icon: 'roundRect', itemWidth: 12, itemHeight: 8, textStyle: { color: '#8c939a', fontSize: 11 }, itemGap: 16 },
+    grid: { left: 56, right: hasWater && kwhKeys.length > 0 ? 56 : 20, top: 36, bottom: hasZoom ? 80 : 44, containLabel: false },
+    xAxis: sharedXAxis(days),
+    yAxis,
+    dataZoom: hasZoom ? [
+      { type: 'slider', xAxisIndex: 0, bottom: 4, height: 22, borderColor: 'transparent', backgroundColor: '#f5f6f8', fillerColor: 'rgba(76,175,80,0.15)', handleStyle: { color: '#4caf50' }, textStyle: { fontSize: 10 }, start: 0, end: 100 },
+      { type: 'inside', xAxisIndex: 0 },
+    ] : [],
+    series,
+    animationDuration: 600,
   })
+}
 
-  chart.setOption({
-    tooltip: {
-      trigger: 'axis',
-      backgroundColor: 'rgba(255, 255, 255, 0.96)',
-      borderColor: '#eaedf0', borderWidth: 1,
-      textStyle: { color: '#2d3239', fontSize: 12 },
-      padding: [10, 14],
-      extraCssText: 'box-shadow: 0 4px 16px rgba(0,0,0,0.08); border-radius: 8px;',
-    },
+// ── 图表 2: COP 与空调性能分析 ──
+function renderCOPChart(inst: echarts.ECharts, data: any) {
+  const records: any[] = data.records || []
+  const days = records.map((r: any) => r.day?.slice(0, 10) || '')
+
+  const copData = makeSeriesData(records, 'ac_cop')
+  const powerData = makeSeriesData(records, 'ac_avg_power_kw')
+  const deltaData = makeSeriesData(records, 'supply_return_delta')
+
+  const copColor = '#1565c0'
+  const powerColor = '#66bb6a'
+  const deltaColor = '#ffa726'
+
+  inst.setOption({
+    tooltip: sharedTooltip(),
     legend: {
-      data: params.map(p => p.label), bottom: 0, icon: 'roundRect',
-      itemWidth: 12, itemHeight: 8,
+      data: ['COP值', 'AC功率 (kW)', '供回水温差 (°C)'],
+      bottom: 0, icon: 'roundRect', itemWidth: 12, itemHeight: 8,
       textStyle: { color: '#8c939a', fontSize: 11 }, itemGap: 16,
     },
-    grid: { left: 56, right: 56, top: 36, bottom: 44, containLabel: false },
-    xAxis: {
-      type: 'category', data: days,
-      axisLabel: { rotate: days.length > 15 ? 45 : 0, color: '#8c939a', fontSize: 11 },
-      axisLine: { lineStyle: { color: '#e8ebee' } },
-      axisTick: { show: false },
-    },
+    grid: { left: 56, right: 56, top: 40, bottom: 44, containLabel: false },
+    xAxis: sharedXAxis(days),
+    yAxis: [
+      {
+        type: 'value', name: 'COP', position: 'left',
+        nameTextStyle: { color: copColor, fontSize: 12, fontWeight: 600 },
+        axisLine: { show: false }, axisTick: { show: false },
+        splitLine: { lineStyle: { color: '#f0f2f5', type: 'dashed' } },
+        axisLabel: { color: '#8c939a', fontSize: 11 },
+      },
+      {
+        type: 'value', name: 'kW / °C', position: 'right',
+        nameTextStyle: { color: '#8c939a', fontSize: 12 },
+        axisLine: { show: false }, axisTick: { show: false },
+        splitLine: { show: false },
+        axisLabel: { color: '#8c939a', fontSize: 11 },
+      },
+    ],
+    series: [
+      {
+        name: 'COP值', type: 'line', yAxisIndex: 0, z: 10,
+        data: copData,
+        lineStyle: { width: 3, color: copColor },
+        itemStyle: { color: copColor, borderWidth: 2, borderColor: '#fff' },
+        areaStyle: { color: { type: 'linear', x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: 'rgba(21,101,192,0.18)' }, { offset: 1, color: 'rgba(21,101,192,0.02)' }] } },
+        smooth: true, symbol: 'circle', symbolSize: 7,
+        emphasis: { focus: 'series' }, animationDuration: 800,
+      },
+      {
+        name: 'AC功率 (kW)', type: 'bar', yAxisIndex: 1, z: 1,
+        data: powerData,
+        itemStyle: { color: 'rgba(102,187,106,0.6)', borderRadius: [3, 3, 0, 0] },
+        barMaxWidth: 24, barCategoryGap: '40%',
+        emphasis: { focus: 'series', itemStyle: { color: powerColor } }, animationDuration: 800,
+      },
+      {
+        name: '供回水温差 (°C)', type: 'line', yAxisIndex: 1, z: 5,
+        data: deltaData,
+        lineStyle: { width: 2.5, type: 'dashed', color: deltaColor },
+        itemStyle: { color: deltaColor },
+        smooth: true, symbol: 'diamond', symbolSize: 6,
+        emphasis: { focus: 'series' }, animationDuration: 800,
+      },
+    ],
+    animationDuration: 600,
+  })
+}
+
+// ── 图表 3: 环境与温度 ──
+function renderTempChart(inst: echarts.ECharts, data: any) {
+  const records: any[] = data.records || []
+  const days = records.map((r: any) => r.day?.slice(0, 10) || '')
+  const checked = new Set(checkedParams.value.map(p => p.key))
+
+  const allTempKeys = ['air_temp_c', 'sim_supply_temp_c', 'sim_return_temp_c', 'dew_temp_c']
+  const userCheckedTemps = allTempKeys.filter(k => checked.has(k))
+  const hasHumidity = checked.has('humidity_rh_pct')
+
+  const autoAddKeys: string[] = []
+  if (userCheckedTemps.length > 0 && userCheckedTemps.length < 3) {
+    for (const k of ['sim_supply_temp_c', 'sim_return_temp_c']) {
+      if (!checked.has(k)) autoAddKeys.push(k)
+    }
+  }
+  const tempKeys = [...userCheckedTemps, ...autoAddKeys]
+
+  const tempLabels: Record<string, string> = {
+    air_temp_c: '环境温度 (°C)', sim_supply_temp_c: '供水温度 (°C)',
+    sim_return_temp_c: '回水温度 (°C)', dew_temp_c: '露点温度 (°C)',
+  }
+
+  const yAxis: any[] = []
+  if (tempKeys.length > 0) yAxis.push({
+    type: 'value', name: '°C', position: 'left',
+    nameTextStyle: { color: '#8c939a', fontSize: 12 },
+    axisLine: { show: false }, axisTick: { show: false },
+    splitLine: { lineStyle: { color: '#f0f2f5', type: 'dashed' } },
+    axisLabel: { color: '#8c939a', fontSize: 11 },
+  })
+  if (hasHumidity) yAxis.push({
+    type: 'value', name: '%RH', position: tempKeys.length > 0 ? 'right' : 'left',
+    nameTextStyle: { color: '#9a60b4', fontSize: 12 },
+    axisLine: { show: false }, axisTick: { show: false },
+    splitLine: tempKeys.length > 0 ? { show: false } : { lineStyle: { color: '#f0f2f5', type: 'dashed' } },
+    axisLabel: { color: '#8c939a', fontSize: 11 },
+  })
+  if (yAxis.length === 0) yAxis.push({ type: 'value' })
+
+  const series: any[] = []
+  for (const k of tempKeys) {
+    const isAuto = autoAddKeys.includes(k)
+    series.push({
+      name: tempLabels[k] || k, type: 'line', yAxisIndex: 0,
+      data: makeSeriesData(records, k),
+      lineStyle: { width: isAuto ? 1.5 : 2.5, color: PARAM_COLORS[k], type: isAuto ? 'dashed' : 'solid', opacity: isAuto ? 0.7 : 1 },
+      itemStyle: { color: PARAM_COLORS[k], opacity: isAuto ? 0.5 : 1 },
+      smooth: true, symbol: isAuto ? 'none' : 'circle', symbolSize: isAuto ? 0 : 4,
+      emphasis: { focus: 'series' }, animationDuration: 800,
+    })
+  }
+  if (hasHumidity) {
+    const humYIdx = tempKeys.length > 0 ? 1 : 0
+    series.push({
+      name: '相对湿度 (%)', type: 'line', yAxisIndex: humYIdx,
+      data: makeSeriesData(records, 'humidity_rh_pct'),
+      lineStyle: { width: 2, type: 'dashed', color: PARAM_COLORS.humidity_rh_pct },
+      itemStyle: { color: PARAM_COLORS.humidity_rh_pct },
+      smooth: true, emphasis: { focus: 'series' }, animationDuration: 800,
+    })
+  }
+
+  inst.setOption({
+    tooltip: sharedTooltip(),
+    legend: { data: series.map(s => s.name), bottom: 0, icon: 'roundRect', itemWidth: 12, itemHeight: 8, textStyle: { color: '#8c939a', fontSize: 11 }, itemGap: 16 },
+    grid: { left: 56, right: hasHumidity && tempKeys.length > 0 ? 56 : 20, top: 36, bottom: 44, containLabel: false },
+    xAxis: sharedXAxis(days),
     yAxis,
     series,
     animationDuration: 600,
@@ -545,7 +778,7 @@ function renderChart(data: any, params: typeof allParams) {
 
 // ── 全局 ──
 function onResize() {
-  chart?.resize()
+  for (const inst of chartInstances.values()) inst.resize()
 }
 
 onMounted(async () => {
@@ -558,7 +791,8 @@ onMounted(async () => {
 onUnmounted(() => {
   window.removeEventListener('resize', onResize)
   document.removeEventListener('click', closeQsDropdowns)
-  chart?.dispose()
+  for (const inst of chartInstances.values()) inst.dispose()
+  chartInstances.clear()
 })
 </script>
 
@@ -882,8 +1116,8 @@ onUnmounted(() => {
 }
 .card-action-btn:hover { background: #f5f6f8; color: #636a73; }
 .chart-container {
-  min-height: 380px;
-  padding: 8px 16px 12px;
+  min-height: 420px;
+  padding: 12px 16px 16px;
 }
 
 /* ── 数据表格 ── */

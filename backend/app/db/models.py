@@ -136,13 +136,7 @@ class EnergyData(Base):
 class DailyEnergySummary(Base):
     """
     物化视图 daily_energy_summary 的 ORM 映射。
-    字段与视图 DDL 严格一一对应：
-      SELECT date_trunc('day', timestamp)::date AS day,
-             building_id,
-             SUM(electricity_kwh) AS total_electricity_kwh,
-             AVG(air_temp_c)      AS avg_ambient_temp,
-             SUM(water_m3)        AS total_water_m3
-      FROM energy_data GROUP BY day, building_id;
+    字段与视图 DDL 严格一一对应（见 migrations/007）。
     """
     __tablename__ = "daily_energy_summary"
 
@@ -151,6 +145,11 @@ class DailyEnergySummary(Base):
     total_electricity_kwh: float = Column(Float)
     avg_ambient_temp: float = Column(Float)
     total_water_m3: float = Column(Float)
+    total_hac_energy: float = Column(Float)
+    avg_supply_temp: float = Column(Float)
+    avg_return_temp: float = Column(Float)
+    avg_humidity: float = Column(Float)
+    avg_dew_temp: float = Column(Float)
 
     __table_args__ = (
         Index(

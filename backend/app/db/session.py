@@ -161,56 +161,51 @@ async def ensure_auth_schema_compat() -> None:
 
 async def ensure_daily_energy_summary_view() -> None:
     """
-    确保 daily_energy_summary 物化视图存在（用于 Tool 4 的极速查询）。
+    启动时 DROP + 重建 daily_energy_summary 物化视图，确保列结构最新、数据已刷新。
 
-    如果数据库还没执行 migrations/007_create_daily_energy_summary.sql，
-    会导致 query_daily_energy_summary 的 day 粒度查询抛 UndefinedTableError。
-
-    注意：使用两个独立的 engine.begin() 事务块，避免在同一事务内捕获并吞掉异常后
-    context manager 的 __aexit__ 仍尝试 COMMIT 导致 PendingRollbackError。
+    策略：每次启动都重建，保证：
+      1. 新增列立即生效（无需手动跑 migration）
+      2. 数据始终与 energy_data 同步（不会出现视图为空的情况）
     """
-    # ── Step 1：检查视图是否已存在（独立事务，失败时干净回滚）────────────────
-    view_exists = False
-    try:
-        async with engine.begin() as conn:
-            await conn.execute(text('SELECT 1 FROM daily_energy_summary LIMIT 1'))
-            view_exists = True
-    except Exception as exc:
-        msg = str(exc).lower()
-        if "daily_energy_summary" not in msg:
-            # 非预期错误（连接问题、权限等）：记录警告并跳过，后续工具层降级兜底
-            logger.warning("检查 daily_energy_summary 时发生意外错误，已跳过: %s", exc)
-            return
-
-    if view_exists:
-        return
-
-    # ── Step 2：视图缺失时尝试创建（独立事务）────────────────────────────────
     async def _op():
         async with engine.begin() as conn:
             await conn.execute(
-                text(
-                    """
-                    CREATE MATERIALIZED VIEW IF NOT EXISTS daily_energy_summary AS
-                    SELECT
-                        date_trunc('day', "timestamp")::date AS day,
-                        building_id,
-                        SUM(electricity_kwh)  AS total_electricity_kwh,
-                        AVG(air_temp_c)       AS avg_ambient_temp,
-                        SUM(water_m3)         AS total_water_m3
-                    FROM energy_data
-                    GROUP BY date_trunc('day', "timestamp")::date, building_id
-                    WITH DATA;
-
-                        CREATE UNIQUE INDEX IF NOT EXISTS idx_daily_summary_day_building
-                            ON daily_energy_summary (day, building_id);
-                        """
-                    )
+                text("DROP MATERIALIZED VIEW IF EXISTS daily_energy_summary")
             )
-            await conn.execute(text('REFRESH MATERIALIZED VIEW daily_energy_summary'))
-            logger.info("已确保 daily_energy_summary 物化视图可用")
+            await conn.execute(text("""
+                CREATE MATERIALIZED VIEW daily_energy_summary AS
+                SELECT
+                    date_trunc('day', "timestamp")::date AS day,
+                    building_id,
+                    SUM(electricity_kwh)    AS total_electricity_kwh,
+                    AVG(air_temp_c)         AS avg_ambient_temp,
+                    SUM(water_m3)           AS total_water_m3,
+                    SUM(hac_energy)         AS total_hac_energy,
+                    AVG(sim_supply_temp_c)  AS avg_supply_temp,
+                    AVG(sim_return_temp_c)  AS avg_return_temp,
+                    AVG(humidity_rh_pct)    AS avg_humidity,
+                    AVG(dew_temp_c)         AS avg_dew_temp
+                FROM energy_data
+                GROUP BY date_trunc('day', "timestamp")::date, building_id
+                WITH DATA
+            """))
+            await conn.execute(text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_daily_summary_day_building "
+                "ON daily_energy_summary (day, building_id)"
+            ))
+            result = await conn.execute(
+                text("SELECT COUNT(*) FROM daily_energy_summary")
+            )
+            cnt = result.scalar()
+            logger.info(
+                "daily_energy_summary 物化视图已重建并刷新，共 %d 行", cnt
+            )
 
     try:
-        await _run_startup_db_op_with_retry("ensure_daily_energy_summary_view", _op)
+        await _run_startup_db_op_with_retry(
+            "ensure_daily_energy_summary_view",
+            _op,
+            per_attempt_timeout=120.0,
+        )
     except Exception as exc:
         logger.warning("创建/刷新 daily_energy_summary 失败，仍将使用工具降级。error=%s", exc)

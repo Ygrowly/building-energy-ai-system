@@ -346,21 +346,17 @@ class QueryDailyEnergySummaryInput(BaseModel):
 
 
 class DailyEnergySummaryRecord(BaseModel):
-    """
-    按天汇总记录，字段与物化视图 daily_energy_summary 列名严格一一对应。
-    视图定义：
-      SELECT date_trunc('day', timestamp)::date AS day, building_id,
-             SUM(electricity_kwh) AS total_electricity_kwh,
-             AVG(air_temp_c)      AS avg_ambient_temp,
-             SUM(water_m3)        AS total_water_m3
-      FROM energy_data GROUP BY day, building_id;
-    """
-    day: str = Field(description="日期，如 '2023-10-25'")
+    """按天汇总记录，字段与物化视图 daily_energy_summary 列名一一对应。"""
+    day: str = Field(description="日期，如 '2026-01-25'")
     building_id: str
     total_electricity_kwh: float
     avg_ambient_temp: float = Field(description="当天平均环境温度（°C）")
     total_water_m3: float = Field(default=0.0, description="当天总用水量（m³）")
     total_hac_energy: float = Field(default=0.0, description="当天空调总能耗（kWh）")
+    avg_supply_temp: float = Field(default=0.0, description="当天平均供水温度（°C）")
+    avg_return_temp: float = Field(default=0.0, description="当天平均回水温度（°C）")
+    avg_humidity: float = Field(default=0.0, description="当天平均相对湿度（%）")
+    avg_dew_temp: float = Field(default=0.0, description="当天平均露点温度（°C）")
 
 
 class QueryDailyEnergySummaryOutput(BaseModel):

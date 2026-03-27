@@ -32,10 +32,15 @@ export const useDataRangeStore = defineStore('dataRange', () => {
       loaded.value = true
     } catch (e) {
       console.warn('[dataRangeStore] 获取数据范围失败，使用默认值', e)
-      minDate.value = '2026-01-01'
-      maxDate.value = '2026-12-31'
-      defaultStart.value = '2026-01-01'
-      defaultEnd.value = '2026-01-31'
+      const today = new Date()
+      const endStr = today.toISOString().slice(0, 10)
+      const startDate = new Date(today)
+      startDate.setDate(startDate.getDate() - 29)
+      const startStr = startDate.toISOString().slice(0, 10)
+      minDate.value = '2024-01-01'
+      maxDate.value = endStr
+      defaultStart.value = startStr
+      defaultEnd.value = endStr
       loaded.value = true
     }
   }

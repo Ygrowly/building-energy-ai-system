@@ -524,12 +524,13 @@ async def get_building_energy_trend(
     building_type: str,
     start_date: date = Query(..., description="开始日期 YYYY-MM-DD"),
     end_date: date = Query(..., description="结束日期 YYYY-MM-DD"),
-    include_water: bool = Query(False, description="是否包含每日用水量（需额外查 energy_data 表）"),
+    include_water: bool = Query(False, description="是否包含每日用水量"),
+    include_device_status: bool = Query(False, description="是否包含设备运行状态日聚合（正常数/COP/功率/温差）"),
     db: AsyncSession = Depends(get_db_session),
 ):
     """
     从物化视图查询按天汇总的能耗趋势。building_type 如 'Office'。
-    include_water=true 时额外从 energy_data 表聚合每日用水量。
+    include_device_status=true 时额外从 device_telemetry_hourly 聚合设备日运行指标。
     """
     if start_date > end_date:
         raise HTTPException(status_code=400, detail="start_date 不能晚于 end_date")
@@ -537,7 +538,7 @@ async def get_building_energy_trend(
     cache_key = (
         f"building_energy:{building_type}:"
         f"{start_date.isoformat()}:{end_date.isoformat()}:"
-        f"{int(include_water)}"
+        f"{int(include_water)}:{int(include_device_status)}"
     )
     ttl_seconds = settings.CACHE_BUILDING_ENERGY_TREND_TTL_SECONDS
 
@@ -551,6 +552,7 @@ async def get_building_energy_trend(
         if not building_id:
             raise HTTPException(status_code=404, detail=f"建筑类型 {building_type} 不存在")
 
+        # ── 能耗数据：优先从物化视图查询 ──
         result = await db.execute(
             select(DailyEnergySummary)
             .where(
@@ -562,12 +564,38 @@ async def get_building_energy_trend(
         )
         rows = result.scalars().all()
 
-        water_by_day: dict[str, float] = {}
-        if include_water:
-            water_result = await db.execute(
+        if rows:
+            records = [
+                {
+                    "day": r.day.isoformat() if r.day else None,
+                    "total_electricity_kwh": r.total_electricity_kwh,
+                    "avg_ambient_temp": r.avg_ambient_temp,
+                    "total_water_m3": r.total_water_m3,
+                    "total_hac_energy": r.total_hac_energy,
+                    "avg_supply_temp": r.avg_supply_temp,
+                    "avg_return_temp": r.avg_return_temp,
+                    "avg_humidity": r.avg_humidity,
+                    "avg_dew_temp": r.avg_dew_temp,
+                }
+                for r in rows
+            ]
+            source = "daily_energy_summary (materialized view)"
+        else:
+            logger.warning(
+                "daily_energy_summary 在 %s ~ %s 无数据，回退到 energy_data 直查",
+                start_date, end_date,
+            )
+            fallback_result = await db.execute(
                 text("""
                     SELECT date_trunc('day', timestamp)::date AS day,
-                           SUM(water_m3) AS total_water_m3
+                           SUM(electricity_kwh)    AS total_electricity_kwh,
+                           AVG(air_temp_c)         AS avg_ambient_temp,
+                           SUM(water_m3)           AS total_water_m3,
+                           SUM(hac_energy)         AS total_hac_energy,
+                           AVG(sim_supply_temp_c)  AS avg_supply_temp,
+                           AVG(sim_return_temp_c)  AS avg_return_temp,
+                           AVG(humidity_rh_pct)    AS avg_humidity,
+                           AVG(dew_temp_c)         AS avg_dew_temp
                     FROM energy_data
                     WHERE building_id = :bid
                       AND timestamp >= :sd AND timestamp <= :ed
@@ -575,33 +603,78 @@ async def get_building_energy_trend(
                 """),
                 {"bid": building_id, "sd": start_date, "ed": end_date},
             )
-            for wr in water_result.fetchall():
-                water_by_day[
-                    wr[0].isoformat() if hasattr(wr[0], 'isoformat') else str(wr[0])
-                ] = float(wr[1] or 0)
+            records = [
+                {
+                    "day": fr[0].isoformat() if hasattr(fr[0], "isoformat") else str(fr[0]),
+                    "total_electricity_kwh": float(fr[1]) if fr[1] is not None else None,
+                    "avg_ambient_temp": float(fr[2]) if fr[2] is not None else None,
+                    "total_water_m3": float(fr[3]) if fr[3] is not None else None,
+                    "total_hac_energy": float(fr[4]) if fr[4] is not None else None,
+                    "avg_supply_temp": float(fr[5]) if fr[5] is not None else None,
+                    "avg_return_temp": float(fr[6]) if fr[6] is not None else None,
+                    "avg_humidity": float(fr[7]) if fr[7] is not None else None,
+                    "avg_dew_temp": float(fr[8]) if fr[8] is not None else None,
+                }
+                for fr in fallback_result.fetchall()
+            ]
+            source = "energy_data (fallback)"
 
-        records = []
-        for r in rows:
-            day_str = r.day.isoformat() if r.day else None
-            rec = {
-                "day": day_str,
-                "total_electricity_kwh": r.total_electricity_kwh,
-                "avg_ambient_temp": r.avg_ambient_temp,
-                "total_water_m3": r.total_water_m3,
+        # ── 设备运行状态日聚合（来自 device_telemetry_hourly） ──
+        if include_device_status:
+            dev_result = await db.execute(
+                text("""
+                    SELECT
+                        CAST(date_trunc('day', dth.timestamp) AS date)             AS day,
+                        COUNT(DISTINCT dth.device_id)                              AS device_total,
+                        COUNT(DISTINCT CASE
+                            WHEN dth.health_status = 'healthy' THEN dth.device_id
+                        END)                                                       AS device_normal,
+                        AVG(CASE WHEN dth.device_type = 'ac'
+                            THEN dth.power_kw END)                                 AS ac_avg_power_kw,
+                        AVG(CASE WHEN dth.device_type = 'ac'
+                            THEN ABS(dth.supply_temp_c - dth.return_temp_c) END)   AS supply_return_delta,
+                        AVG(CASE WHEN dth.device_type = 'ac'
+                                  AND dth.power_kw > 0
+                                  AND dth.supply_temp_c IS NOT NULL
+                                  AND dth.return_temp_c IS NOT NULL
+                            THEN (COALESCE(dth.flow_rate, 1.0) * 4.186
+                                  * ABS(dth.supply_temp_c - dth.return_temp_c))
+                                 / NULLIF(dth.power_kw, 0)
+                        END)                                                       AS ac_cop
+                    FROM device_telemetry_hourly dth
+                    WHERE dth.building_id = :bid
+                      AND dth.timestamp >= :sd
+                      AND dth.timestamp <  CAST(:ed AS date) + interval '1 day'
+                    GROUP BY 1
+                    ORDER BY 1
+                """),
+                {"bid": building_id, "sd": start_date, "ed": end_date},
+            )
+            dev_by_day: dict[str, dict] = {}
+            for dr in dev_result.fetchall():
+                day_str = dr[0].isoformat() if hasattr(dr[0], "isoformat") else str(dr[0])
+                dev_by_day[day_str] = {
+                    "device_total":         int(dr[1]) if dr[1] is not None else 0,
+                    "device_normal":        int(dr[2]) if dr[2] is not None else 0,
+                    "ac_avg_power_kw":      round(float(dr[3]), 2) if dr[3] is not None else None,
+                    "supply_return_delta":  round(float(dr[4]), 2) if dr[4] is not None else None,
+                    "ac_cop":               round(float(dr[5]), 2) if dr[5] is not None else None,
+                }
+
+            empty_dev = {
+                "device_total": 0, "device_normal": 0,
+                "ac_avg_power_kw": None, "supply_return_delta": None, "ac_cop": None,
             }
-            if include_water and day_str:
-                day_key = day_str[:10] if day_str else ""
-                rec["total_water_m3"] = water_by_day.get(
-                    day_key, r.total_water_m3 or 0.0
-                )
-            records.append(rec)
+            for rec in records:
+                rec.update(dev_by_day.get(rec["day"], empty_dev))
 
         return {
             "building_type": building_type,
             "building_id": building_id,
             "start_date": start_date.isoformat(),
             "end_date": end_date.isoformat(),
-            "source": "daily_energy_summary (materialized view)",
+            "source": source,
+            "include_device_status": include_device_status,
             "records": records,
             "count": len(records),
         }

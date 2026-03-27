@@ -22,8 +22,9 @@ _cached_at: float = 0.0
 
 async def get_data_range() -> dict:
     """
-    返回 {"min_date": "2026-01-01", "max_date": "2026-03-31", "default_start": "2026-01-01", "default_end": "2026-01-31"}
-    结果缓存 10 分钟。查询失败时返回安全默认值。
+    返回 {"min_date": ..., "max_date": ..., "default_start": ..., "default_end": ...}
+    default_start/end 默认为最近 30 天（而非数据集起始），缓存 10 分钟。
+    查询失败时返回安全默认值。
     """
     global _cached_range, _cached_at
 
@@ -40,12 +41,13 @@ async def get_data_range() -> dict:
         if row and row[0] and row[1]:
             min_d: date = row[0]
             max_d: date = row[1]
-            default_end = min(min_d + timedelta(days=30), max_d)
+            # 默认展示最近 30 天，而不是从数据集最开始
+            default_start = max(min_d, max_d - timedelta(days=29))
             _cached_range = {
                 "min_date": str(min_d),
                 "max_date": str(max_d),
-                "default_start": str(min_d),
-                "default_end": str(default_end),
+                "default_start": str(default_start),
+                "default_end": str(max_d),
             }
         else:
             _cached_range = _fallback()

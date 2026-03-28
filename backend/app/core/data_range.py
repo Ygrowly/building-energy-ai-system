@@ -3,10 +3,13 @@
 
 供 Agent Prompt 动态注入 + 前端日期选择器使用。
 查询 energy_data 表的 MIN/MAX(timestamp)，缓存 10 分钟。
+
+注意：当前日期和默认查询范围的计算统一由 app.core.time_context 负责，
+本模块仅查询数据库中的 min/max 并配合 time_context 计算 default_start/end。
 """
 import logging
 import time
-from datetime import date, timedelta
+from datetime import date
 
 from sqlalchemy import text
 
@@ -23,8 +26,7 @@ _cached_at: float = 0.0
 async def get_data_range() -> dict:
     """
     返回 {"min_date": ..., "max_date": ..., "default_start": ..., "default_end": ...}
-    default_start/end 默认为最近 30 天（而非数据集起始），缓存 10 分钟。
-    查询失败时返回安全默认值。
+    min/max 来自数据库，default_start/end 由统一时间工具计算，缓存 10 分钟。
     """
     global _cached_range, _cached_at
 
@@ -41,13 +43,15 @@ async def get_data_range() -> dict:
         if row and row[0] and row[1]:
             min_d: date = row[0]
             max_d: date = row[1]
-            # 默认展示最近 30 天，而不是从数据集最开始
-            default_start = max(min_d, max_d - timedelta(days=29))
+            from app.core.time_context import resolve_query_range
+            default_start, default_end = resolve_query_range(
+                data_min=str(min_d), data_max=str(max_d),
+            )
             _cached_range = {
                 "min_date": str(min_d),
                 "max_date": str(max_d),
-                "default_start": str(default_start),
-                "default_end": str(max_d),
+                "default_start": default_start,
+                "default_end": default_end,
             }
         else:
             _cached_range = _fallback()
@@ -64,9 +68,11 @@ async def get_data_range() -> dict:
 
 
 def _fallback() -> dict:
+    from app.core.time_context import get_today
+    today = get_today()
     return {
         "min_date": "2026-01-01",
-        "max_date": "2026-03-31",
+        "max_date": str(today),
         "default_start": "2026-01-01",
-        "default_end": "2026-01-31",
+        "default_end": str(today),
     }

@@ -15,6 +15,7 @@ Diagnose Agent（故障诊断专家）节点。
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -47,8 +48,10 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # System Prompt — 故障诊断专家
 # ---------------------------------------------------------------------------
-DIAGNOSE_AGENT_SYSTEM_PROMPT = """你是一个楼宇能耗管理系统的专家（Diagnose & Knowledge Agent）。
+_DIAGNOSE_PROMPT_TEMPLATE = """你是一个楼宇能耗管理系统的专家（Diagnose & Knowledge Agent）。
 你同时具备两种能力：**故障诊断**（结合实时数据 + 知识库）和**知识查询**（直接检索建筑规范/技术标准）。
+
+**当前系统日期：{today}** — 所有时间判断以此为准，当前年份为 {year} 年。
 
 ## 数据库设备体系（故障诊断时使用）
 系统使用 devices 表管理所有计量设备，每台设备有唯一 device_id，通过 building_id 关联楼宇：
@@ -161,10 +164,17 @@ DIAGNOSE_AGENT_SYSTEM_PROMPT = """你是一个楼宇能耗管理系统的专家�
 
 ---
 
+## 数据时间范围（极其重要，必须严格遵守）
+- 今天是 **{today}**，当前年份是 **{year} 年**
+- **所有工具调用的日期必须来自上下文中的【诊断时间范围】**，该范围已由系统自动计算
+- 严禁自行编造日期，严禁使用 {year} 年以外或不在上下文范围内的日期
+- 参考今天日期 {today} 判断"最近一周""上个月"等相对时间
+
 ## 禁止事项
 - 禁止在没有 get_building_rated_values 或 detect_energy_anomalies 数据支撑的情况下做故障诊断
 - 禁止直接提交工单（必须先调用 create_work_order_draft 返回 pending_approval 状态）
 - 禁止自行编造 device_id（必须来自 devices 表的真实数据）
+- **禁止自行编造日期**（必须使用上下文注入的时间范围）
 - RAG 检索结果相关性不足（similarity < 0.2）时，诚实告知"知识库中未找到匹配条目"
 
 ## 工单生成规范
@@ -175,8 +185,8 @@ DIAGNOSE_AGENT_SYSTEM_PROMPT = """你是一个楼宇能耗管理系统的专家�
 render_ui_component(
     component_type="WorkOrderCard",
     title="维修工单待确认",
-    data_payload={"ticket_id": ..., "device_id": ..., "device_type": ..., "issue": ..., "priority": ...},
-    source_info={"tool": "create_work_order_draft", "status": "pending_approval"}
+    data_payload={{"ticket_id": ..., "device_id": ..., "device_type": ..., "issue": ..., "priority": ...}},
+    source_info={{"tool": "create_work_order_draft", "status": "pending_approval"}}
 )
 ```"""
 
@@ -184,22 +194,38 @@ render_ui_component(
 # ---------------------------------------------------------------------------
 # 工具包装（与 data_agent 保持一致：注入 DB session + 解包 kwargs）
 # ---------------------------------------------------------------------------
+_TOOL_RESPONSE_MAX_CHARS = 4000
+
+
+def _truncate_tool_response(text: str, max_chars: int = _TOOL_RESPONSE_MAX_CHARS) -> str:
+    """截断过长的工具返回，防止 ReAct 消息历史撑爆 LLM 上下文窗口。"""
+    if len(text) <= max_chars:
+        return text
+    half = max_chars // 2
+    return (
+        text[:half]
+        + f"\n\n... [结果过长，已截断中间 {len(text) - max_chars} 字符] ...\n\n"
+        + text[-half:]
+    )
+
+
 def _make_mcp_tool(
     tool_name: str,
     description: str,
     args_schema=None,
 ) -> StructuredTool:
     async def _invoke(**kwargs: Any) -> str:
-        # 兼容 LangChain 将参数包在 'kwargs' 键的情况
         if set(kwargs.keys()) == {"kwargs"} and isinstance(kwargs.get("kwargs"), dict):
             kwargs = kwargs["kwargs"]
         async with AsyncSessionLocal() as session:
             result = await call_tool(tool_name, kwargs, session=session)
         if isinstance(result, dict):
-            return json.dumps(result, ensure_ascii=False, default=str)
-        if hasattr(result, "model_dump"):
-            return json.dumps(result.model_dump(), ensure_ascii=False, default=str)
-        return str(result)
+            raw = json.dumps(result, ensure_ascii=False, default=str)
+        elif hasattr(result, "model_dump"):
+            raw = json.dumps(result.model_dump(), ensure_ascii=False, default=str)
+        else:
+            raw = str(result)
+        return _truncate_tool_response(raw)
 
     return StructuredTool.from_function(
         coroutine=_invoke,
@@ -307,17 +333,23 @@ def reset_diagnose_agent_cache() -> None:
 _MAX_HISTORY_MESSAGES = 8
 
 
+def _build_diagnose_prompt() -> str:
+    """用当前日期填充诊断 Prompt 模板。"""
+    from app.core.time_context import get_today
+    today = get_today()
+    return _DIAGNOSE_PROMPT_TEMPLATE.format(today=today, year=today.year)
+
+
 def _get_diagnose_agent(
     include_list_buildings: bool = True,
     thinking_mode: str = "fast",
     enable_web_search: bool = False,
 ):
     """
-    获取 Diagnose Agent 实例（按 include_list + mode + web_search 缓存）。
-    deep 模式使用 LLM_MODEL_DEEP，fast 模式使用 LLM_MODEL_DIAGNOSE / LLM_MODEL。
-    enable_web_search 为 True 时，额外注入 web_search 工具。
+    获取 Diagnose Agent 实例（按日期+参数缓存，跨日自动重建）。
     """
-    cache_key = (include_list_buildings, thinking_mode, enable_web_search)
+    from app.core.time_context import get_today
+    cache_key = (include_list_buildings, thinking_mode, enable_web_search, str(get_today()))
     with _get_diagnose_agent_lock():
         if cache_key in _diagnose_agent_cache:
             return _diagnose_agent_cache[cache_key]
@@ -337,11 +369,13 @@ def _get_diagnose_agent(
             temperature=0.2,
             max_tokens=max_tok,
             streaming=True,
+            request_timeout=90,
         )
         tools = DIAGNOSE_AGENT_TOOLS if include_list_buildings else _DIAGNOSE_BASE_TOOLS
         if enable_web_search:
             tools = list(tools) + [_WEB_SEARCH_TOOL]
-        agent = create_react_agent(llm, tools=tools, prompt=DIAGNOSE_AGENT_SYSTEM_PROMPT)
+        prompt = _build_diagnose_prompt()
+        agent = create_react_agent(llm, tools=tools, prompt=prompt)
         _diagnose_agent_cache[cache_key] = agent
         return agent
 
@@ -359,16 +393,16 @@ async def diagnose_agent_node(state: AgentState) -> dict[str, Any]:
     t0 = time.time()
     hop_count = state.get("hop_count", 0) + 1
 
-    # ── 动态获取数据时间范围 ───────────────────────────────────────────
+    # ── 统一时间上下文 ─────────────────────────────────────────────────
     from app.core.data_range import get_data_range
+    from app.core.time_context import build_time_context
     data_range = await get_data_range()
 
     # ── 构建上下文注入消息 ─────────────────────────────────────────────
-    context_parts: list[str] = []
-
-    context_parts.append(
-        f"【数据有效时间范围】: {data_range.get('min_date', '未知')} ~ {data_range.get('max_date', '未知')}，"
-        f"默认查询范围: {data_range.get('default_start', '未知')} ~ {data_range.get('default_end', '未知')}"
+    context_parts: list[str] = build_time_context(
+        data_range=data_range,
+        user_time_context=state.get("time_context"),
+        label="诊断时间范围",
     )
 
     existing_summary = state.get("context_summary", "")
@@ -393,19 +427,27 @@ async def diagnose_agent_node(state: AgentState) -> dict[str, Any]:
         else:
             context_parts.append(f"【可用楼宇】: {', '.join(available)}")
 
+    # 接力场景：Data Agent 已完成数据查询，将摘要注入供深度分析
+    data_summary = state.get("react_data_summary", "")
+    if data_summary.strip():
+        context_parts.append(
+            f"【Data Agent 已查询的数据摘要（直接用于分析，无需重复查询）】\n{data_summary}"
+        )
+
     if state.get("building_id"):
         context_parts.append(f"【目标楼宇】: {state['building_id']}")
     if state.get("device_id"):
         context_parts.append(f"【目标设备】: {state['device_id']}")
-    tc = state.get("time_context")
-    if isinstance(tc, dict):
-        start = tc.get("start") or data_range.get("default_start", "")
-        end   = tc.get("end")   or data_range.get("default_end", "")
-        if start and end:
-            context_parts.append(f"【诊断时间范围】: {start} ~ {end}")
 
     history = state.get("messages", [])
-    recent  = history[-_MAX_HISTORY_MESSAGES:] if len(history) > _MAX_HISTORY_MESSAGES else history
+
+    # 接力场景（data_summary 非空）：只保留用户原始问题，减少无关上下文
+    is_relay = bool(data_summary.strip())
+    if is_relay:
+        user_msgs = [m for m in history if isinstance(m, HumanMessage)]
+        recent = user_msgs[-2:] if user_msgs else []
+    else:
+        recent = history[-_MAX_HISTORY_MESSAGES:] if len(history) > _MAX_HISTORY_MESSAGES else history
 
     if context_parts:
         ctx_msg = SystemMessage(
@@ -427,30 +469,98 @@ async def diagnose_agent_node(state: AgentState) -> dict[str, Any]:
         enable_web_search=enable_web_search,
     )
 
-    try:
-        result = await agent.ainvoke(sub_state, config={"recursion_limit": 15})
-    except Exception as exc:
-        logger.error("Diagnose Agent 执行失败: %s", exc)
-        error_msg = AIMessage(
-            content=f"故障诊断专家遇到了问题：{exc}。请稍后重试或联系人工运维。"
-        )
+    _DIAGNOSE_TIMEOUT = 120
+    _MAX_RETRIES = 2
+    _RETRYABLE_KEYWORDS = ("connection_lost", "ConnectionReset", "RemoteDisconnected", "ServerDisconnected")
+
+    result = None
+    last_exc: Exception | None = None
+
+    for attempt in range(1, _MAX_RETRIES + 1):
+        try:
+            result = await asyncio.wait_for(
+                agent.ainvoke(sub_state, config={"recursion_limit": 15}),
+                timeout=_DIAGNOSE_TIMEOUT,
+            )
+            break
+        except asyncio.TimeoutError:
+            logger.warning("Diagnose Agent 超时（%ds），强制终止", _DIAGNOSE_TIMEOUT)
+            return {
+                "messages": [AIMessage(
+                    content="诊断分析耗时过长，已自动终止。建议简化问题后重试，或联系人工运维。"
+                )],
+                "current_agent": "end",
+                "hop_count": hop_count,
+                "error": "diagnose_timeout",
+            }
+        except Exception as exc:
+            last_exc = exc
+            exc_str = str(exc)
+            is_retryable = any(kw in exc_str for kw in _RETRYABLE_KEYWORDS)
+            if is_retryable and attempt < _MAX_RETRIES:
+                logger.warning(
+                    "Diagnose Agent 瞬时错误（第%d次），%.1fs 后重试: %s",
+                    attempt, attempt * 2, exc_str[:120],
+                )
+                await asyncio.sleep(attempt * 2)
+                continue
+            logger.error("Diagnose Agent 执行失败（第%d次）: %s", attempt, exc)
+            return {
+                "messages": [AIMessage(
+                    content=f"故障诊断专家遇到了问题：{exc}。请稍后重试或联系人工运维。"
+                )],
+                "current_agent": "end",
+                "hop_count": hop_count,
+                "error": str(exc),
+            }
+
+    if result is None:
+        logger.error("Diagnose Agent 重试耗尽: %s", last_exc)
         return {
-            "messages": [error_msg],
+            "messages": [AIMessage(content="诊断服务暂时不可用，请稍后重试。")],
             "current_agent": "end",
             "hop_count": hop_count,
-            "error": str(exc),
+            "error": str(last_exc),
         }
 
     all_messages = result.get("messages", [])
     new_messages  = all_messages[injected_count:]
 
+    # Debug: 帮助排查消息丢失问题
+    ai_in_new = [m for m in new_messages if isinstance(m, AIMessage)]
+    logger.debug(
+        "Diagnose 消息统计: all=%d injected=%d new=%d ai_in_new=%d",
+        len(all_messages), injected_count, len(new_messages), len(ai_in_new),
+    )
+    for i, m in enumerate(ai_in_new):
+        has_tc = bool(getattr(m, "tool_calls", []))
+        has_content = bool(m.content)
+        has_rc = bool((getattr(m, "additional_kwargs", None) or {}).get("reasoning_content"))
+        logger.debug("  AI[%d]: content=%s tool_calls=%s reasoning=%s", i, has_content, has_tc, has_rc)
+
     # ── 只将最终纯文字 AIMessage 写回全局 state ───────────────────────
+    # 优先：纯文字（无 tool_calls）的 AIMessage
     final_ai_msgs = [
         m for m in new_messages
         if isinstance(m, AIMessage)
         and m.content
         and not getattr(m, "tool_calls", [])
     ]
+    if not final_ai_msgs:
+        # Fallback 1: 有 content 但同时携带 tool_calls 的 AIMessage（如调用了 render_ui_component）
+        final_ai_msgs = [
+            m for m in new_messages
+            if isinstance(m, AIMessage) and m.content
+        ]
+    if not final_ai_msgs:
+        # Fallback 2: content 为空但 reasoning_content 有内容（思考链模型）
+        for m in reversed(new_messages):
+            if not isinstance(m, AIMessage):
+                continue
+            rc = (getattr(m, "additional_kwargs", None) or {}).get("reasoning_content", "")
+            if rc:
+                final_ai_msgs = [AIMessage(content=rc)]
+                break
     global_msg = [final_ai_msgs[-1]] if final_ai_msgs else []
 
     # 收集 artifacts + 检测工单草稿（HITL）

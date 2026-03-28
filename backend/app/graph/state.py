@@ -174,6 +174,12 @@ class AgentState(TypedDict):
     从互联网获取 RAG 知识库不足的补充信息。由前端 toggle 控制。
     """
 
+    needs_diagnosis: bool
+    """
+    复合意图标记。Router 识别到"数据查询 + 归因分析"复合意图时置 True，
+    使 data_synthesis 完成后自动接力到 diagnose_agent 进行深度分析。
+    """
+
 
 def initial_state(available_buildings: list[str] | None = None) -> AgentState:
     """创建空白初始状态，用于新会话。"""
@@ -196,6 +202,7 @@ def initial_state(available_buildings: list[str] | None = None) -> AgentState:
         react_data_summary="",
         thinking_mode="fast",
         enable_web_search=False,
+        needs_diagnosis=False,
     )
 
 

@@ -25,7 +25,7 @@ for name in required:
         print(f"FAIL: {name} NOT defined!")
 
 # 3) Required constants
-for name in ['DATA_REACT_PROMPT', 'SYNTHESIS_PROMPT', 'DATA_AGENT_TOOLS']:
+for name in ['_DATA_REACT_PROMPT_TEMPLATE', 'SYNTHESIS_PROMPT', 'DATA_AGENT_TOOLS']:
     pattern = rf'^{name}\s*='
     if re.search(pattern, content, re.MULTILINE):
         print(f"PASS: {name} defined")

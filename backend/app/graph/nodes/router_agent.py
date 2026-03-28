@@ -47,6 +47,10 @@ class RouterDecision(BaseModel):
         default=None,
         description="当 intent=general_chat/clarify 时的直接回复文字"
     )
+    needs_diagnosis: bool = Field(
+        default=False,
+        description="复合意图：数据查询 + 归因/对比分析时为 true，Data Agent 完成后接力 Diagnose Agent"
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +62,8 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 _ROUTER_SYSTEM_PROMPT_TEMPLATE = """你是楼宇能耗管理系统的智能助手（Router Agent）。
 你的核心职责是：【识别用户意图】→【提取实体】→【决定如何响应】。
+
+**当前系统日期：{today}（{year} 年）** — 所有时间判断和 time_context 提取以此为准。
 
 **对于通用对话（问候、闲聊、系统介绍等），你要亲切地直接回复。**
 **对于专业业务问题，你负责路由到后续专家 Agent 处理，自己不给出数据或诊断结论。**
@@ -104,6 +110,16 @@ _ROUTER_SYSTEM_PROMPT_TEMPLATE = """你是楼宇能耗管理系统的智能助�
    - 例如："针对上面的分析有什么意见"、"给我一些优化建议"、"怎么改进"、"有什么节能方案"
    - 这类问题需要的是专家诊断和建议，不是重新查数据
 
+## 复合意图识别（重要）
+当用户的问题**同时包含"数据查询"和"归因/对比分析/优化建议"**时，属于复合意图：
+- 先用 Data Agent 获取数据，再由 Diagnose Agent 做深度分析
+- 此时 intent 设为 **data_query**，next_agent 设为 **data_agent**，**needs_diagnosis 设为 true**
+- 典型示例：
+  - "教学楼和办公楼的用电量分别是多少？为什么差异这么大？" → data_query + needs_diagnosis=true
+  - "对比三栋楼用电趋势，并给出优化建议" → data_query + needs_diagnosis=true
+  - "查一下办公楼上个月用电，有没有异常？" → data_query + needs_diagnosis=true
+- 仅查数据不需要分析时，needs_diagnosis=false
+
 ## 输出格式（严格 JSON，不要加 Markdown 代码块）
 {{
   "intent": "<意图类型>",
@@ -112,7 +128,8 @@ _ROUTER_SYSTEM_PROMPT_TEMPLATE = """你是楼宇能耗管理系统的智能助�
   "building_id": "<building_type 值，如 Education|null>",
   "device_id": "<设备类型提示或具体 device_id，如 'HVAC'|null>",
   "time_context": {{"start": "<ISO8601|null>", "end": "<ISO8601|null>"}},
-  "direct_reply": "<当 intent=general_chat 或 clarify 时填写的直接回复，其他情况为 null>"
+  "direct_reply": "<当 intent=general_chat 或 clarify 时填写的直接回复，其他情况为 null>",
+  "needs_diagnosis": <true|false>
 }}
 
 ## 边界规则
@@ -126,13 +143,17 @@ _ROUTER_SYSTEM_PROMPT_TEMPLATE = """你是楼宇能耗管理系统的智能助�
 
 def build_router_system_prompt(building_types: list[str] | None = None) -> str:
     """
-    用数据库真实楼宇列表动态生成 Router System Prompt。
+    用数据库真实楼宇列表 + 当前日期动态生成 Router System Prompt。
     building_types 为 None 时使用内置默认值（降级保护）。
     """
+    from app.core.time_context import get_today
     if not building_types:
         building_types = ["Education", "Office", "Public services"]
     building_list = "\n".join(f"- {b}" for b in building_types)
-    return _ROUTER_SYSTEM_PROMPT_TEMPLATE.format(building_list=building_list)
+    today = get_today()
+    return _ROUTER_SYSTEM_PROMPT_TEMPLATE.format(
+        building_list=building_list, today=today, year=today.year,
+    )
 
 
 # 向后兼容：模块加载时生成一份默认 prompt（无 DB 时可用）
@@ -150,7 +171,7 @@ _INTENT_ROUTING: dict[IntentType | str, NextNode] = {
     "work_order":      "diagnose_agent",
     "knowledge_query": "diagnose_agent",  # 知识库/规范查询 → RAG 检索
     "general_chat":    "end",             # Router 直接回复，无需下游 Agent
-    "clarify":         "router",          # 继续等待用户澄清
+    "clarify":         "end",             # 输出澄清问题后结束本轮，等待用户下一条消息
     "unknown":         "end",
 }
 
@@ -235,11 +256,11 @@ _FAST_ROUTE_RULES: list[tuple[re.Pattern[str], str]] = [
         re.compile(r'(?:COP|cop|能效比|制冷效率|HVAC)', re.IGNORECASE),
         "cop_analysis",
     ),
-    # 故障诊断 / 优化建议
+    # 故障诊断 / 优化建议（收紧"问题"→"原因分析"，扩展"为什么"匹配）
     (
         re.compile(
-            r'(?:建议|优化|改进|意见|诊断|异常|故障|问题|原因|为什么.*高|为什么.*低'
-            r'|节能|省电|降低能耗|怎么.*减少)',
+            r'(?:建议|优化|改进|意见|诊断|异常|故障|原因分析|为什么.*[高低大多少]'
+            r'|什么原因|节能|省电|降低能耗|怎么.*减少|怎么.*降)',
             re.IGNORECASE,
         ),
         "fault_diagnosis",
@@ -261,6 +282,28 @@ _FAST_ROUTE_RULES: list[tuple[re.Pattern[str], str]] = [
 
 _FAST_ROUTE_MAX_LEN = 80  # 业务路由快速通道的长度上限
 
+# 路由到 Data Agent 的意图集合
+_DATA_INTENTS = {"data_query", "cop_analysis", "forecast"}
+# 路由到 Diagnose Agent 的意图集合
+_ANALYSIS_INTENTS = {"fault_diagnosis", "work_order", "knowledge_query"}
+
+# ---------------------------------------------------------------------------
+# 轻量实体提取（正则，零 LLM 成本）
+# ---------------------------------------------------------------------------
+_BUILDING_EXTRACT_RULES: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r'教学楼|Education', re.IGNORECASE), "Education"),
+    (re.compile(r'办公楼|Office', re.IGNORECASE), "Office"),
+    (re.compile(r'公共楼|图书馆|Public', re.IGNORECASE), "Public services"),
+]
+
+
+def _extract_building_from_text(msg: str) -> str | None:
+    """从消息文本中提取建筑 ID（正则匹配，零成本）。"""
+    for pattern, building_id in _BUILDING_EXTRACT_RULES:
+        if pattern.search(msg):
+            return building_id
+    return None
+
 
 def _try_fast_path(message: str) -> str | dict | None:
     """
@@ -268,7 +311,7 @@ def _try_fast_path(message: str) -> str | dict | None:
 
     返回值:
     - str:  直接回复文字（问候/闲聊类）
-    - dict: 路由信息 {"intent": ..., "next_agent": ...}（业务查询类）
+    - dict: 路由信息 {"intent": ..., "next_agent": ..., "building_id": ...}（业务查询类）
     - None: 未匹配，走正常 LLM 路径
     """
     msg = message.strip()
@@ -281,12 +324,27 @@ def _try_fast_path(message: str) -> str | dict | None:
 
     # 2) 业务路由快速匹配（中等长度消息）
     if len(msg) <= _FAST_ROUTE_MAX_LEN:
+        matched_intents: list[str] = []
         for pattern, intent in _FAST_ROUTE_RULES:
             if pattern.search(msg):
-                return {
-                    "intent": intent,
-                    "next_agent": _INTENT_ROUTING.get(intent, "end"),
-                }
+                matched_intents.append(intent)
+
+        if not matched_intents:
+            return None
+
+        unique_intents = set(matched_intents)
+
+        # 冲突检测：同时命中数据类 + 分析类 → 复合意图，交给 LLM 精确判断
+        if unique_intents & _DATA_INTENTS and unique_intents & _ANALYSIS_INTENTS:
+            logger.info("快速路由: 检测到复合意图 %s，交给 LLM 精确判断", unique_intents)
+            return None
+
+        first_intent = matched_intents[0]
+        return {
+            "intent": first_intent,
+            "next_agent": _INTENT_ROUTING.get(first_intent, "end"),
+            "building_id": _extract_building_from_text(msg),
+        }
 
     return None
 
@@ -300,28 +358,34 @@ def _get_router_llm_lock() -> Any:
     import threading
     global _router_llm_lock
     if _router_llm_lock is None:
-        _router_llm_lock = threading.Lock()
+        _router_llm_lock = threading.RLock()  # RLock: 允许同一线程重入，防止嵌套调用死锁
     return _router_llm_lock
 
 
-def _get_router_llm() -> ChatOpenAI:
-    """获取路由 LLM 单例（首次调用时初始化，锁保护避免并发重复创建）。"""
+def _ensure_base_llm() -> ChatOpenAI:
+    """在锁保护下初始化 base LLM（仅供内部调用，调用方应已持有锁）。"""
     global _cached_router_llm
-    with _get_router_llm_lock():
-        if _cached_router_llm is None:
-            settings = get_settings()
-            if not (settings.LLM_API_KEY or "").strip():
-                logger.warning(
-                    "LLM_API_KEY 未配置，将使用 placeholder；生产环境请在 .env 中设置 LLM_API_KEY"
-                )
-            _cached_router_llm = ChatOpenAI(
-                model=settings.LLM_MODEL_ROUTER or settings.LLM_MODEL,
-                api_key=settings.LLM_API_KEY or "placeholder",
-                base_url=settings.LLM_BASE_URL,
-                temperature=0.0,
-                max_tokens=512,
+    if _cached_router_llm is None:
+        settings = get_settings()
+        if not (settings.LLM_API_KEY or "").strip():
+            logger.warning(
+                "LLM_API_KEY 未配置，将使用 placeholder；生产环境请在 .env 中设置 LLM_API_KEY"
             )
+        _cached_router_llm = ChatOpenAI(
+            model=settings.LLM_MODEL_ROUTER or settings.LLM_MODEL,
+            api_key=settings.LLM_API_KEY or "placeholder",
+            base_url=settings.LLM_BASE_URL,
+            temperature=0.0,
+            max_tokens=512,
+            request_timeout=30,
+        )
     return _cached_router_llm
+
+
+def _get_router_llm() -> ChatOpenAI:
+    """获取路由 LLM 单例（锁保护避免并发重复创建）。"""
+    with _get_router_llm_lock():
+        return _ensure_base_llm()
 
 
 def _get_structured_router():
@@ -331,8 +395,9 @@ def _get_structured_router():
         if _cached_structured_router is not None:
             return _cached_structured_router
         try:
-            base_llm = _get_router_llm()
+            base_llm = _ensure_base_llm()  # 直接调用内部函数，不再嵌套获取锁
             _cached_structured_router = base_llm.with_structured_output(RouterDecision)
+            logger.info("Router 结构化输出初始化成功")
             return _cached_structured_router
         except Exception as exc:
             logger.warning("结构化输出初始化失败，将使用 free-form JSON 模式: %s", exc)
@@ -360,7 +425,7 @@ def _parse_router_output(raw: str) -> dict[str, Any]:
         return {
             "intent": "clarify",
             "confidence": 0.0,
-            "next_agent": "router",
+            "next_agent": "end",
             "building_id": None,
             "device_id": None,
             "time_context": None,
@@ -412,8 +477,9 @@ async def router_node(state: AgentState) -> dict[str, Any]:
         if isinstance(fast_result, dict):
             fast_intent = fast_result["intent"]
             fast_next = fast_result["next_agent"]
-            logger.info("Router 快速通道(路由)命中: intent=%s → %s, msg=%r",
-                        fast_intent, fast_next, str(last_human.content)[:60])
+            fast_building = fast_result.get("building_id")
+            logger.info("Router 快速通道(路由)命中: intent=%s → %s, building=%s, msg=%r",
+                        fast_intent, fast_next, fast_building, str(last_human.content)[:60])
             return {
                 "messages": [AIMessage(
                     content=f"[Router] 快速路由：{fast_intent}，正在转接 {fast_next}..."
@@ -422,7 +488,7 @@ async def router_node(state: AgentState) -> dict[str, Any]:
                 "intent": fast_intent,
                 "confidence": 0.95,
                 "hop_count": hop_count,
-                "building_id": state.get("building_id"),
+                "building_id": fast_building or state.get("building_id"),
                 "device_id": state.get("device_id"),
                 "time_context": state.get("time_context"),
             }
@@ -432,7 +498,8 @@ async def router_node(state: AgentState) -> dict[str, Any]:
     recent_history = history[-6:] if len(history) > 6 else history
 
     # ── 上下文提示（结构化实体 + 历史摘要 → 替代冗长原始消息）──────────
-    ctx_parts: list[str] = []
+    from app.core.time_context import get_today
+    ctx_parts: list[str] = [f"今天日期: {get_today()}"]
 
     # 历史摘要（比原始消息更紧凑）
     context_summary = state.get("context_summary", "")
@@ -457,22 +524,38 @@ async def router_node(state: AgentState) -> dict[str, Any]:
     llm_messages = [SystemMessage(content=system_content)] + list(recent_history)
 
     # ── 调用 LLM（优先结构化输出，fallback 到 free-form JSON）──
+    import asyncio as _aio
+    _ROUTER_LLM_TIMEOUT = 30
+
     parsed: dict[str, Any] | None = None
 
     structured_llm = _get_structured_router()
+    logger.info("Router LLM 路径: structured_llm=%s", "ready" if structured_llm else "None(降级free-form)")
     if structured_llm is not None:
         try:
-            decision: RouterDecision = await structured_llm.ainvoke(llm_messages)
+            logger.info("Router 结构化输出: 开始调用 LLM...")
+            decision: RouterDecision = await _aio.wait_for(
+                structured_llm.ainvoke(llm_messages),
+                timeout=_ROUTER_LLM_TIMEOUT,
+            )
             parsed = decision.model_dump()
-            logger.debug("Router 结构化输出成功: intent=%s", parsed.get("intent"))
+            logger.info("Router 结构化输出成功: intent=%s next=%s confidence=%.2f",
+                        parsed.get("intent"), parsed.get("next_agent"), parsed.get("confidence", 0))
+        except _aio.TimeoutError:
+            logger.warning("Router 结构化输出超时(%ds)，降级到 free-form", _ROUTER_LLM_TIMEOUT)
+            parsed = None
         except Exception as exc:
             logger.warning("Router 结构化输出失败，降级到 free-form: %s", exc)
             parsed = None
 
     if parsed is None:
+        logger.info("Router free-form: 开始调用 LLM...")
         llm = _get_router_llm()
         try:
-            response = await llm.ainvoke(llm_messages)
+            response = await _aio.wait_for(
+                llm.ainvoke(llm_messages),
+                timeout=_ROUTER_LLM_TIMEOUT,
+            )
             content = response.content
             if isinstance(content, list):
                 raw_output = "".join(
@@ -481,6 +564,16 @@ async def router_node(state: AgentState) -> dict[str, Any]:
             else:
                 raw_output = str(content or "")
             parsed = _parse_router_output(raw_output)
+            logger.info("Router free-form 输出: intent=%s", parsed.get("intent"))
+        except _aio.TimeoutError:
+            logger.error("Router LLM 调用超时(%ds)", _ROUTER_LLM_TIMEOUT)
+            error_msg = AIMessage(content="路由分析超时，请稍后重试或简化问题。")
+            return {
+                "messages": [error_msg],
+                "current_agent": "end",
+                "hop_count": hop_count,
+                "error": "router_timeout",
+            }
         except Exception as exc:
             logger.error("Router LLM 调用失败: %s", exc)
             error_msg = AIMessage(content="系统暂时无法处理您的请求，请稍后重试。")
@@ -494,6 +587,7 @@ async def router_node(state: AgentState) -> dict[str, Any]:
     intent: IntentType = parsed.get("intent", "unknown")
     confidence: float = float(parsed.get("confidence", 0.0))
     next_agent: NextNode = parsed.get("next_agent", "end")
+    needs_diagnosis: bool = bool(parsed.get("needs_diagnosis", False))
 
     building_id: str | None = parsed.get("building_id") or state.get("building_id")
     device_id: str | None = parsed.get("device_id") or state.get("device_id")
@@ -502,11 +596,26 @@ async def router_node(state: AgentState) -> dict[str, Any]:
     direct_reply: str | None = parsed.get("direct_reply") or parsed.get("clarification_question")
 
     # 始终以路由表覆盖 LLM 返回的 next_agent，防止 LLM 选错目标节点
-    # LLM 可能返回合法但错误的节点名（如 forecast → diagnose_agent），路由表是唯一权威
     if intent in _INTENT_ROUTING:
         next_agent = _INTENT_ROUTING[intent]
-    elif next_agent not in ("data_agent", "diagnose_agent", "router", "end"):
+    elif next_agent not in ("data_agent", "diagnose_agent", "end"):
         next_agent = "end"
+
+    # ── 重入降级：LLM 在复合意图上反复返回 clarify 时，自动走数据→诊断链路 ──
+    if intent == "clarify" and hop_count > 1:
+        logger.info(
+            "Router 重入降级: hop_count=%d, 原 intent=clarify → 降级为 data_query + needs_diagnosis",
+            hop_count,
+        )
+        intent = "data_query"
+        next_agent = "data_agent"
+        needs_diagnosis = True
+        direct_reply = None
+
+    logger.info(
+        "Router 决策: intent=%s, next_agent=%s, confidence=%.2f, hop=%d, needs_diagnosis=%s",
+        intent, next_agent, confidence, hop_count, needs_diagnosis,
+    )
 
     # ── 构造 AI 回复消息 ──
     if intent == "general_chat" and direct_reply:
@@ -536,4 +645,5 @@ async def router_node(state: AgentState) -> dict[str, Any]:
         "building_id": building_id,
         "device_id": device_id,
         "time_context": time_context,
+        "needs_diagnosis": needs_diagnosis,
     }

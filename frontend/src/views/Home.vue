@@ -31,7 +31,7 @@
             :data-pick-subtitle="`温度 ${weatherTemp != null ? Number(weatherTemp).toFixed(1) + '°C' : '--'}，湿度 ${weatherHumi ?? '--'}%`">
           <div class="weather-date">
             <Icon icon="mdi:calendar-month" width="13" />
-            <span>{{ dataDate || '...' }}</span>
+            <span>{{ todayDisplay }}</span>
           </div>
           <div class="weather-divider"></div>
           <div class="weather-metrics">
@@ -120,6 +120,15 @@ const notifStore    = useNotificationStore()
 const { registerSection, setReportMeta } = useReportExport('home')
 
 const displayName = computed(() => authStore.user?.username ?? '访客')
+
+/** 始终显示客户端实际今天日期，与后端数据日期无关 */
+const todayDisplay = computed(() => {
+  const d = new Date()
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+})
 
 const dataDate = ref('')
 const weatherTemp = ref<number | null>(null)

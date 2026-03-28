@@ -26,12 +26,16 @@ settings = get_settings()
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s - %(message)s",
+    force=True,  # uvicorn --reload 会预先配置 root logger，force 确保我们的配置覆盖
 )
-# 强制缓存与业务路由日志在控制台可见
-logging.getLogger("app.core.cache").setLevel(logging.INFO)
-logging.getLogger("app.api.routes_data").setLevel(logging.INFO)
-logging.getLogger("app.api.routes_chat").setLevel(logging.INFO)
-logging.getLogger("app.api.routes_workorder").setLevel(logging.INFO)
+# 强制关键模块日志在控制台可见
+for _logger_name in (
+    "app.core.cache", "app.api.routes_data", "app.api.routes_chat",
+    "app.api.routes_workorder", "app.graph.nodes.router_agent",
+    "app.graph.nodes.data_agent", "app.graph.nodes.diagnose_agent",
+    "app.graph.workflow",
+):
+    logging.getLogger(_logger_name).setLevel(logging.INFO)
 
 
 _DEFAULT_JWT_KEY = "change-this-to-a-random-secret-in-production"

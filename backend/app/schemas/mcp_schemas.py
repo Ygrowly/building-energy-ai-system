@@ -121,18 +121,39 @@ class WorkOrderPriority(str, Enum):
 # ===========================================================================
 
 class TimeRange(BaseModel):
-    """时间范围，TIMESTAMPTZ 精度，end 必须晚于 start。"""
+    """时间范围，TIMESTAMPTZ 精度，end 必须晚于 start，自动钳位到有效数据范围。"""
     start: datetime
     end: datetime
 
     @model_validator(mode="after")
     def _normalize(self) -> "TimeRange":
         # LLM 传入的 datetime 可能不带时区，强制标记为 UTC
-        # 避免 PostgreSQL 用服务器本地时区解释 naive datetime
         if self.start.tzinfo is None:
             self.start = self.start.replace(tzinfo=timezone.utc)
         if self.end.tzinfo is None:
             self.end = self.end.replace(tzinfo=timezone.utc)
+
+        # 钳位到数据有效范围（防止 LLM 编造不存在的日期）
+        from app.core.time_context import get_today
+        from datetime import timedelta as _td
+        today = get_today()
+        earliest = datetime(today.year, 1, 1, tzinfo=timezone.utc)
+        latest = datetime(today.year, today.month, today.day, 23, 59, 59, tzinfo=timezone.utc) + _td(days=7)
+
+        clamped = False
+        if self.start < earliest:
+            self.start = earliest
+            clamped = True
+        if self.end > latest:
+            self.end = latest
+            clamped = True
+        if clamped:
+            import logging
+            logging.getLogger(__name__).warning(
+                "TimeRange 钳位: LLM 传入范围超出有效区间，已修正为 %s ~ %s",
+                self.start.isoformat(), self.end.isoformat(),
+            )
+
         if self.end <= self.start:
             raise ValueError(
                 f"time_range.end ({self.end}) 必须晚于 time_range.start ({self.start})"

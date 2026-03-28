@@ -455,6 +455,12 @@ async def _stream_graph(
 
     is_first_message = len(state.get("messages", [])) == 0
 
+    # ── 重置轮次级字段（每轮对话独立，不跨轮累积）──────────────────────────
+    state["hop_count"] = 0
+    state["needs_diagnosis"] = False
+    state["error"] = None
+    state["current_agent"] = "router"
+
     # ── 注入思考模式和联网搜索开关（每次请求动态传入）────────────────────────
     state["thinking_mode"] = thinking_mode
     state["enable_web_search"] = enable_web_search
@@ -482,8 +488,19 @@ async def _stream_graph(
     }
     _emitted_artifact_ids: set[str] = set(_prev_artifact_ids)
 
+    _STREAM_TOTAL_TIMEOUT = 180  # 单轮对话总超时 3 分钟
+    _deadline = time.time() + _STREAM_TOTAL_TIMEOUT
+
     try:
         async for event in graph.astream_events(graph_input, version="v2"):
+            if time.time() > _deadline:
+                logger.warning(
+                    "_stream_graph 总超时（%ds）: session=%s request_id=%s",
+                    _STREAM_TOTAL_TIMEOUT, session_id, request_id,
+                )
+                yield _error_event("请求处理超时，请简化问题后重试")
+                break
+
             kind = event.get("event", "")
             name = event.get("name", "")
             data = event.get("data", {})
@@ -691,8 +708,13 @@ async def _stream_graph(
                     else:
                         content = ""
                     if not content.strip():
-                        continue
-                    if getattr(msg, "tool_calls", None):
+                        # Fallback: 思考链模型可能把回答放在 reasoning_content
+                        rc = (getattr(msg, "additional_kwargs", None) or {}).get("reasoning_content", "")
+                        if rc.strip():
+                            content = rc
+                        else:
+                            continue
+                    if getattr(msg, "tool_calls", None) and not content.strip():
                         continue
                     if name == "router" and "[Router]" in content:
                         continue
@@ -704,6 +726,10 @@ async def _stream_graph(
                         _text_content_streamed = False
                     else:
                         yield _text_event(final_text, is_final=True)
+                elif _text_content_streamed:
+                    # 文本已经通过流式推送，但 output_messages 为空——仍需发送结束标记
+                    yield _text_event("", is_final=True)
+                    _text_content_streamed = False
 
                 # diagnose_agent 可能也有 artifacts
                 if name != "data_react":
@@ -745,19 +771,34 @@ async def _stream_graph(
             from app.api.routes_workorder import register_pending_order
             register_pending_order(pa)
     else:
-        logger.warning(
-            "final_state_holder 为空，触发 fallback ainvoke: session=%s request_id=%s",
-            session_id, request_id,
+        # 检查流式过程中是否已有有效 AI 回复（防止双重执行）
+        current_msgs = state.get("messages", [])
+        has_ai_reply = any(
+            isinstance(m, AIMessage) and m.content and not getattr(m, "tool_calls", [])
+            for m in current_msgs[-5:]
         )
-        try:
-            fallback_state = await graph.ainvoke(graph_input)
-            _sessions[session_id] = fallback_state
-            merged = fallback_state
-            hop = fallback_state.get("hop_count", 0)
-        except Exception as exc:
-            logger.error("fallback ainvoke 失败: %s", exc)
-            merged = state
-            hop = state.get("hop_count", 0)
+        if has_ai_reply:
+            logger.info(
+                "final_state_holder 为空但已有 AI 回复，跳过 fallback: session=%s request_id=%s",
+                session_id, request_id,
+            )
+            merged = dict(state)
+            _sessions[session_id] = merged
+            hop = merged.get("hop_count", 0)
+        else:
+            logger.warning(
+                "final_state_holder 为空且无 AI 回复，触发 fallback ainvoke: session=%s request_id=%s",
+                session_id, request_id,
+            )
+            try:
+                fallback_state = await graph.ainvoke(graph_input)
+                _sessions[session_id] = fallback_state
+                merged = fallback_state
+                hop = fallback_state.get("hop_count", 0)
+            except Exception as exc:
+                logger.error("fallback ainvoke 失败: %s", exc)
+                merged = state
+                hop = state.get("hop_count", 0)
 
     total_elapsed = time.time() - _t.get("request", time.time())
     logger.info(

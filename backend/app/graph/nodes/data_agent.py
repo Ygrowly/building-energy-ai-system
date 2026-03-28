@@ -13,6 +13,7 @@ Phase 2 (data_synthesis_node):
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -49,10 +50,12 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # System Prompt — ReAct 阶段（只做工具调用 + 简要摘要）
 # ---------------------------------------------------------------------------
-DATA_REACT_PROMPT = """你是一个楼宇能耗管理系统的数据分析师（Data Agent）。
+_DATA_REACT_PROMPT_TEMPLATE = """你是一个楼宇能耗管理系统的数据分析师（Data Agent）。
 你拥有只读数据库权限，负责通过工具调用收集数据。
 **你只需要调用工具收集数据，不需要生成详细分析文本。**
 分析文本会由下游 Synthesis 模块基于你收集的数据自动生成。
+
+**当前系统日期：{today}** — 所有时间判断以此为准。
 
 ## 你的专属工具
 1. list_available_buildings — 列出全部楼宇。**仅当上下文未提供楼宇列表时才调用**
@@ -70,9 +73,11 @@ DATA_REACT_PROMPT = """你是一个楼宇能耗管理系统的数据分析师（
 - building_id 使用 building_type 值：'Education'、'Office'、'Public services'
 - **上下文已提供楼宇列表时，直接使用，禁止再调用 list_available_buildings**
 
-## 数据时间范围
-- 使用上下文注入的【数据有效时间范围】，禁止硬编码日期
-- 用户未指定时间时，使用上下文中的默认查询范围
+## 数据时间范围（极其重要，必须严格遵守）
+- 今天是 **{today}**，当前年份是 **{year} 年**
+- **所有工具调用的日期必须来自上下文中的【查询时间范围】**，该范围已由系统自动计算
+- 严禁自行编造日期，严禁使用 {year} 年以外或不在上下文范围内的日期
+- 参考今天日期 {today} 判断"最近一周""上个月"等相对时间
 
 ## 粒度选择指南（query_daily_energy_summary 的 granularity 参数）
 | 用户意图/时间跨度 | 推荐粒度 | 说明 |
@@ -114,6 +119,21 @@ DATA_REACT_PROMPT = """你是一个楼宇能耗管理系统的数据分析师（
 # ---------------------------------------------------------------------------
 # 将 MCP call_tool 包装为 LangChain StructuredTool
 # ---------------------------------------------------------------------------
+_TOOL_RESPONSE_MAX_CHARS = 4000
+
+
+def _truncate_tool_response(text: str, max_chars: int = _TOOL_RESPONSE_MAX_CHARS) -> str:
+    """截断过长的工具返回，防止 ReAct 消息历史撑爆 LLM 上下文窗口。"""
+    if len(text) <= max_chars:
+        return text
+    half = max_chars // 2
+    return (
+        text[:half]
+        + f"\n\n... [结果过长，已截断中间 {len(text) - max_chars} 字符] ...\n\n"
+        + text[-half:]
+    )
+
+
 def _make_mcp_tool(
     tool_name: str,
     description: str,
@@ -125,10 +145,12 @@ def _make_mcp_tool(
         async with AsyncSessionLocal() as session:
             result = await call_tool(tool_name, kwargs, session=session)
         if isinstance(result, dict):
-            return json.dumps(result, ensure_ascii=False, default=str)
-        if hasattr(result, "model_dump"):
-            return json.dumps(result.model_dump(), ensure_ascii=False, default=str)
-        return str(result)
+            raw = json.dumps(result, ensure_ascii=False, default=str)
+        elif hasattr(result, "model_dump"):
+            raw = json.dumps(result.model_dump(), ensure_ascii=False, default=str)
+        else:
+            raw = str(result)
+        return _truncate_tool_response(raw)
 
     return StructuredTool.from_function(
         coroutine=_invoke,
@@ -204,8 +226,6 @@ DATA_AGENT_TOOLS = [
 # ---------------------------------------------------------------------------
 # ReAct Agent 缓存
 # ---------------------------------------------------------------------------
-_cached_react_agent_full = None
-_cached_react_agent_no_list = None
 _react_agent_lock: Any = None
 
 
@@ -219,37 +239,32 @@ def _get_react_agent_lock() -> Any:
 
 def reset_data_agent_cache() -> None:
     """Reset cached Agent instances (used by eval/tests)."""
-    global _cached_react_agent_full, _cached_react_agent_no_list, _react_agent_lock
-    _cached_react_agent_full = None
-    _cached_react_agent_no_list = None
+    global _react_agent_lock
+    _react_agent_cache.clear()
     _react_agent_lock = None
 
 
 _MAX_HISTORY_MESSAGES = 8
 
 
-def _get_react_agent(include_list_available_buildings: bool):
-    """获取 ReAct Agent 单例。max_tokens=1500，只做工具选择 + 简要确认。"""
-    global _cached_react_agent_full, _cached_react_agent_no_list
-    with _get_react_agent_lock():
-        if include_list_available_buildings:
-            if _cached_react_agent_full is not None:
-                return _cached_react_agent_full
-            settings = get_settings()
-            llm = ChatOpenAI(
-                model=settings.LLM_MODEL_REACT or settings.LLM_MODEL,
-                api_key=settings.LLM_API_KEY or "placeholder",
-                base_url=settings.LLM_BASE_URL,
-                temperature=0.1,
-                max_tokens=1500,
-            )
-            _cached_react_agent_full = create_react_agent(
-                llm, tools=DATA_AGENT_TOOLS, prompt=DATA_REACT_PROMPT,
-            )
-            return _cached_react_agent_full
+_react_agent_cache: dict[str, Any] = {}
 
-        if _cached_react_agent_no_list is not None:
-            return _cached_react_agent_no_list
+
+def _build_data_react_prompt() -> str:
+    """用当前日期填充 Prompt 模板。"""
+    from app.core.time_context import get_today
+    today = get_today()
+    return _DATA_REACT_PROMPT_TEMPLATE.format(today=today, year=today.year)
+
+
+def _get_react_agent(include_list_available_buildings: bool):
+    """获取 ReAct Agent（按日期+工具集缓存，跨日自动重建）。"""
+    from app.core.time_context import get_today
+    cache_key = f"{include_list_available_buildings}:{get_today()}"
+
+    with _get_react_agent_lock():
+        if cache_key in _react_agent_cache:
+            return _react_agent_cache[cache_key]
 
         settings = get_settings()
         llm = ChatOpenAI(
@@ -258,12 +273,17 @@ def _get_react_agent(include_list_available_buildings: bool):
             base_url=settings.LLM_BASE_URL,
             temperature=0.1,
             max_tokens=1500,
+            request_timeout=60,
         )
-        tools_wo_list = [t for t in DATA_AGENT_TOOLS if getattr(t, "name", "") != "list_available_buildings"]
-        _cached_react_agent_no_list = create_react_agent(
-            llm, tools=tools_wo_list, prompt=DATA_REACT_PROMPT,
-        )
-        return _cached_react_agent_no_list
+        prompt = _build_data_react_prompt()
+        if include_list_available_buildings:
+            tools = DATA_AGENT_TOOLS
+        else:
+            tools = [t for t in DATA_AGENT_TOOLS if getattr(t, "name", "") != "list_available_buildings"]
+
+        agent = create_react_agent(llm, tools=tools, prompt=prompt)
+        _react_agent_cache[cache_key] = agent
+        return agent
 
 
 async def data_react_node(state: AgentState) -> dict[str, Any]:
@@ -278,14 +298,14 @@ async def data_react_node(state: AgentState) -> dict[str, Any]:
     t0 = time.time()
     hop_count = state.get("hop_count", 0) + 1
 
+    from app.core.time_context import build_time_context
     dr = await get_data_range()
 
     # ── 构建上下文注入消息 ─────────────────────────────────────────────
-    context_parts: list[str] = []
-
-    context_parts.append(
-        f"【数据有效时间范围】: {dr.get('min_date', '未知')} ~ {dr.get('max_date', '未知')}，"
-        f"默认查询范围: {dr.get('default_start', '未知')} ~ {dr.get('default_end', '未知')}"
+    context_parts: list[str] = build_time_context(
+        data_range=dr,
+        user_time_context=state.get("time_context"),
+        label="查询时间范围",
     )
 
     existing_summary = state.get("context_summary", "")
@@ -300,12 +320,6 @@ async def data_react_node(state: AgentState) -> dict[str, Any]:
         )
     if state.get("building_id"):
         context_parts.append(f"【目标楼宇】: {state['building_id']}")
-    tc = state.get("time_context")
-    if isinstance(tc, dict):
-        start = tc.get("start") or dr.get("default_start", "")
-        end   = tc.get("end")   or dr.get("default_end", "")
-        if start and end:
-            context_parts.append(f"【查询时间范围】: {start} ~ {end}")
 
     # ── 取最近 N 条历史消息 ──
     history = state.get("messages", [])
@@ -332,8 +346,24 @@ async def data_react_node(state: AgentState) -> dict[str, Any]:
     injected_count = len(sub_messages)
     sub_state = {"messages": sub_messages}
 
+    _REACT_TIMEOUT = 90
+
     try:
-        result = await agent.ainvoke(sub_state, config={"recursion_limit": 12})
+        result = await asyncio.wait_for(
+            agent.ainvoke(sub_state, config={"recursion_limit": 12}),
+            timeout=_REACT_TIMEOUT,
+        )
+    except asyncio.TimeoutError:
+        logger.warning("Data Agent ReAct 超时（%ds），强制终止", _REACT_TIMEOUT)
+        error_msg = AIMessage(
+            content="数据查询耗时过长，已自动终止。建议将问题拆分为更简单的查询后重试。"
+        )
+        return {
+            "messages": [error_msg],
+            "current_agent": "end",
+            "hop_count": hop_count,
+            "error": "react_timeout",
+        }
     except Exception as exc:
         logger.error("Data Agent ReAct 执行失败: %s", exc)
         error_msg = AIMessage(
@@ -396,6 +426,8 @@ async def data_react_node(state: AgentState) -> dict[str, Any]:
 SYNTHESIS_PROMPT = """你是一个楼宇能耗管理系统的高级数据分析师。
 你的任务是根据工具查询结果和已生成的图表清单，撰写精准、专业的分析报告。
 
+**当前系统日期：{today}** — 输出文本中涉及日期描述必须以此为准。
+
 ## 已生成的图表清单
 {chart_manifest}
 
@@ -427,6 +459,16 @@ SYNTHESIS_PROMPT = """你是一个楼宇能耗管理系统的高级数据分析�
 - 给出具体数值和趋势判断
 - 注意数据的时间粒度（日/周/月），使用正确的时间单位描述
 - 最后给出简明的管理建议
+
+### 差异/对比分析（当用户比较多个楼宇或时段时）
+- 列出各对象的核心指标值，以表格或并列段落呈现
+- 计算差值与百分比差异（如：教学楼日均 800 kWh，办公楼 320 kWh，差异约 150%）
+- 从以下维度给出可能的差异原因解释：
+  - 建筑面积/体量差异
+  - 功能用途与运行时段（如教学楼白天满负荷、办公楼弹性工时）
+  - 空调/照明等主要耗能设备差异
+  - 人员密度与使用频率
+- 如数据不足以定论原因，明确标注"建议结合设备台账进一步排查"
 
 ### 禁止事项
 - 禁止编造工具未返回的数据
@@ -462,6 +504,7 @@ def _get_synthesis_llm(thinking_mode: str = "fast") -> ChatOpenAI:
                 temperature=0.3,
                 max_tokens=3000,
                 streaming=True,
+                request_timeout=90,
             )
             return _cached_synthesis_llm_deep
         else:
@@ -474,6 +517,7 @@ def _get_synthesis_llm(thinking_mode: str = "fast") -> ChatOpenAI:
                 temperature=0.3,
                 max_tokens=2000,
                 streaming=True,
+                request_timeout=60,
             )
             return _cached_synthesis_llm_fast
 
@@ -492,13 +536,30 @@ async def data_synthesis_node(state: AgentState) -> dict[str, Any]:
     chart_manifest = state.get("chart_manifest", "")
     data_summary = state.get("react_data_summary", "")
 
+    # 无数据早退：ReAct 阶段未获取到有效数据，跳过 LLM 合成，防止编造
+    if not chart_manifest.strip() and not data_summary.strip():
+        logger.warning("data_synthesis_node: 无图表清单且无数据摘要，早退")
+        fallback_msg = AIMessage(
+            content="很抱歉，未能查询到相关数据。请尝试：\n"
+            "1. 检查楼宇名称或时间范围是否正确\n"
+            "2. 将问题拆分为更具体的查询\n"
+            "3. 确认所查询的数据类型（电量/水量/冷量）是否可用",
+        )
+        return {
+            "messages": [fallback_msg],
+            "current_agent": "end",
+        }
+
     history = state.get("messages", [])
     user_q = next(
         (str(m.content) for m in reversed(list(history)) if isinstance(m, HumanMessage)),
         "",
     )
 
-    system_content = SYNTHESIS_PROMPT.format(chart_manifest=chart_manifest)
+    from app.core.time_context import get_today
+    system_content = SYNTHESIS_PROMPT.format(
+        chart_manifest=chart_manifest, today=get_today(),
+    )
     messages = [
         SystemMessage(content=system_content),
         HumanMessage(content=f"用户问题：{user_q}\n\n{data_summary}"),

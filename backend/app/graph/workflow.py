@@ -1,14 +1,14 @@
 """
-多智能体图编排（LangGraph StateGraph）—— v2 两阶段架构。
+多智能体图编排（LangGraph StateGraph）—— v2 两阶段架构 + Agent 接力。
 
 拓扑结构：
     START → router_node
     router_node --[data_query/cop_analysis]-→ data_react_node
     router_node --[fault_diagnosis/work_order]-→ diagnose_agent_node
-    router_node --[clarify]-→ router_node (等待用户下一轮)
-    router_node --[unknown/end]-→ END
+    router_node --[clarify/unknown/end]-→ END (输出澄清问题后结束本轮)
     data_react_node → data_synthesis_node
-    data_synthesis_node → END
+    data_synthesis_node --[needs_diagnosis]-→ diagnose_agent_node  (接力)
+    data_synthesis_node --[else]-→ END
     diagnose_agent_node → END
 
 data_react_node:  ReAct 工具调用 + viz_engine 生成图表
@@ -44,8 +44,18 @@ def _route_from_router(
         "end":            END,
     }
     destination = mapping.get(next_agent, END)
-    logger.debug("Router 路由决策: current_agent=%s → %s", next_agent, destination)
+    logger.info("Graph 路由: current_agent=%s → %s", next_agent, destination)
     return destination  # type: ignore[return-value]
+
+
+def _route_after_synthesis(
+    state: AgentState,
+) -> Literal["diagnose_agent", "__end__"]:
+    """data_synthesis_node 完成后：如果需要接力诊断则转 diagnose_agent，否则结束。"""
+    if state.get("needs_diagnosis") and not state.get("error"):
+        logger.info("data_synthesis → diagnose_agent（复合意图接力）")
+        return "diagnose_agent"
+    return END  # type: ignore[return-value]
 
 
 # ---------------------------------------------------------------------------
@@ -76,9 +86,16 @@ def build_graph() -> Any:
         },
     )
 
-    # data_react → data_synthesis → END（两阶段串联）
-    builder.add_edge("data_react",     "data_synthesis")
-    builder.add_edge("data_synthesis", END)
+    # data_react → data_synthesis → (条件边: diagnose_agent 或 END)
+    builder.add_edge("data_react", "data_synthesis")
+    builder.add_conditional_edges(
+        "data_synthesis",
+        _route_after_synthesis,
+        {
+            "diagnose_agent": "diagnose_agent",
+            END:              END,
+        },
+    )
 
     # diagnose 直接结束
     builder.add_edge("diagnose_agent", END)

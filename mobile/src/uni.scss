@@ -1,0 +1,154 @@
+/* 全局 CSS 变量 */
+page {
+  background-color: #f5f7fa;
+  font-family: -apple-system, 'PingFang SC', 'Helvetica Neue', sans-serif;
+}
+
+/* ---- 运维端色系 ---- */
+.theme-operator {
+  --primary: #3b6cf4;
+  --primary-dark: #1a1a2e;
+  --primary-light: #e8effe;
+  --accent: #00c9ff;
+}
+
+/* ---- 维修端色系 ---- */
+.theme-worker {
+  --primary: #00b96b;
+  --primary-dark: #0f3d2e;
+  --primary-light: #e6f7f1;
+  --accent: #38ef7d;
+}
+
+/* ---- 通用色 ---- */
+$color-high: #ff4d4f;
+$color-medium: #fa8c16;
+$color-low: #52c41a;
+$color-text-primary: #1a1a2e;
+$color-text-secondary: #666;
+$color-text-muted: #999;
+$color-border: #e8ecf0;
+$color-bg: #f5f7fa;
+$color-white: #ffffff;
+
+/* ---- 卡片通用样式 ---- */
+.card {
+  background: $color-white;
+  border-radius: 12rpx;
+  padding: 28rpx;
+  margin-bottom: 20rpx;
+  box-shadow: 0 2rpx 12rpx rgba(0, 0, 0, 0.06);
+}
+
+/* ---- 优先级徽标 ---- */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 4rpx 14rpx;
+  border-radius: 20rpx;
+  font-size: 22rpx;
+  font-weight: 500;
+
+  &.high   { background: #fff2f0; color: $color-high; }
+  &.medium { background: #fff7e6; color: $color-medium; }
+  &.low    { background: #f6ffed; color: $color-low; }
+}
+
+/* ---- 工单状态标签 ---- */
+.status-tag {
+  display: inline-flex;
+  padding: 4rpx 14rpx;
+  border-radius: 20rpx;
+  font-size: 22rpx;
+
+  &.new                { background: #f0f0ff; color: #722ed1; }
+  &.pending_ai_review  { background: #fffbe6; color: #d48806; }
+  &.ai_approved        { background: #e6f7ff; color: #096dd9; }
+  &.ai_rejected        { background: #fff2f0; color: $color-high; }
+  &.dispatched         { background: #e6f7ff; color: #096dd9; }
+  &.completed          { background: #f6ffed; color: #389e0d; }
+  &.closed             { background: #f5f5f5; color: #8c8c8c; }
+  &.false_alarm        { background: #f0f0f0; color: #595959; }
+}
+
+/* ---- 通用布局 ---- */
+.safe-area-top {
+  padding-top: var(--status-bar-height, 44px);
+}
+
+.safe-area-bottom {
+  padding-bottom: calc(env(safe-area-inset-bottom, 0) + 120rpx);
+}
+
+.flex-row {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+}
+
+.flex-between {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.text-primary   { color: $color-text-primary; }
+.text-secondary { color: $color-text-secondary; }
+.text-muted     { color: $color-text-muted; }
+
+/* ---- 按钮 ---- */
+.btn-primary {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 88rpx;
+  border-radius: 44rpx;
+  font-size: 30rpx;
+  font-weight: 600;
+  color: $color-white;
+  background: #3b6cf4;
+  border: none;
+
+  &.worker { background: #00b96b; }
+  &.danger  { background: $color-high; }
+  &.ghost {
+    background: transparent;
+    border: 2rpx solid currentColor;
+    color: #3b6cf4;
+  }
+}
+
+.btn-sm {
+  height: 60rpx;
+  padding: 0 24rpx;
+  border-radius: 30rpx;
+  font-size: 24rpx;
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ---- 分割线 ---- */
+.divider {
+  height: 1rpx;
+  background: $color-border;
+  margin: 20rpx 0;
+}
+
+/* ---- 空状态 ---- */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 120rpx 0;
+  color: $color-text-muted;
+  font-size: 28rpx;
+
+  .empty-icon {
+    font-size: 80rpx;
+    margin-bottom: 20rpx;
+  }
+}

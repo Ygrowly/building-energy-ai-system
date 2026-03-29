@@ -18,6 +18,7 @@ from app.api.routes_data import router as data_router
 from app.api.routes_datacenter import router as datacenter_router
 from app.api.routes_report import router as report_router
 from app.api.routes_workorder import router as workorder_router
+from app.api.routes_context_events import router as context_events_router
 from app.api.routes_admin import router as admin_router
 from app.core.config import get_settings
 
@@ -88,17 +89,21 @@ async def lifespan(app: FastAPI):
     # 定期清理过期/已吊销的 refresh token（每 24 小时一次）
     token_cleanup_task = asyncio.create_task(_cleanup_refresh_tokens(interval_seconds=86400))
 
-    # ── 预测预警自动调度接入点（第一版不启用，手动通过 POST /api/admin/run-forecast 触发）
-    # 下一步可在此处接入 APScheduler 或 asyncio 定时任务：
-    #   from app.services.forecast_service import forecast_building_kpi
-    #   forecast_task = asyncio.create_task(_run_periodic_forecast(interval_seconds=3600))
-    # 批量逻辑复用 routes_admin.run_forecast 中已有的 forecast_building_kpi 调用。
+    # ── 定时调度：异常检测 + 自动建工单（每小时）、预测预警（每小时）
+    anomaly_detect_task = asyncio.create_task(
+        _periodic_anomaly_detect(interval_seconds=3600)
+    )
+    forecast_task = asyncio.create_task(
+        _periodic_forecast(interval_seconds=3600)
+    )
 
     yield
 
     # 关闭时取消定期任务
     token_cleanup_task.cancel()
-    for task in (token_cleanup_task,):
+    anomaly_detect_task.cancel()
+    forecast_task.cancel()
+    for task in (token_cleanup_task, anomaly_detect_task, forecast_task):
         try:
             await task
         except asyncio.CancelledError:
@@ -142,6 +147,115 @@ async def _cleanup_refresh_tokens(interval_seconds: int = 86400) -> None:
             log.exception("refresh_tokens 清理任务异常")
 
 
+async def _wait_until_next_hour(offset_seconds: int = 0) -> None:
+    """等待到下一个整点 + offset_seconds，用于对齐定时任务到整点执行。"""
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+    # 距下一个整点的秒数
+    seconds_past = now.minute * 60 + now.second
+    wait = 3600 - seconds_past + offset_seconds
+    if wait > 3600:
+        wait -= 3600
+    if wait < 10:
+        wait += 3600  # 如果离整点太近，跳到下下个整点
+    logging.getLogger(__name__).info(
+        "定时任务将在 %d 秒后（整点 +%ds）首次执行", wait, offset_seconds,
+    )
+    await asyncio.sleep(wait)
+
+
+async def _periodic_anomaly_detect(interval_seconds: int = 3600) -> None:
+    """定时异常检测 + 自动建工单 + AI 审批（每整点执行）。"""
+    from app.db.session import AsyncSessionLocal
+    from app.services.kpi_expected_service import compute_and_store_all_buildings
+    from app.services.anomaly_detection_service import detect_and_store_all_buildings
+
+    log = logging.getLogger(__name__)
+
+    # 等待到下一个整点
+    await _wait_until_next_hour(offset_seconds=0)
+
+    while True:
+        try:
+            log.info("定时异常检测开始 ...")
+            async with AsyncSessionLocal() as db:
+                await compute_and_store_all_buildings(db)
+
+            async with AsyncSessionLocal() as db:
+                summary = await detect_and_store_all_buildings(db)
+                total_events = sum(v.get("events", 0) for v in summary.values())
+                total_wo = sum(v.get("work_orders_created", 0) for v in summary.values())
+                log.info(
+                    "定时异常检测完成: events=%d, work_orders=%d",
+                    total_events, total_wo,
+                )
+        except Exception:
+            log.exception("定时异常检测任务异常")
+
+        await asyncio.sleep(interval_seconds)
+
+
+async def _periodic_forecast(interval_seconds: int = 3600) -> None:
+    """定时预测预警 + 自动建工单（每小时，与异常检测同频）。"""
+    from sqlalchemy import select as sa_select
+
+    from app.db.models import Building
+    from app.db.session import AsyncSessionLocal
+    from app.schemas.mcp_schemas import MCPError
+    from app.services.forecast_service import forecast_building_kpi
+    from app.services.auto_work_order_service import (
+        auto_create_prediction_orders,
+        trigger_ai_review_for_pending,
+    )
+
+    log = logging.getLogger(__name__)
+
+    # 等待到下一个整点 + 30s（与异常检测错开，避免同时占用数据库）
+    await _wait_until_next_hour(offset_seconds=30)
+
+    while True:
+        try:
+            log.info("定时预测预警开始 ...")
+            async with AsyncSessionLocal() as db:
+                bld_result = await db.execute(
+                    sa_select(Building.primary_space_usage).distinct()
+                )
+                building_types = [r[0] for r in bld_result.fetchall()]
+
+                for bt in building_types:
+                    res = await forecast_building_kpi(
+                        building_id=bt, session=db,
+                    )
+                    if isinstance(res, MCPError):
+                        log.warning("forecast failed: %s → %s", bt, res.error)
+
+            # 预测完成后自动建工单
+            async with AsyncSessionLocal() as db:
+                bld_result = await db.execute(
+                    sa_select(Building.building_id)
+                )
+                all_bids = [r[0] for r in bld_result.fetchall()]
+
+            total_wo = 0
+            for bid in all_bids:
+                try:
+                    async with AsyncSessionLocal() as db:
+                        wo_result = await auto_create_prediction_orders(db, bid)
+                        total_wo += wo_result.get("created", 0)
+                except Exception:
+                    log.exception("预警自动建工单失败: %s", bid)
+
+            if total_wo > 0:
+                async with AsyncSessionLocal() as db:
+                    await trigger_ai_review_for_pending(db)
+
+            log.info("定时预测预警完成: work_orders=%d", total_wo)
+        except Exception:
+            log.exception("定时预测预警任务异常")
+
+        await asyncio.sleep(interval_seconds)
+
+
 app = FastAPI(
     title="楼宇能耗多智能体系统 API",
     description="基于 LangGraph + MCP 的楼宇能耗管理智能体后端",
@@ -171,6 +285,7 @@ app.include_router(chat_router, prefix="/api")
 app.include_router(data_router, prefix="/api")
 app.include_router(datacenter_router, prefix="/api")
 app.include_router(workorder_router, prefix="/api")
+app.include_router(context_events_router, prefix="/api")
 app.include_router(report_router, prefix="/api")
 app.include_router(admin_router)
 

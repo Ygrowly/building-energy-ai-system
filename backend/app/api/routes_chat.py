@@ -743,7 +743,9 @@ async def _stream_graph(
         pa = merged.get("pending_action")
         if pa and pa.get("ticket_id"):
             from app.api.routes_workorder import register_pending_order
-            register_pending_order(pa)
+            # v2: 异步写库 + 触发 AI 审批（不阻塞 SSE 流）
+            pa["session_id"] = session_id
+            asyncio.create_task(register_pending_order(pa))
     else:
         logger.warning(
             "final_state_holder 为空，触发 fallback ainvoke: session=%s request_id=%s",

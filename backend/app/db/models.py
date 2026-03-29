@@ -26,6 +26,7 @@ from sqlalchemy import (
     UniqueConstraint,
 )
 from sqlalchemy import TIMESTAMP
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.sql import func
 from sqlalchemy.orm import DeclarativeBase, relationship
 
@@ -551,4 +552,207 @@ class PredictedAnomalyEvent(Base):
 
     __table_args__ = (
         Index("idx_predicted_anomaly_building_ts", "building_id", "as_of_timestamp"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# work_orders — 工单持久化（替代内存 _work_orders 字典）
+# ---------------------------------------------------------------------------
+
+class WorkOrder(Base):
+    """
+    工单主表，完整生命周期：pending_review → AI 审批 → 派发 → 反馈 → 关闭。
+    状态合法值: pending_review, auto_approved, auto_rejected,
+               dispatched, completed, false_alarm, escalated,
+               admin_override_approved, admin_override_rejected, closed
+    """
+    __tablename__ = "work_orders"
+
+    id: str = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    ticket_id: str = Column(String(64), unique=True, nullable=False)
+
+    # 工单基本信息（来自 Diagnose Agent）
+    building_id: str = Column(
+        String,
+        ForeignKey("buildings.building_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    device_id: str = Column(String(128), nullable=True)
+    issue_description: str = Column(Text, nullable=False)
+    suggested_action: str = Column(Text, nullable=False)
+    priority: str = Column(String(16), nullable=False, default="medium")
+
+    # 状态机
+    status: str = Column(String(32), nullable=False, default="pending_review")
+
+    # AI 审批结果
+    ai_decision: str = Column(String(16), nullable=True)
+    ai_reason: str = Column(Text, nullable=True)
+    ai_matched_event_ids: str = Column(Text, nullable=True)  # JSON array
+    ai_reviewed_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    ai_fallback: bool = Column(Boolean, nullable=False, default=False)
+
+    # 维修反馈
+    worker_result: str = Column(String(32), nullable=True)
+    worker_notes: str = Column(Text, nullable=True)
+    worker_feedback_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    assigned_to: str = Column(
+        String, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+    # 管理员监督
+    admin_action: str = Column(String(32), nullable=True)
+    admin_notes: str = Column(Text, nullable=True)
+    admin_reviewed_by: str = Column(
+        String, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    admin_reviewed_at = Column(TIMESTAMP(timezone=True), nullable=True)
+
+    # 时间戳
+    created_at = Column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at = Column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    closed_at = Column(TIMESTAMP(timezone=True), nullable=True)
+
+    # 来源追溯
+    source: str = Column(String(32), nullable=False, server_default="manual")  # auto_detect / prediction / manual
+    session_id: str = Column(String(128), nullable=True)
+    created_by: str = Column(
+        String, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+    # relationships
+    anomaly_links = relationship(
+        "WorkOrderAnomalyLink", back_populates="work_order", cascade="all, delete-orphan"
+    )
+    audit_logs = relationship(
+        "WorkOrderAuditLog", back_populates="work_order", cascade="all, delete-orphan"
+    )
+
+    __table_args__ = (
+        Index("idx_wo_status", "status"),
+        Index("idx_wo_building", "building_id"),
+        Index("idx_wo_created", created_at.desc()),
+        Index("idx_wo_assigned", "assigned_to", postgresql_where=Column("assigned_to").isnot(None)),
+    )
+
+
+# ---------------------------------------------------------------------------
+# work_order_anomaly_links — 工单与异常事件的关联（含快照）
+# ---------------------------------------------------------------------------
+
+class WorkOrderAnomalyLink(Base):
+    """
+    一个工单可关联多条异常事件（如同时触发水耗 + 电耗异常）。
+    快照字段保证 anomaly_events 被 truncate 重建后工单证据不丢失。
+    """
+    __tablename__ = "work_order_anomaly_links"
+
+    id: str = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    work_order_id: str = Column(
+        String, ForeignKey("work_orders.id", ondelete="CASCADE"), nullable=False
+    )
+    anomaly_event_id: str = Column(
+        PG_UUID(as_uuid=False), ForeignKey("anomaly_events.id", ondelete="SET NULL"), nullable=True
+    )
+
+    # 快照字段
+    rule_triggered: str = Column(String(64), nullable=False)
+    hvac_root_cause: str = Column(String(64), nullable=True)
+    actual_value: float = Column(Float, nullable=True)
+    expected_value: float = Column(Float, nullable=True)
+    deviation_pct: float = Column(Float, nullable=True)
+    data_timestamp = Column(TIMESTAMP(timezone=True), nullable=False)
+
+    work_order = relationship("WorkOrder", back_populates="anomaly_links")
+
+    __table_args__ = (
+        UniqueConstraint("work_order_id", "anomaly_event_id", name="uq_wo_anomaly_link"),
+        Index("idx_wo_anomaly_wo", "work_order_id"),
+        Index("idx_wo_anomaly_event", "anomaly_event_id"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# context_events — 特殊事件（公司状态 / 天气），供 AI 审批引擎查询
+# ---------------------------------------------------------------------------
+
+class ContextEvent(Base):
+    """
+    特殊事件表，记录装修、加班、极端天气等业务语境。
+    AI 审批时按 building_id + 时间窗口 + grace_period 匹配，
+    判断异常是否可被特殊事件合理解释。
+
+    event_type 白名单：
+      公司类: renovation, team_building, overtime, special_event, maintenance_window
+      天气类: extreme_heat, extreme_cold, typhoon, heavy_rain, snow_ice
+    """
+    __tablename__ = "context_events"
+
+    id: str = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    event_type: str = Column(String(32), nullable=False)
+    category: str = Column(String(16), nullable=False)  # company / weather
+    building_id: str = Column(
+        String,
+        ForeignKey("buildings.building_id", ondelete="CASCADE"),
+        nullable=True,  # NULL = 全局事件
+    )
+
+    start_time = Column(TIMESTAMP(timezone=True), nullable=False)
+    end_time = Column(TIMESTAMP(timezone=True), nullable=False)
+    grace_period_minutes: int = Column(Integer, nullable=False, default=0)
+    description: str = Column(Text, nullable=True)
+
+    is_active: bool = Column(Boolean, nullable=False, default=True)
+    created_by: str = Column(
+        String, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at = Column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        Index(
+            "idx_ctx_events_active", "start_time", "end_time",
+            postgresql_where=Column("is_active") == True,  # noqa: E712
+        ),
+        Index("idx_ctx_events_building", "building_id"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# work_order_audit_log — 工单审计日志（状态变更追踪）
+# ---------------------------------------------------------------------------
+
+class WorkOrderAuditLog(Base):
+    """
+    工单每次状态变更的不可变记录。
+    actor_type: system / ai / worker / admin
+    action: create, ai_approve, ai_reject, ai_fallback_approve,
+            dispatch, worker_feedback, admin_override, close, auto_close_timeout
+    """
+    __tablename__ = "work_order_audit_log"
+
+    id: str = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    work_order_id: str = Column(
+        String, ForeignKey("work_orders.id", ondelete="CASCADE"), nullable=False
+    )
+    action: str = Column(String(32), nullable=False)
+    old_status: str = Column(String(32), nullable=True)
+    new_status: str = Column(String(32), nullable=False)
+    actor_type: str = Column(String(16), nullable=False)  # system / ai / worker / admin
+    actor_id: str = Column(String, nullable=True)  # user.id，系统操作时为空
+    detail_json: str = Column(Text, nullable=True)
+    created_at = Column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    work_order = relationship("WorkOrder", back_populates="audit_logs")
+
+    __table_args__ = (
+        Index("idx_audit_wo", "work_order_id"),
+        Index("idx_audit_time", created_at.desc()),
     )

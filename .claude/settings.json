@@ -11,7 +11,17 @@
       "Bash(python .claude/skills/ui-ux-pro-max/scripts/search.py \"dashboard settings modal dark green energy management\" --design-system -p \"Building Energy Management\")",
       "Bash(python .claude/skills/ui-ux-pro-max/scripts/search.py \"modal settings sidebar tabs\" --domain ux -n 5)",
       "Bash(find /e/27_fwwb_A08/project/frontend/src -type f \\\\\\(-iname *statistic* -o -iname *analysis* \\\\\\))",
-      "Bash(python skills/ui-ux-pro-max/scripts/search.py \"dashboard header weather widget notification bell SaaS\" --design-system)"
+      "Bash(python skills/ui-ux-pro-max/scripts/search.py \"dashboard header weather widget notification bell SaaS\" --design-system)",
+      "Bash(echo \"done: $?\")",
+      "Bash(python -c \":*)",
+      "Bash(python -m py_compile app/services/ai_review_service.py)",
+      "Bash(python -m py_compile app/services/work_order_service.py)",
+      "Bash(python -m py_compile app/services/context_event_service.py)",
+      "Bash(python -m py_compile app/api/routes_workorder.py)",
+      "Bash(python -m py_compile app/api/routes_context_events.py)",
+      "Bash(python -m py_compile app/db/models.py)",
+      "Bash(python -m py_compile app/api/routes_chat.py)",
+      "Bash(python -m py_compile main.py)"
     ]
   }
 }

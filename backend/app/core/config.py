@@ -29,9 +29,7 @@ class Settings(BaseSettings):
     LLM_MODEL_REACT: str = ""
     LLM_MODEL_SYNTHESIS: str = ""
     LLM_MODEL_DIAGNOSE: str = ""
-
-    # 深度思考模式使用的强模型（留空则 fallback 到 LLM_MODEL）
-    LLM_MODEL_DEEP: str = ""
+    LLM_MODEL_REVIEW: str = ""          # AI 审批引擎（留空则 fallback 到 LLM_MODEL_DIAGNOSE → LLM_MODEL）
 
     # 深度思考模式使用的强模型（留空则 fallback 到 LLM_MODEL）
     LLM_MODEL_DEEP: str = ""

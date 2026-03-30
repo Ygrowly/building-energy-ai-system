@@ -176,13 +176,11 @@ _S_FUNCS = {
 def _schedule_factor(usage: str, hour: int, dayofweek: int) -> float:
     """dayofweek: 1=Monday … 7=Sunday (ISO).
 
-    The notebook's source CSV uses pandas dayofweek encoding (Mon=0 … Sun=6)
-    and applies ``clip(1,7)`` then ``weekday = dow <= 5``.  Under that
-    mapping Saturday (raw=5, clipped=5) is treated as a weekday; only
-    Sunday (raw=6, clipped=6) counts as a weekend day.  We replicate that
-    here: ISO dayofweek 7 (Sunday) → weekend, everything else → weekday.
+    Notebook 使用 pandas dayofweek (Mon=0…Sun=6) 做 ``(dow+1).clip(1,7)``
+    再判 ``weekday = dow <= 5``，结果 Mon(1)~Fri(5)=weekday，Sat(6)&Sun(7)=weekend。
+    ISO isoweekday 下等价条件：Mon(1)~Fri(5)=weekday，Sat(6)&Sun(7)=weekend。
     """
-    is_weekday = dayofweek != 7  # only Sunday is weekend
+    is_weekday = dayofweek <= 5  # ISO: Mon=1..Fri=5 weekday, Sat=6 & Sun=7 weekend
     s = _S_FUNCS[usage](hour, is_weekday)
     return min(max(s, 0.08), 1.0)
 
@@ -233,7 +231,7 @@ def _compute_nominal_row(
         q_load = sqm * max(0.0, abs(q_env) - q_internal) / 1000.0
 
     # ── HVAC on/off ──
-    extreme = ta < _FORCE_ON_LOW_TA or ta >= _FORCE_ON_HIGH_TA
+    extreme = ta < _FORCE_ON_LOW_TA or ta > _FORCE_ON_HIGH_TA
     hvac_on = q_load > _MIN_ON_LOAD_KW and (s > 0.08 or extreme)
     # #region agent log
     if (is_cooling or is_heating) and not hvac_on and q_load > 0.5:
@@ -515,10 +513,11 @@ async def compute_and_store_all_buildings(db: AsyncSession) -> dict[str, int]:
     """
     from app.db.session import AsyncSessionLocal
 
-    bld_result = await db.execute(
-        select(Building.building_id).order_by(Building.building_id)
-    )
-    building_ids = [r[0] for r in bld_result.fetchall()]
+    async with AsyncSessionLocal() as list_session:
+        bld_result = await list_session.execute(
+            select(Building.building_id).order_by(Building.building_id)
+        )
+        building_ids = [r[0] for r in bld_result.fetchall()]
 
     summary: dict[str, int] = {}
     for bid in building_ids:

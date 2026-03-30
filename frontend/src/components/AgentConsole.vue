@@ -354,9 +354,9 @@
           @reject="(reason) => store.approveOrder(false, reason)"
         />
 
-        <!-- Artifact：报表下载卡片 -->
+        <!-- Artifact：报表下载卡片（需有有效 download_url） -->
         <ReportDownload
-          v-else-if="msg.role === 'artifact' && isReportDownload(msg.artifact)"
+          v-else-if="msg.role === 'artifact' && isReportDownload(msg.artifact) && msg.artifact?.download_url"
           :artifact="ensureArtifact(msg.artifact)"
         />
 
@@ -962,6 +962,9 @@ marked.use({ breaks: true, gfm: true })
 
 function formatMarkdown(text: string): string {
   let clean = text.replace(/<<CHART:[^>]*>>/g, '')
+
+  // 过滤 LLM 泄露的工具调用原始文本（如 render_ui_component(...)、create_work_order_draft(...)）
+  clean = clean.replace(/\b(render_ui_component|create_work_order_draft)\s*\([\s\S]*?\)\s*/g, '')
 
   // 修复中文/全角标点紧邻 ** 时 marked 无法识别粗体的问题
   // 在 ** 与非 ASCII 字符之间插入零宽空格 \u200B 辅助断词

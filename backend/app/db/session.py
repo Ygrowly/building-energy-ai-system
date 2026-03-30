@@ -34,9 +34,9 @@ engine = create_async_engine(
     connect_args={
         "ssl": _ssl_ctx,  # Supabase 强制 SSL
         "server_settings": {
-            "statement_timeout": "30000",      # 30s — 防止单条 SQL 无限等待
+            "statement_timeout": "300000",     # 300s — 批量重建操作单条 SQL 最长耗时
             "lock_timeout": "10000",            # 10s — 防止 DDL 获取锁时无限阻塞
-            "idle_in_transaction_session_timeout": "60000",  # 60s — 自动终止空闲事务
+            "idle_in_transaction_session_timeout": "120000",  # 120s — 自动终止空闲事务
         },
     },
 )

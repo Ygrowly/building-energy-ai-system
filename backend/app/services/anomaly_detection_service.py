@@ -71,8 +71,8 @@ _HAC_ABS = 20.0       # 绝对偏差 ≥ 20 kWh
 _SUPPLY_DEV = 1.5     # |supply - supply_e| > 1.5 ℃
 _RETURN_DEV = 2.0     # |return - return_e| > 2.0 ℃
 
-# 软症状：阈值 × 0.5（50% 灵敏度，用于 ramp 阶段）
-_SOFT_FACTOR = 0.5
+# 软症状：阈值 × 0.62（与 notebook DEFAULT_RAMP_THRESHOLD_FACTOR 一致）
+_SOFT_FACTOR = 0.62
 
 # 空调根因判定参数
 _SMALL_DELTA_T_THRESHOLD = 3.0   # (return - supply) < 3 ℃ → 小温差
@@ -85,66 +85,47 @@ _UNEXPECTED_ON_HAC_MARGIN = 5.0     # 实际 hac > expected + 5 kWh
 # ---------------------------------------------------------------------------
 def _diagnose_hvac(
     *,
-    hvac_mode: str | None,
     supply: float | None,
     ret: float | None,
     supply_e: float | None,
+    return_e: float | None,
     hac_actual: float | None,
     hac_expected: float | None,
-    schedule_factor: float | None,
+    hour: int,
+    dayofweek: int,
 ) -> str:
     """
     第二层 HVAC 根因诊断（仅当 flag_hvac_energy 为 True 时调用）。
+    与 notebook _hvac_diagnosis_vectorized 对齐。
     优先级：A > B > C > other
     """
-    s = schedule_factor or 0.5
-    mode = (hvac_mode or "").lower()
-    is_cooling = "cool" in mode
+    h = hac_actual or 0.0
+    h_e = hac_expected or 0.0
+    sup = supply if supply is not None else 0.0
+    sup_e = supply_e if supply_e is not None else 0.0
+    ret_val = ret if ret is not None else 0.0
+    ret_e_val = return_e if return_e is not None else 0.0
 
-    # A: 制冷 + 供水偏离
-    if is_cooling and supply is not None and supply_e is not None:
-        if abs(supply - supply_e) > _SUPPLY_DEV:
-            return "A_low_efficiency"
+    dT = ret_val - sup
+    dT_e = ret_e_val - sup_e
+    cooling_like = (sup > 3.0) and (sup < 14.0) and (h > 1.0)
+    supply_dev = abs(sup - sup_e) > _SUPPLY_DEV
 
-    # B: 制冷 + 小温差
-    if is_cooling and supply is not None and ret is not None:
-        if (ret - supply) < _SMALL_DELTA_T_THRESHOLD:
-            return "B_small_deltaT"
+    # A: 制冷工况 + 供水偏离
+    if supply_dev and cooling_like:
+        return "A_low_efficiency"
 
-    # C: 非营业时段但空调能耗异常高
-    if s <= _UNEXPECTED_ON_SCHEDULE_MAX:
-        hac_e = hac_expected or 0.0
-        hac_a = hac_actual or 0.0
-        if hac_a > hac_e + _UNEXPECTED_ON_HAC_MARGIN:
-            return "C_unexpected_on"
+    # B: 制冷 + 小温差（旁通或大流量）
+    if cooling_like and dT < _SMALL_DELTA_T_THRESHOLD and (dT_e >= _SMALL_DELTA_T_THRESHOLD or h > h_e * 1.1):
+        return "B_small_deltaT"
+
+    # C: 非营业时段 + 空调能耗异常高
+    # ISO dayofweek: 6=Sat, 7=Sun ↔ notebook pandas dayofweek >= 5
+    offhours = (dayofweek >= 6) or (hour < 7) or (hour > 20)
+    if h > 15.0 and h_e < 8.0 and dT >= 2.5 and offhours:
+        return "C_unexpected_on"
 
     return "other_hvac"
-
-
-def _is_hvac_actually_off(
-    *,
-    hvac_mode: str | None,
-    hac: float | None,
-    hac_e: float | None,
-) -> bool:
-    """Determine whether HVAC is effectively off for temperature checks.
-
-    Returns True in two scenarios:
-    1. Expected mode is "Ventilation" (expected service computed hvac_on=False).
-    2. Expected mode is Cooling/Heating but actual hac_energy is near zero
-       while expected is significant — the actual data was generated with
-       HVAC off despite the expected calculation saying ON (state machine
-       divergence due to noise).
-    """
-    mode = (hvac_mode or "").lower()
-    if "ventilation" in mode:
-        return True
-    if ("cool" in mode or "heat" in mode):
-        actual_hac = hac if hac is not None else 0.0
-        expected_hac = hac_e if hac_e is not None else 0.0
-        if expected_hac > 5.0 and actual_hac < expected_hac * 0.1:
-            return True
-    return False
 
 
 def _detect_flags(
@@ -159,13 +140,13 @@ def _detect_flags(
     supply_e: float | None,
     ret: float | None,
     return_e: float | None,
-    hvac_mode: str | None,
-    schedule_factor: float | None,
+    hour: int,
+    dayofweek: int,
     soft: bool = False,
 ) -> dict[str, Any]:
     """
-    计算单行的所有症状 flags。
-    soft=True 时使用 50% 阈值（软症状）。
+    计算单行的所有症状 flags。与 notebook detect_building_kpi_anomalies 对齐。
+    soft=True 时使用软阈值（factor=0.62）。
     """
     factor = _SOFT_FACTOR if soft else 1.0
     eps = _EPS
@@ -182,7 +163,6 @@ def _detect_flags(
     if elec is not None and elec_e is not None and elec_e > eps:
         delta_e = elec - elec_e
         rel_e = delta_e / max(elec_e, eps)
-        # 动态绝对阈值：0.10 × max(e_e - h_e, 1)
         base_load = max((elec_e or 0.0) - (hac_e or 0.0), 1.0)
         abs_e = 0.10 * base_load * factor
         fe = rel_e > _ELEC_REL * factor and delta_e > abs_e
@@ -194,40 +174,28 @@ def _detect_flags(
         rel_h = delta_h / max(hac_e, eps)
         fh = rel_h > _HAC_REL * factor and delta_h >= _HAC_ABS * factor
 
-    # flag_supply_deviation — skip when HVAC is actually off
+    # flag_supply_deviation（与 notebook 一致，不跳过任何行）
     fs = False
-    hvac_actually_off = _is_hvac_actually_off(
-        hvac_mode=hvac_mode, hac=hac, hac_e=hac_e,
-    )
-    # #region agent log
-    if supply is not None and supply_e is not None and abs(supply - supply_e) > _SUPPLY_DEV * factor:
-        _dbg_ad("H_HVAC_OFF", "anomaly_detection_service.py:_detect_flags", "supply-dev-check", {
-            "hvac_mode": hvac_mode, "hac": float(hac) if hac is not None else None,
-            "hac_e": float(hac_e) if hac_e is not None else None,
-            "hvac_actually_off": hvac_actually_off,
-            "supply": float(supply), "supply_e": float(supply_e),
-            "soft": soft,
-        })
-    # #endregion
-    if not hvac_actually_off and supply is not None and supply_e is not None:
+    if supply is not None and supply_e is not None:
         fs = abs(supply - supply_e) > _SUPPLY_DEV * factor
 
-    # flag_return_deviation — skip when HVAC is actually off
+    # flag_return_deviation（与 notebook 一致，不跳过任何行）
     fr = False
-    if not hvac_actually_off and ret is not None and return_e is not None:
+    if ret is not None and return_e is not None:
         fr = abs(ret - return_e) > _RETURN_DEV * factor
 
     # HVAC 根因（仅满幅度时诊断）
     hvac_diag: str | None = None
     if fh and not soft:
         hvac_diag = _diagnose_hvac(
-            hvac_mode=hvac_mode,
             supply=supply,
             ret=ret,
             supply_e=supply_e,
+            return_e=return_e,
             hac_actual=hac,
             hac_expected=hac_e,
-            schedule_factor=schedule_factor,
+            hour=hour,
+            dayofweek=dayofweek,
         )
 
     return {
@@ -295,20 +263,18 @@ async def detect_for_building(
             hac=hac, hac_e=hac_e,
             supply=supply, supply_e=supply_e,
             ret=ret, return_e=return_e,
-            hvac_mode=hvac_mode,
-            schedule_factor=sched_f,
+            hour=ts.hour, dayofweek=ts.isoweekday(),
             soft=False,
         )
 
-        # 软症状 flags（50% 灵敏度）
+        # 软症状 flags（factor=0.62 灵敏度）
         soft = _detect_flags(
             water=water, water_e=water_e,
             elec=elec, elec_e=elec_e,
             hac=hac, hac_e=hac_e,
             supply=supply, supply_e=supply_e,
             ret=ret, return_e=return_e,
-            hvac_mode=hvac_mode,
-            schedule_factor=sched_f,
+            hour=ts.hour, dayofweek=ts.isoweekday(),
             soft=True,
         )
 
@@ -617,16 +583,35 @@ async def generate_anomaly_events(
             "flag_return_deviation": fr,
         }
 
+        # 每小时只生成一条事件，选偏差最大的规则作主规则
+        _act = {"flag_water": "water", "flag_electricity": "elec",
+                "flag_hvac_energy": "hac", "flag_supply_deviation": "supply",
+                "flag_return_deviation": "return"}
+        _exp = {"flag_water": "water_e", "flag_electricity": "elec_e",
+                "flag_hvac_energy": "hac_e", "flag_supply_deviation": "supply_e",
+                "flag_return_deviation": "return_e"}
+        best_flag: str | None = None
+        best_abs_dev = -1.0
         for flag_key, triggered in flag_map.items():
             if not triggered:
                 continue
-            rule = _FLAG_TO_RULE[flag_key]
+            act = evidence.get(_act.get(flag_key))
+            exp = evidence.get(_exp.get(flag_key))
+            abs_dev = abs((act - exp) / abs(exp)) if (
+                act is not None and exp is not None and abs(exp) > _EPS
+            ) else 0.0
+            if best_flag is None or abs_dev > best_abs_dev:
+                best_flag = flag_key
+                best_abs_dev = abs_dev
+
+        if best_flag is not None:
+            rule = _FLAG_TO_RULE[best_flag]
             event_dicts.append(_build_anomaly_event(
                 ts=ts,
                 building_id=building_id,
                 building_display=building_display,
                 rule=rule,
-                flag_key=flag_key,
+                flag_key=best_flag,
                 evidence=evidence,
                 flag_map=flag_map,
                 hvac_diag=hvac_diag,
@@ -663,8 +648,9 @@ async def generate_anomaly_events(
                :rule_triggered, :actual_value, :threshold_value, :expected_value,
                :deviation_pct, :hvac_root_cause, :message, :is_resolved,
                :anomaly_phase, :symptom_flags_json, :event_source, :severity)
-            ON CONFLICT (data_timestamp, building_id, rule_triggered)
+            ON CONFLICT (data_timestamp, building_id)
             DO UPDATE SET
+              rule_triggered    = EXCLUDED.rule_triggered,
               actual_value      = EXCLUDED.actual_value,
               threshold_value   = EXCLUDED.threshold_value,
               expected_value    = EXCLUDED.expected_value,
@@ -1068,15 +1054,16 @@ async def detect_and_store_all_buildings(db: AsyncSession) -> dict[str, dict[str
     from app.db.session import AsyncSessionLocal
 
     async with AsyncSessionLocal() as cleanup_session:
-        await cleanup_session.execute(text("TRUNCATE TABLE anomaly_events"))
+        await cleanup_session.execute(text("TRUNCATE TABLE anomaly_events CASCADE"))
         await cleanup_session.execute(text("TRUNCATE TABLE anomaly_device_attributions"))
         await cleanup_session.execute(text("TRUNCATE TABLE device_telemetry_hourly"))
         await cleanup_session.commit()
 
-    bld_result = await db.execute(
-        select(Building.building_id).order_by(Building.building_id)
-    )
-    building_ids = [r[0] for r in bld_result.fetchall()]
+    async with AsyncSessionLocal() as list_session:
+        bld_result = await list_session.execute(
+            select(Building.building_id).order_by(Building.building_id)
+        )
+        building_ids = [r[0] for r in bld_result.fetchall()]
 
     summary: dict[str, dict[str, int]] = {}
     for bid in building_ids:

@@ -1,5 +1,5 @@
 <template>
-  <div class="rd-card">
+  <div class="rd-card" v-if="artifact.download_url">
     <div class="rd-header">
       <span class="rd-icon"><Icon icon="mdi:file-download" width="18" /></span>
       <div class="rd-title-block">

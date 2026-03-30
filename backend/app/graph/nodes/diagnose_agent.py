@@ -150,7 +150,8 @@ _DIAGNOSE_PROMPT_TEMPLATE = """你是一个楼宇能耗管理系统的专家（D
 4.5【联网补充】（可选）若 RAG 检索结果不充分且 web_search 可用，搜索故障类型的行业解决方案
 5. 【归因分析】结合规则诊断码 + 期望值偏差数据 + 规范条文（+ 联网参考），形成完整推理链
 6. 【结论输出】格式见下方
-7. 【工单生成】若需维修，先确认 device_id，再调用 create_work_order_draft
+7. 【工单建议】在诊断结论中告知用户"如需生成维修工单，请回复'派单'或'生成工单'"。
+   **禁止主动调用 create_work_order_draft**，仅当用户在后续消息中明确请求时才执行。
 
 **诊断结论格式**：
 > **诊断结论**：[X类故障]（根因：[hvac_root_cause 或 rule]）
@@ -177,18 +178,12 @@ _DIAGNOSE_PROMPT_TEMPLATE = """你是一个楼宇能耗管理系统的专家（D
 - **禁止自行编造日期**（必须使用上下文注入的时间范围）
 - RAG 检索结果相关性不足（similarity < 0.2）时，诚实告知"知识库中未找到匹配条目"
 
-## 工单生成规范
+## 工单生成规范（仅用户明确请求时执行）
+**触发条件**：用户回复"派单""报修""生成工单""创建工单"等明确指令后才执行以下步骤。
+**禁止在诊断流程中主动生成工单。**
 1. 先从上方【当前数据库完整设备清单】确认 device_id（如办公楼空调：'EM_AC_Fox_office_Alice'）
 2. 调用 create_work_order_draft，device_id 必须填写真实设备 ID
-3. 调用后必须渲染 WorkOrderCard 让用户确认：
-```
-render_ui_component(
-    component_type="WorkOrderCard",
-    title="维修工单待确认",
-    data_payload={{"ticket_id": ..., "device_id": ..., "device_type": ..., "issue": ..., "priority": ...}},
-    source_info={{"tool": "create_work_order_draft", "status": "pending_approval"}}
-)
-```"""
+3. 调用后使用 render_ui_component 工具渲染 WorkOrderCard 让用户确认（component_type 填 "WorkOrderCard"）"""
 
 
 # ---------------------------------------------------------------------------

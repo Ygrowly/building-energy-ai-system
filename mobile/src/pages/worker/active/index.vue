@@ -7,7 +7,7 @@
         <view v-for="i in 2" :key="i" class="wo-skeleton" />
       </view>
 
-      <!-- 进行中工单（已开始处理，未提交反馈） -->
+      <!-- 进行中工单（已派单，尚未提交反馈） -->
       <view
         v-for="order in orders"
         :key="order.id"
@@ -16,14 +16,14 @@
       >
         <view class="active-header">
           <view class="priority-badge" :class="order.priority">
-            {{ priorityText(order.priority) }}
+            {{ PRIORITY_LABEL[order.priority] || order.priority }}
           </view>
           <text class="ticket-id">#{{ order.ticket_id.slice(-8) }}</text>
         </view>
 
-        <text class="building-name">{{ order.building_name || order.building_id }}</text>
-        <text class="anomaly-type">{{ order.anomaly_type }}</text>
-        <text class="description" numberOfLines="2">{{ order.description }}</text>
+        <text class="building-name">{{ order.building_id }}</text>
+        <text v-if="order.device_id" class="device-id">{{ order.device_id }}</text>
+        <text class="description">{{ order.issue_description }}</text>
 
         <!-- 进度指示 -->
         <view class="progress-row">
@@ -51,56 +51,48 @@
       </view>
     </scroll-view>
 
-    <TabBar :tabs="workerTabs" current="active" theme="worker" />
+    <TabBar :tabs="WORKER_TABS" current="active" theme="worker" />
   </view>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import NavBar from '../../../components/NavBar.vue'
-import TabBar, { type TabItem } from '../../../components/TabBar.vue'
+import TabBar from '../../../components/TabBar.vue'
+import { useRouteGuard } from '../../../utils/route-guard'
+import { WORKER_TABS } from '../../../constants/tabs'
+import { WORKER_ROLES } from '../../../constants/roles'
+import { PRIORITY_LABEL } from '../../../constants/status'
 import { workOrderApi, type WorkOrder } from '../../../api/workorder'
 
-const workerTabs: TabItem[] = [
-  { name: 'pending', label: '待处理', icon: '📥', path: '/pages/worker/pending/index' },
-  { name: 'active',  label: '进行中', icon: '🔧', path: '/pages/worker/active/index' },
-  { name: 'history', label: '历史',   icon: '📂', path: '/pages/worker/history/index' },
-  { name: 'profile', label: '我的',   icon: '👤', path: '/pages/worker/profile/index' },
-]
+useRouteGuard(WORKER_ROLES)
 
 const orders = ref<WorkOrder[]>([])
 const loading = ref(false)
-const loadingMore = ref(false)
 const noMore = ref(false)
 const page = ref(1)
 
 async function loadData() {
   loading.value = true
   try {
-    // 进行中 = 已派单 + 当前用户已打开过工单（通过 assigned_to_me 过滤）
     const res = await workOrderApi.list({
       status: 'dispatched',
-      assigned_to_me: true,
       page: 1,
       page_size: 20,
     })
-    orders.value = res.items
+    orders.value = res.work_orders
   } catch { /* handled */ }
   finally { loading.value = false }
 }
 
 async function loadMore() {
-  if (loadingMore.value || noMore.value) return
+  if (loading.value || noMore.value) return
 }
 
 function openDetail(order: WorkOrder) {
   uni.navigateTo({
     url: `/pages/worker/workorder-detail/index?ticket_id=${order.ticket_id}`,
   })
-}
-
-function priorityText(p: string) {
-  return { high: '高优先', medium: '中优先', low: '低优先' }[p] ?? p
 }
 
 onMounted(loadData)
@@ -150,7 +142,7 @@ onMounted(loadData)
   margin-bottom: 6rpx;
 }
 
-.anomaly-type {
+.device-id {
   display: block;
   font-size: 26rpx;
   color: #00b96b;
@@ -163,6 +155,10 @@ onMounted(loadData)
   color: #999;
   line-height: 1.5;
   margin-bottom: 28rpx;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 /* 进度条 */

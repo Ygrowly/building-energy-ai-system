@@ -33,9 +33,8 @@ const props = defineProps<{
 
 function onTab(tab: TabItem) {
   if (tab.name === props.current) return
-  uni.switchTab({ url: tab.path }).catch(() => {
-    uni.reLaunch({ url: tab.path })
-  })
+  // 自定义 TabBar 不走 uni.switchTab（pages.json 未配置原生 tabBar）
+  uni.reLaunch({ url: tab.path })
 }
 </script>
 

@@ -55,23 +55,21 @@
       <view v-if="noMore && orders.length > 0" class="load-end">没有更多了</view>
     </scroll-view>
 
-    <TabBar :tabs="workerTabs" current="pending" theme="worker" />
+    <TabBar :tabs="WORKER_TABS" current="pending" theme="worker" />
   </view>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import NavBar from '../../../components/NavBar.vue'
-import TabBar, { type TabItem } from '../../../components/TabBar.vue'
+import TabBar from '../../../components/TabBar.vue'
 import WorkOrderCard from '../../../components/WorkOrderCard.vue'
+import { useRouteGuard } from '../../../utils/route-guard'
+import { WORKER_TABS } from '../../../constants/tabs'
+import { WORKER_ROLES } from '../../../constants/roles'
 import { workOrderApi, type WorkOrder } from '../../../api/workorder'
 
-const workerTabs: TabItem[] = [
-  { name: 'pending', label: '待处理', icon: '📥', path: '/pages/worker/pending/index' },
-  { name: 'active',  label: '进行中', icon: '🔧', path: '/pages/worker/active/index' },
-  { name: 'history', label: '历史',   icon: '📂', path: '/pages/worker/history/index' },
-  { name: 'profile', label: '我的',   icon: '👤', path: '/pages/worker/profile/index' },
-]
+useRouteGuard(WORKER_ROLES)
 
 const filters = [
   { label: '全部',   value: 'all' },
@@ -83,7 +81,6 @@ const filters = [
 const activeFilter = ref('all')
 const orders = ref<WorkOrder[]>([])
 const loading = ref(false)
-const loadingMore = ref(false)
 const noMore = ref(false)
 const page = ref(1)
 const PAGE_SIZE = 15
@@ -106,31 +103,27 @@ async function loadData() {
   try {
     const res = await workOrderApi.list({
       status: 'dispatched',
-      assigned_to_me: true,
       page: 1,
       page_size: PAGE_SIZE,
     })
-    orders.value = res.items
-    if (res.items.length < PAGE_SIZE) noMore.value = true
+    orders.value = res.work_orders
+    if (res.work_orders.length < PAGE_SIZE) noMore.value = true
   } catch { /* handled */ }
   finally { loading.value = false }
 }
 
 async function loadMore() {
-  if (loadingMore.value || noMore.value) return
-  loadingMore.value = true
+  if (loading.value || noMore.value) return
   page.value++
   try {
     const res = await workOrderApi.list({
       status: 'dispatched',
-      assigned_to_me: true,
       page: page.value,
       page_size: PAGE_SIZE,
     })
-    orders.value.push(...res.items)
-    if (res.items.length < PAGE_SIZE) noMore.value = true
+    orders.value.push(...res.work_orders)
+    if (res.work_orders.length < PAGE_SIZE) noMore.value = true
   } catch { page.value-- }
-  finally { loadingMore.value = false }
 }
 
 function openDetail(order: WorkOrder) {

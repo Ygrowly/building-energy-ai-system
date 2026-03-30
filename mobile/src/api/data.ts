@@ -1,47 +1,97 @@
+/**
+ * 数据查询 API — 精确对齐后端 routes_data.py
+ */
 import { get } from './request'
 
-export interface BuildingOverview {
-  building_id: string
-  building_name: string
+// ---- GET /api/overview 响应 ----
+
+export interface BuildingDetail {
   building_type: string
-  electricity_kwh: number
-  water_m3: number
-  hac_energy: number
-  anomaly_count: number
-  last_updated: string
-  status: 'normal' | 'warning' | 'critical'
+  display_name: string
+  icon: string
+  total_electricity_kwh: number
+  total_water_m3: number
+  total_hac_energy_kwh: number
+  avg_ambient_temp: number | null
+  sqm: number
+  energy_intensity_kwh_per_sqm: number | null
+  anomaly_status: 'Normal' | 'Anomaly'
+  latest_water_m3: number
+  electricity_change_pct: number | null
+  water_change_pct: number | null
+  hac_change_pct: number | null
+  carbon_change_pct: number | null
+  prediction_warning_count: number
+  prediction_status: 'normal' | 'warning' | 'critical'
 }
 
 export interface OverviewResponse {
-  buildings: BuildingOverview[]
-  total_electricity_kwh: number
-  total_water_m3: number
-  total_anomalies: number
-  updated_at: string
+  data_date: string
+  kpis: {
+    total_electricity_kwh: number
+    total_water_m3: number
+    total_hac_energy_kwh: number
+    total_carbon_kg: number
+    anomaly_count: number
+    prediction_warning_count: number
+  }
+  kpis_change: {
+    total_electricity_pct: number | null
+    total_water_pct: number | null
+    total_hac_pct: number | null
+    total_carbon_pct: number | null
+  }
+  weather: {
+    temperature: number | null
+    humidity: number | null
+  }
+  buildings: BuildingDetail[]
 }
 
-export interface AnomalyEvent {
+// ---- GET /api/anomalies/recent 响应 ----
+
+export interface AnomalyItem {
   id: string
+  detected_at: string | null
+  data_timestamp: string | null
   building_id: string
-  building_name?: string
-  anomaly_type: string
-  severity: 'high' | 'medium' | 'low'
-  detected_at: string
-  description: string
-  status: 'open' | 'work_ordered' | 'resolved'
+  meter_device_id: string | null
+  rule_triggered: string
+  actual_value: number | null
+  expected_value: number | null
+  deviation_pct: number | null
+  message: string | null
+  is_resolved: boolean
+  severity: string | null
+  hvac_root_cause: string | null
+  anomaly_phase: string | null
+  event_source: string | null
+}
+
+export interface RecentAnomaliesResponse {
+  anomalies: AnomalyItem[]
+  total: number
+  check_period: {
+    start: string | null
+    end: string | null
+    hours: number
+  }
+  source: string
+  module_status: string
 }
 
 export const dataApi = {
-  // 全局总览（手机端专用：只取最新一条能耗数据）
-  overview(): Promise<OverviewResponse> {
-    return get<OverviewResponse>('/api/overview')
+  /** 全局总览（Dashboard KPI 汇总） */
+  overview(date?: string): Promise<OverviewResponse> {
+    return get<OverviewResponse>('/api/overview', date ? { date } : undefined)
   },
 
-  // 异常事件列表
-  anomalies(params?: { page?: number; page_size?: number; severity?: string }): Promise<{
-    items: AnomalyEvent[]
-    total: number
-  }> {
-    return get('/api/anomalies/attributions', params as Record<string, unknown>)
+  /** 近期异常告警 */
+  recentAnomalies(params?: {
+    hours?: number
+    building_type?: string
+    only_unresolved?: boolean
+  }): Promise<RecentAnomaliesResponse> {
+    return get<RecentAnomaliesResponse>('/api/anomalies/recent', params as Record<string, unknown>)
   },
 }

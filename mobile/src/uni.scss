@@ -1,7 +1,12 @@
+/* Noto Sans SC — 从 npm 包直接引入（本地，无需网络） */
+@import '@fontsource/noto-sans-sc/400.css';
+@import '@fontsource/noto-sans-sc/700.css';
+@import '@fontsource/noto-sans-sc/900.css';
+
 /* 全局 CSS 变量 */
 page {
   background-color: #f5f7fa;
-  font-family: -apple-system, 'PingFang SC', 'Helvetica Neue', sans-serif;
+  font-family: 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif;
 }
 
 /* ---- 运维端色系 ---- */

@@ -29,19 +29,19 @@
         v-for="order in orders"
         :key="order.id"
         class="history-card"
-        :class="order.worker_feedback"
+        :class="order.worker_result"
         @click="openDetail(order)"
       >
         <view class="hc-header">
           <text class="hc-date">{{ formatDate(order.updated_at) }}</text>
-          <view class="feedback-badge" :class="order.worker_feedback">
-            {{ feedbackText(order.worker_feedback) }}
+          <view class="feedback-badge" :class="order.worker_result">
+            {{ WORKER_RESULT_LABEL[order.worker_result ?? ''] || '处理完成' }}
           </view>
         </view>
 
-        <text class="hc-building">{{ order.building_name || order.building_id }}</text>
-        <text class="hc-type">{{ order.anomaly_type }}</text>
-        <text v-if="order.worker_note" class="hc-note">备注：{{ order.worker_note }}</text>
+        <text class="hc-building">{{ order.building_id }}</text>
+        <text class="hc-desc">{{ order.issue_description }}</text>
+        <text v-if="order.worker_notes" class="hc-note">备注：{{ order.worker_notes }}</text>
       </view>
 
       <view v-if="!loading && !orders.length" class="empty-state">
@@ -52,81 +52,67 @@
       <view v-if="noMore && orders.length > 0" class="load-end">没有更多了</view>
     </scroll-view>
 
-    <TabBar :tabs="workerTabs" current="history" theme="worker" />
+    <TabBar :tabs="WORKER_TABS" current="history" theme="worker" />
   </view>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import NavBar from '../../../components/NavBar.vue'
-import TabBar, { type TabItem } from '../../../components/TabBar.vue'
+import TabBar from '../../../components/TabBar.vue'
+import { useRouteGuard } from '../../../utils/route-guard'
+import { WORKER_TABS } from '../../../constants/tabs'
+import { WORKER_ROLES } from '../../../constants/roles'
+import { WORKER_RESULT_LABEL } from '../../../constants/status'
+import { formatDate } from '../../../utils/format'
 import { workOrderApi, type WorkOrder } from '../../../api/workorder'
 
-const workerTabs: TabItem[] = [
-  { name: 'pending', label: '待处理', icon: '📥', path: '/pages/worker/pending/index' },
-  { name: 'active',  label: '进行中', icon: '🔧', path: '/pages/worker/active/index' },
-  { name: 'history', label: '历史',   icon: '📂', path: '/pages/worker/history/index' },
-  { name: 'profile', label: '我的',   icon: '👤', path: '/pages/worker/profile/index' },
-]
+useRouteGuard(WORKER_ROLES)
 
 const orders = ref<WorkOrder[]>([])
 const loading = ref(false)
-const loadingMore = ref(false)
 const noMore = ref(false)
 const page = ref(1)
 const PAGE_SIZE = 15
 
 const stats = computed(() => ({
   total:      orders.value.length,
-  fixed:      orders.value.filter(o => o.worker_feedback === 'fixed').length,
-  falseAlarm: orders.value.filter(o => o.worker_feedback === 'false_alarm').length,
+  fixed:      orders.value.filter(o => o.worker_result === 'fixed').length,
+  falseAlarm: orders.value.filter(o => o.worker_result === 'false_alarm').length,
 }))
 
 async function loadData() {
   loading.value = true
   try {
     const res = await workOrderApi.list({
-      status: ['completed', 'closed', 'false_alarm'] as any,
-      assigned_to_me: true,
+      status: 'completed,closed,false_alarm',
       page: 1,
       page_size: PAGE_SIZE,
     })
-    orders.value = res.items
-    if (res.items.length < PAGE_SIZE) noMore.value = true
+    orders.value = res.work_orders
+    if (res.work_orders.length < PAGE_SIZE) noMore.value = true
   } catch { /* handled */ }
   finally { loading.value = false }
 }
 
 async function loadMore() {
-  if (loadingMore.value || noMore.value) return
-  loadingMore.value = true
+  if (loading.value || noMore.value) return
   page.value++
   try {
     const res = await workOrderApi.list({
-      status: ['completed', 'closed', 'false_alarm'] as any,
-      assigned_to_me: true,
+      status: 'completed,closed,false_alarm',
       page: page.value,
       page_size: PAGE_SIZE,
     })
-    orders.value.push(...res.items)
-    if (res.items.length < PAGE_SIZE) noMore.value = true
+    orders.value.push(...res.work_orders)
+    if (res.work_orders.length < PAGE_SIZE) noMore.value = true
   } catch { page.value-- }
-  finally { loadingMore.value = false }
 }
 
 function openDetail(order: WorkOrder) {
   uni.navigateTo({
     url: `/pages/worker/workorder-detail/index?ticket_id=${order.ticket_id}&readonly=1`,
   })
-}
-
-function feedbackText(f?: string) {
-  return { fixed: '已修复', false_alarm: '误报', escalated: '已升级' }[f ?? ''] ?? '处理完成'
-}
-
-function formatDate(iso: string) {
-  const d = new Date(iso)
-  return `${d.getFullYear()}-${(d.getMonth()+1).toString().padStart(2,'0')}-${d.getDate().toString().padStart(2,'0')}`
 }
 
 onMounted(loadData)
@@ -206,11 +192,15 @@ onMounted(loadData)
   margin-bottom: 4rpx;
 }
 
-.hc-type {
+.hc-desc {
   display: block;
   font-size: 24rpx;
   color: #666;
   margin-bottom: 8rpx;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .hc-note {

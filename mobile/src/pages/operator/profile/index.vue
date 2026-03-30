@@ -49,29 +49,30 @@
       </view>
     </view>
 
-    <TabBar :tabs="operatorTabs" current="profile" theme="operator" />
+    <TabBar :tabs="OPERATOR_TABS" current="profile" theme="operator" />
   </view>
 </template>
 
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import NavBar from '../../../components/NavBar.vue'
-import TabBar, { type TabItem } from '../../../components/TabBar.vue'
+import TabBar from '../../../components/TabBar.vue'
 import { useAuthStore } from '../../../stores/auth'
+import { useRouteGuard } from '../../../utils/route-guard'
+import { OPERATOR_TABS } from '../../../constants/tabs'
+import { OPERATOR_ROLES } from '../../../constants/roles'
 import { authApi } from '../../../api/auth'
+
+useRouteGuard(OPERATOR_ROLES)
 
 const authStore = useAuthStore()
 const user = computed(() => authStore.user)
 
-const operatorTabs: TabItem[] = [
-  { name: 'overview',   label: '总览', icon: '📊', path: '/pages/operator/overview/index' },
-  { name: 'alerts',     label: '告警', icon: '🔔', path: '/pages/operator/alerts/index' },
-  { name: 'workorders', label: '工单', icon: '📋', path: '/pages/operator/workorders/index' },
-  { name: 'profile',    label: '我的', icon: '👤', path: '/pages/operator/profile/index' },
-]
-
 const avatarChar = computed(() => user.value?.username?.[0]?.toUpperCase() ?? '?')
-const roleText   = computed(() => user.value?.role === 'admin' ? '系统管理员' : '运维人员')
+const roleText = computed(() => {
+  const m: Record<string, string> = { admin: '系统管理员', manager: '运维经理' }
+  return m[user.value?.role ?? ''] ?? '运维人员'
+})
 
 const showChangePwd = ref(false)
 const oldPwd = ref(''), newPwd = ref(''), confirmPwd = ref('')

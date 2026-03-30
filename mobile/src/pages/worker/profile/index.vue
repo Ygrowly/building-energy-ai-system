@@ -46,26 +46,24 @@
       </view>
     </view>
 
-    <TabBar :tabs="workerTabs" current="profile" theme="worker" />
+    <TabBar :tabs="WORKER_TABS" current="profile" theme="worker" />
   </view>
 </template>
 
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import NavBar from '../../../components/NavBar.vue'
-import TabBar, { type TabItem } from '../../../components/TabBar.vue'
+import TabBar from '../../../components/TabBar.vue'
 import { useAuthStore } from '../../../stores/auth'
+import { useRouteGuard } from '../../../utils/route-guard'
+import { WORKER_TABS } from '../../../constants/tabs'
+import { WORKER_ROLES } from '../../../constants/roles'
 import { authApi } from '../../../api/auth'
+
+useRouteGuard(WORKER_ROLES)
 
 const authStore = useAuthStore()
 const user = computed(() => authStore.user)
-
-const workerTabs: TabItem[] = [
-  { name: 'pending', label: '待处理', icon: '📥', path: '/pages/worker/pending/index' },
-  { name: 'active',  label: '进行中', icon: '🔧', path: '/pages/worker/active/index' },
-  { name: 'history', label: '历史',   icon: '📂', path: '/pages/worker/history/index' },
-  { name: 'profile', label: '我的',   icon: '👤', path: '/pages/worker/profile/index' },
-]
 
 const avatarChar = computed(() => user.value?.username?.[0]?.toUpperCase() ?? '?')
 

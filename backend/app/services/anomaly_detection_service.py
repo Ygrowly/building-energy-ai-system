@@ -1024,6 +1024,22 @@ async def attribute_anomalies_to_devices(
     if not attribution_rows:
         return 0
 
+    # 先删该楼旧数据（幂等重建，避免全局 TRUNCATE 时序问题）
+    await db.execute(
+        text("DELETE FROM anomaly_device_attributions WHERE building_id = :bid"),
+        {"bid": building_id},
+    )
+
+    # 按 (event_id, device_id) 去重，避免触碰 deferrable 唯一约束
+    seen: set[tuple] = set()
+    deduped: list[dict] = []
+    for row in attribution_rows:
+        key = (row["event_id"], row["device_id"])
+        if key not in seen:
+            seen.add(key)
+            deduped.append(row)
+    attribution_rows = deduped
+
     await db.execute(text("""
         INSERT INTO anomaly_device_attributions
           (id, building_id, timestamp, event_id, device_id, device_type,
@@ -1031,7 +1047,6 @@ async def attribute_anomalies_to_devices(
         VALUES
           (:id, :building_id, :timestamp, :event_id, :device_id, :device_type,
            :attribution_role, :attribution_score, :attribution_reason, :evidence_json)
-        ON CONFLICT (id) DO NOTHING
     """), attribution_rows)
     await db.commit()
 
@@ -1082,16 +1097,45 @@ async def detect_and_store_all_buildings(db: AsyncSession) -> dict[str, dict[str
         async with AsyncSessionLocal() as session:
             n_attrib = await attribute_anomalies_to_devices(bid, session)
 
+        # 自动建工单：异常事件 → 工单 → AI 审批
+        n_wo_created = 0
+        wo_error: str | None = None
+        if n_events > 0:
+            try:
+                from app.services.auto_work_order_service import auto_create_alert_orders
+                async with AsyncSessionLocal() as session:
+                    wo_result = await auto_create_alert_orders(session, bid)
+                    n_wo_created = wo_result.get("created", 0)
+                    logger.info(
+                        "自动建工单结果: building=%s created=%d skipped=%d",
+                        bid, n_wo_created, wo_result.get("skipped_dup", 0),
+                    )
+            except Exception as _wo_exc:
+                import traceback as _tb
+                wo_error = f"{_wo_exc}\n{_tb.format_exc()}"
+                logger.error("自动建工单失败: building=%s error=%s", bid, wo_error)
+
         summary[bid] = {
             "flags": n_flags,
             "events": n_events,
             "telemetry": n_telemetry,
             "device_status": n_status,
             "attributions": n_attrib,
+            "work_orders_created": n_wo_created,
+            "wo_error": wo_error,
         }
         logger.info(
-            "anomaly detect: %s → flags=%d, events=%d, telemetry=%d, status=%d, attrib=%d",
-            bid, n_flags, n_events, n_telemetry, n_status, n_attrib,
+            "anomaly detect: %s → flags=%d, events=%d, telemetry=%d, status=%d, attrib=%d, wo=%d",
+            bid, n_flags, n_events, n_telemetry, n_status, n_attrib, n_wo_created,
         )
+
+    # 批量触发 AI 审批（所有 pending_review 工单）
+    try:
+        from app.services.auto_work_order_service import trigger_ai_review_for_pending
+        async with AsyncSessionLocal() as session:
+            n_reviewed = await trigger_ai_review_for_pending(session)
+        logger.info("AI 审批批量完成: reviewed=%d", n_reviewed)
+    except Exception:
+        logger.exception("AI 审批批量触发失败")
 
     return summary

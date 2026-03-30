@@ -86,6 +86,7 @@ async def rebuild_all():
     两步分别使用独立的 Session，避免第一步长时间运行后连接被服务器关闭，
     导致第二步拿到死连接（asyncpg InterfaceError: underlying connection is closed）。
     """
+    import traceback as _tb
     logger.info("admin: rebuild-all 开始 ...")
 
     async with AsyncSessionLocal() as db1:
@@ -176,11 +177,77 @@ async def run_forecast(
         "admin: run-forecast done, buildings=%d, success=%d, fail=%d, warnings=%d",
         len(building_types), succeeded, failed, total_warnings,
     )
+
+    # 预测完成后：自动为高风险预警创建工单 + AI 审批
+    total_wo_created = 0
+    try:
+        from app.services.auto_work_order_service import (
+            auto_create_prediction_orders,
+            trigger_ai_review_for_pending,
+        )
+        from app.db.session import AsyncSessionLocal
+
+        # 需要查 building_id（非 building_type），查询所有楼宇
+        bld_result = await db.execute(
+            select(Building.building_id)
+        )
+        all_building_ids = [r[0] for r in bld_result.fetchall()]
+
+        for bid in all_building_ids:
+            try:
+                async with AsyncSessionLocal() as session:
+                    wo_result = await auto_create_prediction_orders(session, bid)
+                    total_wo_created += wo_result.get("created", 0)
+            except Exception:
+                logger.exception("预警自动建工单失败: building=%s", bid)
+
+        # 批量 AI 审批
+        if total_wo_created > 0:
+            async with AsyncSessionLocal() as session:
+                await trigger_ai_review_for_pending(session)
+    except Exception:
+        logger.exception("预警工单流程异常")
+
     return {
         "status": "ok",
         "total_buildings": len(building_types),
         "succeeded": succeeded,
         "failed": failed,
         "total_warnings": total_warnings,
+        "work_orders_created": total_wo_created,
         "per_building": per_building,
     }
+
+
+@router.post("/test-workorder")
+async def test_workorder():
+    """诊断端点：直接对第一个楼宇调用 auto_create_alert_orders，返回详细结果或错误。"""
+    import traceback as _tb
+    from app.db.session import AsyncSessionLocal
+    from app.db.models import AnomalyEvent
+    from sqlalchemy import select, func as sa_func
+
+    results = {}
+    for bid in ["Fox_education_Louie", "Fox_office_Alice", "Fox_public_Henry"]:
+        try:
+            # 先查 anomaly_events 数量
+            async with AsyncSessionLocal() as s:
+                cnt_r = await s.execute(
+                    sa_func.count(AnomalyEvent.id)
+                    .__class__(sa_func.count(AnomalyEvent.id))
+                    if False else
+                    select(sa_func.count(AnomalyEvent.id))
+                    .where(AnomalyEvent.building_id == bid)
+                )
+                event_count = cnt_r.scalar()
+
+            # 调用工单创建
+            from app.services.auto_work_order_service import auto_create_alert_orders
+            async with AsyncSessionLocal() as s:
+                wo_result = await auto_create_alert_orders(s, bid)
+
+            results[bid] = {"event_count": event_count, "wo_result": wo_result}
+        except Exception as exc:
+            results[bid] = {"error": str(exc), "traceback": _tb.format_exc()}
+
+    return results

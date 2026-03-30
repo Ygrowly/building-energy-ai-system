@@ -769,7 +769,9 @@ async def _stream_graph(
         pa = merged.get("pending_action")
         if pa and pa.get("ticket_id"):
             from app.api.routes_workorder import register_pending_order
-            register_pending_order(pa)
+            # v2: 异步写库 + 触发 AI 审批（不阻塞 SSE 流）
+            pa["session_id"] = session_id
+            asyncio.create_task(register_pending_order(pa))
     else:
         # 检查流式过程中是否已有有效 AI 回复（防止双重执行）
         current_msgs = state.get("messages", [])

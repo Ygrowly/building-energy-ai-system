@@ -217,7 +217,7 @@ class AnomalyEvent(Base):
 
     __table_args__ = (
         UniqueConstraint(
-            "data_timestamp", "building_id", "rule_triggered",
+            "data_timestamp", "building_id",
             name="uq_anomaly_event",
         ),
         Index("idx_anomaly_events_data_timestamp", "data_timestamp"),

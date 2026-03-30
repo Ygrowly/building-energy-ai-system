@@ -19,7 +19,9 @@ CREATE TABLE IF NOT EXISTS anomaly_events (
     is_resolved      BOOLEAN     NOT NULL DEFAULT FALSE
 );
 
--- 2. 唯一约束：同一条能耗记录的同一规则只写入一次（保证幂等扫描）
+-- 2. 唯一约束：同一小时同一楼宇只写入一条事件（保证幂等扫描）
+--    注意：约束已由迁移 015_anomaly_events_unique_per_hour.sql 更新为
+--          UNIQUE (data_timestamp, building_id)，去掉了 rule_triggered 列
 ALTER TABLE anomaly_events
     DROP CONSTRAINT IF EXISTS uq_anomaly_event;
 ALTER TABLE anomaly_events

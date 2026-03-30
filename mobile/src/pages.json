@@ -1,6 +1,13 @@
 {
   "pages": [
     {
+      "path": "pages/splash/index",
+      "style": {
+        "navigationBarTitleText": "",
+        "navigationStyle": "custom"
+      }
+    },
+    {
       "path": "pages/login/index",
       "style": {
         "navigationBarTitleText": "登录",

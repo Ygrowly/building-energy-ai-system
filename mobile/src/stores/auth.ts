@@ -12,55 +12,68 @@ export const useAuthStore = defineStore('auth', () => {
   const isOperator = computed(() => !!user.value && isOperatorRole(user.value.role))
   const isWorker   = computed(() => !!user.value && isWorkerRole(user.value.role))
 
-  /** 启动时从本地存储恢复状态 */
+  /**
+   * 启动时从本地存储恢复状态（只恢复，不跳转）。
+   * 跳转逻辑由启动页（splash）在计时结束后统一调用 redirectAfterSplash()。
+   */
   function init() {
-    const token = uni.getStorageSync('access_token')
-    const storedUser = uni.getStorageSync('user_info')
+    const token       = uni.getStorageSync('access_token')
+    const storedUser  = uni.getStorageSync('user_info')
     const storedRefresh = uni.getStorageSync('refresh_token')
 
     if (token && storedUser) {
-      accessToken.value = token
+      accessToken.value  = token
       refreshToken.value = storedRefresh
       try {
         user.value = typeof storedUser === 'string' ? JSON.parse(storedUser) : storedUser
-        redirectByRole()
       } catch {
-        clearAll()
-        uni.reLaunch({ url: '/pages/login/index' })
+        _clearTokens()
       }
+    }
+  }
+
+  /** 启动页计时结束后调用：已登录 → 跳首页，未登录 → 跳登录页 */
+  function redirectAfterSplash() {
+    if (isLoggedIn.value && user.value) {
+      redirectByRole()
     } else {
       uni.reLaunch({ url: '/pages/login/index' })
     }
   }
 
-  async function login(username: string, password: string) {
-    const res = await authApi.login(username, password)
-
-    // 校验角色是否允许手机端登录
+  function _saveAuth(res: { access_token: string; refresh_token: string; user: import('../api/auth').UserInfo }) {
     if (!ALLOWED_ROLES.includes(res.user.role as UserRole)) {
       throw new Error('当前账号角色暂不支持移动端登录')
     }
-
     accessToken.value = res.access_token
     refreshToken.value = res.refresh_token
     user.value = res.user
-
     uni.setStorageSync('access_token', res.access_token)
     uni.setStorageSync('refresh_token', res.refresh_token)
     uni.setStorageSync('user_info', JSON.stringify(res.user))
+  }
 
+  async function login(username: string, password: string) {
+    const res = await authApi.login(username, password)
+    _saveAuth(res)
     redirectByRole()
+  }
+
+  async function register(username: string, password: string, email?: string, phone?: string) {
+    const res = await authApi.register(username, password, email, phone)
+    // 注册成功后不自动登录，清空 token，让用户手动登录
+    _clearTokens()
   }
 
   async function logout() {
     if (refreshToken.value) {
       try { await authApi.logout(refreshToken.value) } catch { /* ignore */ }
     }
-    clearAll()
+    _clearTokens()
     uni.reLaunch({ url: '/pages/login/index' })
   }
 
-  function clearAll() {
+  function _clearTokens() {
     user.value = null
     accessToken.value = null
     refreshToken.value = null
@@ -68,6 +81,9 @@ export const useAuthStore = defineStore('auth', () => {
     uni.removeStorageSync('refresh_token')
     uni.removeStorageSync('user_info')
   }
+
+  /** @deprecated 请使用 _clearTokens */
+  const clearAll = _clearTokens
 
   function redirectByRole() {
     if (!user.value) return
@@ -78,5 +94,5 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
-  return { user, accessToken, isLoggedIn, isOperator, isWorker, init, login, logout }
+  return { user, accessToken, isLoggedIn, isOperator, isWorker, init, redirectAfterSplash, login, register, logout, _clearTokens }
 })

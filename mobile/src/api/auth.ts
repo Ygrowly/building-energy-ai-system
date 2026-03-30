@@ -12,8 +12,8 @@ export interface UserInfo {
   created_at: string
 }
 
-/** 对齐后端 LoginResponse */
-export interface LoginResponse {
+/** 对齐后端 LoginResponse / RegisterResponse */
+export interface AuthResponse {
   access_token: string
   refresh_token: string
   token_type: 'bearer'
@@ -21,9 +21,26 @@ export interface LoginResponse {
   user: UserInfo
 }
 
+/** @deprecated 保持向后兼容 */
+export type LoginResponse = AuthResponse
+
 export const authApi = {
-  login(username: string, password: string): Promise<LoginResponse> {
-    return post<LoginResponse>('/api/auth/login', { username, password })
+  login(username: string, password: string): Promise<AuthResponse> {
+    return post<AuthResponse>('/api/auth/login', { username, password })
+  },
+
+  register(
+    username: string,
+    password: string,
+    email?: string,
+    phone?: string,
+  ): Promise<AuthResponse> {
+    return post<AuthResponse>('/api/auth/register', {
+      username,
+      password,
+      ...(email ? { email } : {}),
+      ...(phone ? { phone } : {}),
+    })
   },
 
   logout(refreshToken: string): Promise<void> {

@@ -3,10 +3,8 @@
 
     <!-- ══ 顶部品牌区 ══ -->
     <view class="top-area">
-      <!-- 背景城市图片 -->
-      <image class="top-bg-img" src="/static/images/bangkok-city.jpg" mode="aspectFill"/>
-      <!-- 渐变遮罩，确保文字可读 -->
-      <view class="top-overlay"/>
+<!-- 背景城市图片 -->
+    <image class="top-bg-img" src="/static/images/bangkok-city.jpg" mode="aspectFill"/>
 
       <view class="brand-wrap">
         <view class="brand-logo">

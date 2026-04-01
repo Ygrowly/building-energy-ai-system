@@ -35,6 +35,9 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["数据"])
 settings = get_settings()
 
+_COP_PROXY_SCALING_FACTOR = 15.0
+_ZERO_HVAC_ENERGY_THRESHOLD = 0.1
+
 _BUILDING_ICONS = {
     "Education": "🏫",
     "Office": "🏢",
@@ -650,6 +653,43 @@ async def get_building_energy_trend(
                 """),
                 {"bid": building_id, "sd": start_date, "ed": end_date},
             )
+            fallback_cop_result = await db.execute(
+                text("""
+                    SELECT
+                        date_trunc('day', e.timestamp)::date AS day,
+                        AVG(CASE
+                            WHEN e.hac_energy > :min_energy
+                             AND e.sim_supply_temp_c IS NOT NULL
+                             AND e.sim_return_temp_c IS NOT NULL
+                            THEN ABS(e.sim_return_temp_c - e.sim_supply_temp_c)
+                        END) AS supply_return_delta,
+                        AVG(CASE
+                            WHEN e.hac_energy > :min_energy
+                            THEN e.hac_energy
+                        END) AS ac_avg_power_kw,
+                        AVG(CASE
+                            WHEN e.hac_energy > :min_energy
+                             AND e.sim_supply_temp_c IS NOT NULL
+                             AND e.sim_return_temp_c IS NOT NULL
+                             AND ABS(e.sim_return_temp_c - e.sim_supply_temp_c) > 0
+                            THEN (:scale * ABS(e.sim_return_temp_c - e.sim_supply_temp_c))
+                                 / NULLIF(e.hac_energy, 0)
+                        END) AS ac_cop
+                    FROM energy_data e
+                    WHERE e.building_id = :bid
+                      AND e.timestamp >= :sd
+                      AND e.timestamp < CAST(:ed AS date) + interval '1 day'
+                    GROUP BY 1
+                    ORDER BY 1
+                """),
+                {
+                    "bid": building_id,
+                    "sd": start_date,
+                    "ed": end_date,
+                    "min_energy": _ZERO_HVAC_ENERGY_THRESHOLD,
+                    "scale": _COP_PROXY_SCALING_FACTOR,
+                },
+            )
             dev_by_day: dict[str, dict] = {}
             for dr in dev_result.fetchall():
                 day_str = dr[0].isoformat() if hasattr(dr[0], "isoformat") else str(dr[0])
@@ -661,12 +701,28 @@ async def get_building_energy_trend(
                     "ac_cop":               round(float(dr[5]), 2) if dr[5] is not None else None,
                 }
 
+            fallback_cop_by_day: dict[str, dict] = {}
+            for row in fallback_cop_result.fetchall():
+                day_str = row[0].isoformat() if hasattr(row[0], "isoformat") else str(row[0])
+                fallback_cop_by_day[day_str] = {
+                    "ac_avg_power_kw": round(float(row[2]), 2) if row[2] is not None else None,
+                    "supply_return_delta": round(float(row[1]), 2) if row[1] is not None else None,
+                    "ac_cop": round(float(row[3]), 2) if row[3] is not None else None,
+                }
+
             empty_dev = {
                 "device_total": 0, "device_normal": 0,
                 "ac_avg_power_kw": None, "supply_return_delta": None, "ac_cop": None,
             }
             for rec in records:
                 rec.update(dev_by_day.get(rec["day"], empty_dev))
+                fallback = fallback_cop_by_day.get(rec["day"], {})
+                if rec.get("ac_avg_power_kw") is None:
+                    rec["ac_avg_power_kw"] = fallback.get("ac_avg_power_kw")
+                if rec.get("supply_return_delta") is None:
+                    rec["supply_return_delta"] = fallback.get("supply_return_delta")
+                if rec.get("ac_cop") is None:
+                    rec["ac_cop"] = fallback.get("ac_cop")
 
         return {
             "building_type": building_type,

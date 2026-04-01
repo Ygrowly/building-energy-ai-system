@@ -12,7 +12,7 @@
           <div
             class="qs-dropdown"
             :class="{ 'qs-dropdown--open': dropdownBuildingOpen }"
-            @click.stop="dropdownBuildingOpen = !dropdownBuildingOpen; dropdownChartOpen = false"
+            @click.stop="dropdownBuildingOpen = !dropdownBuildingOpen"
           >
             <span class="qs-dropdown-value">{{ buildingOptions.find(b => b.key === selectedBuilding)?.label }}</span>
             <Icon icon="mdi:chevron-down" width="14" class="qs-dropdown-arrow" :class="{ 'qs-dropdown-arrow--open': dropdownBuildingOpen }" />
@@ -44,33 +44,6 @@
             结束日期
           </label>
           <input type="date" v-model="endDate" class="filter-input" :min="dataRangeStore.minDate" :max="dataRangeStore.maxDate" />
-        </div>
-        <div class="filter-item">
-          <label class="filter-label">
-            <Icon icon="mdi:chart-box-outline" width="13" class="label-icon" />
-            图表类型
-          </label>
-          <div
-            class="qs-dropdown"
-            :class="{ 'qs-dropdown--open': dropdownChartOpen }"
-            @click.stop="dropdownChartOpen = !dropdownChartOpen; dropdownBuildingOpen = false"
-          >
-            <span class="qs-dropdown-value">{{ CHART_OPTIONS.find(c => c.value === chartType)?.label }}</span>
-            <Icon icon="mdi:chevron-down" width="14" class="qs-dropdown-arrow" :class="{ 'qs-dropdown-arrow--open': dropdownChartOpen }" />
-            <Transition name="qs-drop">
-              <div v-if="dropdownChartOpen" class="qs-dropdown-list" @click.stop>
-                <div
-                  v-for="opt in CHART_OPTIONS" :key="opt.value"
-                  class="qs-dropdown-item"
-                  :class="{ 'qs-dropdown-item--selected': chartType === opt.value }"
-                  @click="chartType = opt.value; dropdownChartOpen = false"
-                >
-                  <Icon v-if="chartType === opt.value" icon="mdi:check" width="13" class="qs-item-check" />
-                  <span>{{ opt.label }}</span>
-                </div>
-              </div>
-            </Transition>
-          </div>
         </div>
         <button
           class="query-btn"
@@ -109,16 +82,6 @@
           <div class="toggle-slider" :style="sliderStyle"></div>
           <button
             class="toggle-btn"
-            ref="btnDataRef"
-            :class="{ active: viewMode === 'data' }"
-            @click="viewMode = 'data'"
-            aria-label="数据展示视图"
-          >
-            <Icon icon="mdi:table" width="14" />
-            数据展示
-          </button>
-          <button
-            class="toggle-btn"
             ref="btnAnalysisRef"
             :class="{ active: viewMode === 'analysis' }"
             @click="viewMode = 'analysis'"
@@ -127,16 +90,106 @@
             <Icon icon="mdi:chart-line" width="14" />
             统计分析
           </button>
+          <button
+            class="toggle-btn"
+            ref="btnDataRef"
+            :class="{ active: viewMode === 'data' }"
+            @click="viewMode = 'data'"
+            aria-label="数据展示视图"
+          >
+            <Icon icon="mdi:table" width="14" />
+            数据展示
+          </button>
         </div>
       </div>
     </div>
+
+    <!-- ══════════════ 统计分析：摘要 + 图表 + 结论 ══════════════ -->
+    <template v-if="queryResult && viewMode === 'analysis'">
+      <section class="analysis-stack">
+        <div class="kpi-grid">
+          <article
+            v-for="item in summaryKpis"
+            :key="item.id"
+            class="kpi-card"
+          >
+            <div class="kpi-card-top">
+              <span class="kpi-label">{{ item.label }}</span>
+              <Icon :icon="item.icon" width="16" class="kpi-icon" />
+            </div>
+            <div class="kpi-value">{{ item.value }}</div>
+            <div class="kpi-subtext">{{ item.subtext }}</div>
+          </article>
+        </div>
+
+        <div class="analysis-grid">
+          <article
+            v-for="card in analysisCards"
+            :key="card.id"
+            :class="[
+              'chart-card',
+              'analysis-card',
+              `analysis-card--${card.id}`,
+              `analysis-card--${card.layout}`,
+            ]"
+          >
+            <div class="chart-card-header">
+              <div class="chart-card-title">
+                <Icon :icon="card.icon" width="18" class="chart-title-icon" />
+                <span>{{ buildingLabel }} {{ card.title }}</span>
+                <span class="chart-date-range">{{ startDate }} ~ {{ endDate }}</span>
+              </div>
+              <div class="chart-card-actions">
+                <button class="card-action-btn" title="刷新数据" @click="handleQuery" aria-label="刷新数据">
+                  <Icon icon="mdi:refresh" width="16" />
+                </button>
+              </div>
+            </div>
+            <div class="analysis-meta" v-if="card.highlights.length">
+              <div
+                v-for="highlight in card.highlights"
+                :key="`${card.id}-${highlight.label}`"
+                class="analysis-meta-item"
+              >
+                <span class="analysis-meta-label">{{ highlight.label }}</span>
+                <span class="analysis-meta-value">{{ highlight.value }}</span>
+              </div>
+            </div>
+            <div class="chart-container chart-container--analysis" :ref="(el: any) => setChartRef(card.id, el)"></div>
+          </article>
+        </div>
+
+        <article class="chart-card insight-card">
+          <div class="chart-card-header">
+            <div class="chart-card-title">
+              <Icon icon="mdi:lightbulb-on-outline" width="18" class="chart-title-icon" />
+              <span>{{ buildingLabel }} 异常/结论区</span>
+              <span class="chart-date-range">{{ startDate }} ~ {{ endDate }}</span>
+            </div>
+          </div>
+          <div class="insight-list">
+            <div
+              v-for="item in analysisInsights"
+              :key="item.id"
+              class="insight-item"
+            >
+              <div class="insight-badge">{{ item.tag }}</div>
+              <div class="insight-content">
+                <div class="insight-title">{{ item.title }}</div>
+                <div class="insight-text">{{ item.text }}</div>
+              </div>
+            </div>
+          </div>
+        </article>
+      </section>
+    </template>
 
     <!-- ══════════════ 数据展示：表格 ══════════════ -->
     <div class="chart-card" v-if="queryResult && checkedParams.length && viewMode === 'data'">
       <div class="chart-card-header">
         <div class="chart-card-title">
           <Icon icon="mdi:table" width="18" class="chart-title-icon" />
-          <span>{{ buildingLabel }} 能耗数据</span>
+          <span>{{ buildingLabel }} 数据明细表</span>
           <span class="chart-date-range">{{ startDate }} ~ {{ endDate }}</span>
         </div>
         <div class="chart-card-actions">
@@ -164,29 +217,6 @@
         </table>
       </div>
     </div>
-
-    <!-- ══════════════ 统计分析：多图表 ══════════════ -->
-    <template v-if="queryResult && viewMode === 'analysis'">
-      <div
-        v-for="group in activeChartGroups"
-        :key="group.id"
-        class="chart-card"
-      >
-        <div class="chart-card-header">
-          <div class="chart-card-title">
-            <Icon :icon="group.icon" width="18" class="chart-title-icon" />
-            <span>{{ buildingLabel }} {{ group.title }}</span>
-            <span class="chart-date-range">{{ startDate }} ~ {{ endDate }}</span>
-          </div>
-          <div class="chart-card-actions">
-            <button class="card-action-btn" title="刷新数据" @click="handleQuery" aria-label="刷新数据">
-              <Icon icon="mdi:refresh" width="16" />
-            </button>
-          </div>
-        </div>
-        <div class="chart-container" :ref="(el: any) => setChartRef(group.id, el)"></div>
-      </div>
-    </template>
 
     <!-- ══════════════ 空状态 ══════════════ -->
     <div class="content-placeholder" v-if="!queryResult && !loading">
@@ -245,26 +275,18 @@ const buildingOptions = [
   { key: 'Office', label: '办公楼' },
   { key: 'Public services', label: '公共楼' },
 ]
-const CHART_OPTIONS = [
-  { value: 'line',  label: '折线图' },
-  { value: 'bar',   label: '柱状图' },
-  { value: 'mixed', label: '混合（折线+柱状）' },
-]
 const selectedBuilding = ref('Office')
 const startDate = ref('')
 const endDate = ref('')
-const chartType = ref('mixed')
 
 // ── 自定义下拉状态 ──
 const dropdownBuildingOpen = ref(false)
-const dropdownChartOpen    = ref(false)
 function closeQsDropdowns() {
   dropdownBuildingOpen.value = false
-  dropdownChartOpen.value    = false
 }
 const loading = ref(false)
 const queryResult = ref<any>(null)
-const viewMode = ref<'data' | 'analysis'>('data')
+const viewMode = ref<'data' | 'analysis'>('analysis')
 
 const buildingLabel = computed(() =>
   buildingOptions.find(b => b.key === selectedBuilding.value)?.label ?? selectedBuilding.value
@@ -338,6 +360,31 @@ interface ChartGroup {
   paramKeys: string[]
 }
 
+interface CardHighlight {
+  label: string
+  value: string
+}
+
+interface AnalysisCard extends ChartGroup {
+  highlights: CardHighlight[]
+  layout: 'half' | 'full'
+}
+
+interface SummaryKpi {
+  id: string
+  label: string
+  value: string
+  subtext: string
+  icon: string
+}
+
+interface AnalysisInsight {
+  id: string
+  tag: string
+  title: string
+  text: string
+}
+
 const CHART_GROUPS: ChartGroup[] = [
   {
     id: 'energy',
@@ -357,19 +404,248 @@ const CHART_GROUPS: ChartGroup[] = [
     icon: 'mdi:thermometer',
     paramKeys: ['air_temp_c', 'sim_supply_temp_c', 'sim_return_temp_c', 'dew_temp_c', 'humidity_rh_pct'],
   },
+  {
+    id: 'device',
+    title: '设备运行概览',
+    icon: 'mdi:cog-outline',
+    paramKeys: ['device_normal_rate', 'ac_avg_power_kw'],
+  },
 ]
 
+const records = computed<any[]>(() => queryResult.value?.records ?? [])
+const selectedParamKeys = computed(() => new Set(checkedParams.value.map(p => p.key)))
+const hasEnergyParams = computed(() => ['electricity_kwh', 'water_m3', 'hac_energy'].some(k => selectedParamKeys.value.has(k)))
+const hasEnvParams = computed(() => ['air_temp_c', 'sim_supply_temp_c', 'sim_return_temp_c', 'dew_temp_c', 'humidity_rh_pct'].some(k => selectedParamKeys.value.has(k)))
+const hasDeviceParams = computed(() => deviceStatusChecked.value)
+
 const activeChartGroups = computed(() => {
-  const checked = new Set(checkedParams.value.map(p => p.key))
   const groups: ChartGroup[] = []
-  for (const g of CHART_GROUPS) {
-    if (g.id === 'cop') {
-      groups.push(g)
-    } else {
-      if (g.paramKeys.some(k => checked.has(k))) groups.push(g)
+  if (hasEnergyParams.value) groups.push(CHART_GROUPS.find(g => g.id === 'energy')!)
+  if (hasEnvParams.value) groups.push(CHART_GROUPS.find(g => g.id === 'temperature')!)
+  if (hasDeviceParams.value) groups.push(CHART_GROUPS.find(g => g.id === 'device')!)
+  groups.push(CHART_GROUPS.find(g => g.id === 'cop')!)
+  return groups
+})
+
+const COP_LOW_THRESHOLD = 3.0
+
+const expectedDayCount = computed(() => {
+  if (!startDate.value || !endDate.value) return 0
+  const start = new Date(`${startDate.value}T00:00:00`)
+  const end = new Date(`${endDate.value}T00:00:00`)
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end < start) return 0
+  return Math.floor((end.getTime() - start.getTime()) / 86400000) + 1
+})
+
+const summaryKpis = computed<SummaryKpi[]>(() => {
+  const items: SummaryKpi[] = []
+  const totalDays = records.value.length
+  const completeRate = expectedDayCount.value > 0 ? (totalDays / expectedDayCount.value) * 100 : 0
+  const avgCop = averageOf('ac_cop')
+  const minCop = minPoint('ac_cop')
+  const lowCopDays = records.value.filter(r => {
+    const v = parseNumeric(getRowValue(r, 'ac_cop'))
+    return v != null && v < COP_LOW_THRESHOLD
+  }).length
+
+  items.push({
+    id: 'days',
+    label: '统计天数',
+    value: `${totalDays} 天`,
+    subtext: expectedDayCount.value ? `查询区间共 ${expectedDayCount.value} 天` : '按日汇总结果',
+    icon: 'mdi:calendar-range',
+  })
+  items.push({
+    id: 'completion',
+    label: '数据完整率',
+    value: `${completeRate.toFixed(0)}%`,
+    subtext: completeRate >= 95 ? '查询区间数据较完整' : '区间内存在缺失天',
+    icon: 'mdi:database-check-outline',
+  })
+  items.push({
+    id: 'avg-cop',
+    label: '平均 COP',
+    value: formatMetric(avgCop, '', 2),
+    subtext: minCop ? `最低 ${formatMetric(minCop.value, '', 2)} · 低效 ${lowCopDays} 天` : '暂无 COP 数据',
+    icon: 'mdi:air-conditioner',
+  })
+
+  if (selectedParamKeys.value.has('electricity_kwh')) {
+    const total = sumOf('electricity_kwh')
+    const peak = maxPoint('electricity_kwh')
+    items.push({
+      id: 'total-electricity',
+      label: '总用电',
+      value: formatMetric(total, 'kWh', 0),
+      subtext: peak ? `峰值日 ${formatShortDay(peak.day)} · ${formatMetric(peak.value, 'kWh', 0)}` : '无峰值日',
+      icon: 'mdi:flash-outline',
+    })
+  }
+  if (selectedParamKeys.value.has('hac_energy')) {
+    const total = sumOf('hac_energy')
+    const avg = averageOf('hac_energy')
+    items.push({
+      id: 'total-hac',
+      label: '总空调能耗',
+      value: formatMetric(total, 'kWh', 0),
+      subtext: avg != null ? `日均 ${formatMetric(avg, 'kWh', 1)}` : '暂无空调能耗数据',
+      icon: 'mdi:fan',
+    })
+  }
+  if (selectedParamKeys.value.has('water_m3')) {
+    const total = sumOf('water_m3')
+    const peak = maxPoint('water_m3')
+    items.push({
+      id: 'total-water',
+      label: '总用水',
+      value: formatMetric(total, 'm³', 1),
+      subtext: peak ? `峰值日 ${formatShortDay(peak.day)} · ${formatMetric(peak.value, 'm³', 1)}` : '暂无用水峰值',
+      icon: 'mdi:water-outline',
+    })
+  }
+  if (selectedParamKeys.value.has('air_temp_c')) {
+    const avg = averageOf('air_temp_c')
+    const peak = maxPoint('air_temp_c')
+    items.push({
+      id: 'avg-air-temp',
+      label: '平均环境温度',
+      value: formatMetric(avg, '°C', 1),
+      subtext: peak ? `最高 ${formatMetric(peak.value, '°C', 1)} · ${formatShortDay(peak.day)}` : '暂无环境温度数据',
+      icon: 'mdi:thermometer',
+    })
+  }
+  if (hasDeviceParams.value) {
+    const avg = averageOf('device_normal_rate')
+    const low = minPoint('device_normal_rate')
+    items.push({
+      id: 'device-normal-rate',
+      label: '设备正常率',
+      value: avg != null ? `${avg.toFixed(0)}%` : '--',
+      subtext: low ? `最低 ${low.value.toFixed(0)}% · ${formatShortDay(low.day)}` : '暂无设备状态数据',
+      icon: 'mdi:check-decagram-outline',
+    })
+  }
+
+  return items.slice(0, 6)
+})
+
+const analysisCards = computed<AnalysisCard[]>(() => {
+  const groups = [...activeChartGroups.value]
+  if (groups.length === 3) {
+    const copIndex = groups.findIndex(group => group.id === 'cop')
+    if (copIndex === 2) {
+      const [copGroup] = groups.splice(copIndex, 1)
+      groups.splice(1, 0, copGroup)
     }
   }
-  return groups
+
+  return groups.map((group, index) => ({
+    ...group,
+    highlights: buildCardHighlights(group.id),
+    layout: groups.length === 1 || (groups.length === 3 && index === 2) ? 'full' : 'half',
+  }))
+})
+
+const analysisInsights = computed<AnalysisInsight[]>(() => {
+  const items: AnalysisInsight[] = []
+
+  if (hasEnergyParams.value) {
+    const primaryEnergyKey = selectedParamKeys.value.has('electricity_kwh')
+      ? 'electricity_kwh'
+      : selectedParamKeys.value.has('hac_energy')
+        ? 'hac_energy'
+        : 'water_m3'
+    const peak = maxPoint(primaryEnergyKey)
+    if (peak) {
+      const labelMap: Record<string, string> = {
+        electricity_kwh: '用电',
+        hac_energy: '空调能耗',
+        water_m3: '用水',
+      }
+      const unitMap: Record<string, string> = {
+        electricity_kwh: 'kWh',
+        hac_energy: 'kWh',
+        water_m3: 'm³',
+      }
+      items.push({
+        id: 'energy-peak',
+        tag: '峰值',
+        title: `${labelMap[primaryEnergyKey]}峰值日`,
+        text: `${formatShortDay(peak.day)} 达到 ${formatMetric(peak.value, unitMap[primaryEnergyKey], unitMap[primaryEnergyKey] === 'm³' ? 1 : 0)}，建议结合明细排查当天负荷来源。`,
+      })
+    }
+  }
+
+  const lowCopDays = records.value.filter(r => {
+    const v = parseNumeric(getRowValue(r, 'ac_cop'))
+    return v != null && v < COP_LOW_THRESHOLD
+  }).length
+  if (lowCopDays > 0) {
+    items.push({
+      id: 'cop-warning',
+      tag: 'COP',
+      title: '存在低效运行时段',
+      text: `统计区间内共有 ${lowCopDays} 天 COP 低于 ${COP_LOW_THRESHOLD.toFixed(1)}，建议结合功率与供回水温差联动查看低效原因。`,
+    })
+  } else if (records.value.length) {
+    items.push({
+      id: 'cop-stable',
+      tag: 'COP',
+      title: 'COP 整体稳定',
+      text: `当前区间未出现明显低于 ${COP_LOW_THRESHOLD.toFixed(1)} 的日级 COP，空调效率表现整体平稳。`,
+    })
+  }
+
+  if (hasDeviceParams.value) {
+    const lowDevice = minPoint('device_normal_rate')
+    if (lowDevice) {
+      items.push({
+        id: 'device-warning',
+        tag: '设备',
+        title: '设备健康波动日',
+        text: `${formatShortDay(lowDevice.day)} 设备正常率最低，仅 ${lowDevice.value.toFixed(0)}%。这一天适合优先联查设备告警与能耗波动。`,
+      })
+    }
+  }
+
+  if (hasEnvParams.value) {
+    const maxTemp = maxPoint('air_temp_c')
+    const minTemp = minPoint('air_temp_c')
+    if (maxTemp && minTemp) {
+      items.push({
+        id: 'env-range',
+        tag: '环境',
+        title: '环境波动范围',
+        text: `环境温度在 ${formatMetric(minTemp.value, '°C', 1)} 到 ${formatMetric(maxTemp.value, '°C', 1)} 间波动，可结合能耗走势判断是否存在季节性负荷变化。`,
+      })
+    }
+  }
+
+  if (hasEnergyParams.value && hasEnvParams.value) {
+    const energyKey = selectedParamKeys.value.has('hac_energy') ? 'hac_energy' : 'electricity_kwh'
+    const corr = calculateCorrelation('air_temp_c', energyKey)
+    if (corr != null) {
+      const label = energyKey === 'hac_energy' ? '空调能耗' : '用电'
+      const relation = Math.abs(corr) >= 0.6 ? '明显相关' : Math.abs(corr) >= 0.35 ? '存在一定相关性' : '相关性较弱'
+      items.push({
+        id: 'relation',
+        tag: '关联',
+        title: `环境温度与${label}`,
+        text: `环境温度与${label}${relation}（相关系数 ${corr.toFixed(2)}），建议把这两张图结合起来看，不要只单看某一个指标。`,
+      })
+    }
+  }
+
+  if (!items.length) {
+    items.push({
+      id: 'default',
+      tag: '提示',
+      title: '暂无明显异常',
+      text: '当前所选参数下未发现突出的异常信号，可以切换到数据展示查看逐日明细。',
+    })
+  }
+
+  return items.slice(0, 5)
 })
 
 // ── ECharts 多实例管理 ──
@@ -521,6 +797,174 @@ function formatTableVal(v: any, paramKey?: string, row?: any): string {
   return isNaN(n) ? String(v) : n.toFixed(2)
 }
 
+function parseNumeric(value: any) {
+  if (value == null || value === '') return null
+  const num = Number(value)
+  return Number.isFinite(num) ? num : null
+}
+
+function getNumericValues(paramKey: string) {
+  return records.value
+    .map(row => {
+      const value = parseNumeric(getRowValue(row, paramKey))
+      return value != null ? value : null
+    })
+    .filter((value): value is number => value != null)
+}
+
+function sumOf(paramKey: string) {
+  const values = getNumericValues(paramKey)
+  return values.length ? values.reduce((sum, value) => sum + value, 0) : null
+}
+
+function averageOf(paramKey: string) {
+  const values = getNumericValues(paramKey)
+  return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null
+}
+
+function maxPoint(paramKey: string) {
+  const pairs = records.value
+    .map(row => {
+      const value = parseNumeric(getRowValue(row, paramKey))
+      return value != null ? { day: row.day?.slice(0, 10) ?? '', value } : null
+    })
+    .filter((pair): pair is { day: string, value: number } => pair != null)
+  if (!pairs.length) return null
+  return pairs.reduce((best, current) => current.value > best.value ? current : best)
+}
+
+function minPoint(paramKey: string) {
+  const pairs = records.value
+    .map(row => {
+      const value = parseNumeric(getRowValue(row, paramKey))
+      return value != null ? { day: row.day?.slice(0, 10) ?? '', value } : null
+    })
+    .filter((pair): pair is { day: string, value: number } => pair != null)
+  if (!pairs.length) return null
+  return pairs.reduce((best, current) => current.value < best.value ? current : best)
+}
+
+function formatMetric(value: number | null, unit = '', digits = 1) {
+  if (value == null || !Number.isFinite(value)) return '--'
+  const formatter = new Intl.NumberFormat('zh-CN', {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  })
+  return unit ? `${formatter.format(value)} ${unit}` : formatter.format(value)
+}
+
+function formatShortDay(day?: string) {
+  if (!day) return '--'
+  const [year, month, date] = day.split('-')
+  if (!year || !month || !date) return day
+  return `${month}/${date}`
+}
+
+function calculateCorrelation(leftKey: string, rightKey: string) {
+  const pairs = records.value
+    .map(row => {
+      const left = parseNumeric(getRowValue(row, leftKey))
+      const right = parseNumeric(getRowValue(row, rightKey))
+      return left != null && right != null ? { left, right } : null
+    })
+    .filter((pair): pair is { left: number, right: number } => pair != null)
+
+  if (pairs.length < 3) return null
+
+  const leftMean = pairs.reduce((sum, pair) => sum + pair.left, 0) / pairs.length
+  const rightMean = pairs.reduce((sum, pair) => sum + pair.right, 0) / pairs.length
+  const numerator = pairs.reduce((sum, pair) => sum + (pair.left - leftMean) * (pair.right - rightMean), 0)
+  const leftVariance = pairs.reduce((sum, pair) => sum + (pair.left - leftMean) ** 2, 0)
+  const rightVariance = pairs.reduce((sum, pair) => sum + (pair.right - rightMean) ** 2, 0)
+  const denominator = Math.sqrt(leftVariance * rightVariance)
+
+  if (!denominator) return null
+  return numerator / denominator
+}
+
+function buildCardHighlights(groupId: string): CardHighlight[] {
+  if (groupId === 'energy') {
+    const highlights: CardHighlight[] = []
+    if (selectedParamKeys.value.has('electricity_kwh')) {
+      highlights.push({
+        label: '总用电',
+        value: formatMetric(sumOf('electricity_kwh'), 'kWh', 0),
+      })
+    }
+    if (selectedParamKeys.value.has('hac_energy')) {
+      highlights.push({
+        label: '日均空调能耗',
+        value: formatMetric(averageOf('hac_energy'), 'kWh', 1),
+      })
+    }
+    if (selectedParamKeys.value.has('water_m3')) {
+      highlights.push({
+        label: '总用水',
+        value: formatMetric(sumOf('water_m3'), 'm³', 1),
+      })
+    }
+    const peak = maxPoint(selectedParamKeys.value.has('electricity_kwh') ? 'electricity_kwh' : selectedParamKeys.value.has('hac_energy') ? 'hac_energy' : 'water_m3')
+    if (peak) {
+      highlights.push({
+        label: '峰值日',
+        value: formatShortDay(peak.day),
+      })
+    }
+    return highlights.slice(0, 4)
+  }
+
+  if (groupId === 'temperature') {
+    const highlights: CardHighlight[] = []
+    if (selectedParamKeys.value.has('air_temp_c')) {
+      highlights.push({
+        label: '平均环境温度',
+        value: formatMetric(averageOf('air_temp_c'), '°C', 1),
+      })
+    }
+    if (selectedParamKeys.value.has('humidity_rh_pct')) {
+      highlights.push({
+        label: '平均湿度',
+        value: formatMetric(averageOf('humidity_rh_pct'), '%', 0),
+      })
+    }
+    const supplyAvg = averageOf('sim_supply_temp_c')
+    const returnAvg = averageOf('sim_return_temp_c')
+    if (supplyAvg != null && returnAvg != null) {
+      highlights.push({
+        label: '平均供回水温差',
+        value: formatMetric(Math.abs(returnAvg - supplyAvg), '°C', 1),
+      })
+    }
+    return highlights.slice(0, 4)
+  }
+
+  if (groupId === 'device') {
+    const lowest = minPoint('device_normal_rate')
+    return [
+      { label: '平均正常率', value: averageOf('device_normal_rate') != null ? `${averageOf('device_normal_rate')!.toFixed(0)}%` : '--' },
+      { label: '平均 AC 功率', value: formatMetric(averageOf('ac_avg_power_kw'), 'kW', 1) },
+      { label: '最低正常率日', value: lowest ? `${formatShortDay(lowest.day)} · ${lowest.value.toFixed(0)}%` : '--' },
+    ]
+  }
+
+  if (groupId === 'cop') {
+    const avgCop = averageOf('ac_cop')
+    const minCop = minPoint('ac_cop')
+    const lowDays = records.value.filter(row => {
+      const value = parseNumeric(getRowValue(row, 'ac_cop'))
+      return value != null && value < COP_LOW_THRESHOLD
+    }).length
+
+    return [
+      { label: '平均 COP', value: formatMetric(avgCop, '', 2) },
+      { label: '最低 COP', value: minCop ? formatMetric(minCop.value, '', 2) : '--' },
+      { label: '低效天数', value: `${lowDays} 天` },
+    ]
+  }
+
+  return []
+}
+
 // ── 公共 tooltip / xAxis 配置 ──
 function sharedTooltip() {
   return {
@@ -567,6 +1011,7 @@ function renderAllCharts() {
     if (group.id === 'energy') renderEnergyChart(inst, data)
     else if (group.id === 'cop') renderCOPChart(inst, data)
     else if (group.id === 'temperature') renderTempChart(inst, data)
+    else if (group.id === 'device') renderDeviceChart(inst, data)
   }
 }
 
@@ -772,6 +1217,88 @@ function renderTempChart(inst: echarts.ECharts, data: any) {
     xAxis: sharedXAxis(days),
     yAxis,
     series,
+    animationDuration: 600,
+  })
+}
+
+// ── 图表 4: 设备运行概览 ──
+function renderDeviceChart(inst: echarts.ECharts, data: any) {
+  const rows: any[] = data.records || []
+  const days = rows.map((r: any) => r.day?.slice(0, 10) || '')
+  const normalRateData = makeSeriesData(rows, 'device_normal_rate')
+  const powerData = makeSeriesData(rows, 'ac_avg_power_kw')
+
+  inst.setOption({
+    tooltip: sharedTooltip(),
+    legend: {
+      data: ['设备正常率', 'AC平均功率 (kW)'],
+      bottom: 0,
+      icon: 'roundRect',
+      itemWidth: 12,
+      itemHeight: 8,
+      textStyle: { color: '#8c939a', fontSize: 11 },
+      itemGap: 16,
+    },
+    grid: { left: 56, right: 56, top: 36, bottom: 44, containLabel: false },
+    xAxis: sharedXAxis(days),
+    yAxis: [
+      {
+        type: 'value',
+        name: '%',
+        position: 'left',
+        min: 0,
+        max: 100,
+        nameTextStyle: { color: '#26a69a', fontSize: 12 },
+        axisLine: { show: false },
+        axisTick: { show: false },
+        splitLine: { lineStyle: { color: '#f0f2f5', type: 'dashed' } },
+        axisLabel: { color: '#8c939a', fontSize: 11 },
+      },
+      {
+        type: 'value',
+        name: 'kW',
+        position: 'right',
+        nameTextStyle: { color: '#ef5350', fontSize: 12 },
+        axisLine: { show: false },
+        axisTick: { show: false },
+        splitLine: { show: false },
+        axisLabel: { color: '#8c939a', fontSize: 11 },
+      },
+    ],
+    series: [
+      {
+        name: '设备正常率',
+        type: 'line',
+        yAxisIndex: 0,
+        data: normalRateData,
+        lineStyle: { width: 2.5, color: PARAM_COLORS.device_normal_rate },
+        areaStyle: {
+          color: {
+            type: 'linear',
+            x: 0,
+            y: 0,
+            x2: 0,
+            y2: 1,
+            colorStops: [
+              { offset: 0, color: 'rgba(38,166,154,0.16)' },
+              { offset: 1, color: 'rgba(38,166,154,0.02)' },
+            ],
+          },
+        },
+        itemStyle: { color: PARAM_COLORS.device_normal_rate },
+        smooth: true,
+        symbol: 'circle',
+        symbolSize: 5,
+      },
+      {
+        name: 'AC平均功率 (kW)',
+        type: 'bar',
+        yAxisIndex: 1,
+        data: powerData,
+        itemStyle: { color: 'rgba(239,83,80,0.58)', borderRadius: [3, 3, 0, 0] },
+        barMaxWidth: 22,
+      },
+    ],
     animationDuration: 600,
   })
 }
@@ -1066,6 +1593,141 @@ onUnmounted(() => {
 .toggle-btn:hover:not(.active) { color: #555; }
 .toggle-btn.active { color: #fff; }
 
+/* ── 统计分析层级 ── */
+.analysis-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+.kpi-card {
+  background: linear-gradient(180deg, #ffffff 0%, #fbfcfd 100%);
+  border: 1px solid #eaedf0;
+  border-radius: 12px;
+  padding: 16px 18px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.02);
+}
+.kpi-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+.kpi-label {
+  font-size: 12px;
+  color: #8c939a;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.kpi-icon { color: #4caf50; }
+.kpi-value {
+  font-size: 28px;
+  line-height: 1.1;
+  font-weight: 700;
+  color: #24303a;
+  margin-bottom: 8px;
+}
+.kpi-subtext {
+  font-size: 12px;
+  color: #8c939a;
+  line-height: 1.5;
+}
+.analysis-grid {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 18px;
+  align-items: stretch;
+}
+.analysis-card {
+  min-width: 0;
+  grid-column: span 6;
+}
+.analysis-card--full {
+  grid-column: 1 / -1;
+}
+.analysis-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 12px 20px 0;
+}
+.analysis-meta-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: 999px;
+  background: #f6f8fa;
+  border: 1px solid #edf0f2;
+}
+.analysis-meta-label {
+  font-size: 12px;
+  color: #8c939a;
+}
+.analysis-meta-value {
+  font-size: 12px;
+  color: #2d3239;
+  font-weight: 600;
+}
+.chart-container--analysis {
+  min-height: 320px;
+  padding-top: 8px;
+}
+.analysis-card--full .chart-container--analysis {
+  min-height: 290px;
+}
+.insight-card {
+  overflow: visible;
+}
+.insight-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  padding: 16px 20px 20px;
+}
+.insight-item {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 16px;
+  border-radius: 12px;
+  background: linear-gradient(180deg, #fbfcfd 0%, #f6f9fb 100%);
+  border: 1px solid #edf1f4;
+}
+.insight-badge {
+  min-width: 44px;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #e8f5e9;
+  color: #2e7d32;
+  font-size: 12px;
+  font-weight: 700;
+}
+.insight-content {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.insight-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #24303a;
+}
+.insight-text {
+  font-size: 13px;
+  line-height: 1.6;
+  color: #5f6974;
+}
+
 /* ── 图表卡片 ── */
 .chart-card {
   background: #fff;
@@ -1225,6 +1887,15 @@ onUnmounted(() => {
   .filter-row { gap: 10px; }
   .filter-item { min-width: 120px; }
   .filter-bottom { flex-direction: column; align-items: flex-start; }
+  .kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .analysis-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .analysis-card,
+  .analysis-card--energy,
+  .analysis-card--temperature,
+  .analysis-card--device,
+  .analysis-card--cop,
+  .analysis-card--full { grid-column: auto; }
+  .insight-list { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 768px) {
@@ -1238,6 +1909,14 @@ onUnmounted(() => {
   .param-checkbox .check-box { width: 14px; height: 14px; }
   .view-toggle { width: 100%; }
   .toggle-btn { flex: 1; justify-content: center; padding: 6px 12px; font-size: 12px; }
+  .kpi-grid { grid-template-columns: 1fr; gap: 10px; }
+  .kpi-card { padding: 14px 14px 12px; }
+  .kpi-value { font-size: 22px; }
+  .analysis-grid { grid-template-columns: 1fr; }
+  .analysis-meta { padding: 10px 14px 0; gap: 8px; }
+  .analysis-meta-item { min-height: 30px; padding: 0 10px; }
+  .insight-list { padding: 14px; grid-template-columns: 1fr; }
+  .insight-item { padding: 14px; }
   .chart-card-header { padding: 12px 14px 0; }
   .chart-card-title { font-size: 14px; flex-wrap: wrap; }
   .chart-date-range { font-size: 11px; }

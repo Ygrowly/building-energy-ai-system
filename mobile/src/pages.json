@@ -13,7 +13,11 @@
         "navigationBarTitleText": "登录",
         "navigationBarBackgroundColor": "#1a1a2e",
         "navigationBarTextStyle": "white",
-        "navigationStyle": "custom"
+        "navigationStyle": "custom",
+        "backgroundColor": "#ffffff",
+        "app-plus": {
+          "background": "#ffffff"
+        }
       }
     },
     {

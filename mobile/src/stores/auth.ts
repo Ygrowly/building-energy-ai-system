@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { authApi, type UserInfo } from '../api/auth'
 import { isOperatorRole, isWorkerRole, ALLOWED_ROLES, type UserRole } from '../constants/roles'
+import { rememberLoginPersona } from '../utils/login-persona'
 
 export const useAuthStore = defineStore('auth', () => {
   const user = ref<UserInfo | null>(null)
@@ -55,12 +56,14 @@ export const useAuthStore = defineStore('auth', () => {
 
   async function login(username: string, password: string) {
     const res = await authApi.login(username, password)
+    rememberLoginPersona(username, res.user.role)
     _saveAuth(res)
     redirectByRole()
   }
 
   async function register(username: string, password: string, email?: string, phone?: string) {
     const res = await authApi.register(username, password, email, phone)
+    rememberLoginPersona(username, res.user.role)
     // 注册成功后不自动登录，清空 token，让用户手动登录
     _clearTokens()
   }

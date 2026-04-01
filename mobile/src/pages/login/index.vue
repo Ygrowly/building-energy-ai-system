@@ -3,38 +3,14 @@
 
     <!-- ══ 顶部品牌区 ══ -->
     <view class="top-area">
-<!-- 背景城市图片 -->
-    <image class="top-bg-img" src="/static/images/bangkok-city.jpg" mode="aspectFill"/>
-
-      <view class="brand-wrap">
-        <view class="brand-logo">
-          <svg viewBox="0 0 32 32" fill="none">
-            <rect width="32" height="32" rx="9" fill="rgba(255,255,255,0.22)"/>
-            <path d="M18 4L8 18h8l-2 10 12-14h-8V4z" fill="white"/>
-          </svg>
-        </view>
-        <text class="brand-name">建筑能源</text>
-      </view>
-
-      <view class="top-text">
-        <text class="top-title">{{ isLogin ? '欢迎回来' : '创建账号' }}</text>
-        <text class="top-sub">{{ isLogin ? '登录账号以继续使用' : '填写信息完成注册' }}</text>
+      <image class="top-bg-img" src="/static/images/bangkok-city.jpg" mode="aspectFill"/>
+      <view class="top-brand">
+        <text class="top-brand__slogan">智慧能源 · 绿色建筑</text>
       </view>
     </view>
 
     <!-- ══ 表单卡片 ══ -->
     <view class="card">
-
-      <!-- Tab 切换 -->
-      <view class="tab-bar">
-        <view class="tab" :class="{ active: isLogin }" @click="switchMode('login')">
-          <text>登 录</text>
-        </view>
-        <view class="tab" :class="{ active: !isLogin }" @click="switchMode('register')">
-          <text>注 册</text>
-        </view>
-        <view class="tab-indicator" :class="{ right: !isLogin }"/>
-      </view>
 
       <!-- 注册成功提示 -->
       <view class="banner banner-success" v-if="successMsg">
@@ -46,6 +22,41 @@
       <view class="banner banner-error" v-if="errorMsg">
         <svg viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="9" stroke="#DC2626" stroke-width="1.5"/><path d="M10 6v4M10 13h.01" stroke="#DC2626" stroke-width="1.5" stroke-linecap="round"/></svg>
         <text>{{ errorMsg }}</text>
+      </view>
+
+      <!-- ══ 用户画像轮播 ══ -->
+      <view class="carousel-wrap" v-if="isLogin"
+        @touchstart="onCarouselTouchStart"
+        @touchend="onCarouselTouchEnd"
+        @mouseenter="pauseCarousel"
+        @mouseleave="resumeCarousel">
+        <view class="carousel-track">
+          <view
+            v-for="(card, idx) in personaCards"
+            :key="card.key"
+            class="carousel-item"
+            :class="[
+              `carousel-item--${card.key}`,
+              { 'carousel-item--active': idx === activeIdx }
+            ]"
+            :style="getCardStyle(idx)">
+            <DotLottieVue class="carousel-item__anim" :class="`carousel-item__anim--${card.key}`"
+              :src="card.lottie" autoplay loop />
+            <view class="carousel-item__footer">
+              <text class="carousel-item__title">{{ card.title }}</text>
+              <text class="carousel-item__meta">{{ card.meta }}</text>
+            </view>
+          </view>
+        </view>
+        <!-- 指示器 -->
+        <view class="carousel-dots">
+          <view
+            v-for="(_, idx) in personaCards"
+            :key="idx"
+            class="carousel-dot"
+            :class="{ 'carousel-dot--active': idx === activeIdx }"
+            @click="goTo(idx)" />
+        </view>
       </view>
 
       <!-- ══ 登录表单 ══ -->
@@ -209,12 +220,28 @@
 
     </view>
 
+    <view class="bottom-brand">
+      <view class="brand-logo">
+        <svg viewBox="0 0 32 32" fill="none">
+          <rect width="32" height="32" rx="9" fill="none"/>
+          <path d="M18 4L8 18h8l-2 10 12-14h-8V4z" fill="#15803D"/>
+        </svg>
+      </view>
+      <text class="brand-name">建筑能源</text>
+    </view>
+
   </view>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue'
+import { DotLottieVue } from '@lottiefiles/dotlottie-vue'
 import { useAuthStore } from '../../stores/auth'
+import {
+  getCachedPersonaByUsername,
+  roleToPersona,
+  type PersonaKey,
+} from '../../utils/login-persona'
 
 type Mode = 'login' | 'register'
 
@@ -232,6 +259,146 @@ const errorMsg    = ref('')
 const successMsg  = ref('')
 
 const isLogin = computed(() => mode.value === 'login')
+
+// ── 轮播可调参数 ────────────────────────────────────────────
+const CAROUSEL_INTERVAL = 2800   // 自动轮播间隔 ms
+const CAROUSEL_SIDE_SCALE = 0.88 // 两侧卡片缩放
+const CAROUSEL_SIDE_OPACITY = 0.65 // 两侧卡片透明度
+const CAROUSEL_OFFSET_X = 68     // 两侧偏移百分比
+
+// ── 轮播数据 & 逻辑 ─────────────────────────────────────────
+const personaCards: Array<{ key: PersonaKey; title: string; meta: string; lottie: string }> = [
+  { key: 'repair', title: '维修人员', meta: '现场处理', lottie: '/static/lottie/free-maintenance-web-animation.lottie' },
+  { key: 'ops',    title: '运维人员', meta: '监测调度', lottie: '/static/lottie/free-itay-animation-copy-animation.lottie' },
+  { key: 'user',   title: '普通人员', meta: '轻量使用', lottie: '/static/lottie/free-friends-animation.lottie' },
+]
+
+const activeIdx = ref(0)
+const matchedPersona = ref<PersonaKey | null>(null)
+let timer: ReturnType<typeof setInterval> | null = null
+let touchStartX = 0
+
+const matchedIdx = computed(() => {
+  if (!matchedPersona.value) return -1
+  return personaCards.findIndex(card => card.key === matchedPersona.value)
+})
+
+const isPersonaLocked = computed(() => isLogin.value && matchedIdx.value >= 0)
+
+function getCardStyle(idx: number) {
+  const total = personaCards.length
+  // 计算相对位置: -1(左), 0(中), 1(右)
+  let offset = idx - activeIdx.value
+  if (offset > 1)  offset -= total
+  if (offset < -1) offset += total
+
+  const isCenter = offset === 0
+  const scale = isCenter ? 1 : CAROUSEL_SIDE_SCALE
+  const opacity = isCenter ? 1 : CAROUSEL_SIDE_OPACITY
+  const translateX = offset * CAROUSEL_OFFSET_X
+  const zIndex = isCenter ? 3 : 1
+
+  return {
+    transform: `translateX(${translateX}%) scale(${scale})`,
+    opacity,
+    zIndex,
+  }
+}
+
+function goTo(idx: number) {
+  if (isPersonaLocked.value) return
+  activeIdx.value = idx
+  restartTimer()
+}
+
+function next() {
+  if (isPersonaLocked.value) return
+  activeIdx.value = (activeIdx.value + 1) % personaCards.length
+}
+
+function startTimer() {
+  if (!isLogin.value || isPersonaLocked.value) return
+  if (timer) return
+  timer = setInterval(next, CAROUSEL_INTERVAL)
+}
+
+function stopTimer() {
+  if (timer) { clearInterval(timer); timer = null }
+}
+
+function restartTimer() {
+  stopTimer()
+  startTimer()
+}
+
+function pauseCarousel() { stopTimer() }
+function resumeCarousel() {
+  if (!isPersonaLocked.value) startTimer()
+}
+
+function onCarouselTouchStart(e: TouchEvent) {
+  if (isPersonaLocked.value) return
+  stopTimer()
+  touchStartX = e.touches[0].clientX
+}
+
+function onCarouselTouchEnd(e: TouchEvent) {
+  if (isPersonaLocked.value) return
+  const dx = e.changedTouches[0].clientX - touchStartX
+  if (Math.abs(dx) > 30) {
+    const total = personaCards.length
+    if (dx < 0) {
+      // 左滑 → 下一张
+      activeIdx.value = (activeIdx.value + 1) % total
+    } else {
+      // 右滑 → 上一张
+      activeIdx.value = (activeIdx.value - 1 + total) % total
+    }
+  }
+  startTimer()
+}
+
+function syncMatchedPersona() {
+  if (!isLogin.value) {
+    matchedPersona.value = null
+    return
+  }
+
+  const matched = getCachedPersonaByUsername(username.value)
+  matchedPersona.value = matched?.persona ?? null
+}
+
+function syncCarouselMode() {
+  if (!isLogin.value) {
+    stopTimer()
+    return
+  }
+
+  if (matchedIdx.value >= 0) {
+    activeIdx.value = matchedIdx.value
+    stopTimer()
+    return
+  }
+
+  startTimer()
+}
+
+watch(username, () => {
+  syncMatchedPersona()
+  syncCarouselMode()
+}, { immediate: true })
+
+watch(mode, () => {
+  syncMatchedPersona()
+  syncCarouselMode()
+})
+
+watch(matchedIdx, () => {
+  syncCarouselMode()
+})
+
+onMounted(() => syncCarouselMode())
+onUnmounted(() => stopTimer())
 
 const focus  = reactive({ username: false, password: false, confirm: false, email: false, phone: false })
 const errors = reactive({ username: '', password: '', confirm: '', email: '', phone: '' })
@@ -301,6 +468,11 @@ async function handleSubmit() {
   try {
     if (isLogin.value) {
       await authStore.login(username.value.trim(), password.value)
+      const realRole = authStore.user?.role
+      if (realRole) {
+        matchedPersona.value = roleToPersona(realRole)
+        syncCarouselMode()
+      }
     } else {
       const uname = username.value.trim()
       await authStore.register(
@@ -343,7 +515,7 @@ $font-cn:  'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif;
 // ── Page ─────────────────────────────────────────────────
 .page {
   min-height: 100vh;
-  background: #F0FDF4;
+  background: #fff;
   display: flex;
   flex-direction: column;
   font-family: $font-cn;
@@ -352,7 +524,7 @@ $font-cn:  'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif;
 
 // ── 顶部品牌区 ───────────────────────────────────────────
 .top-area {
-  padding: 80rpx 48rpx 80rpx;
+  height: 360rpx;
   position: relative;
   overflow: hidden;
   flex-shrink: 0;
@@ -365,26 +537,33 @@ $font-cn:  'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif;
   z-index: 0;
 }
 
-.top-overlay {
+.top-brand {
   position: absolute;
-  top: 0; left: 0;
-  width: 100%; height: 100%;
-  z-index: 1;
-  background: linear-gradient(
-    160deg,
-    rgba(10, 74, 32, 0.72) 0%,
-    rgba(21, 128, 61, 0.55) 50%,
-    rgba(34, 197, 94, 0.38) 100%
-  );
+  bottom: 36rpx;
+  left: 0; right: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
 }
 
-.brand-wrap {
+.top-brand__slogan {
+  font-size: 32rpx;
+  font-weight: 700;
+  line-height: 1.35;
+  color: #ffffff;
+  letter-spacing: 4rpx;
+  text-shadow: 0 2rpx 10rpx rgba(0,0,0,0.35);
+}
+
+.bottom-brand {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 16rpx;
-  margin-bottom: 36rpx;
-  position: relative;
-  z-index: 2;
+  padding: 24rpx 0 36rpx;
+  flex-shrink: 0;
+  background: #fff;
 }
 
 .brand-logo {
@@ -395,33 +574,8 @@ $font-cn:  'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif;
 .brand-name {
   font-size: 30rpx;
   font-weight: 800;
-  color: #fff;
+  color: $green-dk;
   letter-spacing: 4rpx;
-  font-family: $font-cn;
-}
-
-.top-text {
-  position: relative;
-  z-index: 2;
-}
-
-.top-title {
-  display: block;
-  font-size: 60rpx;
-  font-weight: 900;
-  color: #fff;
-  letter-spacing: 2rpx;
-  line-height: 1.15;
-  font-family: $font-cn;
-  text-shadow: 0 2rpx 12rpx rgba(0,0,0,0.12);
-}
-
-.top-sub {
-  display: block;
-  font-size: 24rpx;
-  color: rgba(255,255,255,0.82);
-  margin-top: 10rpx;
-  letter-spacing: 1.5rpx;
   font-family: $font-cn;
 }
 
@@ -435,55 +589,6 @@ $font-cn:  'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif;
   box-shadow: 0 -8rpx 40rpx rgba(0,80,0,0.07);
   overflow-y: auto;
   animation: fadeSlideUp 0.4s ease both;
-}
-
-// ── Tab 切换 ─────────────────────────────────────────────
-.tab-bar {
-  display: flex;
-  background: #F1F5F9;
-  border-radius: 20rpx;
-  padding: 6rpx;
-  margin-bottom: 36rpx;
-  position: relative;
-  height: 80rpx;
-}
-
-.tab {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 14rpx;
-  position: relative;
-  z-index: 1;
-  cursor: pointer;
-  transition: color 0.22s;
-
-  text {
-    font-size: 28rpx;
-    font-weight: 600;
-    color: $muted;
-    letter-spacing: 3rpx;
-    font-family: $font-cn;
-    transition: color 0.22s;
-  }
-
-  &.active text {
-    color: $green-d;
-  }
-}
-
-.tab-indicator {
-  position: absolute;
-  top: 6rpx;
-  left: 6rpx;
-  width: calc(50% - 6rpx);
-  bottom: 6rpx;
-  background: #fff;
-  border-radius: 14rpx;
-  box-shadow: 0 2rpx 12rpx rgba(0,0,0,0.08);
-  transition: transform 0.26s cubic-bezier(0.34,1.56,0.64,1);
-  &.right { transform: translateX(100%); }
 }
 
 // ── Banner ───────────────────────────────────────────────
@@ -514,6 +619,123 @@ $font-cn:  'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif;
     background: #FEF2F2;
     border: 1.5rpx solid #FECACA;
     text { color: $red; }
+  }
+}
+
+// ── 轮播区 ──────────────────────────────────────────────
+.carousel-wrap {
+  margin: -10rpx -10rpx 28rpx;
+  padding: 20rpx 0 12rpx;
+  overflow: hidden;
+  animation: fadeSlideUp 0.35s ease both;
+}
+
+.carousel-track {
+  position: relative;
+  height: 330rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.carousel-item {
+  position: absolute;
+  width: 54%;
+  padding: 24rpx 20rpx 22rpx;
+  border-radius: 24rpx;
+  border: none;
+  background: #ffffff;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  box-shadow: 0 4rpx 16rpx rgba(18, 60, 37, 0.06);
+  transition: transform 0.8s cubic-bezier(0.4, 0, 0.2, 1),
+              opacity 0.8s cubic-bezier(0.4, 0, 0.2, 1),
+              box-shadow 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+  will-change: transform, opacity;
+
+  &--active {
+    box-shadow: 0 16rpx 48rpx rgba(18, 80, 40, 0.15),
+                0 4rpx 12rpx rgba(18, 60, 37, 0.08);
+  }
+
+  &--repair {
+    background: linear-gradient(160deg, #ffffff 0%, #eef8f1 50%, #e2f3e8 100%);
+  }
+  &--ops {
+    background: linear-gradient(160deg, #ffffff 0%, #eaf6f0 50%, #ddf1e6 100%);
+  }
+  &--user {
+    background: linear-gradient(160deg, #ffffff 0%, #f0f9f3 50%, #e5f5eb 100%);
+  }
+}
+
+.carousel-item__anim {
+  width: 100%;
+  height: 185rpx;
+  margin-bottom: 16rpx;
+  border-radius: 16rpx;
+  background: radial-gradient(ellipse 80% 70% at 50% 45%,
+    rgba(34, 197, 94, 0.10) 0%,
+    rgba(34, 197, 94, 0.03) 55%,
+    transparent 100%);
+
+  &--repair { filter: saturate(1.08); }
+  &--ops    { filter: hue-rotate(8deg) saturate(1.1); }
+  &--user   { filter: hue-rotate(-6deg) saturate(0.96); }
+}
+
+.carousel-item__footer {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12rpx;
+  padding: 0 4rpx;
+}
+
+.carousel-item__title {
+  font-size: 28rpx;
+  font-weight: 700;
+  color: #163827;
+  line-height: 1.3;
+  letter-spacing: 1rpx;
+  flex: 1;
+}
+
+.carousel-item__meta {
+  flex-shrink: 0;
+  padding: 8rpx 18rpx;
+  border-radius: 999rpx;
+  background: linear-gradient(135deg, #e8f5ec 0%, #d4eddb 100%);
+  color: #1a6b3a;
+  font-size: 20rpx;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 1rpx;
+}
+
+// ── 指示器 ──────────────────────────────────────────────
+.carousel-dots {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14rpx;
+  margin-top: 20rpx;
+}
+
+.carousel-dot {
+  width: 12rpx;
+  height: 12rpx;
+  border-radius: 50%;
+  background: #c8dccf;
+  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+
+  &--active {
+    width: 36rpx;
+    border-radius: 6rpx;
+    background: linear-gradient(90deg, $green-d 0%, $green 100%);
+    box-shadow: 0 2rpx 8rpx rgba(21, 128, 61, 0.3);
   }
 }
 

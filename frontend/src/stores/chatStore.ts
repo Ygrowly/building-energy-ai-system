@@ -90,7 +90,7 @@ function _loadArtifactsFromStorage(sessionId: string): ChatMessage[] {
     if (!stored) return []
     const parsed = JSON.parse(stored) as Record<string, Record<string, unknown>>
     return Object.values(parsed).map(m => ({
-      ...(m as ChatMessage),
+      ...(m as unknown as ChatMessage),
       timestamp: new Date(m.timestamp as string),
     }))
   } catch {
@@ -471,7 +471,7 @@ export const useChatStore = defineStore('chat', () => {
       if (currentSessionId.value === originSessionId) {
         return messages.value.find(x => x.id === aiMsgId)
       }
-      const cache = _msgCache.get(originSessionId)
+      const cache = _msgCache.get(originSessionId as string)
       return cache?.find(x => x.id === aiMsgId)
     }
 
@@ -644,7 +644,7 @@ export const useChatStore = defineStore('chat', () => {
       if (currentSessionId.value === originSessionId) {
         return messages.value.find(x => x.id === aiMsgId)
       }
-      const cache = _msgCache.get(originSessionId)
+      const cache = _msgCache.get(originSessionId as string)
       return cache?.find(x => x.id === aiMsgId)
     }
 

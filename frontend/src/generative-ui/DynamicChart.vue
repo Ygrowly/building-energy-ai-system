@@ -42,7 +42,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { Icon } from '@iconify/vue'
 import * as echarts from 'echarts'
 import ChartSkeleton from '@/generative-ui/ChartSkeleton.vue'
@@ -62,6 +62,7 @@ const chartReady = ref(false)
 
 let _chart: echarts.ECharts | null = null
 let _ro: ResizeObserver | null = null
+let _initRaf: number | null = null
 
 const title = props.artifact.title ?? '能耗图表'
 const sourceInfo = props.artifact.source_info as Record<string, unknown> | undefined
@@ -158,6 +159,108 @@ function buildOption() {
   const isGauge = rawWidget === 'Gauge'    || rawWidget === 'gauge'
   const tc = themeColors()
 
+  function coerceNumber(raw: unknown): number | null {
+    if (raw === null || raw === undefined) return null
+    if (typeof raw === 'number') return Number.isFinite(raw) ? raw : null
+    if (typeof raw === 'bigint') {
+      const n = Number(raw)
+      return Number.isFinite(n) ? n : null
+    }
+    if (typeof raw === 'string') {
+      const normalized = raw.replace(/,/g, '').trim()
+      const direct = Number(normalized)
+      if (Number.isFinite(direct)) return direct
+      const matched = normalized.match(/-?\d+(?:\.\d+)?/)
+      if (!matched) return null
+      const extracted = Number(matched[0])
+      return Number.isFinite(extracted) ? extracted : null
+    }
+    if (typeof raw === 'object') {
+      const obj = raw as Record<string, unknown>
+      const candidate = obj.value
+        ?? obj.total_electricity_kwh
+        ?? obj.electricity_kwh
+        ?? obj.kwh
+        ?? obj.amount
+        ?? obj.y
+        ?? obj.aggregated_value
+        ?? obj.avg
+        ?? obj.average
+        ?? obj.mean
+        ?? obj.metric_value
+        ?? obj.raw_value
+        ?? obj.raw
+        ?? obj.score
+      if (candidate !== undefined) return coerceNumber(candidate)
+    }
+    return null
+  }
+
+  function toNumberList(raw: unknown): (number | null)[] {
+    if (Array.isArray(raw)) return raw.map(coerceNumber)
+    if (raw && typeof raw === 'object') return Object.values(raw).map(coerceNumber)
+    return []
+  }
+
+  function toLabelList(raw: unknown): string[] {
+    if (Array.isArray(raw)) return raw.map(String)
+    if (raw && typeof raw === 'object') return Object.keys(raw as Record<string, unknown>)
+    return []
+  }
+
+  function deriveLabelsFromItems(raw: unknown): string[] {
+    if (!Array.isArray(raw)) return []
+    return raw.map((item, index) => {
+      if (item && typeof item === 'object') {
+        const obj = item as Record<string, unknown>
+        return String(
+          obj.label
+          ?? obj.name
+          ?? obj.category
+          ?? obj.x
+          ?? obj.day
+          ?? obj.timestamp
+          ?? index + 1,
+        )
+      }
+      return String(index + 1)
+    })
+  }
+
+  function hasPlottableValues(values: (number | null)[]): boolean {
+    return values.some((v) => typeof v === 'number' && Number.isFinite(v))
+  }
+
+  function prettifyKeyLabel(key: string): string {
+    return key
+      .replace(/_/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+  }
+
+  function deriveScalarEntries(obj: Record<string, unknown>) {
+    const META_KEYS = new Set([
+      'labels', 'categories', 'xAxis', 'xAxisData', 'x',
+      'dates', 'days', 'values', 'data', 'y', 'items',
+      'series', 'seriesName', 'name', 'title', 'unit',
+      'source', 'source_info', 'sourceInfo', 'meta',
+      'tooltip', 'legend', 'grid', 'color', 'colors',
+    ])
+
+    return Object.entries(obj)
+      .filter(([key]) => !META_KEYS.has(key) && !key.startsWith('_'))
+      .map(([key, value]) => {
+        if (value && typeof value === 'object' && !Array.isArray(value)) {
+          const item = value as Record<string, unknown>
+          const num = coerceNumber(item)
+          const label = String(item.label ?? item.name ?? item.category ?? prettifyKeyLabel(key))
+          return { label, value: num }
+        }
+        return { label: prettifyKeyLabel(key), value: coerceNumber(value) }
+      })
+      .filter((entry) => entry.value !== null)
+  }
+
   const baseTooltip = {
     trigger: 'axis' as const,
     backgroundColor: tc.tooltip.bg,
@@ -209,26 +312,20 @@ function buildOption() {
     splitLine: { lineStyle: { color: tc.splitLine } },
   })
 
+  const baseCategoryYAxis = (data: string[]) => ({
+    type: 'category' as const,
+    data,
+    axisLabel: { color: tc.axisLabel, fontSize: 10 },
+    axisLine: { lineStyle: { color: tc.axisLine } },
+  })
+
   // ── 多系列格式：{ series: [{ name, data, timestamps? }, ...] } ──────────
   const objPayload = payload as Record<string, unknown>
   if (!Array.isArray(payload) && Array.isArray(objPayload.series)) {
     type SeriesItem = Record<string, unknown>
 
     function extractData(s: SeriesItem): (number | null)[] {
-      const raw = (s.data ?? s.values ?? s.y ?? s.value ?? s.electricity_kwh ?? []) as unknown[]
-      if (!Array.isArray(raw) || raw.length === 0) return []
-      return raw.map((v) => {
-        if (v === null || v === undefined) return null
-        if (typeof v === 'number') return v
-        if (typeof v === 'object') {
-          const obj = v as Record<string, unknown>
-          const val = obj.value ?? obj.total_electricity_kwh ?? obj.electricity_kwh
-            ?? obj.kwh ?? obj.amount ?? obj.y
-          return val !== undefined ? Number(val) : null
-        }
-        const n = Number(v)
-        return isNaN(n) ? null : n
-      })
+      return toNumberList(s.data ?? s.values ?? s.y ?? s.value ?? s.electricity_kwh ?? [])
     }
 
     function extractTimestamps(s: SeriesItem): string[] {
@@ -277,15 +374,143 @@ function buildOption() {
   }
 
   // ── 单系列数组格式：[{ label/day/timestamp, value/total_electricity_kwh }, ...] ──
+  if (!Array.isArray(payload) && Array.isArray(objPayload.datasets)) {
+    type DatasetItem = Record<string, unknown>
+    const labels = toLabelList(objPayload.labels ?? objPayload.categories ?? [])
+    const datasets = (objPayload.datasets as DatasetItem[]).filter(Boolean)
+    const config = (objPayload.config as Record<string, unknown> | undefined) ?? {}
+    const horizontal = String(config.indexAxis ?? 'x') === 'y'
+    const hasLegend = datasets.length > 1
+
+    return {
+      grid: horizontal
+        ? { top: hasLegend ? 40 : 20, right: 20, bottom: 20, left: 88 }
+        : { top: hasLegend ? 40 : 20, right: 20, bottom: 40, left: 55 },
+      legend: hasLegend ? {
+        top: 4,
+        textStyle: { color: tc.legend, fontSize: 11 },
+      } : undefined,
+      tooltip: {
+        ...baseTooltip,
+        trigger: 'item' as const,
+      },
+      xAxis: horizontal ? baseYAxis() : baseXAxis(labels),
+      yAxis: horizontal ? baseCategoryYAxis(labels) : baseYAxis(),
+      series: datasets.map((ds, i) => {
+        const color = PALETTE[i % PALETTE.length]
+        const values = toNumberList(ds.data ?? ds.values ?? [])
+        const colors = Array.isArray(ds.backgroundColor)
+          ? (ds.backgroundColor as unknown[]).map((c) => String(c))
+          : []
+        const barData = colors.length === values.length
+          ? values.map((value, index) => ({
+              value,
+              itemStyle: { color: colors[index] },
+            }))
+          : values
+
+        return {
+          type: 'bar',
+          name: String(ds.label ?? `系列${i + 1}`),
+          data: barData,
+          itemStyle: horizontal
+            ? { color, borderRadius: [0, 3, 3, 0] }
+            : { color, borderRadius: [3, 3, 0, 0] },
+        }
+      }),
+    }
+  }
+
+  if (!Array.isArray(payload)) {
+    const rawLabels = (
+      objPayload.labels
+      ?? objPayload.categories
+      ?? objPayload.xAxis
+      ?? objPayload.xAxisData
+      ?? objPayload.x
+      ?? objPayload.dates
+      ?? objPayload.days
+    ) as unknown
+    const rawValues = (
+      objPayload.values
+      ?? objPayload.data
+      ?? objPayload.y
+      ?? objPayload.items
+    ) as unknown
+
+    const xData = toLabelList(rawLabels)
+    const yData = toNumberList(rawValues)
+    const itemLabels = xData.length === 0 ? deriveLabelsFromItems(rawValues) : []
+    const scalarEntries = deriveScalarEntries(objPayload)
+    const scalarLabels = scalarEntries.map((entry) => entry.label)
+    const scalarValues = scalarEntries.map((entry) => entry.value)
+
+    const normalizedYData = hasPlottableValues(yData)
+      ? yData
+      : (xData.length > 0 && scalarValues.length === xData.length ? scalarValues : scalarValues)
+    const normalizedXData = xData.length
+      ? xData
+      : (itemLabels.length ? itemLabels : (scalarLabels.length ? scalarLabels : normalizedYData.map((_, i) => String(i + 1))))
+
+    if (normalizedXData.length > 0 || normalizedYData.length > 0) {
+      const safeXData = normalizedXData
+      const seriesName = String(objPayload.seriesName ?? objPayload.name ?? title)
+      if (safeXData.length > 0 && !hasPlottableValues(normalizedYData)) {
+        console.warn('[DynamicChart] No plottable values in object payload', {
+          title,
+          rawWidget,
+          payload,
+        })
+      }
+
+      if (isBar) {
+        return {
+          grid: { top: 20, right: 20, bottom: 40, left: 55 },
+          xAxis: baseXAxis(safeXData),
+          yAxis: baseYAxis(),
+          series: [{
+            type: 'bar',
+            name: seriesName,
+            data: normalizedYData,
+            itemStyle: { color: PALETTE[0], borderRadius: [3, 3, 0, 0] },
+          }],
+          tooltip: baseTooltip,
+        }
+      }
+      return {
+        grid: { top: 20, right: 20, bottom: 40, left: 55 },
+        xAxis: baseXAxis(safeXData),
+        yAxis: baseYAxis(),
+        series: [{
+          type: 'line',
+          name: seriesName,
+          data: normalizedYData,
+          smooth: true,
+          lineStyle: { color: PALETTE[0], width: 2 },
+          areaStyle: { color: { type: 'linear', x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: 'rgba(108,142,245,0.3)' }, { offset: 1, color: 'rgba(108,142,245,0)' }] } },
+          itemStyle: { color: PALETTE[0] },
+        }],
+        tooltip: baseTooltip,
+      }
+    }
+  }
+
   if (Array.isArray(payload)) {
     const xData = payload.map((d: unknown) => {
       const item = d as Record<string, unknown>
-      return String(item.label ?? item.day ?? item.timestamp ?? item[0] ?? '')
+      return String(item.label ?? item.name ?? item.category ?? item.day ?? item.timestamp ?? item[0] ?? '')
     })
     const yData = payload.map((d: unknown) => {
       const item = d as Record<string, unknown>
-      return Number(item.value ?? item.total_electricity_kwh ?? item[1] ?? 0)
+      return coerceNumber(item.value ?? item.total_electricity_kwh ?? item.aggregated_value ?? item.average ?? item.avg ?? item[1] ?? 0)
     })
+    if (xData.length > 0 && !hasPlottableValues(yData)) {
+      console.warn('[DynamicChart] No plottable values in array payload', {
+        title,
+        rawWidget,
+        payload,
+      })
+    }
 
     if (isBar) {
       return {
@@ -317,21 +542,67 @@ function detectTheme(): string | undefined {
   return document.documentElement.getAttribute('data-theme') === 'light' ? undefined : 'dark'
 }
 
-async function initChart() {
-  await nextTick()
-  if (!chartEl.value) return
+function clearInitRaf() {
+  if (_initRaf !== null) {
+    cancelAnimationFrame(_initRaf)
+    _initRaf = null
+  }
+}
 
-  _chart = echarts.init(chartEl.value, detectTheme())
+function ensureResizeObserver() {
+  if (_ro || !chartEl.value) return
+  _ro = new ResizeObserver(() => {
+    if (!_chart) {
+      void initChart()
+      return
+    }
+    _chart.resize()
+  })
+  _ro.observe(chartEl.value)
+}
+
+function disposeChart() {
+  clearInitRaf()
+  _ro?.disconnect()
+  _ro = null
+  _chart?.dispose()
+  _chart = null
+}
+
+async function initChart(retry = 0) {
+  await nextTick()
+  if (!chartReady.value || !chartEl.value) return
+
+  const rect = chartEl.value.getBoundingClientRect()
+  if ((rect.width === 0 || rect.height === 0) && retry < 10) {
+    clearInitRaf()
+    _initRaf = requestAnimationFrame(() => {
+      void initChart(retry + 1)
+    })
+    return
+  }
+
+  clearInitRaf()
+
+  const theme = detectTheme()
+  const prevTheme = _chart?.getDom().getAttribute('data-chart-theme')
+  if (_chart && prevTheme !== (theme ?? 'light')) {
+    _chart.dispose()
+    _chart = null
+  }
+
+  if (!_chart) {
+    _chart = echarts.init(chartEl.value, theme)
+    _chart.getDom().setAttribute('data-chart-theme', theme ?? 'light')
+  }
   const opts = buildOption()
   ;(opts as Record<string, unknown>).backgroundColor = 'transparent'
-  _chart.setOption(opts)
+  _chart.setOption(opts, true)
 
   // ResizeObserver 替代 window.resize：元素获得实际尺寸时立即触发，
   // 解决 ECharts 在 flexbox 布局中初始化时 canvas 宽度为 0 的问题
-  _ro = new ResizeObserver(() => {
-    _chart?.resize()
-  })
-  _ro.observe(chartEl.value)
+  _chart.resize()
+  ensureResizeObserver()
 }
 
 onMounted(async () => {
@@ -342,11 +613,23 @@ onMounted(async () => {
   await initChart()
 })
 
+watch(
+  () => [
+    props.artifact.widget,
+    props.artifact.component_type,
+    props.artifact.title,
+    props.artifact.data_payload,
+    props.artifact.source_info,
+  ],
+  async () => {
+    if (!chartReady.value) return
+    await initChart()
+  },
+  { deep: true },
+)
+
 onUnmounted(() => {
-  _ro?.disconnect()
-  _ro = null
-  _chart?.dispose()
-  _chart = null
+  disposeChart()
 })
 </script>
 

@@ -302,7 +302,11 @@ _WEB_SEARCH_TOOL = _make_mcp_tool(
     args_schema=WebSearchInput,
 )
 
-DIAGNOSE_AGENT_TOOLS = [_TOOL_LIST_BUILDINGS] + _DIAGNOSE_BASE_TOOLS
+_chat_work_orders_enabled = get_settings().ENABLE_CHAT_WORK_ORDERS
+DIAGNOSE_AGENT_TOOLS = [_TOOL_LIST_BUILDINGS] + [
+    tool for tool in _DIAGNOSE_BASE_TOOLS
+    if _chat_work_orders_enabled or tool.name != "create_work_order_draft"
+]
 
 
 # 缓存键: (include_list_buildings, thinking_mode, enable_web_search)
@@ -332,7 +336,23 @@ def _build_diagnose_prompt() -> str:
     """用当前日期填充诊断 Prompt 模板。"""
     from app.core.time_context import get_today
     today = get_today()
-    return _DIAGNOSE_PROMPT_TEMPLATE.format(today=today, year=today.year)
+    prompt = _DIAGNOSE_PROMPT_TEMPLATE.format(today=today, year=today.year)
+    if not get_settings().ENABLE_CHAT_WORK_ORDERS:
+        blocked = (
+            "create_work_order_draft",
+            "派单",
+            "报修",
+            "生成工单",
+            "创建工单",
+            "工单建议",
+            "工单生成规范",
+            "WorkOrderCard",
+        )
+        prompt = "\n".join(
+            line for line in prompt.splitlines()
+            if not any(token in line for token in blocked)
+        )
+    return prompt
 
 
 def _get_diagnose_agent(

@@ -1067,6 +1067,9 @@ async def detect_and_store_all_buildings(db: AsyncSession) -> dict[str, dict[str
     返回 {building_id: {"flags": N, "events": M}}。
     """
     from app.db.session import AsyncSessionLocal
+    from app.core.config import get_settings
+
+    settings = get_settings()
 
     async with AsyncSessionLocal() as cleanup_session:
         await cleanup_session.execute(text("TRUNCATE TABLE anomaly_events CASCADE"))
@@ -1100,7 +1103,7 @@ async def detect_and_store_all_buildings(db: AsyncSession) -> dict[str, dict[str
         # 自动建工单：异常事件 → 工单 → AI 审批
         n_wo_created = 0
         wo_error: str | None = None
-        if n_events > 0:
+        if settings.ENABLE_AUTO_WORK_ORDERS and n_events > 0:
             try:
                 from app.services.auto_work_order_service import auto_create_alert_orders
                 async with AsyncSessionLocal() as session:
@@ -1114,6 +1117,12 @@ async def detect_and_store_all_buildings(db: AsyncSession) -> dict[str, dict[str
                 import traceback as _tb
                 wo_error = f"{_wo_exc}\n{_tb.format_exc()}"
                 logger.error("自动建工单失败: building=%s error=%s", bid, wo_error)
+
+        if n_events > 0 and not settings.ENABLE_AUTO_WORK_ORDERS:
+            logger.info(
+                "skip auto work orders: building=%s events=%d ENABLE_AUTO_WORK_ORDERS=%s",
+                bid, n_events, settings.ENABLE_AUTO_WORK_ORDERS,
+            )
 
         summary[bid] = {
             "flags": n_flags,
@@ -1133,6 +1142,9 @@ async def detect_and_store_all_buildings(db: AsyncSession) -> dict[str, dict[str
     try:
         from app.services.auto_work_order_service import trigger_ai_review_for_pending
         async with AsyncSessionLocal() as session:
+            if not settings.ENABLE_AUTO_AI_REVIEW:
+                logger.info("skip auto ai review: ENABLE_AUTO_AI_REVIEW=%s", settings.ENABLE_AUTO_AI_REVIEW)
+                return summary
             n_reviewed = await trigger_ai_review_for_pending(session)
         logger.info("AI 审批批量完成: reviewed=%d", n_reviewed)
     except Exception:

@@ -73,6 +73,9 @@ class Settings(BaseSettings):
     # -----------------------------------------------------------------------
     DEBUG: bool = True
     APP_ENV: str = "development"  # development | production
+    ENABLE_AUTO_WORK_ORDERS: bool = False
+    ENABLE_AUTO_AI_REVIEW: bool = False
+    ENABLE_CHAT_WORK_ORDERS: bool = False
 
     # -----------------------------------------------------------------------
     # Redis Cache

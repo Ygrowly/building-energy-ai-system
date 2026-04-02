@@ -23,6 +23,8 @@ dist/
 dataset/output/*.csv
 dataset/output/knowledge_vectors/
 *.log
+backend/tests/.tmp/
+backend/tests/.pytest-tmp/
 
 # OS
 .DS_Store

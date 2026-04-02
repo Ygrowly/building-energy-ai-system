@@ -511,11 +511,11 @@ import ValueCard from '@/generative-ui/ValueCard.vue'
 import EvidenceLink from '@/generative-ui/EvidenceLink.vue'
 import ChartSkeleton from '@/generative-ui/ChartSkeleton.vue'
 import type { ArtifactEvent } from '@/api/stream_client'
-import { marked } from 'marked'
+import { apiFetch } from '@/api/http'
+import { renderMarkdown as sharedRenderMarkdown } from '@/utils/markdown'
 
 import { useDataRangeStore } from '@/stores/dataRangeStore'
 import { useReportStore } from '@/stores/reportStore'
-import type { ReportSection } from '@/stores/reportStore'
 
 const router = useRouter()
 const store = useChatStore()
@@ -773,48 +773,29 @@ function onReportBtnClick() {
   if (reportStore.sections.length > 0) {
     reportStore.openPreview()
   } else {
-    onExportConversation()
+    void onExportConversation()
   }
 }
 
-function onExportConversation() {
+async function onExportConversation() {
   moreOpen.value = false
-  const messages = store.messages
-  if (!messages.length) return
+  if (!store.currentSessionId) return
 
-  const sections: ReportSection[] = []
-
-  // 每条消息作为一个文本段落
-  messages.forEach((msg, idx) => {
-    if (msg.role === 'user') {
-      sections.push({
-        id: `msg-${idx}`,
-        namespace: 'agent-export',
-        title: `用户提问 ${idx + 1}`,
-        type: 'text',
-        content: msg.content,
-        order: idx * 2,
-      })
-    } else if (msg.role === 'ai' && msg.content) {
-      sections.push({
-        id: `reply-${idx}`,
-        namespace: 'agent-export',
-        title: 'AI 回答',
-        type: 'text',
-        content: msg.content,
-        order: idx * 2 + 1,
-      })
-    }
-  })
-
-  const currentSession = store.openTabs.find(s => s.session_id === store.currentSessionId)
-  reportStore.openPreviewWithPayload({
-    title: currentSession?.title ?? 'AI 对话记录',
-    subtitle: `共 ${messages.filter(m => m.role === 'user').length} 轮对话`,
-    generatedAt: new Date().toLocaleString('zh-CN'),
-    sections,
-    mode: 'snapshot',
-  })
+  try {
+    const payload = await apiFetch(`/api/chat/sessions/${store.currentSessionId}/report`, {
+      method: 'POST',
+      body: JSON.stringify({
+        mode: 'formal',
+        generation_mode: 'hybrid',
+        artifact_policy: 'all',
+        include_appendix: false,
+      }),
+    })
+    reportStore.openPreviewWithPayload(payload as any)
+  } catch (error) {
+    console.error('[AgentConsole] 导出对话报表失败:', error)
+    window.alert((error as Error).message || '导出对话报表失败')
+  }
 }
 
 // ── 消息互动操作 ──────────────────────────────────────────────────────────────
@@ -957,26 +938,9 @@ function toSourceInfo(v: unknown): Record<string, unknown> {
   return v as Record<string, unknown>
 }
 
-// ── Markdown 渲染（使用 marked 库）─────────────────────────────────────────────
-marked.use({ breaks: true, gfm: true })
-
+// ── Markdown 渲染 ─────────────────────────────────────────────
 function formatMarkdown(text: string): string {
-  let clean = text.replace(/<<CHART:[^>]*>>/g, '')
-
-  // 过滤 LLM 泄露的工具调用原始文本（如 render_ui_component(...)、create_work_order_draft(...)）
-  clean = clean.replace(/\b(render_ui_component|create_work_order_draft)\s*\([\s\S]*?\)\s*/g, '')
-
-  // 修复中文/全角标点紧邻 ** 时 marked 无法识别粗体的问题
-  // 在 ** 与非 ASCII 字符之间插入零宽空格 \u200B 辅助断词
-  clean = clean.replace(/([\u2000-\u9fff\uff00-\uffef])(\*\*)/g, '$1\u200B$2')
-  clean = clean.replace(/(\*\*)([\u2000-\u9fff\uff00-\uffef])/g, '$1\u200B$2')
-
-  let html = marked.parse(clean, { async: false }) as string
-
-  // Fallback：若 marked 仍未解析，手动处理残留的 **...**
-  html = html.replace(/\*\*([^*]+?)\*\*/g, '<strong>$1</strong>')
-
-  return html
+  return sharedRenderMarkdown(text)
 }
 
 // ── 内嵌图表：占位符驱动 + stagger 动画 ──────────────────────────────────────

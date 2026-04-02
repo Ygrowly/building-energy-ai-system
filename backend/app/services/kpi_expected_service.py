@@ -318,6 +318,7 @@ def _run_hvac_state_machine(
 async def compute_expected_for_building(
     building_id: str,
     db: AsyncSession,
+    target_timestamps: set | None = None,
 ) -> list[dict[str, Any]]:
     """
     对一栋楼的所有 energy_data 行计算无噪声额定期望值，
@@ -403,6 +404,12 @@ async def compute_expected_for_building(
             **nominal,
         })
 
+    if target_timestamps:
+        output_rows = [
+            row for row in output_rows
+            if row["timestamp"] in target_timestamps
+        ]
+
     logger.info(
         "compute_expected_for_building: 楼 %s (%s, %.0f m²) 计算了 %d 行",
         building_id, usage, sqm, len(output_rows),
@@ -458,23 +465,10 @@ async def compute_and_store_all_buildings(db: AsyncSession) -> dict[str, int]:
     每栋楼使用独立 session 以避免长事务连接超时。
     返回 {building_id: rows_written}。
     """
-    from app.db.session import AsyncSessionLocal
+    del db
+    from app.services.pipeline_refresh_service import compute_expected_for_buildings
 
-    async with AsyncSessionLocal() as list_session:
-        bld_result = await list_session.execute(
-            select(Building.building_id).order_by(Building.building_id)
-        )
-        building_ids = [r[0] for r in bld_result.fetchall()]
-
-    summary: dict[str, int] = {}
-    for bid in building_ids:
-        async with AsyncSessionLocal() as session:
-            rows = await compute_expected_for_building(bid, session)
-            n = await upsert_expected_hourly(rows, session)
-            summary[bid] = n
-            logger.info("expected upsert: %s → %d rows", bid, n)
-
-    return summary
+    return await compute_expected_for_buildings()
 
 
 # ---------------------------------------------------------------------------

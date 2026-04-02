@@ -26,6 +26,7 @@
 """
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -199,12 +200,15 @@ def _detect_flags(
 async def detect_for_building(
     building_id: str,
     db: AsyncSession,
+    target_timestamps: set | list | tuple | None = None,
 ) -> list[dict[str, Any]]:
     """
     JOIN energy_data + kpi_expected_hourly，应用检测规则，
     返回可直接 upsert 到 kpi_anomaly_flags 的字典列表。
     """
-    rows_result = await db.execute(text("""
+    ts_list, _ts_set = _normalize_target_timestamps(target_timestamps)
+    if ts_list is None:
+        sql = text("""
         SELECT
             e.timestamp,
             e.electricity_kwh,
@@ -224,7 +228,33 @@ async def detect_for_building(
             ON x.building_id = e.building_id AND x.timestamp = e.timestamp
         WHERE e.building_id = :bid
         ORDER BY e.timestamp ASC
-    """), {"bid": building_id})
+    """)
+        params = {"bid": building_id}
+    else:
+        sql = text("""
+        SELECT
+            e.timestamp,
+            e.electricity_kwh,
+            e.water_m3,
+            e.hac_energy,
+            e.sim_supply_temp_c,
+            e.sim_return_temp_c,
+            x.electricity_kwh_expected,
+            x.water_m3_expected,
+            x.hac_energy_expected,
+            x.sim_supply_temp_c_expected,
+            x.sim_return_temp_c_expected,
+            x.schedule_factor,
+            x.hvac_mode
+        FROM energy_data e
+        JOIN kpi_expected_hourly x
+            ON x.building_id = e.building_id AND x.timestamp = e.timestamp
+        WHERE e.building_id = :bid
+          AND e.timestamp = ANY(:ts_arr)
+        ORDER BY e.timestamp ASC
+    """)
+        params = {"bid": building_id, "ts_arr": ts_list}
+    rows_result = await db.execute(sql, params)
     rows = rows_result.fetchall()
 
     if not rows:
@@ -495,6 +525,7 @@ def _build_anomaly_event(
 async def generate_anomaly_events(
     building_id: str,
     db: AsyncSession,
+    target_timestamps: set | list | tuple | None = None,
 ) -> int:
     """
     从 kpi_anomaly_flags 读取该楼有 flag 的行，
@@ -509,9 +540,22 @@ async def generate_anomaly_events(
     bld_row = bld_result.fetchone()
     primary_usage = (bld_row[0] if bld_row else None) or ""
     building_display = _BUILDING_DISPLAY_NAMES.get(primary_usage, building_id)
+    ts_list, _ts_set = _normalize_target_timestamps(target_timestamps)
+
+    if ts_list is not None:
+        await db.execute(
+            text("""
+                DELETE FROM anomaly_events
+                WHERE building_id = :bid
+                  AND data_timestamp = ANY(:ts_arr)
+            """),
+            {"bid": building_id, "ts_arr": ts_list},
+        )
+        await db.commit()
 
     # 读取所有有满幅度 flag 的行（flag_symptom_union_any 包含软症状，但 anomaly_events 只写满幅度）
-    flags_result = await db.execute(text("""
+    if ts_list is None:
+        flags_sql = text("""
         SELECT
             f.timestamp,
             f.flag_water, f.flag_electricity, f.flag_hvac_energy,
@@ -523,7 +567,25 @@ async def generate_anomaly_events(
           AND (f.flag_water OR f.flag_electricity OR f.flag_hvac_energy
                OR f.flag_supply_deviation OR f.flag_return_deviation)
         ORDER BY f.timestamp ASC
-    """), {"bid": building_id})
+    """)
+        flags_params = {"bid": building_id}
+    else:
+        flags_sql = text("""
+        SELECT
+            f.timestamp,
+            f.flag_water, f.flag_electricity, f.flag_hvac_energy,
+            f.flag_supply_deviation, f.flag_return_deviation,
+            f.anomaly_phase, f.hvac_diagnosis,
+            f.evidence_json
+        FROM kpi_anomaly_flags f
+        WHERE f.building_id = :bid
+          AND f.timestamp = ANY(:ts_arr)
+          AND (f.flag_water OR f.flag_electricity OR f.flag_hvac_energy
+               OR f.flag_supply_deviation OR f.flag_return_deviation)
+        ORDER BY f.timestamp ASC
+    """)
+        flags_params = {"bid": building_id, "ts_arr": ts_list}
+    flags_result = await db.execute(flags_sql, flags_params)
     flag_rows = flags_result.fetchall()
 
     if not flag_rows:
@@ -687,9 +749,24 @@ def _infer_health_status(
     return "warning"
 
 
+def _normalize_target_timestamps(
+    target_timestamps: set | list | tuple | None,
+) -> tuple[list, set] | tuple[None, None]:
+    if not target_timestamps:
+        return None, None
+    ordered: list = []
+    seen: set = set()
+    for ts in target_timestamps:
+        if ts not in seen:
+            seen.add(ts)
+            ordered.append(ts)
+    return ordered, seen
+
+
 async def derive_device_status(
     building_id: str,
     db: AsyncSession,
+    target_timestamps: set | list | tuple | None = None,
 ) -> tuple[int, int]:
     """
     从 energy_data + kpi_expected_hourly + kpi_anomaly_flags 派生设备状态，
@@ -704,9 +781,11 @@ async def derive_device_status(
     if not devices:
         logger.warning("derive_device_status: 楼 %s 无设备记录", building_id)
         return 0, 0
+    ts_list, _ts_set = _normalize_target_timestamps(target_timestamps)
 
     # 联合查询 energy_data + kpi_expected_hourly + kpi_anomaly_flags
-    rows_result = await db.execute(text("""
+    if ts_list is None:
+        telemetry_sql = text("""
         SELECT
             e.timestamp,
             e.electricity_kwh,
@@ -732,7 +811,39 @@ async def derive_device_status(
             ON f.building_id = e.building_id AND f.timestamp = e.timestamp
         WHERE e.building_id = :bid
         ORDER BY e.timestamp ASC
-    """), {"bid": building_id})
+    """)
+        telemetry_params = {"bid": building_id}
+    else:
+        telemetry_sql = text("""
+        SELECT
+            e.timestamp,
+            e.electricity_kwh,
+            e.water_m3,
+            e.hac_energy,
+            e.sim_supply_temp_c,
+            e.sim_return_temp_c,
+            e.air_temp_c,
+            x.hvac_mode,
+            x.schedule_factor,
+            x.hac_energy_expected,
+            COALESCE(f.flag_water, false)            AS flag_water,
+            COALESCE(f.flag_electricity, false)      AS flag_electricity,
+            COALESCE(f.flag_hvac_energy, false)      AS flag_hvac_energy,
+            COALESCE(f.flag_supply_deviation, false) AS flag_supply_dev,
+            COALESCE(f.flag_return_deviation, false) AS flag_return_dev,
+            f.hvac_diagnosis,
+            f.anomaly_phase
+        FROM energy_data e
+        LEFT JOIN kpi_expected_hourly x
+            ON x.building_id = e.building_id AND x.timestamp = e.timestamp
+        LEFT JOIN kpi_anomaly_flags f
+            ON f.building_id = e.building_id AND f.timestamp = e.timestamp
+        WHERE e.building_id = :bid
+          AND e.timestamp = ANY(:ts_arr)
+        ORDER BY e.timestamp ASC
+    """)
+        telemetry_params = {"bid": building_id, "ts_arr": ts_list}
+    rows_result = await db.execute(telemetry_sql, telemetry_params)
     rows = rows_result.fetchall()
 
     if not rows:
@@ -839,29 +950,44 @@ async def derive_device_status(
     """), telemetry_rows)
     await db.commit()
 
-    # 更新 device_status_latest（每个设备取最新一行）
-    latest_by_device: dict[str, dict] = {}
-    for row in telemetry_rows:
-        did = row["device_id"]
-        if did not in latest_by_device or row["timestamp"] > latest_by_device[did]["timestamp"]:
-            latest_by_device[did] = row
-
+    latest_rows_result = await db.execute(text("""
+        SELECT DISTINCT ON (device_id)
+            device_id,
+            building_id,
+            device_type,
+            timestamp,
+            online_status,
+            running_state,
+            health_status,
+            power_kw,
+            flow_rate,
+            supply_temp_c,
+            return_temp_c,
+            metric_payload_json
+        FROM device_telemetry_hourly
+        WHERE building_id = :bid
+        ORDER BY device_id, timestamp DESC
+    """), {"bid": building_id})
     status_rows = [
         {
-            "device_id": r["device_id"],
-            "building_id": r["building_id"],
-            "device_type": r["device_type"],
-            "last_seen_at": r["timestamp"],
-            "online_status": r["online_status"],
-            "running_state": r["running_state"],
-            "health_status": r["health_status"],
-            "latest_power_kw": r["power_kw"],
-            "latest_flow_rate": r["flow_rate"],
-            "latest_supply_temp_c": r["supply_temp_c"],
-            "latest_return_temp_c": r["return_temp_c"],
-            "latest_payload_json": r["metric_payload_json"],
+            "device_id": row[0],
+            "building_id": row[1],
+            "device_type": row[2],
+            "last_seen_at": row[3],
+            "online_status": row[4],
+            "running_state": row[5],
+            "health_status": row[6],
+            "latest_power_kw": row[7],
+            "latest_flow_rate": row[8],
+            "latest_supply_temp_c": row[9],
+            "latest_return_temp_c": row[10],
+            "latest_payload_json": (
+                json.dumps(row[11], default=str)
+                if isinstance(row[11], (dict, list))
+                else row[11]
+            ),
         }
-        for r in latest_by_device.values()
+        for row in latest_rows_result.fetchall()
     ]
 
     await db.execute(text("""
@@ -903,6 +1029,7 @@ async def derive_device_status(
 async def attribute_anomalies_to_devices(
     building_id: str,
     db: AsyncSession,
+    target_timestamps: set | list | tuple | None = None,
 ) -> int:
     """
     从 anomaly_events 按 rule_triggered 归因到具体设备，
@@ -916,15 +1043,40 @@ async def attribute_anomalies_to_devices(
     devices = {row[1]: row[0] for row in dev_result.fetchall()}
     if not devices:
         return 0
+    ts_list, _ts_set = _normalize_target_timestamps(target_timestamps)
+
+    if ts_list is not None:
+        await db.execute(
+            text("""
+                DELETE FROM anomaly_device_attributions
+                WHERE building_id = :bid
+                  AND timestamp = ANY(:ts_arr)
+            """),
+            {"bid": building_id, "ts_arr": ts_list},
+        )
+        await db.commit()
 
     # 查该楼所有异常事件
-    ev_result = await db.execute(text("""
+    if ts_list is None:
+        events_sql = text("""
         SELECT id, data_timestamp, rule_triggered, actual_value, expected_value,
                deviation_pct, hvac_root_cause, symptom_flags_json, anomaly_phase
         FROM anomaly_events
         WHERE building_id = :bid
         ORDER BY data_timestamp ASC
-    """), {"bid": building_id})
+    """)
+        events_params = {"bid": building_id}
+    else:
+        events_sql = text("""
+        SELECT id, data_timestamp, rule_triggered, actual_value, expected_value,
+               deviation_pct, hvac_root_cause, symptom_flags_json, anomaly_phase
+        FROM anomaly_events
+        WHERE building_id = :bid
+          AND data_timestamp = ANY(:ts_arr)
+        ORDER BY data_timestamp ASC
+    """)
+        events_params = {"bid": building_id, "ts_arr": ts_list}
+    ev_result = await db.execute(events_sql, events_params)
     events = ev_result.fetchall()
 
     if not events:
@@ -988,11 +1140,12 @@ async def attribute_anomalies_to_devices(
     if not attribution_rows:
         return 0
 
-    # 先删该楼旧数据（幂等重建，避免全局 TRUNCATE 时序问题）
-    await db.execute(
-        text("DELETE FROM anomaly_device_attributions WHERE building_id = :bid"),
-        {"bid": building_id},
-    )
+    # 全量模式先删该楼旧数据（幂等重建，避免全局 TRUNCATE 时序问题）
+    if ts_list is None:
+        await db.execute(
+            text("DELETE FROM anomaly_device_attributions WHERE building_id = :bid"),
+            {"bid": building_id},
+        )
 
     # 按 (event_id, device_id) 去重，避免触碰 deferrable 唯一约束
     seen: set[tuple] = set()
@@ -1030,46 +1183,26 @@ async def detect_and_store_all_buildings(db: AsyncSession) -> dict[str, dict[str
     每栋楼使用独立 session 以避免长事务连接超时。
     返回 {building_id: {"flags": N, "events": M}}。
     """
-    from app.db.session import AsyncSessionLocal
     from app.core.config import get_settings
+    from app.db.session import AsyncSessionLocal
+    from app.services.pipeline_refresh_service import rebuild_detection_for_buildings
 
     settings = get_settings()
+    del db
+    raw_summary = await rebuild_detection_for_buildings(clear_mode="global")
 
-    async with AsyncSessionLocal() as cleanup_session:
-        await cleanup_session.execute(text("TRUNCATE TABLE anomaly_events CASCADE"))
-        await cleanup_session.execute(text("TRUNCATE TABLE anomaly_device_attributions"))
-        await cleanup_session.execute(text("TRUNCATE TABLE device_telemetry_hourly"))
-        await cleanup_session.commit()
-
-    async with AsyncSessionLocal() as list_session:
-        bld_result = await list_session.execute(
-            select(Building.building_id).order_by(Building.building_id)
-        )
-        building_ids = [r[0] for r in bld_result.fetchall()]
-
-    summary: dict[str, dict[str, int]] = {}
-    for bid in building_ids:
-        async with AsyncSessionLocal() as session:
-            flag_rows = await detect_for_building(bid, session)
-            n_flags = await upsert_anomaly_flags(flag_rows, session)
-
-        async with AsyncSessionLocal() as session:
-            n_events = await generate_anomaly_events(bid, session)
-
-        # 方案A：派生设备遥测历史 + 设备状态快照
-        async with AsyncSessionLocal() as session:
-            n_telemetry, n_status = await derive_device_status(bid, session)
-
-        # 方案A：异常归因到具体设备
-        async with AsyncSessionLocal() as session:
-            n_attrib = await attribute_anomalies_to_devices(bid, session)
-
-        # 自动建工单：异常事件 → 工单 → AI 审批
+    summary: dict[str, dict[str, int | str | None]] = {
+        bid: dict(values) for bid, values in raw_summary.items()
+    }
+    for bid, values in summary.items():
+        n_events = int(values.get("events", 0) or 0)
         n_wo_created = 0
         wo_error: str | None = None
+
         if settings.ENABLE_AUTO_WORK_ORDERS and n_events > 0:
             try:
                 from app.services.auto_work_order_service import auto_create_alert_orders
+
                 async with AsyncSessionLocal() as session:
                     wo_result = await auto_create_alert_orders(session, bid)
                     n_wo_created = wo_result.get("created", 0)
@@ -1079,6 +1212,7 @@ async def detect_and_store_all_buildings(db: AsyncSession) -> dict[str, dict[str
                     )
             except Exception as _wo_exc:
                 import traceback as _tb
+
                 wo_error = f"{_wo_exc}\n{_tb.format_exc()}"
                 logger.error("自动建工单失败: building=%s error=%s", bid, wo_error)
 
@@ -1088,18 +1222,17 @@ async def detect_and_store_all_buildings(db: AsyncSession) -> dict[str, dict[str
                 bid, n_events, settings.ENABLE_AUTO_WORK_ORDERS,
             )
 
-        summary[bid] = {
-            "flags": n_flags,
-            "events": n_events,
-            "telemetry": n_telemetry,
-            "device_status": n_status,
-            "attributions": n_attrib,
-            "work_orders_created": n_wo_created,
-            "wo_error": wo_error,
-        }
+        values["work_orders_created"] = n_wo_created
+        values["wo_error"] = wo_error
         logger.info(
-            "anomaly detect: %s → flags=%d, events=%d, telemetry=%d, status=%d, attrib=%d, wo=%d",
-            bid, n_flags, n_events, n_telemetry, n_status, n_attrib, n_wo_created,
+            "anomaly detect: %s -> flags=%d, events=%d, telemetry=%d, status=%d, attrib=%d, wo=%d",
+            bid,
+            int(values.get("flags", 0) or 0),
+            n_events,
+            int(values.get("telemetry", 0) or 0),
+            int(values.get("device_status", 0) or 0),
+            int(values.get("attributions", 0) or 0),
+            n_wo_created,
         )
 
     # 批量触发 AI 审批（所有 pending_review 工单）

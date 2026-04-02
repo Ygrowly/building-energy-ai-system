@@ -31,7 +31,7 @@
     </div>
 
     <!-- 操作按钮（仅 pending 状态显示） -->
-    <div class="wo-actions" v-if="isPending">
+    <div class="wo-actions" v-if="isPending && !readonly">
       <button class="btn-approve" @click="emit('approve')" :disabled="isProcessing">
         <Icon icon="mdi:check-circle" width="14" /> 批准派单
       </button>
@@ -40,7 +40,7 @@
       </button>
     </div>
 
-    <div class="reject-input" v-if="showRejectInput">
+    <div class="reject-input" v-if="showRejectInput && !readonly">
       <input
         v-model="rejectReason"
         placeholder="请输入驳回原因（可选）"
@@ -59,6 +59,7 @@ import type { ArtifactEvent } from '@/api/stream_client'
 const props = defineProps<{
   artifact: ArtifactEvent
   isProcessing?: boolean
+  readonly?: boolean
 }>()
 
 const emit = defineEmits<{

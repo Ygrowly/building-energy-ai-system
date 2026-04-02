@@ -8,6 +8,7 @@
  */
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
+import type { ArtifactEvent } from '@/api/stream_client'
 
 // ── 数据模型 ──────────────────────────────────────────────────
 
@@ -34,7 +35,7 @@ export interface ReportSection {
   namespace: string              // 注册方命名空间，用于页面切换时清理
   title: string
   description?: string
-  type: 'kpi' | 'table' | 'chart' | 'text' | 'summary'
+  type: 'kpi' | 'table' | 'chart' | 'text' | 'summary' | 'artifact'
   // type=kpi
   kpis?: KpiItem[]
   // type=table
@@ -46,6 +47,9 @@ export interface ReportSection {
   summaryItems?: SummaryItem[]
   // type=text
   content?: string
+  contentFormat?: 'plain' | 'markdown'
+  // type=artifact
+  artifact?: ArtifactEvent
   order?: number                 // 段落排序（越小越靠前），默认 100
 }
 

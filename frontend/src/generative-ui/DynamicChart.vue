@@ -1,5 +1,5 @@
 <template>
-  <div class="chart-card" :class="{ 'chart-card--inline': inline }">
+  <div class="chart-card" :class="{ 'chart-card--inline': inline, 'chart-card--report': reportMode }">
     <div class="chart-header">
       <span class="chart-title">{{ title }}</span>
       <button class="source-btn" @click="showSource = !showSource" :title="showSource ? '收起数据来源' : '展开数据来源'">
@@ -54,6 +54,7 @@ const props = defineProps<{
   inline?: boolean
   /** 骨架屏由外部管理时为 true，跳过内部延迟直接渲染图表 */
   skipSkeleton?: boolean
+  reportMode?: boolean
 }>()
 
 const chartEl = ref<HTMLElement>()
@@ -128,12 +129,22 @@ const sourceRows = computed(() => {
 })
 
 // 多系列配色盘
-const PALETTE = ['#6c8ef5', '#4ade80', '#f59e0b', '#f87171', '#a78bfa', '#38bdf8']
+const DEFAULT_PALETTE = ['#6c8ef5', '#4ade80', '#f59e0b', '#f87171', '#a78bfa', '#38bdf8']
+const REPORT_PALETTE = ['#2563eb', '#14b8a6', '#f59e0b', '#ef4444', '#7c3aed', '#0ea5e9']
 
 const isLight = () => document.documentElement.getAttribute('data-theme') === 'light'
 
 /** 主题感知的图表颜色 */
 function themeColors() {
+  if (props.reportMode) {
+    return {
+      axisLabel: '#334155',
+      axisLine: '#cbd5e1',
+      splitLine: '#e2e8f0',
+      legend: '#0f172a',
+      tooltip: { bg: '#ffffff', border: '#cbd5e1', text: '#0f172a' },
+    }
+  }
   if (isLight()) {
     return {
       axisLabel: '#374151',   // gray-700
@@ -351,7 +362,7 @@ function buildOption() {
       yAxis: baseYAxis(),
       tooltip: baseTooltip,
       series: seriesList.map((s, i) => {
-        const color = PALETTE[i % PALETTE.length]
+        const color = palette()[i % palette().length]
         const yData = extractData(s)
         return isBar
           ? { type: 'bar', name: String(s.name ?? `系列${i + 1}`), data: yData, itemStyle: { color, borderRadius: [3, 3, 0, 0] } }
@@ -397,7 +408,7 @@ function buildOption() {
       xAxis: horizontal ? baseYAxis() : baseXAxis(labels),
       yAxis: horizontal ? baseCategoryYAxis(labels) : baseYAxis(),
       series: datasets.map((ds, i) => {
-        const color = PALETTE[i % PALETTE.length]
+        const color = palette()[i % palette().length]
         const values = toNumberList(ds.data ?? ds.values ?? [])
         const colors = Array.isArray(ds.backgroundColor)
           ? (ds.backgroundColor as unknown[]).map((c) => String(c))
@@ -472,7 +483,7 @@ function buildOption() {
             type: 'bar',
             name: seriesName,
             data: normalizedYData,
-            itemStyle: { color: PALETTE[0], borderRadius: [3, 3, 0, 0] },
+            itemStyle: { color: palette()[0], borderRadius: [3, 3, 0, 0] },
           }],
           tooltip: baseTooltip,
         }
@@ -486,9 +497,17 @@ function buildOption() {
           name: seriesName,
           data: normalizedYData,
           smooth: true,
-          lineStyle: { color: PALETTE[0], width: 2 },
-          areaStyle: { color: { type: 'linear', x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: 'rgba(108,142,245,0.3)' }, { offset: 1, color: 'rgba(108,142,245,0)' }] } },
-          itemStyle: { color: PALETTE[0] },
+          lineStyle: { color: palette()[0], width: 2 },
+          areaStyle: {
+            color: {
+              type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
+              colorStops: [
+                { offset: 0, color: props.reportMode ? 'rgba(37,99,235,0.18)' : 'rgba(108,142,245,0.3)' },
+                { offset: 1, color: props.reportMode ? 'rgba(37,99,235,0)' : 'rgba(108,142,245,0)' },
+              ],
+            },
+          },
+          itemStyle: { color: palette()[0] },
         }],
         tooltip: baseTooltip,
       }
@@ -517,7 +536,7 @@ function buildOption() {
         grid: { top: 20, right: 20, bottom: 40, left: 55 },
         xAxis: baseXAxis(xData),
         yAxis: baseYAxis(),
-        series: [{ type: 'bar', data: yData, itemStyle: { color: PALETTE[0], borderRadius: [3, 3, 0, 0] } }],
+        series: [{ type: 'bar', data: yData, itemStyle: { color: palette()[0], borderRadius: [3, 3, 0, 0] } }],
         tooltip: baseTooltip,
       }
     }
@@ -527,9 +546,17 @@ function buildOption() {
       yAxis: baseYAxis(),
       series: [{
         type: 'line', data: yData, smooth: true,
-        lineStyle: { color: PALETTE[0], width: 2 },
-        areaStyle: { color: { type: 'linear', x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: 'rgba(108,142,245,0.3)' }, { offset: 1, color: 'rgba(108,142,245,0)' }] } },
-        itemStyle: { color: PALETTE[0] },
+        lineStyle: { color: palette()[0], width: 2 },
+        areaStyle: {
+          color: {
+            type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
+            colorStops: [
+              { offset: 0, color: props.reportMode ? 'rgba(37,99,235,0.18)' : 'rgba(108,142,245,0.3)' },
+              { offset: 1, color: props.reportMode ? 'rgba(37,99,235,0)' : 'rgba(108,142,245,0)' },
+            ],
+          },
+        },
+        itemStyle: { color: palette()[0] },
       }],
       tooltip: baseTooltip,
     }
@@ -539,6 +566,7 @@ function buildOption() {
 }
 
 function detectTheme(): string | undefined {
+  if (props.reportMode) return undefined
   return document.documentElement.getAttribute('data-theme') === 'light' ? undefined : 'dark'
 }
 
@@ -547,6 +575,10 @@ function clearInitRaf() {
     cancelAnimationFrame(_initRaf)
     _initRaf = null
   }
+}
+
+function palette() {
+  return props.reportMode ? REPORT_PALETTE : DEFAULT_PALETTE
 }
 
 function ensureResizeObserver() {
@@ -745,5 +777,48 @@ onUnmounted(() => {
   border-color: var(--border);
   margin: 10px 0;
   box-shadow: none;
+}
+
+.chart-card--report {
+  --bg-card: #ffffff;
+  --border: #dbe3ef;
+  --bg-panel: #f8fbff;
+  --text-primary: #0f172a;
+  --text-secondary: #334155;
+  --text-muted: #64748b;
+  --accent: #2563eb;
+  --card-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+  background: #ffffff;
+  border-color: #dbe3ef;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+}
+
+.chart-card--report .chart-header {
+  padding: 14px 16px 10px;
+}
+
+.chart-card--report .chart-title {
+  color: #0f172a;
+  font-size: 14px;
+}
+
+.chart-card--report .source-btn {
+  background: #f8fbff;
+  border-color: #dbe3ef;
+  color: #475569;
+}
+
+.chart-card--report .source-btn:hover {
+  border-color: #2563eb;
+  color: #2563eb;
+}
+
+.chart-card--report .chart-body {
+  background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);
+}
+
+.chart-card--report .source-panel {
+  background: #f8fbff;
+  border-top-color: #dbe3ef;
 }
 </style>

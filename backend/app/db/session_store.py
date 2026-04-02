@@ -37,6 +37,11 @@ _SERIALIZABLE_STATE_KEYS = (
     "artifacts",
     "available_buildings",
     "context_summary",
+    "chart_manifest",
+    "react_data_summary",
+    "thinking_mode",
+    "enable_web_search",
+    "needs_diagnosis",
     "error",
 )
 

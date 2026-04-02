@@ -51,6 +51,8 @@ from app.schemas.genui_protocol import (
     SessionCreateRequest,
     SessionUpdateRequest,
 )
+from app.schemas.report_schemas import ConversationReportPayload, ConversationReportRequest
+from app.services.conversation_report_service_formal import generate_conversation_report_payload
 
 logger = logging.getLogger(__name__)
 
@@ -1024,6 +1026,41 @@ async def get_session(
         }
 
     return await get_or_compute_json(cache_key, ttl_seconds, _compute)
+
+
+@router.post(
+    "/chat/sessions/{session_id}/report",
+    response_model=ConversationReportPayload,
+    summary="生成会话总结报表",
+)
+async def generate_session_report(
+    session_id: str = Path(..., max_length=_SESSION_ID_MAX_LEN, pattern=r"^[a-zA-Z0-9_-]+$"),
+    req: ConversationReportRequest = Body(default=ConversationReportRequest()),
+    current_user: Any = Depends(get_current_user_optional),
+):
+    """
+    基于当前会话状态生成正式总结报表。
+    """
+    _require_auth_in_production(current_user)
+    row = await session_store.get(session_id)
+    _check_session_access(row, current_user)
+
+    state = _sessions.get(session_id)
+    if state is None:
+        state = await session_store.load_state(session_id)
+
+    if state is None or (row is None and not state.get("messages")):
+        raise HTTPException(status_code=404, detail="会话不存在")
+
+    try:
+        return await generate_conversation_report_payload(
+            session_id=session_id,
+            session_title=getattr(row, "title", None) or "AI 对话总结报表",
+            state=state,
+            req=req,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.patch("/chat/sessions/{session_id}", response_model=SessionInfo, summary="重命名或更新会话")

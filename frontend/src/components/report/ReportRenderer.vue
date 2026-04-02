@@ -126,7 +126,35 @@
       <!-- 说明文本 -->
       <div v-else-if="section.type === 'text' && section.content" class="rr-section">
         <h2 class="rr-section-title">{{ section.title }}</h2>
-        <p class="rr-text-content">{{ section.content }}</p>
+        <p v-if="section.contentFormat !== 'markdown'" class="rr-text-content rr-text-plain">{{ section.content }}</p>
+        <div
+          v-else
+          class="rr-text-content rr-markdown"
+          v-html="renderMarkdown(section.content)"
+        ></div>
+      </div>
+
+      <div v-else-if="section.type === 'artifact' && section.artifact" class="rr-section">
+        <h2 class="rr-section-title">{{ section.title }}</h2>
+        <p v-if="section.description" class="rr-section-desc">{{ section.description }}</p>
+        <div class="rr-artifact-wrap">
+          <DynamicChart
+            v-if="isChartArtifact(section.artifact)"
+            :artifact="section.artifact"
+            :report-mode="true"
+          />
+          <WorkOrderCard
+            v-else-if="isWorkOrderArtifact(section.artifact)"
+            :artifact="section.artifact"
+            :readonly="true"
+          />
+          <ReportDownload
+            v-else-if="isReportDownloadArtifact(section.artifact)"
+            :artifact="section.artifact"
+            :readonly="true"
+          />
+          <pre v-else class="rr-artifact-fallback">{{ JSON.stringify(section.artifact, null, 2) }}</pre>
+        </div>
       </div>
     </template>
 
@@ -140,6 +168,11 @@
 
 <script setup lang="ts">
 import type { ReportPayload } from '@/stores/reportStore'
+import type { ArtifactEvent } from '@/api/stream_client'
+import DynamicChart from '@/generative-ui/DynamicChart.vue'
+import WorkOrderCard from '@/generative-ui/WorkOrderCard.vue'
+import ReportDownload from '@/generative-ui/ReportDownload.vue'
+import { renderMarkdown } from '@/utils/markdown'
 
 const props = defineProps<{ payload: ReportPayload }>()
 
@@ -151,6 +184,24 @@ function formatCell(v: any): string {
   }
   return String(v)
 }
+
+function isChartArtifact(artifact?: ArtifactEvent): boolean {
+  if (!artifact) return false
+  const type = artifact.component_type ?? artifact.widget ?? ''
+  return ['LineChart', 'BarChart', 'Gauge', 'line-chart', 'bar-chart', 'gauge'].includes(type)
+}
+
+function isWorkOrderArtifact(artifact?: ArtifactEvent): boolean {
+  if (!artifact) return false
+  const type = artifact.component_type ?? artifact.widget ?? ''
+  return ['WorkOrderCard', 'work-order-card'].includes(type)
+}
+
+function isReportDownloadArtifact(artifact?: ArtifactEvent): boolean {
+  if (!artifact) return false
+  const type = artifact.component_type ?? artifact.widget ?? ''
+  return ['ReportDownload', 'report-download'].includes(type)
+}
 </script>
 
 <style scoped>
@@ -161,7 +212,7 @@ function formatCell(v: any): string {
   font-family: 'PingFang SC', 'Microsoft YaHei', 'Noto Sans SC', sans-serif;
   font-size: 13px;
   line-height: 1.6;
-  padding: 32px 40px 24px;
+  padding: 28px 36px 24px;
   min-width: 600px;
 }
 
@@ -169,19 +220,22 @@ function formatCell(v: any): string {
 .rr-cover {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  min-height: 280px;
-  padding: 40px 0 32px;
-  margin-bottom: 32px;
-  border-bottom: 2px solid #1a3a6b;
+  align-items: flex-start;
+  justify-content: flex-start;
+  min-height: 0;
+  padding: 28px 28px 24px;
+  margin-bottom: 28px;
+  border: 1px solid #dbe3ef;
+  border-radius: 18px;
+  background: linear-gradient(180deg, #fbfdff 0%, #f4f8ff 100%);
+  box-shadow: 0 16px 32px rgba(15, 23, 42, 0.06);
 }
 
 .rr-cover-logo {
   display: flex;
   align-items: center;
   gap: 10px;
-  margin-bottom: 32px;
+  margin-bottom: 18px;
 }
 .rr-cover-logo-icon {
   width: 36px; height: 36px;
@@ -197,25 +251,44 @@ function formatCell(v: any): string {
   color: #1a3a6b;
   letter-spacing: 0.05em;
 }
-.rr-cover-main { text-align: center; margin-bottom: 28px; }
+.rr-cover-main {
+  text-align: left;
+  margin-bottom: 18px;
+  max-width: 780px;
+}
 .rr-cover-title {
-  font-size: 26px;
+  font-size: 31px;
   font-weight: 700;
   color: #0d1b2a;
-  letter-spacing: 0.04em;
-  margin-bottom: 6px;
+  letter-spacing: 0.01em;
+  line-height: 1.3;
+  margin-bottom: 10px;
 }
-.rr-cover-subtitle { color: #5a6478; font-size: 14px; }
+.rr-cover-subtitle {
+  color: #475569;
+  font-size: 15px;
+  line-height: 1.75;
+  max-width: 720px;
+}
 
 .rr-cover-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 20px;
-  justify-content: center;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+  width: 100%;
 }
-.rr-cover-meta-item { display: flex; flex-direction: column; align-items: center; gap: 2px; }
-.rr-cover-meta-label { font-size: 11px; color: #8c939a; text-transform: uppercase; letter-spacing: 0.06em; }
-.rr-cover-meta-val { font-size: 13px; font-weight: 600; color: #1a1f2e; }
+.rr-cover-meta-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 12px 14px;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid #dbe3ef;
+  border-radius: 12px;
+}
+.rr-cover-meta-label { font-size: 11px; color: #64748b; text-transform: uppercase; letter-spacing: 0.06em; }
+.rr-cover-meta-val { font-size: 14px; font-weight: 600; color: #0f172a; line-height: 1.45; }
 .rr-cover-divider { display: none; }
 
 /* ── 快照页眉 ──────────────────────────────────────────────── */
@@ -274,9 +347,10 @@ function formatCell(v: any): string {
   margin-bottom: 12px;
 }
 .rr-section-desc {
-  font-size: 12px;
-  color: #5a6478;
-  margin-bottom: 10px;
+  font-size: 13px;
+  color: #475569;
+  margin-bottom: 14px;
+  line-height: 1.7;
 }
 
 /* ── KPI 卡片 ──────────────────────────────────────────────── */
@@ -347,29 +421,102 @@ function formatCell(v: any): string {
 .rr-summary-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-  gap: 8px;
+  gap: 12px;
 }
 .rr-summary-item {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 8px 12px;
-  background: #f7f9fc;
-  border-radius: 6px;
-  border: 1px solid #eaedf2;
+  flex-direction: column;
+  justify-content: flex-start;
+  align-items: flex-start;
+  gap: 8px;
+  min-height: 96px;
+  padding: 14px 16px;
+  background: linear-gradient(180deg, #f9fbff 0%, #f3f7fd 100%);
+  border-radius: 12px;
+  border: 1px solid #dde6f3;
+  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.04);
 }
-.rr-summary-label { font-size: 12px; color: #5a6478; }
-.rr-summary-value { font-size: 13px; font-weight: 600; color: #1a3a6b; }
+.rr-summary-label {
+  font-size: 11px;
+  color: #64748b;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.rr-summary-value {
+  font-size: 16px;
+  font-weight: 700;
+  color: #0f172a;
+  line-height: 1.6;
+  word-break: break-word;
+}
 
 /* ── 说明文本 ──────────────────────────────────────────────── */
 .rr-text-content {
   font-size: 12px;
-  color: #3d4451;
+  color: #334155;
   line-height: 1.8;
+  background: linear-gradient(180deg, #fbfdff 0%, #f6f9fe 100%);
+  border: 1px solid #dde6f3;
+  padding: 14px 16px;
+  border-radius: 12px;
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.04);
+}
+.rr-text-plain {
+  white-space: pre-wrap;
+}
+.rr-markdown :deep(p),
+.rr-markdown :deep(ul),
+.rr-markdown :deep(ol),
+.rr-markdown :deep(table),
+.rr-markdown :deep(blockquote) {
+  margin: 0 0 10px;
+}
+.rr-markdown :deep(ul),
+.rr-markdown :deep(ol) {
+  padding-left: 18px;
+}
+.rr-markdown :deep(li + li) {
+  margin-top: 4px;
+}
+.rr-markdown :deep(strong) {
+  color: #1a3a6b;
+}
+.rr-markdown :deep(h1),
+.rr-markdown :deep(h2),
+.rr-markdown :deep(h3) {
+  margin: 0 0 8px;
+  color: #0d1b2a;
+  font-size: 14px;
+}
+.rr-markdown :deep(table) {
+  width: 100%;
+  border-collapse: collapse;
+}
+.rr-markdown :deep(th),
+.rr-markdown :deep(td) {
+  border: 1px solid #dde3ee;
+  padding: 6px 8px;
+  text-align: left;
+}
+.rr-markdown :deep(th) {
+  background: #eef2fa;
+}
+.rr-artifact-wrap {
+  overflow: hidden;
+  background: linear-gradient(180deg, #fbfdff 0%, #f6f9fe 100%);
+  border: 1px solid #dde6f3;
+  border-radius: 16px;
+  padding: 12px;
+  box-shadow: 0 12px 24px rgba(15, 23, 42, 0.05);
+}
+.rr-artifact-fallback {
+  margin: 0;
+  white-space: pre-wrap;
+  font-size: 11px;
   background: #f7f9fc;
-  border-left: 3px solid #c8d5ee;
-  padding: 10px 14px;
-  border-radius: 0 6px 6px 0;
+  border: 1px solid #e4eaf5;
+  border-radius: 6px;
+  padding: 12px;
 }
 
 /* ── 页脚 ──────────────────────────────────────────────────── */

@@ -30,7 +30,7 @@
     </div>
 
     <!-- 操作 -->
-    <div class="rd-footer">
+    <div class="rd-footer" v-if="!readonly">
       <button class="btn-preview" @click="triggerPreview" :disabled="previewing">
         <Icon v-if="!previewing" icon="mdi:eye-outline" width="14" />
         <Icon v-else icon="mdi:loading" width="14" class="spin" />
@@ -54,7 +54,7 @@ import { useReportStore } from '@/stores/reportStore'
 import type { ReportSection } from '@/stores/reportStore'
 import { parseCSV } from '@/utils/reportExportEngine'
 
-const props = defineProps<{ artifact: ArtifactEvent }>()
+const props = defineProps<{ artifact: ArtifactEvent; readonly?: boolean }>()
 const buildingStore = useBuildingStore()
 const reportStore = useReportStore()
 

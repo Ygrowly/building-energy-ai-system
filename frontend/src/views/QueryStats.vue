@@ -969,20 +969,100 @@ function buildCardHighlights(groupId: string): CardHighlight[] {
 function sharedTooltip() {
   return {
     trigger: 'axis' as const,
-    backgroundColor: 'rgba(255,255,255,0.96)',
-    borderColor: '#eaedf0', borderWidth: 1,
+    backgroundColor: 'rgba(255,255,255,0.98)',
+    borderColor: '#edf1f4', borderWidth: 1,
     textStyle: { color: '#2d3239', fontSize: 12 },
     padding: [10, 14],
-    extraCssText: 'box-shadow:0 4px 16px rgba(0,0,0,0.08);border-radius:8px;',
+    axisPointer: {
+      type: 'line' as const,
+      lineStyle: { color: 'rgba(129, 140, 155, 0.35)', width: 1 },
+    },
+    extraCssText: 'box-shadow:0 10px 30px rgba(15,23,42,0.08);border-radius:12px;',
   }
 }
-function sharedXAxis(days: string[]) {
+
+function getXAxisLabelInterval(days: string[]) {
+  const len = days.length
+  if (len <= 8) return 0
+  if (len <= 14) return 1
+  if (len <= 24) return 2
+  if (len <= 45) return 3
+  if (len <= 75) return 5
+  return 7
+}
+
+function formatAxisDayLabel(value: string) {
+  const [year, month, date] = value.split('-')
+  if (!year || !month || !date) return value
+  return `${month}/${date}`
+}
+
+function sharedXAxis(days: string[], options: { boundaryGap?: boolean } = {}) {
+  const interval = getXAxisLabelInterval(days)
   return {
     type: 'category' as const, data: days,
-    axisLabel: { rotate: days.length > 15 ? 45 : 0, color: '#8c939a', fontSize: 11 },
-    axisLine: { lineStyle: { color: '#e8ebee' } },
+    boundaryGap: options.boundaryGap ?? false,
+    axisLabel: {
+      interval,
+      formatter: (value: string) => formatAxisDayLabel(value),
+      rotate: days.length > 36 ? 28 : 0,
+      color: '#7e8792',
+      fontSize: 10,
+      margin: 12,
+      hideOverlap: true,
+      showMinLabel: true,
+      showMaxLabel: true,
+    },
+    axisLine: { lineStyle: { color: '#edf1f4' } },
     axisTick: { show: false },
   }
+}
+
+function sharedLegend(items: string[], bottom = 10) {
+  return {
+    data: items,
+    bottom,
+    left: 'center' as const,
+    icon: 'roundRect',
+    itemWidth: 12,
+    itemHeight: 8,
+    textStyle: { color: '#8c939a', fontSize: 11 },
+    itemGap: 16,
+  }
+}
+
+function sharedZoom() {
+  return [
+    {
+      type: 'slider' as const,
+      xAxisIndex: 0,
+      bottom: 6,
+      height: 18,
+      borderColor: 'transparent',
+      backgroundColor: '#f3f6f8',
+      dataBackground: {
+        lineStyle: { color: 'rgba(148,163,184,0.35)' },
+        areaStyle: { color: 'rgba(226,232,240,0.65)' },
+      },
+      fillerColor: 'rgba(76,175,80,0.14)',
+      handleSize: 14,
+      handleIcon: 'M8.7,11.9v-1.2H7.3v1.2H8.7z M8.7,9.4V8.1H7.3v1.2H8.7z M8.7,6.9V5.6H7.3v1.2H8.7z',
+      handleStyle: {
+        color: '#ffffff',
+        borderColor: '#4caf50',
+        borderWidth: 1.5,
+        shadowBlur: 8,
+        shadowColor: 'rgba(76,175,80,0.18)',
+      },
+      moveHandleStyle: { color: 'rgba(76,175,80,0.22)' },
+      textStyle: { fontSize: 0, color: 'transparent' },
+      showDetail: false,
+      brushSelect: false,
+      start: 0,
+      end: 100,
+    },
+    { type: 'inside' as const, xAxisIndex: 0 },
+  ]
 }
 function makeSeriesData(records: any[], paramKey: string) {
   return records.map((r: any) => {
@@ -1066,14 +1146,11 @@ function renderEnergyChart(inst: echarts.ECharts, data: any) {
   const hasZoom = days.length > 14
   inst.setOption({
     tooltip: sharedTooltip(),
-    legend: { data: series.map(s => s.name), bottom: hasZoom ? 36 : 0, icon: 'roundRect', itemWidth: 12, itemHeight: 8, textStyle: { color: '#8c939a', fontSize: 11 }, itemGap: 16 },
-    grid: { left: 56, right: hasWater && kwhKeys.length > 0 ? 56 : 20, top: 36, bottom: hasZoom ? 80 : 44, containLabel: false },
-    xAxis: sharedXAxis(days),
+    legend: sharedLegend(series.map(s => s.name), hasZoom ? 42 : 18),
+    grid: { left: 54, right: hasWater && kwhKeys.length > 0 ? 52 : 18, top: 44, bottom: hasZoom ? 88 : 62, containLabel: false },
+    xAxis: sharedXAxis(days, { boundaryGap: true }),
     yAxis,
-    dataZoom: hasZoom ? [
-      { type: 'slider', xAxisIndex: 0, bottom: 4, height: 22, borderColor: 'transparent', backgroundColor: '#f5f6f8', fillerColor: 'rgba(76,175,80,0.15)', handleStyle: { color: '#4caf50' }, textStyle: { fontSize: 10 }, start: 0, end: 100 },
-      { type: 'inside', xAxisIndex: 0 },
-    ] : [],
+    dataZoom: hasZoom ? sharedZoom() : [],
     series,
     animationDuration: 600,
   })
@@ -1083,6 +1160,7 @@ function renderEnergyChart(inst: echarts.ECharts, data: any) {
 function renderCOPChart(inst: echarts.ECharts, data: any) {
   const records: any[] = data.records || []
   const days = records.map((r: any) => r.day?.slice(0, 10) || '')
+  const hasZoom = days.length > 18
 
   const copData = makeSeriesData(records, 'ac_cop')
   const powerData = makeSeriesData(records, 'ac_avg_power_kw')
@@ -1094,13 +1172,9 @@ function renderCOPChart(inst: echarts.ECharts, data: any) {
 
   inst.setOption({
     tooltip: sharedTooltip(),
-    legend: {
-      data: ['COP值', 'AC功率 (kW)', '供回水温差 (°C)'],
-      bottom: 0, icon: 'roundRect', itemWidth: 12, itemHeight: 8,
-      textStyle: { color: '#8c939a', fontSize: 11 }, itemGap: 16,
-    },
-    grid: { left: 56, right: 56, top: 40, bottom: 44, containLabel: false },
-    xAxis: sharedXAxis(days),
+    legend: sharedLegend(['COP值', 'AC功率 (kW)', '供回水温差 (°C)'], hasZoom ? 42 : 18),
+    grid: { left: 54, right: 54, top: 44, bottom: hasZoom ? 88 : 62, containLabel: false },
+    xAxis: sharedXAxis(days, { boundaryGap: true }),
     yAxis: [
       {
         type: 'value', name: 'COP', position: 'left',
@@ -1151,6 +1225,7 @@ function renderCOPChart(inst: echarts.ECharts, data: any) {
 function renderTempChart(inst: echarts.ECharts, data: any) {
   const records: any[] = data.records || []
   const days = records.map((r: any) => r.day?.slice(0, 10) || '')
+  const hasZoom = days.length > 18
   const checked = new Set(checkedParams.value.map(p => p.key))
 
   const allTempKeys = ['air_temp_c', 'sim_supply_temp_c', 'sim_return_temp_c', 'dew_temp_c']
@@ -1212,10 +1287,11 @@ function renderTempChart(inst: echarts.ECharts, data: any) {
 
   inst.setOption({
     tooltip: sharedTooltip(),
-    legend: { data: series.map(s => s.name), bottom: 0, icon: 'roundRect', itemWidth: 12, itemHeight: 8, textStyle: { color: '#8c939a', fontSize: 11 }, itemGap: 16 },
-    grid: { left: 56, right: hasHumidity && tempKeys.length > 0 ? 56 : 20, top: 36, bottom: 44, containLabel: false },
+    legend: sharedLegend(series.map(s => s.name), hasZoom ? 42 : 18),
+    grid: { left: 54, right: hasHumidity && tempKeys.length > 0 ? 54 : 18, top: 44, bottom: hasZoom ? 88 : 62, containLabel: false },
     xAxis: sharedXAxis(days),
     yAxis,
+    dataZoom: hasZoom ? sharedZoom() : [],
     series,
     animationDuration: 600,
   })
@@ -1225,22 +1301,15 @@ function renderTempChart(inst: echarts.ECharts, data: any) {
 function renderDeviceChart(inst: echarts.ECharts, data: any) {
   const rows: any[] = data.records || []
   const days = rows.map((r: any) => r.day?.slice(0, 10) || '')
+  const hasZoom = days.length > 18
   const normalRateData = makeSeriesData(rows, 'device_normal_rate')
   const powerData = makeSeriesData(rows, 'ac_avg_power_kw')
 
   inst.setOption({
     tooltip: sharedTooltip(),
-    legend: {
-      data: ['设备正常率', 'AC平均功率 (kW)'],
-      bottom: 0,
-      icon: 'roundRect',
-      itemWidth: 12,
-      itemHeight: 8,
-      textStyle: { color: '#8c939a', fontSize: 11 },
-      itemGap: 16,
-    },
-    grid: { left: 56, right: 56, top: 36, bottom: 44, containLabel: false },
-    xAxis: sharedXAxis(days),
+    legend: sharedLegend(['设备正常率', 'AC平均功率 (kW)'], hasZoom ? 42 : 18),
+    grid: { left: 54, right: 54, top: 44, bottom: hasZoom ? 88 : 62, containLabel: false },
+    xAxis: sharedXAxis(days, { boundaryGap: true }),
     yAxis: [
       {
         type: 'value',
@@ -1299,6 +1368,7 @@ function renderDeviceChart(inst: echarts.ECharts, data: any) {
         barMaxWidth: 22,
       },
     ],
+    dataZoom: hasZoom ? sharedZoom() : [],
     animationDuration: 600,
   })
 }
@@ -1335,11 +1405,13 @@ onUnmounted(() => {
 
 /* ── 筛选面板 ── */
 .filter-panel {
-  background: #fff;
-  border: 1px solid #eaedf0;
-  border-radius: 12px;
+  background:
+    radial-gradient(circle at top right, rgba(76, 175, 80, 0.05), transparent 24%),
+    linear-gradient(180deg, #ffffff 0%, #fbfcfd 100%);
+  border: 1px solid #e8edf2;
+  border-radius: 16px;
   padding: 20px 24px 16px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.02);
+  box-shadow: 0 14px 34px rgba(15, 23, 42, 0.04), 0 2px 8px rgba(15, 23, 42, 0.03);
   flex-shrink: 0;
 }
 
@@ -1605,11 +1677,22 @@ onUnmounted(() => {
   gap: 14px;
 }
 .kpi-card {
+  position: relative;
   background: linear-gradient(180deg, #ffffff 0%, #fbfcfd 100%);
-  border: 1px solid #eaedf0;
-  border-radius: 12px;
-  padding: 16px 18px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.02);
+  border: 1px solid #e8edf2;
+  border-radius: 16px;
+  padding: 16px 18px 18px;
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.04), 0 2px 8px rgba(15, 23, 42, 0.03);
+  overflow: hidden;
+}
+.kpi-card::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  right: 0;
+  height: 3px;
+  background: linear-gradient(90deg, rgba(76,175,80,0.9), rgba(76,175,80,0.18));
 }
 .kpi-card-top {
   display: flex;
@@ -1662,8 +1745,8 @@ onUnmounted(() => {
   min-height: 34px;
   padding: 0 12px;
   border-radius: 999px;
-  background: #f6f8fa;
-  border: 1px solid #edf0f2;
+  background: linear-gradient(180deg, #f8fafb 0%, #f2f6f8 100%);
+  border: 1px solid #edf2f5;
 }
 .analysis-meta-label {
   font-size: 12px;
@@ -1676,10 +1759,10 @@ onUnmounted(() => {
 }
 .chart-container--analysis {
   min-height: 320px;
-  padding-top: 8px;
+  padding-top: 6px;
 }
 .analysis-card--full .chart-container--analysis {
-  min-height: 290px;
+  min-height: 300px;
 }
 .insight-card {
   overflow: visible;
@@ -1694,10 +1777,11 @@ onUnmounted(() => {
   display: flex;
   gap: 12px;
   align-items: flex-start;
-  padding: 16px;
-  border-radius: 12px;
-  background: linear-gradient(180deg, #fbfcfd 0%, #f6f9fb 100%);
-  border: 1px solid #edf1f4;
+  padding: 18px;
+  border-radius: 16px;
+  background: linear-gradient(180deg, #fcfefd 0%, #f5f9f7 100%);
+  border: 1px solid #e9f0ec;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.55);
 }
 .insight-badge {
   min-width: 44px;
@@ -1730,10 +1814,10 @@ onUnmounted(() => {
 
 /* ── 图表卡片 ── */
 .chart-card {
-  background: #fff;
-  border: 1px solid #eaedf0;
-  border-radius: 12px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.02);
+  background: linear-gradient(180deg, #ffffff 0%, #fcfdfd 100%);
+  border: 1px solid #e8edf2;
+  border-radius: 18px;
+  box-shadow: 0 16px 34px rgba(15, 23, 42, 0.05), 0 2px 10px rgba(15, 23, 42, 0.03);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -1743,24 +1827,25 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 16px 20px 0;
+  padding: 18px 22px 0;
 }
 .chart-card-title {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 15px;
+  font-size: 16px;
   font-weight: 600;
-  color: #2d3239;
+  color: #24303a;
 }
 .chart-title-icon { color: #4caf50; }
 .chart-date-range {
   font-size: 12px;
-  font-weight: 400;
-  color: #b0b6be;
-  padding: 2px 10px;
-  background: #f5f6f8;
-  border-radius: 10px;
+  font-weight: 500;
+  color: #8c939a;
+  padding: 4px 12px;
+  background: linear-gradient(180deg, #f6f8fa 0%, #f0f4f7 100%);
+  border: 1px solid #edf2f5;
+  border-radius: 999px;
 }
 .chart-card-actions { display: flex; gap: 4px; }
 .card-action-btn {
@@ -1771,15 +1856,15 @@ onUnmounted(() => {
   justify-content: center;
   border: none;
   background: transparent;
-  color: #b0b6be;
-  border-radius: 8px;
+  color: #a8b0b9;
+  border-radius: 10px;
   cursor: pointer;
-  transition: background 0.15s, color 0.15s;
+  transition: background 0.15s, color 0.15s, transform 0.15s;
 }
-.card-action-btn:hover { background: #f5f6f8; color: #636a73; }
+.card-action-btn:hover { background: #f5f8fa; color: #4b5563; transform: rotate(-12deg); }
 .chart-container {
   min-height: 420px;
-  padding: 12px 16px 16px;
+  padding: 14px 18px 18px;
 }
 
 /* ── 数据表格 ── */

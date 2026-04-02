@@ -17,24 +17,10 @@
 """
 from __future__ import annotations
 
-import json
 import logging
-import os
-import time
 from dataclasses import dataclass
 from datetime import timezone
 from typing import Any
-
-# #region agent log
-_DBG_LOG_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "..", "debug-e8ce47.log")
-def _dbg(hypothesis: str, location: str, message: str, data: dict):
-    try:
-        entry = json.dumps({"sessionId": "e8ce47", "runId": "rebuild", "hypothesisId": hypothesis, "location": location, "message": message, "data": data, "timestamp": int(time.time()*1000)}, default=str)
-        with open(_DBG_LOG_PATH, "a", encoding="utf-8") as f:
-            f.write(entry + "\n")
-    except Exception:
-        pass
-# #endregion
 
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -233,15 +219,6 @@ def _compute_nominal_row(
     # ── HVAC on/off ──
     extreme = ta < _FORCE_ON_LOW_TA or ta > _FORCE_ON_HIGH_TA
     hvac_on = q_load > _MIN_ON_LOAD_KW and (s > 0.08 or extreme)
-    # #region agent log
-    if (is_cooling or is_heating) and not hvac_on and q_load > 0.5:
-        _dbg("H4", "kpi_expected_service.py:_compute_nominal_row:hvac_on_rejected", "hvac-on-false-despite-load", {
-            "ta": ta, "s": s, "q_load": round(q_load, 4), "extreme": extreme,
-            "s_gt_008": s > 0.08, "ta_gt_force_high": ta > _FORCE_ON_HIGH_TA, "ta_lt_force_low": ta < _FORCE_ON_LOW_TA,
-            "is_cooling": is_cooling, "is_heating": is_heating,
-            "force_high": _FORCE_ON_HIGH_TA, "force_low": _FORCE_ON_LOW_TA,
-        })
-    # #endregion
     if not hvac_on:
         q_load = 0.0
 
@@ -313,10 +290,6 @@ def _run_hvac_state_machine(
     """
     results: list[tuple[bool, bool]] = []
     mode = 0  # 0=transition, 1=cooling, -1=heating
-    # #region agent log
-    _transition_log_count = 0
-    # #endregion
-
     for idx, (ta, q_total, q_env) in enumerate(rows):
         prev_mode = mode
         # 离开当前工况
@@ -333,17 +306,6 @@ def _run_hvac_state_machine(
                 mode = -1
             elif cool_demand:
                 mode = 1
-
-        # #region agent log
-        if prev_mode != mode and _transition_log_count < 30:
-            _transition_log_count += 1
-            ts_str = str(ts_list[idx]) if ts_list and idx < len(ts_list) else str(idx)
-            _dbg("H1", f"kpi_expected_service.py:state_machine:{building_id}", "state-transition", {
-                "idx": idx, "ts": ts_str, "ta": ta, "q_total": round(q_total, 4), "q_env": round(q_env, 4),
-                "prev_mode": prev_mode, "new_mode": mode,
-                "cool_off_check": f"ta={ta}<=cool_off_ta={_COOL_OFF_TA}={ta<=_COOL_OFF_TA}, q_total={q_total:.2f}<=cool_off_q={_COOL_OFF_Q}={q_total<=_COOL_OFF_Q}",
-            })
-        # #endregion
 
         results.append((mode == 1, mode == -1))
 
@@ -433,21 +395,6 @@ async def compute_expected_for_building(
             is_cooling=is_cool,
             is_heating=is_heat,
         )
-        # #region agent log
-        _target_ts = {"2016-04-23 17:00:00", "2016-10-08 06:00:00", "2016-01-02 07:00:00", "2016-07-15 14:00:00"}
-        ts_str = str(ts).replace("+00:00", "").replace(" ", " ")[:19]
-        if ts_str in _target_ts or (nominal.get("hac_energy_expected", 0) < 3.0 and (is_cool or is_heat)):
-            _dbg("H1_H4", f"kpi_expected_service.py:compute_row:{building_id}", "row-detail", {
-                "ts": ts_str, "ta": ta, "td": td, "rh": rh, "hour": ts.hour, "dow": ts.isoweekday(),
-                "is_cool": is_cool, "is_heat": is_heat, "sqm": sqm, "usage": usage,
-                "s": nominal.get("schedule_factor"), "hvac_mode": nominal.get("hvac_mode"),
-                "hac_expected": nominal.get("hac_energy_expected"),
-                "elec_expected": nominal.get("electricity_kwh_expected"),
-                "water_expected": nominal.get("water_m3_expected"),
-                "supply_expected": nominal.get("sim_supply_temp_c_expected"),
-                "return_expected": nominal.get("sim_return_temp_c_expected"),
-            })
-        # #endregion
         output_rows.append({
             "timestamp": ts,
             "building_id": building_id,

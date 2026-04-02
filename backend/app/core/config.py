@@ -73,9 +73,15 @@ class Settings(BaseSettings):
     # -----------------------------------------------------------------------
     DEBUG: bool = True
     APP_ENV: str = "development"  # development | production
-    ENABLE_AUTO_WORK_ORDERS: bool = False
-    ENABLE_AUTO_AI_REVIEW: bool = False
-    ENABLE_CHAT_WORK_ORDERS: bool = False
+    ENABLE_STARTUP_JOBS: bool = False  # 总开关：是否允许 API 进程在启动时注册后台周期任务
+    ENABLE_TOKEN_CLEANUP_JOB: bool = False  # 子开关：是否定时清理过期/已吊销的 refresh token
+    ENABLE_ANOMALY_JOB: bool = False  # 子开关：是否周期性执行期望值计算 + 异常检测批处理
+    ENABLE_FORECAST_JOB: bool = False  # 子开关：是否周期性执行预测预警 + 预测工单流程
+    ANOMALY_JOB_INTERVAL_SECONDS: int = 3600  # 异常检测任务运行间隔，单位秒；仅在 ENABLE_ANOMALY_JOB=True 时生效
+    FORECAST_JOB_INTERVAL_SECONDS: int = 3600  # 预测任务运行间隔，单位秒；仅在 ENABLE_FORECAST_JOB=True 时生效
+    ENABLE_AUTO_WORK_ORDERS: bool = False  # 业务开关：异常/预测结果产生后，是否自动创建工单
+    ENABLE_AUTO_AI_REVIEW: bool = False  # 业务开关：自动创建工单后，是否继续触发 AI 审批
+    ENABLE_CHAT_WORK_ORDERS: bool = False  # 对话开关：是否允许聊天链路直接生成工单草稿/工单流程
 
     # -----------------------------------------------------------------------
     # Redis Cache

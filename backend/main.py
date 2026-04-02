@@ -90,24 +90,37 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logging.getLogger(__name__).warning("楼宇列表预加载失败（首次请求时重试）: %s", exc)
 
-    # 定期清理过期/已吊销的 refresh token（每 24 小时一次）
-    token_cleanup_task = asyncio.create_task(_cleanup_refresh_tokens(interval_seconds=86400))
-
-    # ── 定时调度：异常检测 + 自动建工单（每小时）、预测预警（每小时）
-    anomaly_detect_task = asyncio.create_task(
-        _periodic_anomaly_detect(interval_seconds=3600)
-    )
-    forecast_task = asyncio.create_task(
-        _periodic_forecast(interval_seconds=3600)
-    )
+    tasks: list[asyncio.Task] = []
+    if settings.ENABLE_STARTUP_JOBS:
+        if settings.ENABLE_TOKEN_CLEANUP_JOB:
+            tasks.append(
+                asyncio.create_task(
+                    _cleanup_refresh_tokens(interval_seconds=86400)
+                )
+            )
+        if settings.ENABLE_ANOMALY_JOB:
+            tasks.append(
+                asyncio.create_task(
+                    _periodic_anomaly_detect(
+                        interval_seconds=settings.ANOMALY_JOB_INTERVAL_SECONDS
+                    )
+                )
+            )
+        if settings.ENABLE_FORECAST_JOB:
+            tasks.append(
+                asyncio.create_task(
+                    _periodic_forecast(
+                        interval_seconds=settings.FORECAST_JOB_INTERVAL_SECONDS
+                    )
+                )
+            )
 
     yield
 
     # 关闭时取消定期任务
-    token_cleanup_task.cancel()
-    anomaly_detect_task.cancel()
-    forecast_task.cancel()
-    for task in (token_cleanup_task, anomaly_detect_task, forecast_task):
+    for task in tasks:
+        task.cancel()
+    for task in tasks:
         try:
             await task
         except asyncio.CancelledError:
@@ -222,16 +235,16 @@ async def _periodic_forecast(interval_seconds: int = 3600) -> None:
             log.info("定时预测预警开始 ...")
             async with AsyncSessionLocal() as db:
                 bld_result = await db.execute(
-                    sa_select(Building.primary_space_usage).distinct()
+                    sa_select(Building.building_id).order_by(Building.building_id)
                 )
-                building_types = [r[0] for r in bld_result.fetchall()]
+                building_ids = [r[0] for r in bld_result.fetchall()]
 
-                for bt in building_types:
+                for bid in building_ids:
                     res = await forecast_building_kpi(
-                        building_id=bt, session=db,
+                        building_id=bid, session=db,
                     )
                     if isinstance(res, MCPError):
-                        log.warning("forecast failed: %s → %s", bt, res.error)
+                        log.warning("forecast failed: %s → %s", bid, res.error)
 
             # 预测完成后自动建工单
             async with AsyncSessionLocal() as db:

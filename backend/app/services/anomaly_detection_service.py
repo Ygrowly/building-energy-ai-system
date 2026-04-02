@@ -26,7 +26,6 @@
 """
 from __future__ import annotations
 
-import json
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -35,23 +34,9 @@ from typing import Any
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-import os
-import time
-
 from app.db.models import Building, EnergyData, KpiExpectedHourly
 
 logger = logging.getLogger(__name__)
-
-# #region agent log
-_DBG_LOG_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "..", "debug-e8ce47.log")
-def _dbg_ad(hypothesis: str, location: str, message: str, data: dict):
-    try:
-        entry = json.dumps({"sessionId": "e8ce47", "runId": "rebuild", "hypothesisId": hypothesis, "location": location, "message": message, "data": data, "timestamp": int(time.time()*1000)}, default=str)
-        with open(_DBG_LOG_PATH, "a", encoding="utf-8") as f:
-            f.write(entry + "\n")
-    except Exception:
-        pass
-# #endregion
 
 # ---------------------------------------------------------------------------
 # 检测阈值（与 notebook detect_building_kpi_anomalies 中 DetectionThresholds 一致）
@@ -336,13 +321,6 @@ async def detect_for_building(
     flag_hac_count = sum(1 for r in flag_rows if r["flag_hvac_energy"])
     flag_supply_count = sum(1 for r in flag_rows if r["flag_supply_deviation"])
     flag_return_count = sum(1 for r in flag_rows if r["flag_return_deviation"])
-    _dbg_ad("H_STATS", f"anomaly_detection_service.py:detect_for_building:{building_id}", "detection-summary", {
-        "building_id": building_id, "total_rows": len(flag_rows),
-        "full": full_count, "ramp": ramp_count,
-        "flag_water": flag_water_count, "flag_electricity": flag_elec_count,
-        "flag_hac": flag_hac_count, "flag_supply": flag_supply_count, "flag_return": flag_return_count,
-    })
-    # #endregion
     logger.info("detect_for_building: 楼 %s 检测了 %d 行", building_id, len(flag_rows))
     return flag_rows
 
@@ -618,20 +596,6 @@ async def generate_anomaly_events(
                 phase=phase,
                 sched_f=sched_f,
             ))
-
-    # #region agent log
-    high_dev = [e for e in event_dicts if e.get("deviation_pct") is not None and abs(e["deviation_pct"]) > 500]
-    for e in high_dev[:5]:
-        _dbg_ad("H_HIGHDEV", f"anomaly_detection_service.py:generate_events:{building_id}", "high-deviation-event", {
-            "ts": str(e.get("data_timestamp")), "rule": e.get("rule_triggered"),
-            "actual": e.get("actual_value"), "expected": e.get("expected_value"),
-            "deviation_pct": e.get("deviation_pct"), "threshold": e.get("threshold_value"),
-            "hvac_root_cause": e.get("hvac_root_cause"),
-        })
-    _dbg_ad("H_EVENTS", f"anomaly_detection_service.py:generate_events:{building_id}", "events-summary", {
-        "building_id": building_id, "total_events": len(event_dicts), "high_dev_events": len(high_dev),
-    })
-    # #endregion
 
     if not event_dicts:
         return 0

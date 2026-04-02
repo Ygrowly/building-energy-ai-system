@@ -137,36 +137,36 @@ async def run_forecast(
 
     - 不传 building_id 时对所有楼宇逐一执行
     - 可选传入 as_of 指定预测基准时刻
-    - 复用 forecast_building_kpi()，未来可被 lifespan 中的调度器直接调用
-    - 调度接入点预留于 main.py lifespan 中（见注释），本轮不启用自动周期任务
+    - 复用 forecast_building_kpi()，未来可被独立调度器直接调用
+    - 默认不在 API 进程启动时自动触发周期任务
     """
     if body.building_id:
-        building_types = [body.building_id]
+        building_ids = [body.building_id]
     else:
         result = await db.execute(
-            select(Building.primary_space_usage).distinct()
+            select(Building.building_id).order_by(Building.building_id)
         )
-        building_types = [r[0] for r in result.fetchall()]
+        building_ids = [r[0] for r in result.fetchall()]
 
     succeeded = 0
     failed = 0
     total_warnings = 0
     per_building: dict[str, dict] = {}
 
-    for bt in building_types:
+    for bid in building_ids:
         res = await forecast_building_kpi(
-            building_id=bt,
+            building_id=bid,
             session=db,
             as_of=body.as_of,
         )
         if isinstance(res, MCPError):
             failed += 1
-            per_building[bt] = {"status": "error", "error": res.error}
-            logger.warning("run-forecast: %s failed: %s", bt, res.error)
+            per_building[bid] = {"status": "error", "error": res.error}
+            logger.warning("run-forecast: %s failed: %s", bid, res.error)
         else:
             succeeded += 1
             total_warnings += res.warnings_count
-            per_building[bt] = {
+            per_building[bid] = {
                 "status": "ok",
                 "warnings_count": res.warnings_count,
                 "data_rows_used": res.data_rows_used,
@@ -175,7 +175,7 @@ async def run_forecast(
 
     logger.info(
         "admin: run-forecast done, buildings=%d, success=%d, fail=%d, warnings=%d",
-        len(building_types), succeeded, failed, total_warnings,
+        len(building_ids), succeeded, failed, total_warnings,
     )
 
     # 预测完成后：自动为高风险预警创建工单 + AI 审批
@@ -210,7 +210,7 @@ async def run_forecast(
 
     return {
         "status": "ok",
-        "total_buildings": len(building_types),
+        "total_buildings": len(building_ids),
         "succeeded": succeeded,
         "failed": failed,
         "total_warnings": total_warnings,

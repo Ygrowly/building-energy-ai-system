@@ -1,6 +1,7 @@
 <!--
   自定义底部导航栏
   通过 tabs prop 传入标签配置，current 绑定当前页
+  icon 字段现在使用 /static/icons/ 下的 SVG 图标路径
 -->
 <template>
   <view class="tab-bar" :class="theme">
@@ -11,7 +12,11 @@
       :class="{ active: current === tab.name }"
       @click="onTab(tab)"
     >
-      <text class="tab-icon">{{ tab.icon }}</text>
+      <image
+        class="tab-icon"
+        :src="current === tab.name ? tab.iconActive || tab.icon : tab.icon"
+        mode="aspectFit"
+      />
       <text class="tab-label">{{ tab.label }}</text>
     </view>
   </view>
@@ -22,6 +27,7 @@ export interface TabItem {
   name: string
   label: string
   icon: string
+  iconActive?: string
   path: string
 }
 
@@ -33,7 +39,6 @@ const props = defineProps<{
 
 function onTab(tab: TabItem) {
   if (tab.name === props.current) return
-  // 自定义 TabBar 不走 uni.switchTab（pages.json 未配置原生 tabBar）
   uni.reLaunch({ url: tab.path })
 }
 </script>
@@ -66,7 +71,8 @@ function onTab(tab: TabItem) {
 }
 
 .tab-icon {
-  font-size: 44rpx;
+  width: 44rpx;
+  height: 44rpx;
   transition: transform 0.2s;
 }
 

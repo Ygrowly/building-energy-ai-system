@@ -680,8 +680,16 @@ $font-cn:  'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif;
     rgba(34, 197, 94, 0.03) 55%,
     transparent 100%);
 
-  &--repair { filter: saturate(1.08); }
-  &--ops    { filter: hue-rotate(8deg) saturate(1.1); }
+  &--repair {
+    filter: saturate(1.08);
+    transform: translateX(-42rpx) scale(1.3);
+    transform-origin: center center;
+  }
+  &--ops {
+    filter: hue-rotate(8deg) saturate(1.1);
+    transform: translateY(20rpx) scale(1.22);
+    transform-origin: center center;
+  }
   &--user   { filter: hue-rotate(-6deg) saturate(0.96); }
 }
 

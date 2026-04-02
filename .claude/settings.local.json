@@ -24,7 +24,8 @@
       "Bash(find /e/27_fwwb_A08/project -name *seed* -o -name *init* -o -name *fixture* -type f)",
       "Bash(npx vue-tsc:*)",
       "Bash(find /e/27_fwwb_A08/project/frontend/src -name *.vue -type f)",
-      "Bash(curl -v http://localhost:8000/health)"
+      "Bash(curl -v http://localhost:8000/health)",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(''''Buildings count:'''', len\\(d.get\\(''''buildings'''',[]\\)\\)\\); [print\\(f''''  - {b[\"\"building_type\"\"]} \\({b[\"\"display_name\"\"]}\\): {b[\"\"total_electricity_kwh\"\"]} kWh''''\\) for b in d.get\\(''''buildings'''',[]\\)]\")"
     ]
   }
 }

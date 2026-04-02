@@ -6,7 +6,30 @@
  * - 统一错误提示
  */
 
-const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
+const UNI_PLATFORM = process.env.UNI_PLATFORM || 'unknown'
+const ENV_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').trim()
+const IS_LOOPBACK_BASE_URL = /^https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0)(:\d+)?(\/|$)/i.test(ENV_BASE_URL)
+
+// H5 开发态可以走 Vite 代理；App/小程序开发态必须显式指向后端地址。
+const BASE_URL = ENV_BASE_URL || (
+  import.meta.env.DEV && UNI_PLATFORM === 'h5'
+    ? ''
+    : 'http://127.0.0.1:8000'
+)
+
+if (import.meta.env.DEV && UNI_PLATFORM !== 'h5' && !ENV_BASE_URL) {
+  console.warn(
+    `[api] 当前平台=${UNI_PLATFORM}，开发环境未设置 VITE_API_BASE_URL，` +
+    '将回退到 http://127.0.0.1:8000。真机调试时请改成电脑局域网 IP。'
+  )
+}
+
+if (import.meta.env.DEV && UNI_PLATFORM !== 'h5' && IS_LOOPBACK_BASE_URL) {
+  console.warn(
+    `[api] 当前平台=${UNI_PLATFORM}，VITE_API_BASE_URL=${ENV_BASE_URL} 指向回环地址。` +
+    '真机调试时这会指向手机自身，不会连到电脑上的后端，请改成电脑局域网 IP。'
+  )
+}
 
 function getToken(): string | null {
   return uni.getStorageSync('access_token') || null

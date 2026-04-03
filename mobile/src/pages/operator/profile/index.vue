@@ -4,8 +4,14 @@
 
     <!-- 用户信息头 -->
     <view class="profile-header">
-      <view class="avatar">
-        <text>{{ avatarChar }}</text>
+      <view class="avatar-wrap" @click="changeAvatar">
+        <image v-if="avatarUrl" class="avatar-img" :src="avatarUrl" mode="aspectFill" />
+        <view v-else class="avatar-fallback">
+          <text>{{ avatarChar }}</text>
+        </view>
+        <view class="avatar-badge">
+          <text class="badge-text">换</text>
+        </view>
       </view>
       <view class="user-info">
         <text class="username">{{ user?.username }}</text>
@@ -17,35 +23,36 @@
 
     <!-- 菜单列表 -->
     <view class="menu-section">
-      <view class="menu-item" @click="showChangePwd = true">
-        <text class="menu-icon">🔑</text>
-        <text class="menu-label">修改密码</text>
-        <text class="menu-arrow">›</text>
+      <view class="menu-item" @click="goTo('info')">
+        <image class="menu-icon" src="/static/icons/user-outline.svg" mode="aspectFit" />
+        <text class="menu-label">个人资料</text>
+        <image class="menu-arrow" src="/static/icons/arrow-right.svg" mode="aspectFit" />
       </view>
       <view class="menu-divider" />
-      <view class="menu-item" @click="handleLogout">
-        <text class="menu-icon">🚪</text>
-        <text class="menu-label logout">退出登录</text>
-        <text class="menu-arrow">›</text>
+      <view class="menu-item" @click="goTo('security')">
+        <image class="menu-icon" src="/static/icons/shield-lock.svg" mode="aspectFit" />
+        <text class="menu-label">账号与安全</text>
+        <image class="menu-arrow" src="/static/icons/arrow-right.svg" mode="aspectFit" />
+      </view>
+      <view class="menu-divider" />
+      <view class="menu-item" @click="goTo('notification')">
+        <image class="menu-icon" src="/static/icons/bell-outline.svg" mode="aspectFit" />
+        <text class="menu-label">消息通知</text>
+        <image class="menu-arrow" src="/static/icons/arrow-right.svg" mode="aspectFit" />
+      </view>
+      <view class="menu-divider" />
+      <view class="menu-item" @click="goTo('about')">
+        <image class="menu-icon" src="/static/icons/info-circle.svg" mode="aspectFit" />
+        <text class="menu-label">关于</text>
+        <image class="menu-arrow" src="/static/icons/arrow-right.svg" mode="aspectFit" />
       </view>
     </view>
 
-    <!-- 应用信息 -->
-    <view class="app-info">
-      <text>楼宇能耗管理 v1.0.0</text>
-    </view>
-
-    <!-- 修改密码弹窗 -->
-    <view v-if="showChangePwd" class="modal-mask" @click.self="showChangePwd = false">
-      <view class="modal-card">
-        <text class="modal-title">修改密码</text>
-        <input class="modal-input" v-model="oldPwd" placeholder="当前密码" password />
-        <input class="modal-input" v-model="newPwd" placeholder="新密码（至少6位）" password />
-        <input class="modal-input" v-model="confirmPwd" placeholder="确认新密码" password />
-        <view class="modal-actions">
-          <button class="modal-btn cancel" @click="showChangePwd = false">取消</button>
-          <button class="modal-btn confirm" :loading="pwdLoading" @click="doChangePwd">确认</button>
-        </view>
+    <!-- 退出登录 -->
+    <view class="logout-section">
+      <view class="logout-btn" @click="handleLogout">
+        <image class="menu-icon" src="/static/icons/logout.svg" mode="aspectFit" />
+        <text class="logout-text">退出登录</text>
       </view>
     </view>
 
@@ -54,14 +61,14 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
 import NavBar from '../../../components/NavBar.vue'
 import TabBar from '../../../components/TabBar.vue'
 import { useAuthStore } from '../../../stores/auth'
 import { useRouteGuard } from '../../../utils/route-guard'
 import { OPERATOR_TABS } from '../../../constants/tabs'
 import { OPERATOR_ROLES } from '../../../constants/roles'
-import { authApi } from '../../../api/auth'
+import { ref, computed } from 'vue'
+import { onShow } from '@dcloudio/uni-app'
 
 useRouteGuard(OPERATOR_ROLES)
 
@@ -74,9 +81,61 @@ const roleText = computed(() => {
   return m[user.value?.role ?? ''] ?? '运维人员'
 })
 
-const showChangePwd = ref(false)
-const oldPwd = ref(''), newPwd = ref(''), confirmPwd = ref('')
-const pwdLoading = ref(false)
+// 头像：本地存储
+const avatarUrl = ref('')
+
+function loadAvatar() {
+  const uid = user.value?.id ?? 'guest'
+  avatarUrl.value = uni.getStorageSync(`avatar_${uid}`) || ''
+}
+
+onShow(() => { loadAvatar() })
+
+function changeAvatar() {
+  uni.chooseImage({
+    count: 1,
+    sizeType: ['compressed'],
+    sourceType: ['album', 'camera'],
+    success(res) {
+      const tempPath = res.tempFilePaths[0]
+      // 读取为 base64 存入本地
+      // #ifdef H5
+      const canvas = document.createElement('canvas')
+      const img = new Image()
+      img.onload = () => {
+        const size = 200
+        canvas.width = size
+        canvas.height = size
+        const ctx = canvas.getContext('2d')!
+        ctx.drawImage(img, 0, 0, size, size)
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.8)
+        saveAvatar(dataUrl)
+      }
+      img.src = tempPath
+      // #endif
+      // #ifndef H5
+      saveAvatar(tempPath)
+      // #endif
+    },
+  })
+}
+
+function saveAvatar(url: string) {
+  const uid = user.value?.id ?? 'guest'
+  uni.setStorageSync(`avatar_${uid}`, url)
+  avatarUrl.value = url
+}
+
+const SUB_PAGES: Record<string, string> = {
+  info: '/pages/operator/profile/info',
+  security: '/pages/operator/profile/security',
+  notification: '/pages/operator/profile/notification',
+  about: '/pages/operator/profile/about',
+}
+
+function goTo(page: string) {
+  uni.navigateTo({ url: SUB_PAGES[page] })
+}
 
 function handleLogout() {
   uni.showModal({
@@ -88,26 +147,6 @@ function handleLogout() {
       if (res.confirm) authStore.logout()
     },
   })
-}
-
-async function doChangePwd() {
-  if (!oldPwd.value || !newPwd.value || !confirmPwd.value) {
-    return uni.showToast({ title: '请填写完整', icon: 'none' })
-  }
-  if (newPwd.value.length < 6) {
-    return uni.showToast({ title: '新密码至少6位', icon: 'none' })
-  }
-  if (newPwd.value !== confirmPwd.value) {
-    return uni.showToast({ title: '两次密码不一致', icon: 'none' })
-  }
-  pwdLoading.value = true
-  try {
-    await authApi.changePassword(oldPwd.value, newPwd.value)
-    uni.showToast({ title: '密码已修改', icon: 'success' })
-    showChangePwd.value = false
-    oldPwd.value = newPwd.value = confirmPwd.value = ''
-  } catch { /* handled */ }
-  finally { pwdLoading.value = false }
 }
 </script>
 
@@ -123,7 +162,20 @@ async function doChangePwd() {
   margin-bottom: 24rpx;
 }
 
-.avatar {
+.avatar-wrap {
+  position: relative;
+  width: 112rpx;
+  height: 112rpx;
+  flex-shrink: 0;
+}
+
+.avatar-img {
+  width: 112rpx;
+  height: 112rpx;
+  border-radius: 56rpx;
+}
+
+.avatar-fallback {
   width: 112rpx;
   height: 112rpx;
   border-radius: 56rpx;
@@ -137,6 +189,26 @@ async function doChangePwd() {
     color: #fff;
     font-weight: 700;
   }
+}
+
+.avatar-badge {
+  position: absolute;
+  right: -4rpx;
+  bottom: -4rpx;
+  width: 36rpx;
+  height: 36rpx;
+  border-radius: 18rpx;
+  background: #3b6cf4;
+  border: 3rpx solid #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.badge-text {
+  font-size: 18rpx;
+  color: #fff;
+  font-weight: 600;
 }
 
 .username {
@@ -174,17 +246,21 @@ async function doChangePwd() {
   padding: 32rpx 28rpx;
 }
 
-.menu-icon { font-size: 36rpx; }
+.menu-icon {
+  width: 40rpx;
+  height: 40rpx;
+}
 
 .menu-label {
   flex: 1;
   font-size: 30rpx;
   color: #1a1a2e;
-
-  &.logout { color: #ff4d4f; }
 }
 
-.menu-arrow { font-size: 36rpx; color: #ccc; }
+.menu-arrow {
+  width: 32rpx;
+  height: 32rpx;
+}
 
 .menu-divider {
   height: 1rpx;
@@ -192,65 +268,23 @@ async function doChangePwd() {
   margin: 0 28rpx;
 }
 
-.app-info {
-  text-align: center;
-  padding: 48rpx;
-  font-size: 24rpx;
-  color: #ccc;
+.logout-section {
+  margin: 40rpx 32rpx;
 }
 
-/* 弹窗 */
-.modal-mask {
-  position: fixed;
-  inset: 0;
-  background: rgba(0,0,0,0.5);
+.logout-btn {
   display: flex;
-  align-items: flex-end;
-  z-index: 1000;
-}
-
-.modal-card {
+  align-items: center;
+  justify-content: center;
+  gap: 12rpx;
   background: #fff;
-  border-radius: 24rpx 24rpx 0 0;
-  padding: 40rpx 32rpx calc(40rpx + env(safe-area-inset-bottom, 0px));
-  width: 100%;
+  border-radius: 16rpx;
+  padding: 28rpx 0;
 }
 
-.modal-title {
-  display: block;
-  font-size: 34rpx;
-  font-weight: 700;
-  color: #1a1a2e;
-  margin-bottom: 32rpx;
-}
-
-.modal-input {
-  width: 100%;
-  height: 88rpx;
-  background: #f5f7fa;
-  border-radius: 12rpx;
-  padding: 0 24rpx;
-  font-size: 28rpx;
-  color: #1a1a2e;
-  margin-bottom: 20rpx;
-  box-sizing: border-box;
-}
-
-.modal-actions {
-  display: flex;
-  gap: 20rpx;
-  margin-top: 12rpx;
-}
-
-.modal-btn {
-  flex: 1;
-  height: 88rpx;
-  border-radius: 12rpx;
-  font-size: 28rpx;
+.logout-text {
+  font-size: 30rpx;
+  color: #ff4d4f;
   font-weight: 600;
-  border: none;
-
-  &.cancel  { background: #f5f5f5; color: #666; }
-  &.confirm { background: #3b6cf4; color: #fff; }
 }
 </style>

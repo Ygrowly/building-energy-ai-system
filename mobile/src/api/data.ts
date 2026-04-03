@@ -80,6 +80,29 @@ export interface RecentAnomaliesResponse {
   module_status: string
 }
 
+// ---- GET /api/buildings/{building_type}/load-profile 响应 ----
+
+export interface HourlyPoint {
+  hour: number
+  avg_value: number
+  sample_count?: number
+}
+
+export interface WeekdayPoint {
+  weekday: number
+  label?: string
+  avg_value: number
+}
+
+export interface LoadProfileResponse {
+  building_type: string
+  building_id: string
+  metric: string
+  days: number
+  hourly_profile: HourlyPoint[]
+  weekday_profile: WeekdayPoint[]
+}
+
 export const dataApi = {
   /** 全局总览（Dashboard KPI 汇总） */
   overview(date?: string): Promise<OverviewResponse> {
@@ -93,5 +116,13 @@ export const dataApi = {
     only_unresolved?: boolean
   }): Promise<RecentAnomaliesResponse> {
     return get<RecentAnomaliesResponse>('/api/anomalies/recent', params as Record<string, unknown>)
+  },
+
+  /** 建筑负荷曲线（热力图数据） */
+  loadProfile(buildingType: string, metric = 'electricity', days = 14): Promise<LoadProfileResponse> {
+    return get<LoadProfileResponse>(
+      `/api/buildings/${encodeURIComponent(buildingType)}/load-profile`,
+      { metric, days } as Record<string, unknown>,
+    )
   },
 }

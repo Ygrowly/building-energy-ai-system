@@ -89,7 +89,7 @@ class Device(Base):
 # ---------------------------------------------------------------------------
 # energy_data — 核心数据日志（时序宽表）
 # 实际 DDL 列（以 Supabase schema 为准）：
-#   timestamp, building_id, electricity_kwh, water_m3, hac_energy,
+#   timestamp, building_id, source_timestamp, electricity_kwh, water_m3, hac_energy,
 #   sim_supply_temp_c, sim_return_temp_c,
 #   air_temp_c, dew_temp_c, humidity_rh_pct, anomaly_status
 # ---------------------------------------------------------------------------
@@ -110,6 +110,7 @@ class EnergyData(Base):
         primary_key=True,
         nullable=False,
     )
+    source_timestamp = Column(TIMESTAMP(timezone=True), nullable=True)
 
     electricity_kwh: float = Column(Float)
     water_m3: float = Column(Float)
@@ -125,6 +126,12 @@ class EnergyData(Base):
             "idx_energy_data_building_timestamp",
             "building_id",
             timestamp.desc(),
+        ),
+        Index(
+            "uq_energy_data_building_source_timestamp",
+            "building_id",
+            "source_timestamp",
+            unique=True,
         ),
     )
 

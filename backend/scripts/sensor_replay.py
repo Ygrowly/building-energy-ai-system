@@ -9,7 +9,7 @@ import os
 import sys
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -224,6 +224,24 @@ def save_checkpoint(
     )
 
 
+def _current_source_hour(now: datetime | None = None) -> datetime:
+    local_now = now or datetime.now().astimezone()
+    return datetime(
+        local_now.year,
+        local_now.month,
+        local_now.day,
+        local_now.hour,
+        0,
+        0,
+    )
+
+
+def _seconds_until_next_hour(now: datetime | None = None) -> float:
+    local_now = now or datetime.now().astimezone()
+    next_hour = (local_now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1))
+    return max((next_hour - local_now).total_seconds(), 0.0)
+
+
 async def ingest_round(round_item: ReplayRound, ingest_ts: datetime) -> list[str]:
     params: list[dict[str, Any]] = []
     building_ids: list[str] = []
@@ -231,6 +249,7 @@ async def ingest_round(round_item: ReplayRound, ingest_ts: datetime) -> list[str
         params.append(
             {
                 "timestamp": ingest_ts,
+                "source_timestamp": row.source_timestamp.replace(tzinfo=timezone.utc),
                 "building_id": row.building_id,
                 **row.values,
             }
@@ -242,6 +261,7 @@ async def ingest_round(round_item: ReplayRound, ingest_ts: datetime) -> list[str
         INSERT INTO energy_data (
             timestamp,
             building_id,
+            source_timestamp,
             air_temp_c,
             dew_temp_c,
             humidity_rh_pct,
@@ -254,6 +274,7 @@ async def ingest_round(round_item: ReplayRound, ingest_ts: datetime) -> list[str
         VALUES (
             :timestamp,
             :building_id,
+            :source_timestamp,
             :air_temp_c,
             :dew_temp_c,
             :humidity_rh_pct,
@@ -263,7 +284,8 @@ async def ingest_round(round_item: ReplayRound, ingest_ts: datetime) -> list[str
             :sim_return_temp_c,
             :hac_energy
         )
-        ON CONFLICT (timestamp, building_id) DO UPDATE SET
+        ON CONFLICT (building_id, source_timestamp) DO UPDATE SET
+            timestamp = EXCLUDED.timestamp,
             air_temp_c = EXCLUDED.air_temp_c,
             dew_temp_c = EXCLUDED.dew_temp_c,
             humidity_rh_pct = EXCLUDED.humidity_rh_pct,
@@ -275,9 +297,16 @@ async def ingest_round(round_item: ReplayRound, ingest_ts: datetime) -> list[str
         """
     )
 
-    async with AsyncSessionLocal() as session:
-        await session.execute(sql, params)
-        await session.commit()
+    try:
+        async with AsyncSessionLocal() as session:
+            await session.execute(sql, params)
+            await session.commit()
+    except (OSError, SQLAlchemyError) as exc:
+        raise RuntimeError(
+            "写入 energy_data 失败。请先确认已执行 "
+            "`python backend/scripts/run_migration_016.py`，"
+            "并检查 energy_data.source_timestamp 与唯一索引是否已生效。"
+        ) from exc
 
     deduped: list[str] = []
     seen: set[str] = set()

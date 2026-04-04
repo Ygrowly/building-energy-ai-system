@@ -33,11 +33,32 @@ class ReportSection(BaseModel):
     order: int | None = None
 
 
+class FormalReportMeta(BaseModel):
+    severity: str | None = None
+    confidence: str | None = None
+    decisionSummary: str | None = None
+    currentJudgement: str | None = None
+    conclusionStatus: str | None = None
+    overviewItems: list[ReportSummaryItem] = Field(default_factory=list)
+    processSummary: list[str] = Field(default_factory=list)
+    keyMetrics: list[ReportSummaryItem] = Field(default_factory=list)
+    evidenceFacts: list[ReportSummaryItem] = Field(default_factory=list)
+    evidenceBasisMarkdown: str | None = None
+    evidenceExclusionMarkdown: str | None = None
+    evidenceHighlights: list[ReportSummaryItem] = Field(default_factory=list)
+    impactFacts: list[ReportSummaryItem] = Field(default_factory=list)
+    impactHighlights: list[ReportSummaryItem] = Field(default_factory=list)
+    actions: list[str] = Field(default_factory=list)
+    openQuestions: list[str] = Field(default_factory=list)
+    primaryArtifact: dict[str, Any] | None = None
+
+
 class ConversationReportRequest(BaseModel):
     mode: Literal["snapshot", "formal"] = "formal"
     generation_mode: Literal["hybrid", "backend_ai", "rules"] = "hybrid"
     artifact_policy: Literal["all", "none"] = "all"
     include_appendix: bool = False
+    template_id: str | None = None
 
 
 class ConversationReportPayload(BaseModel):
@@ -49,3 +70,6 @@ class ConversationReportPayload(BaseModel):
     sections: list[ReportSection]
     mode: Literal["snapshot", "formal"]
     generatedBy: str | None = None
+    template_id: str | None = None
+    template_label: str | None = None
+    formalMeta: FormalReportMeta | None = None

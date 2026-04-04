@@ -30,6 +30,26 @@ export interface SummaryItem {
   value: string
 }
 
+export interface FormalReportMeta {
+  severity?: string
+  confidence?: string
+  decisionSummary?: string
+  currentJudgement?: string
+  conclusionStatus?: string
+  overviewItems?: SummaryItem[]
+  processSummary?: string[]
+  keyMetrics?: SummaryItem[]
+  evidenceFacts?: SummaryItem[]
+  evidenceBasisMarkdown?: string
+  evidenceExclusionMarkdown?: string
+  evidenceHighlights?: SummaryItem[]
+  impactFacts?: SummaryItem[]
+  impactHighlights?: SummaryItem[]
+  actions?: string[]
+  openQuestions?: string[]
+  primaryArtifact?: ArtifactEvent
+}
+
 export interface ReportSection {
   id: string
   namespace: string              // 注册方命名空间，用于页面切换时清理
@@ -62,6 +82,9 @@ export interface ReportPayload {
   sections: ReportSection[]
   mode: 'snapshot' | 'formal'
   generatedBy?: string
+  template_id?: string
+  template_label?: string
+  formalMeta?: FormalReportMeta
 }
 
 // ── Store ─────────────────────────────────────────────────────

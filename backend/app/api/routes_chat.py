@@ -52,7 +52,7 @@ from app.schemas.genui_protocol import (
     SessionUpdateRequest,
 )
 from app.schemas.report_schemas import ConversationReportPayload, ConversationReportRequest
-from app.services.conversation_report_service_formal import generate_conversation_report_payload
+from app.services.conversation_report_template_service import generate_conversation_report_payload
 
 logger = logging.getLogger(__name__)
 

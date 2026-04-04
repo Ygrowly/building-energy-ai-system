@@ -69,7 +69,7 @@
 import { ref } from 'vue'
 import { Icon } from '@iconify/vue'
 import { useReportStore } from '@/stores/reportStore'
-import ReportRenderer from './ReportRenderer.vue'
+import ReportRenderer from './ReportRendererV2.vue'
 import { exportToPDF, exportToHTML, buildReportFilename } from '@/utils/reportExportEngine'
 
 const reportStore = useReportStore()

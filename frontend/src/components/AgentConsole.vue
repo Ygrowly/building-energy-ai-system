@@ -52,18 +52,47 @@
         <!-- 导出报表 -->
         <button
           class="top-btn"
-          :title="reportStore.sections.length > 0 ? '导出页面报表' : '导出对话报表'"
+          :class="{ active: reportMenuOpen || reportGenerating }"
+          :title="reportButtonTitle"
+          :disabled="reportGenerating || (!isPageReportMode && !store.currentSessionId)"
+          :aria-label="reportButtonTitle"
+          data-report-trigger="true"
           @click="onReportBtnClick"
         >
           <Icon icon="mdi:file-chart-outline" width="16" />
         </button>
+
+        <Transition name="dropdown">
+          <div
+            v-if="reportMenuOpen && !isPageReportMode"
+            ref="reportWrapEl"
+            class="dropdown-menu report-template-floating"
+          >
+            <div class="report-template-title">选择报表模板</div>
+            <button
+              v-for="template in conversationReportTemplates"
+              :key="template.id"
+              class="menu-item report-template-item"
+              :disabled="reportGenerating"
+              @click="onSelectReportTemplate(template.id)"
+            >
+              <div class="report-template-copy">
+                <div class="report-template-label">
+                  <span>{{ template.label }}</span>
+                  <span v-if="template.default" class="report-template-badge">默认</span>
+                </div>
+                <div class="report-template-desc">{{ template.description }}</div>
+              </div>
+            </button>
+          </div>
+        </Transition>
 
         <!-- 更多操作 -->
         <div class="dropdown-wrap" ref="moreWrapEl">
           <button
             class="top-btn"
             :class="{ active: moreOpen }"
-            @click="moreOpen = !moreOpen"
+            @click="toggleMoreMenu"
             title="更多"
           >
             <Icon icon="mdi:dots-horizontal" width="16" />
@@ -75,9 +104,13 @@
                 关闭会话
               </button>
               <div class="menu-divider" />
-              <button class="menu-item" @click="onExportConversation">
+              <button
+                class="menu-item report-export-menu-item"
+                :disabled="reportGenerating || !store.currentSessionId"
+                @click="onExportConversation()"
+              >
                 <Icon icon="mdi:file-chart-outline" width="14" />
-                导出对话报表
+                <span>{{ reportGenerating ? '生成报表中...' : '导出对话报表' }}</span>
               </button>
               <div class="menu-divider" />
               <button class="menu-item danger" @click="onClearChat">
@@ -496,6 +529,23 @@
     </div>
 
     <Transition name="fade">
+      <div
+        v-if="reportGenerating"
+        class="report-generating-overlay"
+        aria-live="polite"
+        aria-busy="true"
+      >
+        <div class="report-generating-card">
+          <Icon icon="mdi:loading" width="28" class="spin report-generating-spinner" />
+          <div class="report-generating-title">正在生成报表</div>
+          <div class="report-generating-desc">
+            {{ activeReportTemplate?.label || 'AI辅助研判会话纪要' }}
+          </div>
+        </div>
+      </div>
+    </Transition>
+
+    <Transition name="fade">
       <div v-if="rawDataPreview" class="raw-data-overlay" @click.self="closeRawDataPreview">
         <div class="raw-data-modal">
           <div class="raw-data-header">
@@ -560,6 +610,10 @@ import { renderMarkdown as sharedRenderMarkdown } from '@/utils/markdown'
 
 import { useDataRangeStore } from '@/stores/dataRangeStore'
 import { useReportStore } from '@/stores/reportStore'
+import {
+  conversationReportTemplates,
+  defaultConversationReportTemplate,
+} from '@/constants/reportTemplates'
 
 const router = useRouter()
 const store = useChatStore()
@@ -606,20 +660,47 @@ const moreOpen = ref(false)
 const historySearch = ref('')
 const historyPanelEl = ref<HTMLElement>()
 const moreWrapEl = ref<HTMLElement>()
+const reportWrapEl = ref<HTMLElement>()
+const reportMenuOpen = ref(false)
+const reportGenerating = ref(false)
+const activeReportTemplateId = ref<string | null>(null)
 const rawDataPreview = ref<ArtifactEvent | null>(null)
+
+const isPageReportMode = computed(() => reportStore.sections.length > 0)
+const activeReportTemplate = computed(() => (
+  conversationReportTemplates.find(template => template.id === activeReportTemplateId.value) ?? null
+))
+const reportButtonTitle = computed(() => {
+  if (reportGenerating.value) {
+    return activeReportTemplate.value
+      ? `生成${activeReportTemplate.value.label}中...`
+      : '生成报表中...'
+  }
+  return isPageReportMode.value ? '导出页面报表' : '导出对话报表'
+})
 
 function toggleHistory() {
   historyOpen.value = !historyOpen.value
   if (historyOpen.value) {
     moreOpen.value = false
+    reportMenuOpen.value = false
     // 每次打开历史面板时从后端刷新会话列表，保持与数据库同步
     store.loadSessionList()
+  }
+}
+
+function toggleMoreMenu() {
+  moreOpen.value = !moreOpen.value
+  if (moreOpen.value) {
+    historyOpen.value = false
+    reportMenuOpen.value = false
   }
 }
 
 function closeAllDropdowns() {
   historyOpen.value = false
   moreOpen.value = false
+  reportMenuOpen.value = false
 }
 
 function closeRawDataPreview() {
@@ -671,11 +752,20 @@ function onMessagesClick(e: MouseEvent) {
 // 点击外部关闭
 function onDocClick(e: MouseEvent) {
   const target = e.target as Node
+  const targetEl = e.target as HTMLElement | null
   if (historyPanelEl.value && !historyPanelEl.value.contains(target)) {
     historyOpen.value = false
   }
   if (moreWrapEl.value && !moreWrapEl.value.contains(target)) {
     moreOpen.value = false
+  }
+  const clickedReportTrigger = !!targetEl?.closest('[data-report-trigger="true"]')
+  if (
+    reportWrapEl.value &&
+    !reportWrapEl.value.contains(target) &&
+    !clickedReportTrigger
+  ) {
+    reportMenuOpen.value = false
   }
   const dropdownEl = document.querySelector('.thinking-mode-dropdown')
   if (dropdownEl && !dropdownEl.contains(target)) {
@@ -876,16 +966,27 @@ function onClearChat() {
 }
 
 function onReportBtnClick() {
-  if (reportStore.sections.length > 0) {
+  if (reportGenerating.value) return
+  if (isPageReportMode.value) {
     reportStore.openPreview()
-  } else {
-    void onExportConversation()
+    return
   }
+  historyOpen.value = false
+  moreOpen.value = false
+  reportMenuOpen.value = !reportMenuOpen.value
 }
 
-async function onExportConversation() {
+function onSelectReportTemplate(templateId: string) {
+  void onExportConversation(templateId)
+}
+
+async function onExportConversation(templateId = defaultConversationReportTemplate.id) {
   moreOpen.value = false
-  if (!store.currentSessionId) return
+  reportMenuOpen.value = false
+  if (reportGenerating.value || !store.currentSessionId) return
+
+  reportGenerating.value = true
+  activeReportTemplateId.value = templateId
 
   try {
     const payload = await apiFetch(`/api/chat/sessions/${store.currentSessionId}/report`, {
@@ -895,12 +996,16 @@ async function onExportConversation() {
         generation_mode: 'hybrid',
         artifact_policy: 'all',
         include_appendix: false,
+        template_id: templateId,
       }),
     })
     reportStore.openPreviewWithPayload(payload as any)
   } catch (error) {
     console.error('[AgentConsole] 导出对话报表失败:', error)
     window.alert((error as Error).message || '导出对话报表失败')
+  } finally {
+    reportGenerating.value = false
+    activeReportTemplateId.value = null
   }
 }
 
@@ -1380,6 +1485,7 @@ html[data-theme="light"] .tab.active .tab-close {
   padding: 0 6px;
   gap: 1px;
   flex-shrink: 0;
+  position: relative;
   /* 无 border-left */
 }
 
@@ -1399,6 +1505,14 @@ html[data-theme="light"] .tab.active .tab-close {
 }
 .top-btn:hover { color: var(--text-primary); opacity: 1; }
 .top-btn.active { color: var(--accent); opacity: 1; }
+.top-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+.top-btn:disabled:hover {
+  color: var(--text-secondary);
+  opacity: 0.5;
+}
 
 /* 下拉菜单 */
 .dropdown-wrap { position: relative; }
@@ -1432,9 +1546,124 @@ html[data-theme="light"] .tab.active .tab-close {
   transition: background 0.15s, color 0.15s;
 }
 .menu-item:hover { background: var(--bg-hover); color: var(--text-primary); }
+.menu-item:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.menu-item:disabled:hover {
+  background: none;
+  color: var(--text-secondary);
+}
 .menu-item.danger:hover { background: rgba(248,113,113,0.08); color: var(--danger, #f87171); }
 
 .menu-divider { height: 1px; background: var(--border); margin: 4px 0; }
+
+.report-template-floating {
+  top: calc(100% + 4px);
+  right: 34px;
+  min-width: 260px;
+  max-width: 320px;
+}
+
+.report-template-title {
+  padding: 8px 10px 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.report-template-item {
+  align-items: flex-start;
+}
+
+.report-template-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.report-template-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.report-template-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(108,142,245,0.12);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.report-template-desc {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.report-export-menu-item > span {
+  flex: 1;
+}
+
+.report-generating-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(10, 14, 24, 0.42);
+  backdrop-filter: blur(2px);
+  z-index: 240;
+}
+
+.report-generating-card {
+  min-width: 220px;
+  max-width: 320px;
+  padding: 22px 24px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--bg-card);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.22);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  text-align: center;
+}
+
+.report-generating-spinner {
+  color: var(--accent);
+}
+
+.report-generating-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.report-generating-desc {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-muted);
+}
+
+.spin {
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
 
 /* ── 历史记录面板 ─────────────────────────────────────────────────────────── */
 .history-panel {
@@ -2580,4 +2809,3 @@ textarea::placeholder { color: var(--text-muted); }
 
 .inline-icon { vertical-align: middle; margin-right: 4px; }
 </style>
-

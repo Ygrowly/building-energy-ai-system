@@ -846,18 +846,34 @@ const RULE_LABELS: Record<string, string> = {
   electricity_overload:  '电耗超标',
   water_leak:            '水耗异常',
   hvac_overconsumption:  '空调能耗超标',
+  supply_temp_deviation: '供水温度偏离',
+  return_temp_deviation: '回水温度偏离',
+  flag_water:            '水耗偏高',
+  flag_electricity:      '总电耗偏高',
+  flag_hvac_energy:      '空调能耗偏高',
+  flag_supply_deviation: '供水温度偏离',
+  flag_return_deviation: '回水温度偏离',
   A_low_efficiency:      '主机效能衰退',
   B_small_deltaT:        '水力失调（大流量小温差）',
   C_unexpected_on:       '非预期开机',
+  other_hvac:            '其他空调故障',
 }
 
 const RULE_ICONS: Record<string, string> = {
   electricity_overload:  'mdi:lightning-bolt',
   water_leak:            'mdi:water-alert',
   hvac_overconsumption:  'mdi:air-conditioner',
+  supply_temp_deviation: 'mdi:thermometer',
+  return_temp_deviation: 'mdi:thermometer',
+  flag_water:            'mdi:water-alert',
+  flag_electricity:      'mdi:lightning-bolt',
+  flag_hvac_energy:      'mdi:air-conditioner',
+  flag_supply_deviation: 'mdi:thermometer',
+  flag_return_deviation: 'mdi:thermometer',
   A_low_efficiency:      'mdi:gauge-low',
   B_small_deltaT:        'mdi:waves-arrow-right',
   C_unexpected_on:       'mdi:clock-alert-outline',
+  other_hvac:            'mdi:air-conditioner',
 }
 
 function ruleLabel(rule?: string) {

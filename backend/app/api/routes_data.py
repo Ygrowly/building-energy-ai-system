@@ -1547,6 +1547,8 @@ _RULE_LABEL = {
     "water_leak": "水耗异常",
     "electricity_overload": "电耗超标",
     "hvac_overconsumption": "空调过耗",
+    "supply_temp_deviation": "供水温度偏离",
+    "return_temp_deviation": "回水温度偏离",
     "db_flagged": "标注异常",
     "night_high_power": "夜间高耗",
     # notebook v2 规则

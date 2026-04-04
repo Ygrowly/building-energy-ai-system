@@ -132,7 +132,7 @@
               <div class="anomaly-tags">
                 <span class="tag pred-tag">
                   <Icon icon="mdi:chart-timeline-variant" width="11" />
-                  {{ p.rule_triggered ?? '偏差预警' }}
+                  {{ p.rule_triggered ? ruleLabel(p.rule_triggered) : '偏差预警' }}
                 </span>
                 <span class="tag flag">{{ p.model_name }}</span>
               </div>
@@ -361,15 +361,33 @@ function diagLabel(code: string): string {
   return _DIAG_LABELS[code] ?? code
 }
 
+const _RULE_LABELS: Record<string, string> = {
+  'water_leak': '水耗异常',
+  'electricity_overload': '电耗超标',
+  'hvac_overconsumption': '空调过耗',
+  'supply_temp_deviation': '供水温度偏离',
+  'return_temp_deviation': '回水温度偏离',
+  'night_high_power': '夜间高耗',
+  'db_flagged': '标注异常',
+  'flag_water': '水耗偏高',
+  'flag_electricity': '总电耗偏高',
+  'flag_hvac_energy': '空调能耗偏高',
+  'flag_supply_deviation': '供水温度偏离',
+  'flag_return_deviation': '回水温度偏离',
+}
+function ruleLabel(rule: string): string {
+  return _RULE_LABELS[rule] ?? rule
+}
+
 const _FLAG_LABELS: Record<string, string> = {
   'flag_water':           '水耗偏高',
   'flag_electricity':     '总电偏高',
   'flag_hvac_energy':     '空调偏高',
-  'flag_supply_deviation':'供水偏离',
-  'flag_return_deviation':'回水偏离',
+  'flag_supply_deviation':'供水温度偏离',
+  'flag_return_deviation':'回水温度偏离',
 }
 function flagLabel(flag: string): string {
-  return _FLAG_LABELS[flag] ?? flag
+  return _FLAG_LABELS[flag] ?? ruleLabel(flag)
 }
 
 function rulePriority(rule: string): 'high' | 'medium' {
@@ -378,6 +396,7 @@ function rulePriority(rule: string): 'high' | 'medium' {
 
 function ruleUnit(rule: string): string {
   if (rule === 'water_leak') return 'L'
+  if (['supply_temp_deviation', 'return_temp_deviation', 'flag_supply_deviation', 'flag_return_deviation'].includes(rule)) return '℃'
   return 'kWh'
 }
 

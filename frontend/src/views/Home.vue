@@ -137,7 +137,7 @@ const overviewData = ref<any>(null)
 const anomalyData = ref<any[]>([])
 const sankeyData = ref<{
   nodes: { name: string }[]
-  links: { source: string; target: string; value: number }[]
+  links: { source: string | number; target: string | number; value: number }[]
 } | null>(null)
 
 const buildingOptions = [

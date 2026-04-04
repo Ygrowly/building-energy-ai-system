@@ -12,7 +12,7 @@ const props = defineProps<{
   anomalyData: any[]
   sankeyData: {
     nodes: { name: string }[]
-    links: { source: string; target: string; value: number }[]
+    links: { source: string | number; target: string | number; value: number }[]
   } | null
 }>()
 
@@ -85,13 +85,41 @@ function hideGhTip() {
   ghTip.value.show = false
 }
 
+const _SANKEY_RULE_LABELS: Record<string, string> = {
+  water_leak: '水耗异常',
+  electricity_overload: '电耗超标',
+  hvac_overconsumption: '空调过耗',
+  supply_temp_deviation: '供水温度偏离',
+  return_temp_deviation: '回水温度偏离',
+  db_flagged: '标注异常',
+  night_high_power: '夜间高耗',
+  flag_water: '水耗偏高',
+  flag_electricity: '总电耗偏高',
+  flag_hvac_energy: '空调能耗偏高',
+  flag_supply_deviation: '供水温度偏离',
+  flag_return_deviation: '回水温度偏离',
+}
+
+const _SANKEY_ROOT_CAUSE_LABELS: Record<string, string> = {
+  A_low_efficiency: '主机效能衰退',
+  B_small_deltaT: '水力失调',
+  C_unexpected_on: '非预期开机',
+  other_hvac: '其他空调故障',
+}
+
 const _SANKEY_SOURCE_COLORS: Record<string, string> = {
   水耗异常: MC.teal,
+  水耗偏高: MC.teal,
   电耗超标: MC.blue,
+  总电耗偏高: MC.blue,
   空调过耗: MC.terra,
+  空调能耗偏高: MC.terra,
+  供水温度偏离: MC.rose,
+  回水温度偏离: MC.lav,
   标注异常: MC.rose,
   夜间高耗: MC.lav,
 }
+
 const _SANKEY_TARGET_COLORS: Record<string, string> = {
   主机效能衰退: MC.rose,
   水力失调: MC.blue,
@@ -101,6 +129,36 @@ const _SANKEY_TARGET_COLORS: Record<string, string> = {
   负荷过载: MC.terra,
   数据标注: MC.lav,
   夜间异常运行: MC.lav,
+  '供水温度偏离(直接)': MC.rose,
+  '回水温度偏离(直接)': MC.lav,
+  '水耗异常(直接)': MC.teal,
+  '电耗超标(直接)': MC.blue,
+  '空调过耗(直接)': MC.terra,
+  '水耗偏高(直接)': MC.teal,
+  '总电耗偏高(直接)': MC.blue,
+  '空调能耗偏高(直接)': MC.terra,
+}
+
+function translateSankeyBaseLabel(name: string): string {
+  return _SANKEY_RULE_LABELS[name] ?? _SANKEY_ROOT_CAUSE_LABELS[name] ?? name
+}
+
+function normalizeSankeyLabel(name: string): string {
+  const directMatch = name.match(/^(.*)\((?:直接|direct)\)$/i)
+  if (directMatch) {
+    return `${translateSankeyBaseLabel(directMatch[1])}(直接)`
+  }
+  return translateSankeyBaseLabel(name)
+}
+
+function normalizeSankeyLinkEnd(
+  value: string | number,
+  nodes: Array<{ name: string }>,
+): string {
+  if (typeof value === 'number') {
+    return normalizeSankeyLabel(nodes[value]?.name ?? String(value))
+  }
+  return normalizeSankeyLabel(value)
 }
 
 function disposeAll() {
@@ -509,13 +567,24 @@ function renderSankey() {
     return
   }
 
-  const sourceNames = new Set(sd!.links.map((l) => l.source))
-  const nodes = sd!.nodes.map((n) => ({
-    name: n.name,
+  const normalizedLinks = sd!.links.map((link) => ({
+    source: normalizeSankeyLinkEnd(link.source, sd!.nodes),
+    target: normalizeSankeyLinkEnd(link.target, sd!.nodes),
+    value: link.value,
+  }))
+  const sourceNames = new Set(normalizedLinks.map((l) => l.source))
+  const nodeNames = Array.from(
+    new Set([
+      ...sd!.nodes.map((n) => normalizeSankeyLabel(n.name)),
+      ...normalizedLinks.flatMap((l) => [l.source, l.target]),
+    ]),
+  )
+  const nodes = nodeNames.map((name) => ({
+    name,
     itemStyle: {
-      color: sourceNames.has(n.name)
-        ? _SANKEY_SOURCE_COLORS[n.name] ?? MC.blue
-        : _SANKEY_TARGET_COLORS[n.name] ?? MC.lav,
+      color: sourceNames.has(name)
+        ? _SANKEY_SOURCE_COLORS[name] ?? MC.blue
+        : _SANKEY_TARGET_COLORS[name] ?? MC.lav,
     },
   }))
 
@@ -538,7 +607,7 @@ function renderSankey() {
         nodeGap: 10,
         nodeWidth: 12,
         data: nodes,
-        links: sd!.links,
+        links: normalizedLinks,
         lineStyle: { color: 'gradient', opacity: 0.42 },
         label: { color: c.axis, fontSize: 11 },
       },

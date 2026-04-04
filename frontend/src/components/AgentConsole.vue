@@ -987,13 +987,14 @@ async function onExportConversation(templateId = defaultConversationReportTempla
 
   reportGenerating.value = true
   activeReportTemplateId.value = templateId
+  const template = conversationReportTemplates.find(item => item.id === templateId) ?? defaultConversationReportTemplate
 
   try {
     const payload = await apiFetch(`/api/chat/sessions/${store.currentSessionId}/report`, {
       method: 'POST',
       body: JSON.stringify({
         mode: 'formal',
-        generation_mode: 'hybrid',
+        generation_mode: template.generationMode ?? 'hybrid',
         artifact_policy: 'all',
         include_appendix: false,
         template_id: templateId,

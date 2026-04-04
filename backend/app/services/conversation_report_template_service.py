@@ -1849,10 +1849,13 @@ async def generate_conversation_report_payload(
     if user_turn_count == 0 and ai_turn_count == 0:
         raise ValueError("当前会话暂无可导出的有效内容")
 
+    generation_mode = req.generation_mode
     raw_artifacts = list(state.get("artifacts", [])) if req.artifact_policy == "all" else []
     artifacts = _stable_unique_artifacts(raw_artifacts)
     react_data_summary = state.get("react_data_summary") or build_data_summary(messages)
-    chart_manifest = state.get("chart_manifest") or build_chart_manifest(raw_artifacts)
+    chart_manifest = ""
+    if generation_mode != "rules":
+        chart_manifest = state.get("chart_manifest") or build_chart_manifest(raw_artifacts)
     user_questions = _collect_turn_texts(turns, "user")
     ai_answers = _collect_turn_texts(turns, "ai")
 
@@ -1883,14 +1886,16 @@ async def generate_conversation_report_payload(
     context["data_sources"] = _extract_data_sources(artifacts)
     context["date_range"] = _extract_date_range(context)
 
-    if req.generation_mode == "rules":
+    if generation_mode == "rules":
         report_draft = _build_fallback_sections(context)
     else:
         try:
-            thinking_mode = str(state.get("thinking_mode") or "fast")
+            # Report generation is a fixed-format summarization task; always use fast mode
+            # instead of inheriting the chat session's deep reasoning mode.
+            thinking_mode = "fast"
             report_draft = await _generate_ai_sections(context, thinking_mode)
         except Exception:
-            if req.generation_mode == "backend_ai":
+            if generation_mode == "backend_ai":
                 raise
             report_draft = _build_fallback_sections(context)
 

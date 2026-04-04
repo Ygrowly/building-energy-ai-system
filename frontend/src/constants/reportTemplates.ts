@@ -3,6 +3,7 @@
   label: string
   description: string
   mode: 'formal' | 'snapshot'
+  generationMode?: 'rules' | 'hybrid' | 'backend_ai'
   default?: boolean
 }
 
@@ -12,6 +13,7 @@ export const conversationReportTemplates: ConversationReportTemplateOption[] = [
     label: 'AI辅助研判会话纪要',
     description: '围绕一次会话总结问题、过程、结论和行动项，适合正式会议导出。',
     mode: 'formal',
+    generationMode: 'rules',
     default: true,
   },
 ]

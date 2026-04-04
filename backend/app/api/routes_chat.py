@@ -324,6 +324,49 @@ def _artifact_event(artifact: dict[str, Any]) -> str:
     })
 
 
+def _build_raw_data_snapshot_artifact(tool_name: str, payload: dict[str, Any]) -> dict[str, Any] | None:
+    """把 query_energy_metrics 的原始结果压缩成前端可按需打开的隐藏快照。"""
+    if tool_name != "query_energy_metrics":
+        return None
+
+    records = payload.get("records")
+    if not isinstance(records, list) or not records:
+        return None
+
+    preview = records[:50]
+    return {
+        "widget": "raw-data-snapshot",
+        "component_type": "RawDataSnapshot",
+        "title": "原始数据快照",
+        "artifact_id": f"raw_data_{uuid.uuid4().hex[:8]}",
+        "data_payload": {
+            "tool_name": tool_name,
+            "building_id": payload.get("building_id"),
+            "meter_device_id": payload.get("meter_device_id"),
+            "source_table": payload.get("source_table"),
+            "total_count": payload.get("total_count", len(records)),
+            "preview_count": len(preview),
+            "records": preview,
+        },
+        "source_info": {
+            "tool_name": tool_name,
+            "source_table": payload.get("source_table"),
+            "building_id": payload.get("building_id"),
+            "meter_device_id": payload.get("meter_device_id"),
+            "record_count": payload.get("total_count", len(records)),
+        },
+    }
+
+
+def _web_search_done_message(output: str) -> str:
+    if "未找到相关结果" in output:
+        return "Tavily 联网搜索未找到可用参考资料"
+    match = re.search(r"找到\s*(\d+)\s*条参考资料", output)
+    if match:
+        return f"Tavily 联网搜索完成，获取到 {match.group(1)} 条参考资料"
+    return "Tavily 联网搜索已完成"
+
+
 def _evidence_event(sources: list[dict[str, Any]]) -> str:
     return _sse({
         "type": "evidence",
@@ -603,13 +646,16 @@ async def _stream_graph(
                 _t[f"tool_{tool_name}_{_tool_count}"] = time.time()
                 tool_input = data.get("input", {})
                 tool_purpose = _describe_tool_call(tool_name, tool_input)
-                yield _thinking_event("tool", f"调用MCP工具：{tool_name}　{tool_purpose}", hop_count=0)
+                if tool_name == "web_search":
+                    yield _thinking_event("web_search", f"\u6b63\u5728\u4f7f\u7528 Tavily \u8054\u7f51\u641c\u7d22\uff1a{tool_purpose}", hop_count=0)
+                else:
+                    yield _thinking_event("tool", f"\u8c03\u7528MCP\u5de5\u5177\uff1a{tool_name}\u3002{tool_purpose}", hop_count=0)
 
             elif kind == "on_tool_end":
                 tool_key = f"tool_{name}_{_tool_count}"
                 elapsed = time.time() - _t.pop(tool_key, time.time())
                 _tool_count += 1
-                logger.info("工具调用完成: %s, 用时=%.2fs", name, elapsed)
+                logger.info("\u5de5\u5177\u8c03\u7528\u5b8c\u6210: %s, \u7528\u65f6=%.2fs", name, elapsed)
                 raw_output = data.get("output", "")
                 if hasattr(raw_output, "content"):
                     output = raw_output.content
@@ -621,21 +667,23 @@ async def _stream_graph(
                 else:
                     output = str(raw_output) if raw_output else ""
                 if output:
+                    if name == "web_search":
+                        yield _thinking_event("web_search", _web_search_done_message(output), hop_count=0)
                     try:
                         parsed = json.loads(output)
-                        # 工单草稿 → 立即推送审批卡片
-                        if parsed.get("status") == "pending_approval":
+                        raw_snapshot = _build_raw_data_snapshot_artifact(name, parsed)
+                        if raw_snapshot is not None:
+                            yield _artifact_event(raw_snapshot)
+                        if parsed.get("status") == "pending_approval" and get_settings().ENABLE_CHAT_WORK_ORDERS:
                             yield _artifact_event({
                                 "widget": "WorkOrderCard",
                                 "component_type": "WorkOrderCard",
-                                "title": "维修工单待确认",
+                                "title": "\u7ef4\u4fee\u5de5\u5355\u5f85\u786e\u8ba4",
                                 "data_payload": parsed,
                                 "source_info": {"tool": "create_work_order_draft"},
                             })
-                        # 报表下载 → 立即推送（generate_report 直接带 component_type）
                         elif parsed.get("component_type") == "ReportDownload":
                             yield _artifact_event(parsed)
-                        # 其他工具结果的可视化由 viz_engine 在 on_chain_end 统一处理
                     except (json.JSONDecodeError, TypeError):
                         pass
 
@@ -769,9 +817,9 @@ async def _stream_graph(
         _sessions[session_id] = merged
         hop = merged.get("hop_count", 0)
         pa = merged.get("pending_action")
-        if pa and pa.get("ticket_id"):
+        if pa and pa.get("ticket_id") and get_settings().ENABLE_CHAT_WORK_ORDERS:
             from app.api.routes_workorder import register_pending_order
-            # v2: 异步写库 + 触发 AI 审批（不阻塞 SSE 流）
+            # v2: ???? + ?? AI ?????? SSE ??
             pa["session_id"] = session_id
             asyncio.create_task(register_pending_order(pa))
     else:

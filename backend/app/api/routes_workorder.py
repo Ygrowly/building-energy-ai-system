@@ -73,6 +73,7 @@ async def register_pending_order(order_data: dict[str, Any]) -> WorkOrder | None
 
             wo = await create_work_order(
                 db,
+                ticket_id=ticket_id,
                 building_id=order_data.get("building_id", ""),
                 device_id=order_data.get("device_id"),
                 issue_description=order_data.get("issue_description", ""),
@@ -172,7 +173,17 @@ async def list_work_orders_endpoint(
     if user and user.role == "ops":
         assigned_to = user.id
 
-    cache_key = f"workorders:list:{status or 'all'}:{building_id or ''}:{page}:{page_size}"
+    user_scope = user.id if user else "anonymous"
+    cache_key = (
+        "workorders:list:"
+        f"{user_scope}:"
+        f"{status or 'all'}:"
+        f"{building_id or ''}:"
+        f"{priority or 'all'}:"
+        f"{ai_fallback if ai_fallback is not None else 'all'}:"
+        f"{assigned_to or 'all'}:"
+        f"{page}:{page_size}"
+    )
     ttl = settings.CACHE_WORKORDERS_TTL_SECONDS
 
     async def _compute() -> dict[str, Any]:
@@ -186,10 +197,6 @@ async def list_work_orders_endpoint(
             page=page,
             page_size=page_size,
         )
-        # eagerly load anomaly_links
-        for wo in items:
-            await db.refresh(wo, ["anomaly_links"])
-
         return {
             "total": total,
             "page": page,
@@ -215,7 +222,6 @@ async def get_work_order_endpoint(
         wo = await get_work_order_by_ticket_id(db, ticket_id)
         if not wo:
             raise HTTPException(status_code=404, detail=f"工单 {ticket_id} 不存在")
-        await db.refresh(wo, ["anomaly_links"])
         return serialize_work_order(wo)
 
     return await get_or_compute_json(cache_key, ttl, _compute)

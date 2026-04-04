@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import pathlib
 import ssl
+from urllib.parse import urlsplit
 
 import pytest_asyncio
 from dotenv import load_dotenv
@@ -23,6 +24,25 @@ from app.core.config import get_settings  # noqa: E402
 
 get_settings.cache_clear()
 
+_LOCAL_DB_HOSTS = {"", "localhost", "127.0.0.1", "::1"}
+
+
+def _normalize_ssl_mode(mode: str | None) -> str:
+    return (mode or "auto").strip().lower().replace("_", "-")
+
+
+def _build_ssl_context(mode: str, ca_file: str | None = None) -> ssl.SSLContext | None:
+    if mode == "disable":
+        return None
+    if mode == "verify-full":
+        cafile = ca_file.strip() if ca_file else None
+        return ssl.create_default_context(cafile=cafile or None)
+
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    return ctx
+
 
 def _build_test_engine():
     """懒加载：只在集成测试 fixture 第一次被请求时才创建引擎。"""
@@ -30,15 +50,20 @@ def _build_test_engine():
     from sqlalchemy.pool import NullPool
 
     _settings = get_settings()
-    _ssl_ctx = ssl.create_default_context()
-    _ssl_ctx.check_hostname = False
-    _ssl_ctx.verify_mode = ssl.CERT_NONE
+    connect_args: dict[str, object] = {}
+    host = (urlsplit(_settings.DATABASE_URL).hostname or "").lower()
+    ssl_mode = _normalize_ssl_mode(_settings.DATABASE_SSL_MODE)
+    if ssl_mode == "auto":
+        ssl_mode = "disable" if host in _LOCAL_DB_HOSTS else "require"
+    ssl_ctx = _build_ssl_context(ssl_mode, _settings.DATABASE_SSL_CA_FILE)
+    if ssl_ctx is not None:
+        connect_args["ssl"] = ssl_ctx
 
     return create_async_engine(
         _settings.DATABASE_URL,
         echo=False,
         poolclass=NullPool,
-        connect_args={"ssl": _ssl_ctx},
+        connect_args=connect_args,
     )
 
 

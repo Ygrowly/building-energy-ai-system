@@ -16,6 +16,8 @@ class Settings(BaseSettings):
     SYNC_DATABASE_URL: str = (
         "postgresql://postgres:postgres@localhost:5432/fwwb_db"
     )
+    DATABASE_SSL_MODE: str = "auto"  # disable | auto | require | verify-full
+    DATABASE_SSL_CA_FILE: str = ""
 
     # -----------------------------------------------------------------------
     # 大模型 API（DeepSeek / OpenAI 兼容）

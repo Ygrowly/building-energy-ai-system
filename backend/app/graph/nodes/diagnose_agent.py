@@ -302,11 +302,13 @@ _WEB_SEARCH_TOOL = _make_mcp_tool(
     args_schema=WebSearchInput,
 )
 
-_chat_work_orders_enabled = get_settings().ENABLE_CHAT_WORK_ORDERS
-DIAGNOSE_AGENT_TOOLS = [_TOOL_LIST_BUILDINGS] + [
+# Chat 对话链路不再暴露工单生成能力；工单只由异常监测等独立流程产生。
+_chat_work_orders_enabled = False
+_DIAGNOSE_CHAT_TOOLS = [
     tool for tool in _DIAGNOSE_BASE_TOOLS
-    if _chat_work_orders_enabled or tool.name != "create_work_order_draft"
+    if tool.name != "create_work_order_draft"
 ]
+DIAGNOSE_AGENT_TOOLS = [_TOOL_LIST_BUILDINGS] + list(_DIAGNOSE_CHAT_TOOLS)
 
 
 # 缓存键: (include_list_buildings, thinking_mode, enable_web_search)
@@ -337,7 +339,7 @@ def _build_diagnose_prompt() -> str:
     from app.core.time_context import get_today
     today = get_today()
     prompt = _DIAGNOSE_PROMPT_TEMPLATE.format(today=today, year=today.year)
-    if not get_settings().ENABLE_CHAT_WORK_ORDERS:
+    if not _chat_work_orders_enabled:
         blocked = (
             "create_work_order_draft",
             "派单",
@@ -386,7 +388,7 @@ def _get_diagnose_agent(
             streaming=True,
             request_timeout=90,
         )
-        tools = DIAGNOSE_AGENT_TOOLS if include_list_buildings else _DIAGNOSE_BASE_TOOLS
+        tools = DIAGNOSE_AGENT_TOOLS if include_list_buildings else _DIAGNOSE_CHAT_TOOLS
         if enable_web_search:
             tools = list(tools) + [_WEB_SEARCH_TOOL]
         prompt = _build_diagnose_prompt()

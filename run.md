@@ -2,7 +2,7 @@
 ```
 cd frontend
 pnpm install
-cd frontend
+pnpm run dev
 ```
 
 后端启动

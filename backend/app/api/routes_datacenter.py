@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import uuid
@@ -43,6 +44,48 @@ ALLOWED_DATASET_TYPES = {".csv", ".xlsx", ".xls"}
 ALLOWED_DOC_TYPES = {".pdf", ".docx", ".doc", ".txt", ".md"}
 
 MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
+
+
+def _build_import_batch_params(
+    df_sub: pd.DataFrame,
+    mapped_fields: list[str],
+    batch_start: int,
+    batch_size: int,
+) -> tuple[list[dict[str, Any]], set[str], datetime | None, datetime | None, int, list[str]]:
+    """把 DataFrame 分块转换为 executemany 参数，避免一次性展开整表 records。"""
+    batch_df = df_sub.iloc[batch_start: batch_start + batch_size]
+    batch_params: list[dict[str, Any]] = []
+    imported_bids: set[str] = set()
+    min_ts: datetime | None = None
+    max_ts: datetime | None = None
+    failed = 0
+    errors: list[str] = []
+
+    for row in batch_df.itertuples(index=False):
+        row_dict = row._asdict()
+        try:
+            ts_raw = row_dict["timestamp"]
+            ts = ts_raw.to_pydatetime() if hasattr(ts_raw, "to_pydatetime") else ts_raw
+            bid = str(row_dict["building_id"])
+            row_p: dict[str, Any] = {"ts": ts, "bid": bid}
+            for field in mapped_fields:
+                raw = row_dict.get(field)
+                try:
+                    row_p[field] = None if (raw is None or pd.isna(raw)) else float(raw)
+                except (TypeError, ValueError):
+                    row_p[field] = None
+            batch_params.append(row_p)
+            imported_bids.add(bid)
+            if min_ts is None or ts < min_ts:
+                min_ts = ts
+            if max_ts is None or ts > max_ts:
+                max_ts = ts
+        except Exception as exc:
+            failed += 1
+            if len(errors) < 5:
+                errors.append(str(exc))
+
+    return batch_params, imported_bids, min_ts, max_ts, failed, errors
 
 
 # ---------------------------------------------------------------------------
@@ -84,10 +127,10 @@ async def upload_dataset(
 
     file_id = str(uuid.uuid4())
     save_path = UPLOAD_DIR / f"{file_id}{suffix}"
-    save_path.write_bytes(content)
+    await asyncio.to_thread(save_path.write_bytes, content)
 
     try:
-        result = data_analyzer.analyze_file(str(save_path))
+        result = await asyncio.to_thread(data_analyzer.analyze_file, str(save_path))
     except Exception as exc:
         save_path.unlink(missing_ok=True)
         log.exception("文件解析失败：%s", file.filename)
@@ -161,7 +204,7 @@ async def get_dataset(
 
     # 实时重新读取样本数据（避免存储大量行数据在 DB 中）
     try:
-        analysis = data_analyzer.analyze_file(record.file_path)
+        analysis = await asyncio.to_thread(data_analyzer.analyze_file, record.file_path)
         sample_rows = analysis["sample_rows"]
     except Exception:
         sample_rows = []
@@ -265,7 +308,7 @@ async def analyze_dataset(
     stats = json.loads(record.stats_json or "{}")
 
     try:
-        analysis = data_analyzer.analyze_file(record.file_path)
+        analysis = await asyncio.to_thread(data_analyzer.analyze_file, record.file_path)
         sample_rows = analysis["sample_rows"]
     except Exception as exc:
         raise HTTPException(
@@ -622,7 +665,7 @@ async def import_dataset_to_energy_data(
                 yield _emit({"stage": "parsing", "progress": 0.0, "msg": "正在解析文件..."})
 
                 try:
-                    df, _ = data_analyzer.parse_file(file_path)
+                    df, _ = await asyncio.to_thread(data_analyzer.parse_file, file_path)
                 except Exception as exc:
                     yield _emit({"error": f"文件解析失败：{exc}"})
                     yield "data: [DONE]\n\n"
@@ -707,33 +750,26 @@ async def import_dataset_to_energy_data(
                 max_ts: datetime | None = None
                 imported_bids: set[str] = set()
 
-                records_list = df_sub.to_dict(orient="records")
-
                 for batch_start in range(0, total, _IMPORT_BATCH_SIZE):
-                    batch = records_list[batch_start: batch_start + _IMPORT_BATCH_SIZE]
-                    batch_params: list[dict] = []
-
-                    for rec in batch:
-                        try:
-                            ts: datetime = rec["timestamp"].to_pydatetime()  # type: ignore[union-attr]
-                            bid: str = str(rec["building_id"])
-                            row_p: dict[str, Any] = {"ts": ts, "bid": bid}
-                            for f in mapped_fields:
-                                raw = rec.get(f)
-                                try:
-                                    row_p[f] = None if (raw is None or pd.isna(raw)) else float(raw)
-                                except (TypeError, ValueError):
-                                    row_p[f] = None
-                            batch_params.append(row_p)
-                            imported_bids.add(bid)
-                            if min_ts is None or ts < min_ts:
-                                min_ts = ts
-                            if max_ts is None or ts > max_ts:
-                                max_ts = ts
-                        except Exception as exc:
-                            failed += 1
-                            if len(errors) < 5:
-                                errors.append(str(exc))
+                    batch_params, batch_bids, batch_min_ts, batch_max_ts, batch_failed, batch_errors = (
+                        await asyncio.to_thread(
+                            _build_import_batch_params,
+                            df_sub,
+                            mapped_fields,
+                            batch_start,
+                            _IMPORT_BATCH_SIZE,
+                        )
+                    )
+                    imported_bids.update(batch_bids)
+                    failed += batch_failed
+                    for err in batch_errors:
+                        if len(errors) >= 5:
+                            break
+                        errors.append(err)
+                    if batch_min_ts is not None and (min_ts is None or batch_min_ts < min_ts):
+                        min_ts = batch_min_ts
+                    if batch_max_ts is not None and (max_ts is None or batch_max_ts > max_ts):
+                        max_ts = batch_max_ts
 
                     if batch_params:
                         try:
@@ -747,7 +783,8 @@ async def import_dataset_to_energy_data(
                             if len(errors) < 5:
                                 errors.append(f"批次 {batch_start} 写入失败：{exc}")
 
-                    progress = min(0.99, (batch_start + len(batch)) / total * 0.95 + 0.05)
+                    processed = min(batch_start + _IMPORT_BATCH_SIZE, total)
+                    progress = min(0.99, processed / total * 0.95 + 0.05)
                     yield _emit({
                         "stage": "importing",
                         "progress": round(progress, 3),

@@ -20,7 +20,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func, select, text
+from sqlalchemy import and_, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.cache import cache_bucket, get_or_compute_json
@@ -1648,22 +1648,35 @@ async def get_risk_now(db: AsyncSession = Depends(get_db_session)):
     """
     now = datetime.now(timezone.utc)
 
-    buildings_result = await db.execute(select(Building))
-    buildings = buildings_result.scalars().all()
+    latest_ts_subquery = (
+        select(
+            EnergyData.building_id.label("building_id"),
+            func.max(EnergyData.timestamp).label("latest_ts"),
+        )
+        .group_by(EnergyData.building_id)
+        .subquery()
+    )
+
+    result = await db.execute(
+        select(Building, EnergyData)
+        .join(
+            latest_ts_subquery,
+            latest_ts_subquery.c.building_id == Building.building_id,
+        )
+        .join(
+            EnergyData,
+            and_(
+                EnergyData.building_id == latest_ts_subquery.c.building_id,
+                EnergyData.timestamp == latest_ts_subquery.c.latest_ts,
+            ),
+        )
+        .order_by(Building.building_id)
+    )
+    building_rows = result.all()
 
     risk_items: list[dict] = []
 
-    for building in buildings:
-        latest_result = await db.execute(
-            select(EnergyData)
-            .where(EnergyData.building_id == building.building_id)
-            .order_by(EnergyData.timestamp.desc())
-            .limit(1)
-        )
-        latest: EnergyData | None = latest_result.scalar_one_or_none()
-        if not latest:
-            continue
-
+    for building, latest in building_rows:
         air_temp  = latest.air_temp_c  or 20.0
         dew_temp  = latest.dew_temp_c  or 10.0
 

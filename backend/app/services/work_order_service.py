@@ -7,11 +7,13 @@ from __future__ import annotations
 
 import json
 import logging
+import secrets
 from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import select, update, func as sa_func
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.db.models import (
     WorkOrder,
@@ -37,19 +39,13 @@ VALID_TRANSITIONS: dict[str, set[str]] = {
     # closed 是终态，不可转移
 }
 
-# ---------------------------------------------------------------------------
-# ticket_id 生成
-# ---------------------------------------------------------------------------
-_TICKET_COUNTER: dict[str, int] = {}
-
-
 def _generate_ticket_id(timestamp: datetime | None = None) -> str:
-    """生成可读工单号，如 WO-20160801-001。"""
+    """生成无状态且多实例安全的工单号。"""
     ts = timestamp or datetime.now(timezone.utc)
     date_str = ts.strftime("%Y%m%d")
-    key = date_str
-    _TICKET_COUNTER[key] = _TICKET_COUNTER.get(key, 0) + 1
-    return f"WO-{date_str}-{_TICKET_COUNTER[key]:03d}"
+    time_str = ts.strftime("%H%M%S")
+    random_suffix = secrets.token_hex(3).upper()
+    return f"WO-{date_str}-{time_str}-{random_suffix}"
 
 
 # ---------------------------------------------------------------------------
@@ -92,6 +88,7 @@ async def _write_audit_log(
 async def create_work_order(
     db: AsyncSession,
     *,
+    ticket_id: str | None = None,
     building_id: str,
     device_id: str | None = None,
     issue_description: str,
@@ -108,10 +105,10 @@ async def create_work_order(
     anomaly_evidence: 来自 anomaly_events 的证据列表，每项需含
         anomaly_event_id, rule_triggered, data_timestamp 等字段。
     """
-    ticket_id = _generate_ticket_id()
+    resolved_ticket_id = ticket_id or _generate_ticket_id()
 
     wo = WorkOrder(
-        ticket_id=ticket_id,
+        ticket_id=resolved_ticket_id,
         building_id=building_id,
         device_id=device_id,
         issue_description=issue_description,
@@ -150,7 +147,7 @@ async def create_work_order(
         actor_id=created_by,
     )
 
-    logger.info("工单已创建: ticket_id=%s building=%s", ticket_id, building_id)
+    logger.info("工单已创建: ticket_id=%s building=%s", resolved_ticket_id, building_id)
     return wo
 
 
@@ -267,7 +264,9 @@ async def get_work_order_by_ticket_id(
     db: AsyncSession, ticket_id: str
 ) -> WorkOrder | None:
     result = await db.execute(
-        select(WorkOrder).where(WorkOrder.ticket_id == ticket_id)
+        select(WorkOrder)
+        .options(selectinload(WorkOrder.anomaly_links))
+        .where(WorkOrder.ticket_id == ticket_id)
     )
     return result.scalar_one_or_none()
 
@@ -276,7 +275,9 @@ async def get_work_order_by_id(
     db: AsyncSession, work_order_id: str
 ) -> WorkOrder | None:
     result = await db.execute(
-        select(WorkOrder).where(WorkOrder.id == work_order_id)
+        select(WorkOrder)
+        .options(selectinload(WorkOrder.anomaly_links))
+        .where(WorkOrder.id == work_order_id)
     )
     return result.scalar_one_or_none()
 
@@ -293,7 +294,7 @@ async def list_work_orders(
     page_size: int = 20,
 ) -> tuple[list[WorkOrder], int]:
     """分页查询工单，返回 (items, total_count)。"""
-    query = select(WorkOrder)
+    query = select(WorkOrder).options(selectinload(WorkOrder.anomaly_links))
     count_query = select(sa_func.count(WorkOrder.id))
 
     if status_filter:

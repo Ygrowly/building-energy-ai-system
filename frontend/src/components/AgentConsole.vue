@@ -168,7 +168,7 @@
     </Transition>
 
     <!-- 消息列表 -->
-    <div class="messages" ref="messagesEl" @click="closeAllDropdowns">
+    <div class="messages" ref="messagesEl" @click="onMessagesClick">
       <div v-if="!store.hasMessages" class="empty-hint">
         <p class="hint-greeting"><Icon icon="mdi:hand-wave" width="16" class="inline-icon" /> 你好！我是你的建筑能源智能运维助手</p>
         <p class="hint-sub">可以用自然语言提问，支持数据查询、故障诊断与工单生成。</p>
@@ -213,6 +213,7 @@
           <div
             class="msg msg-ai"
             v-if="msg.content || (msg.thinkingFinished && store.isLoading)"
+            :data-msg-id="msg.id"
           >
             <div class="ai-content">
               <div class="ai-bubble">
@@ -493,6 +494,49 @@
         </div>
       </div>
     </div>
+
+    <Transition name="fade">
+      <div v-if="rawDataPreview" class="raw-data-overlay" @click.self="closeRawDataPreview">
+        <div class="raw-data-modal">
+          <div class="raw-data-header">
+            <div>
+              <div class="raw-data-title">原始数据快照</div>
+              <div class="raw-data-subtitle">
+                {{ rawDataMeta }}
+              </div>
+            </div>
+            <button class="raw-data-close" @click="closeRawDataPreview">
+              <Icon icon="mdi:close" width="18" />
+            </button>
+          </div>
+          <div class="raw-data-body">
+            <div v-if="rawDataRows.length" class="raw-data-table-wrap">
+              <table class="raw-data-table">
+                <thead>
+                  <tr>
+                    <th>时间</th>
+                    <th>指标</th>
+                    <th>数值</th>
+                    <th>单位</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="(row, idx) in rawDataRows" :key="idx">
+                    <td>{{ row.timestamp }}</td>
+                    <td>{{ row.metric }}</td>
+                    <td>{{ row.value }}</td>
+                    <td>{{ row.unit }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div v-else class="raw-data-empty">
+              当前回复没有可展示的原始数据快照。
+            </div>
+          </div>
+        </div>
+      </div>
+    </Transition>
   </div>
 </template>
 
@@ -562,6 +606,7 @@ const moreOpen = ref(false)
 const historySearch = ref('')
 const historyPanelEl = ref<HTMLElement>()
 const moreWrapEl = ref<HTMLElement>()
+const rawDataPreview = ref<ArtifactEvent | null>(null)
 
 function toggleHistory() {
   historyOpen.value = !historyOpen.value
@@ -575,6 +620,52 @@ function toggleHistory() {
 function closeAllDropdowns() {
   historyOpen.value = false
   moreOpen.value = false
+}
+
+function closeRawDataPreview() {
+  rawDataPreview.value = null
+}
+
+function isRawDataSnapshot(artifact?: ArtifactEvent): boolean {
+  if (!artifact) return false
+  const t = artifact.component_type ?? artifact.widget ?? ''
+  return ['RawDataSnapshot', 'raw-data-snapshot'].includes(t)
+}
+
+function findRelatedArtifact(msgId: string, matcher: (artifact?: ArtifactEvent) => boolean): ArtifactEvent | null {
+  const start = store.messages.findIndex(m => m.id === msgId)
+  if (start === -1) return null
+  for (let i = start + 1; i < store.messages.length; i++) {
+    const msg = store.messages[i]
+    if (msg.role === 'user') break
+    if (msg.role === 'artifact' && matcher(msg.artifact)) {
+      return msg.artifact ?? null
+    }
+  }
+  return null
+}
+
+function onMessagesClick(e: MouseEvent) {
+  closeAllDropdowns()
+  const target = e.target as HTMLElement | null
+  const link = target?.closest('a')
+  if (!link) return
+
+  const text = (link.textContent ?? '').trim()
+  const href = link.getAttribute('href') ?? ''
+  const wantsRawData = text.includes('原始数据') || href.includes('raw-data') || href.includes('原始数据')
+  if (!wantsRawData) return
+
+  e.preventDefault()
+  const msgEl = link.closest('[data-msg-id]') as HTMLElement | null
+  const msgId = msgEl?.dataset.msgId
+  if (!msgId) return
+  rawDataPreview.value = findRelatedArtifact(msgId, isRawDataSnapshot) ?? {
+    type: 'artifact',
+    component_type: 'RawDataSnapshot',
+    title: '原始数据快照',
+    data_payload: { records: [], total_count: 0, preview_count: 0 },
+  }
 }
 
 // 点击外部关闭
@@ -676,6 +767,21 @@ const lastAiMsg = computed(() => {
   return null
 })
 const lastAiMsgId = computed(() => lastAiMsg.value?.id ?? null)
+
+const rawDataRows = computed(() => {
+  const payload = rawDataPreview.value?.data_payload as Record<string, unknown> | undefined
+  const rows = payload?.records
+  return Array.isArray(rows) ? rows as Array<Record<string, unknown>> : []
+})
+
+const rawDataMeta = computed(() => {
+  const payload = rawDataPreview.value?.data_payload as Record<string, unknown> | undefined
+  if (!payload) return ''
+  const building = String(payload.building_id ?? '未知楼宇')
+  const total = Number(payload.total_count ?? 0)
+  const preview = Number(payload.preview_count ?? rawDataRows.value.length)
+  return `${building} · 展示 ${preview}/${total} 条记录`
+})
 
 // ── 历史记录分组 ────────────────────────────────────────────────────────────
 interface HistoryGroup { label: string; sessions: SessionInfo[] }
@@ -887,6 +993,7 @@ watch(
 )
 
 watch(() => store.currentSessionId, async () => {
+  closeRawDataPreview()
   await nextTick()
   _scrollToBottom()
 })
@@ -2355,6 +2462,113 @@ textarea::placeholder { color: var(--text-muted); }
 @keyframes stop-pulse {
   0%, 100% { box-shadow: 0 0 0 0 rgba(229, 62, 62, 0.4); }
   50% { box-shadow: 0 0 0 4px rgba(229, 62, 62, 0); }
+}
+
+.raw-data-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.48);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  z-index: 40;
+}
+
+.raw-data-modal {
+  width: min(820px, 100%);
+  max-height: min(78vh, 760px);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: 0 24px 80px rgba(15, 23, 42, 0.22);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.raw-data-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 18px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.raw-data-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.raw-data-subtitle {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.raw-data-close {
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.raw-data-close:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.raw-data-body {
+  padding: 14px 18px 18px;
+  overflow: auto;
+}
+
+.raw-data-table-wrap {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: auto;
+}
+
+.raw-data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.raw-data-table th,
+.raw-data-table td {
+  padding: 10px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+.raw-data-table th {
+  position: sticky;
+  top: 0;
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.raw-data-table td {
+  color: var(--text-primary);
+  word-break: break-word;
+}
+
+.raw-data-table tr:last-child td {
+  border-bottom: none;
+}
+
+.raw-data-empty {
+  padding: 20px 8px;
+  text-align: center;
+  color: var(--text-secondary);
 }
 
 /* ── 通用过渡动画 ───────────────────────────────────────────────────────── */

@@ -23,6 +23,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import math
@@ -154,6 +155,24 @@ def _predict(feature_row: dict[str, float], feature_cols: list[str]) -> list[flo
         "features": [features_vec],
     })
     return result["predictions"][0]
+
+
+async def _load_metadata_async() -> dict | None:
+    return await asyncio.to_thread(_load_metadata)
+
+
+async def _build_features_async(
+    df_input: pd.DataFrame,
+    feature_cols: list[str],
+) -> pd.DataFrame:
+    return await asyncio.to_thread(_build_features, df_input, feature_cols)
+
+
+async def _predict_async(
+    feature_row: dict[str, float],
+    feature_cols: list[str],
+) -> list[float]:
+    return await asyncio.to_thread(_predict, feature_row, feature_cols)
 
 
 # ---------------------------------------------------------------------------
@@ -461,7 +480,7 @@ async def forecast_building_kpi(
 
     # --- 构造特征 ---
     try:
-        X = _build_features(df, feature_cols)
+        X = await _build_features_async(df, feature_cols)
     except ValueError as exc:
         return MCPError(
             error=str(exc),
@@ -472,7 +491,7 @@ async def forecast_building_kpi(
     # --- 推理（通过 .venv-forecast worker 子进程） ---
     feature_row = {col: float(X[col].iloc[0]) for col in feature_cols}
     try:
-        y_hat_row = _predict(feature_row, feature_cols)
+        y_hat_row = await _predict_async(feature_row, feature_cols)
     except Exception as exc:
         return MCPError(
             error=f"模型推理失败：{exc}",
@@ -487,26 +506,30 @@ async def forecast_building_kpi(
     # 未命中时返回 expected_value=None, risk_level="normal"，不报错、不补值、不做模糊容错。
     expected_map: dict[str, dict[int, float]] = {}
     if include_expected_comparison:
-        for h in horizons:
-            future_ts = actual_as_of + timedelta(hours=h)
-            exp_result = await session.execute(
-                select(
-                    KpiExpectedHourly.water_m3_expected,
-                    KpiExpectedHourly.electricity_kwh_expected,
-                    KpiExpectedHourly.hac_energy_expected,
-                    KpiExpectedHourly.sim_supply_temp_c_expected,
-                    KpiExpectedHourly.sim_return_temp_c_expected,
-                )
-                .where(KpiExpectedHourly.building_id == actual_bid)
-                .where(KpiExpectedHourly.timestamp == future_ts)
+        future_ts_to_horizon = {
+            actual_as_of + timedelta(hours=h): h for h in horizons
+        }
+        exp_result = await session.execute(
+            select(
+                KpiExpectedHourly.timestamp,
+                KpiExpectedHourly.water_m3_expected,
+                KpiExpectedHourly.electricity_kwh_expected,
+                KpiExpectedHourly.hac_energy_expected,
+                KpiExpectedHourly.sim_supply_temp_c_expected,
+                KpiExpectedHourly.sim_return_temp_c_expected,
             )
-            exp_row = exp_result.fetchone()
-            if exp_row is not None:
-                expected_map.setdefault("water_l", {})[h] = float(exp_row[0]) if exp_row[0] is not None else None
-                expected_map.setdefault("electricity_kwh", {})[h] = float(exp_row[1]) if exp_row[1] is not None else None
-                expected_map.setdefault("hac_energy", {})[h] = float(exp_row[2]) if exp_row[2] is not None else None
-                expected_map.setdefault("sim_supply_temp_c", {})[h] = float(exp_row[3]) if exp_row[3] is not None else None
-                expected_map.setdefault("sim_return_temp_c", {})[h] = float(exp_row[4]) if exp_row[4] is not None else None
+            .where(KpiExpectedHourly.building_id == actual_bid)
+            .where(KpiExpectedHourly.timestamp.in_(list(future_ts_to_horizon.keys())))
+        )
+        for exp_row in exp_result.fetchall():
+            horizon = future_ts_to_horizon.get(exp_row[0])
+            if horizon is None:
+                continue
+            expected_map.setdefault("water_l", {})[horizon] = float(exp_row[1]) if exp_row[1] is not None else None
+            expected_map.setdefault("electricity_kwh", {})[horizon] = float(exp_row[2]) if exp_row[2] is not None else None
+            expected_map.setdefault("hac_energy", {})[horizon] = float(exp_row[3]) if exp_row[3] is not None else None
+            expected_map.setdefault("sim_supply_temp_c", {})[horizon] = float(exp_row[4]) if exp_row[4] is not None else None
+            expected_map.setdefault("sim_return_temp_c", {})[horizon] = float(exp_row[5]) if exp_row[5] is not None else None
 
     # --- 组装输出 ---
     metrics: list[ForecastedMetric] = []

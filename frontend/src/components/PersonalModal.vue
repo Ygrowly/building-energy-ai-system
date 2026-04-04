@@ -293,7 +293,7 @@
                     </Transition>
                   </div>
 
-                  <!-- 时间范围下拉（预警通知 tab 仅显示 6h/24h） -->
+                  <!-- 时间范围下拉（预警通知 tab 仅显示 6h/12h） -->
                   <div class="filter-pill" :class="{ 'filter-pill--active': filterHours !== 0, 'filter-pill--open': dropdownTimeOpen }" @click.stop="dropdownTimeOpen = !dropdownTimeOpen; dropdownBuildingOpen = false">
                     <Icon icon="mdi:clock-outline" width="14" class="pill-icon" />
                     <div class="pill-inner">
@@ -433,55 +433,61 @@
                 <div class="msg-block">
                   <p class="block-label">
                     <Icon icon="mdi:lightning-bolt-outline" width="13" />
-                    实时能耗风险评估
-                    <button class="refresh-btn" @click="loadRisks" :disabled="riskLoading" title="刷新数据">
-                      <Icon :icon="riskLoading ? 'mdi:loading' : 'mdi:refresh'" width="12" :class="{ spin: riskLoading }" />
+                    未来 {{ filterHours }} 小时预测预警
+                    <button class="refresh-btn" @click="loadPredictions" :disabled="predictionLoading" title="刷新数据">
+                      <Icon :icon="predictionLoading ? 'mdi:loading' : 'mdi:refresh'" width="12" :class="{ spin: predictionLoading }" />
                     </button>
                     <span v-if="forecastResult" class="forecast-result-hint">
                       <Icon icon="mdi:check-circle-outline" width="12" />
                       {{ forecastResult }}
                     </span>
-                    <span v-else class="block-label-hint">基于当前天气实时计算 · {{ filterHours }}h 预测窗口</span>
+                    <span v-else class="block-label-hint">仅展示最新一轮预测中的异常项 · {{ filterHours }}h 窗口</span>
                   </p>
-                  <div v-if="riskLoading && risks.length === 0" class="empty-state">
+                  <div v-if="predictionLoading && latestPredictions.length === 0" class="empty-state">
                     <Icon icon="mdi:loading" width="24" class="empty-icon spin" />
-                    <p>正在评估中...</p>
+                    <p>正在加载预测预警...</p>
                   </div>
-                  <div v-else-if="riskError" class="empty-state error">
+                  <div v-else-if="predictionError" class="empty-state error">
                     <Icon icon="mdi:alert" width="24" class="empty-icon" />
-                    <p>{{ riskError }}</p>
+                    <p>{{ predictionError }}</p>
                   </div>
-                  <div v-else-if="filteredRisks.length === 0" class="empty-state ok">
+                  <div v-else-if="filteredPredictions.length === 0" class="empty-state ok">
                     <Icon icon="mdi:check-circle-outline" width="26" class="empty-icon" />
-                    <p>{{ hasActiveFilter ? '该建筑运行正常' : '所有楼宇运行正常' }}</p>
+                    <p>{{ filterBuilding !== 'all' ? '该建筑在所选预测窗口内暂无异常预警' : `未来 ${filterHours} 小时暂无异常预警` }}</p>
                   </div>
                   <div v-else class="msg-list">
                     <div
-                      v-for="risk in filteredRisks"
-                      :key="risk.building_id"
+                      v-for="prediction in filteredPredictions"
+                      :key="prediction.id"
                       class="risk-card"
-                      :class="'risk-' + risk.risk_level"
+                      :class="'risk-' + prediction.risk_level"
                     >
                       <div class="risk-card-left">
                         <div class="risk-icon">
-                          <Icon :icon="risk.risk_level === 'high' ? 'mdi:alert' : risk.risk_level === 'medium' ? 'mdi:alert-circle-outline' : risk.risk_level === 'low' ? 'mdi:information-outline' : 'mdi:check-circle-outline'" width="16" />
+                          <Icon :icon="prediction.risk_level === 'critical' ? 'mdi:alert' : 'mdi:alert-circle-outline'" width="16" />
                         </div>
                         <div class="risk-info">
                           <div class="risk-header">
-                            <span class="risk-name">{{ risk.building_name }}</span>
-                            <span class="risk-mode-badge">{{ risk.hvac_mode_label }}</span>
+                            <span class="risk-name">{{ prediction.building_name }}</span>
+                            <span class="risk-mode-badge">{{ predictionWindowLabel(prediction.horizon_h) }}</span>
                           </div>
-                          <p class="risk-desc">{{ risk.risk_desc }}</p>
+                          <p class="risk-desc">{{ predictionSummary(prediction) }}</p>
                           <p class="risk-meta">
-                            室外 {{ Number(risk.air_temp).toFixed(1) }}℃ · 期望 {{ risk.expected_hac }} kWh
-                            <template v-if="risk.deviation_pct != null">
-                              · 偏差 <span :class="'dev-' + risk.risk_level">{{ risk.deviation_pct > 0 ? '+' : '' }}{{ risk.deviation_pct }}%</span>
+                            预测时刻 {{ formatDate(prediction.forecast_for_timestamp) }}
+                            <template v-if="prediction.predicted_value != null || prediction.expected_value != null">
+                              · 预测 {{ formatPredictionValue(prediction.predicted_value, prediction.metric_name) }}
+                              <template v-if="prediction.expected_value != null">
+                                / 基线 {{ formatPredictionValue(prediction.expected_value, prediction.metric_name) }}
+                              </template>
+                            </template>
+                            <template v-if="prediction.deviation_pct != null">
+                              · 偏差 <span :class="'dev-' + prediction.risk_level">{{ prediction.deviation_pct > 0 ? '+' : '' }}{{ prediction.deviation_pct }}%</span>
                             </template>
                           </p>
                         </div>
                       </div>
-                      <span class="risk-level-badge" :class="'rlv-' + risk.risk_level">
-                        {{ { high: '高风险', medium: '警告', low: '偏高', normal: '正常' }[risk.risk_level] }}
+                      <span class="risk-level-badge" :class="'rlv-' + prediction.risk_level">
+                        {{ predictionRiskLabel(prediction.risk_level) }}
                       </span>
                     </div>
                   </div>
@@ -770,7 +776,7 @@ const TIME_OPTIONS = [
 
 const WARNING_TIME_OPTIONS = [
   { value: 6,  label: '6 小时' },
-  { value: 24, label: '24 小时' },
+  { value: 12, label: '12 小时' },
 ]
 
 const currentTimeOptions = computed(() =>
@@ -797,10 +803,10 @@ const filteredAnomalies = computed(() => {
   return list
 })
 
-const filteredRisks = computed(() =>
+const filteredPredictions = computed(() =>
   filterBuilding.value === 'all'
-    ? risks.value
-    : risks.value.filter(r => r.building_type === filterBuilding.value)
+    ? latestPredictions.value.filter(p => p.horizon_h === filterHours.value)
+    : latestPredictions.value.filter(p => p.horizon_h === filterHours.value && p.building_type === filterBuilding.value)
 )
 
 const pendingSessions = computed(() =>
@@ -810,12 +816,10 @@ const pendingSessions = computed(() =>
 function switchMsgTab(tab: 'workorder' | 'anomaly' | 'warning') {
   msgTab.value = tab
   if (tab === 'warning') {
-    // 切到预警通知时：时间范围锁定为 6h/24h，若当前值不在选项中则重置为 6
-    if (![6, 24].includes(filterHours.value)) filterHours.value = 6
-    if (risks.value.length === 0) loadRisks()
+    if (![6, 12].includes(filterHours.value)) filterHours.value = 6
+    if (predictions.value.length === 0) loadPredictions()
   } else {
-    // 离开预警通知时：若时间值是 6（仅预警专属选项），重置为 0（全部时间）
-    if (filterHours.value === 6) filterHours.value = 0
+    if ([6, 12].includes(filterHours.value)) filterHours.value = 0
   }
 }
 
@@ -900,36 +904,62 @@ async function loadAnomalies() {
 }
 
 // ── 预警通知 ──────────────────────────────────
-interface RiskItem {
+interface PredictionItem {
+  id: string
+  created_at: string | null
+  as_of_timestamp: string | null
+  forecast_for_timestamp: string | null
+  horizon_h: number
   building_id: string
   building_name: string
   building_type?: string
-  hvac_mode: string
-  hvac_mode_label: string
-  expected_hac: number
-  air_temp: number
-  risk_level: 'high' | 'medium' | 'low' | 'normal'
-  deviation_pct?: number | null
-  risk_desc: string
+  metric_name: string
+  predicted_value: number | null
+  expected_value: number | null
+  deviation_pct: number | null
+  risk_level: 'warning' | 'critical' | 'normal'
+  rule_triggered: string | null
+  model_name: string | null
+  is_confirmed: boolean | null
 }
 
-const risks        = ref<RiskItem[]>([])
-const riskLoading  = ref(false)
-const riskError    = ref('')
+const predictions = ref<PredictionItem[]>([])
+const predictionLoading = ref(false)
+const predictionError = ref('')
+const latestPredictionBatchAt = computed(() => {
+  const timestamps = predictions.value
+    .map(item => item.as_of_timestamp || item.created_at)
+    .filter((value): value is string => Boolean(value))
+    .sort((a, b) => new Date(b).getTime() - new Date(a).getTime())
+  return timestamps[0] ?? null
+})
+const latestPredictions = computed(() =>
+  predictions.value.filter(item => (item.as_of_timestamp || item.created_at) === latestPredictionBatchAt.value)
+)
 const riskHighCount = computed(() =>
-  risks.value.filter(r => r.risk_level === 'high' || r.risk_level === 'medium').length
+  latestPredictions.value.filter(item => item.risk_level === 'warning' || item.risk_level === 'critical').length
 )
 
-async function loadRisks() {
-  riskLoading.value = true
-  riskError.value = ''
+async function loadPredictions() {
+  predictionLoading.value = true
+  predictionError.value = ''
   try {
-    const data = await apiFetch<{ risks: RiskItem[] }>('/api/buildings/risk-now')
-    risks.value = data?.risks ?? []
+    const data = await apiFetch<{ predictions: PredictionItem[]; message?: string }>('/api/predictions/recent?hours=168')
+    predictions.value = (data?.predictions ?? [])
+      .filter(item => item.risk_level === 'warning' || item.risk_level === 'critical')
+      .sort((a, b) => {
+        const order = { critical: 0, warning: 1 }
+        const levelDiff = order[a.risk_level as keyof typeof order] - order[b.risk_level as keyof typeof order]
+        if (levelDiff !== 0) return levelDiff
+        return Math.abs(b.deviation_pct ?? 0) - Math.abs(a.deviation_pct ?? 0)
+      })
+    if (predictions.value.length === 0 && data?.message) {
+      predictionError.value = data.message
+    }
   } catch (e: unknown) {
-    riskError.value = (e as Error).message ?? '加载失败'
+    predictionError.value = (e as Error).message ?? '加载失败'
   } finally {
-    riskLoading.value = false
+    predictionLoading.value = false
   }
 }
 
@@ -939,16 +969,16 @@ const forecastResult  = ref<string>('')
 async function runForecast() {
   forecastLoading.value = true
   forecastResult.value  = ''
-  riskError.value       = ''
+  predictionError.value = ''
   try {
     const res = await apiFetch<{ status: string; succeeded: number; total_buildings: number }>(
       '/api/admin/run-forecast',
       { method: 'POST' },
     )
     forecastResult.value = `预测完成：${res.succeeded ?? 0}/${res.total_buildings ?? 0} 栋楼`
-    await loadRisks()
+    await loadPredictions()
   } catch (e: unknown) {
-    riskError.value = (e as Error).message ?? '预测失败'
+    predictionError.value = (e as Error).message ?? '预测失败'
   } finally {
     forecastLoading.value = false
     setTimeout(() => { forecastResult.value = '' }, 4000)
@@ -991,10 +1021,54 @@ function formatDate(dateStr?: string | null): string {
   }
 }
 
+function predictionWindowLabel(horizon: number): string {
+  return `${horizon}h`
+}
+
+function predictionRiskLabel(level: PredictionItem['risk_level']): string {
+  return level === 'critical' ? '高风险' : level === 'warning' ? '预警' : '正常'
+}
+
+function metricLabel(metricName: string): string {
+  const labels: Record<string, string> = {
+    electricity_kwh: '用电量',
+    water_l: '水耗',
+    hac_energy: '空调能耗',
+    sim_supply_temp_c: '供水温度',
+    sim_return_temp_c: '回水温度',
+  }
+  return labels[metricName] ?? metricName
+}
+
+function metricUnit(metricName: string): string {
+  const units: Record<string, string> = {
+    electricity_kwh: 'kWh',
+    water_l: 'L',
+    hac_energy: 'kWh',
+    sim_supply_temp_c: '℃',
+    sim_return_temp_c: '℃',
+  }
+  return units[metricName] ?? ''
+}
+
+function formatPredictionValue(value: number | null, metricName: string): string {
+  if (value == null || Number.isNaN(value)) return '--'
+  const unit = metricUnit(metricName)
+  return `${value.toFixed(2)}${unit ? ` ${unit}` : ''}`
+}
+
+function predictionSummary(item: PredictionItem): string {
+  const metric = RULE_LABELS[item.rule_triggered ?? ''] ?? metricLabel(item.metric_name)
+  return item.risk_level === 'critical'
+    ? `${metric} 预计显著异常`
+    : `${metric} 预计偏离基线`
+}
+
 // ── 初始化 ──────────────────────────────────
 onMounted(() => {
   if (chatStore.sessionList.length === 0) chatStore.loadSessionList()
   loadAnomalies()
+  loadPredictions()
   document.addEventListener('click', closeDropdowns)
 })
 
@@ -1666,6 +1740,8 @@ onUnmounted(() => {
 .dev-high   { color: #dc2626; font-weight: 600; }
 .dev-medium { color: #d97706; font-weight: 600; }
 .dev-low    { color: #16a34a; font-weight: 600; }
+.dev-critical { color: #dc2626; font-weight: 700; }
+.dev-warning  { color: #d97706; font-weight: 700; }
 
 /* ── 预警风险卡片 ── */
 .risk-card {
@@ -1675,27 +1751,23 @@ onUnmounted(() => {
   transition: border-color 0.15s ease, background 0.15s ease;
 }
 .risk-card:last-child { margin-bottom: 0; }
-.risk-card.risk-high   { border-left: 3px solid #ef4444; background: rgba(239,68,68,0.02); }
-.risk-card.risk-medium { border-left: 3px solid #f59e0b; background: rgba(245,158,11,0.02); }
-.risk-card.risk-low    { border-left: 3px solid #34d399; background: rgba(52,211,153,0.02); }
-.risk-card.risk-normal { border-left: 3px solid #d1fae5; }
+.risk-card.risk-critical { border-left: 3px solid #ef4444; background: rgba(239,68,68,0.02); }
+.risk-card.risk-warning  { border-left: 3px solid #f59e0b; background: rgba(245,158,11,0.02); }
 
 .risk-card-left { display: flex; align-items: flex-start; gap: 10px; flex: 1; min-width: 0; }
 .risk-icon {
   flex-shrink: 0; width: 32px; height: 32px; border-radius: 9px;
   display: flex; align-items: center; justify-content: center; margin-top: 1px;
 }
-.risk-high .risk-icon   { background: rgba(239,68,68,0.1); color: #ef4444; }
-.risk-medium .risk-icon { background: rgba(245,158,11,0.1); color: #f59e0b; }
-.risk-low .risk-icon    { background: rgba(52,211,153,0.1); color: #34d399; }
-.risk-normal .risk-icon { background: rgba(52,211,153,0.08); color: #34d399; }
+.risk-critical .risk-icon { background: rgba(239,68,68,0.1); color: #ef4444; }
+.risk-warning .risk-icon  { background: rgba(245,158,11,0.1); color: #f59e0b; }
 
 .risk-info { flex: 1; min-width: 0; }
 .risk-header { display: flex; align-items: center; gap: 7px; margin-bottom: 3px; }
 .risk-name { font-size: 13px; font-weight: 600; color: #111827; }
 .risk-mode-badge {
   font-size: 10px; font-weight: 500; padding: 1px 7px; border-radius: 10px;
-  background: rgba(80,200,120,0.1); color: #16a34a;
+  background: rgba(59,108,244,0.1); color: #3b6cf4;
 }
 .risk-desc { font-size: 12px; color: #374151; margin: 0 0 3px; }
 .risk-meta { font-size: 11px; color: #9ca3af; margin: 0; }
@@ -1704,10 +1776,8 @@ onUnmounted(() => {
   flex-shrink: 0; font-size: 10px; font-weight: 700; padding: 3px 10px;
   border-radius: 20px; align-self: center;
 }
-.rlv-high   { background: rgba(239,68,68,0.1); color: #dc2626; }
-.rlv-medium { background: rgba(245,158,11,0.1); color: #d97706; }
-.rlv-low    { background: rgba(52,211,153,0.1); color: #059669; }
-.rlv-normal { background: rgba(52,211,153,0.08); color: #16a34a; }
+.rlv-critical { background: rgba(239,68,68,0.1); color: #dc2626; }
+.rlv-warning  { background: rgba(245,158,11,0.1); color: #d97706; }
 
 /* ── FAQ ── */
 .faq-list { display: flex; flex-direction: column; gap: 6px; }
@@ -1794,13 +1864,12 @@ onUnmounted(() => {
 :root[data-theme="dark"] .msg-chevron { color: rgba(255,255,255,0.15); }
 
 :root[data-theme="dark"] .risk-card { background: rgba(255,255,255,0.03); border-color: rgba(255,255,255,0.04); }
-:root[data-theme="dark"] .risk-card.risk-high   { background: rgba(239,68,68,0.04); }
-:root[data-theme="dark"] .risk-card.risk-medium { background: rgba(245,158,11,0.04); }
-:root[data-theme="dark"] .risk-card.risk-low    { background: rgba(52,211,153,0.03); }
+:root[data-theme="dark"] .risk-card.risk-critical { background: rgba(239,68,68,0.04); }
+:root[data-theme="dark"] .risk-card.risk-warning  { background: rgba(245,158,11,0.04); }
 :root[data-theme="dark"] .risk-name { color: rgba(255,255,255,0.9); }
 :root[data-theme="dark"] .risk-desc { color: rgba(255,255,255,0.6); }
 :root[data-theme="dark"] .risk-meta { color: rgba(255,255,255,0.3); }
-:root[data-theme="dark"] .risk-mode-badge { background: rgba(80,200,120,0.12); color: #6ee7a0; }
+:root[data-theme="dark"] .risk-mode-badge { background: rgba(59,108,244,0.16); color: #93c5fd; }
 
 /* FAQ */
 :root[data-theme="dark"] .faq-question { background: rgba(255,255,255,0.03); border-color: rgba(255,255,255,0.04); color: rgba(255,255,255,0.8); }

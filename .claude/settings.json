@@ -21,7 +21,15 @@
       "Bash(python -m py_compile app/api/routes_context_events.py)",
       "Bash(python -m py_compile app/db/models.py)",
       "Bash(python -m py_compile app/api/routes_chat.py)",
-      "Bash(python -m py_compile main.py)"
+      "Bash(python -m py_compile main.py)",
+      "Bash(curl -v http://localhost:5174/src/pages/operator/overview/index.vue)",
+      "Bash(curl --noproxy localhost -s http://localhost:5174/src/pages/operator/overview/index.vue)",
+      "Bash(npx --no-install vite --version)",
+      "Bash(grep -r \"interface.*Heatmap\\\\|type.*Heatmap\\\\|export.*heatmap\" /e/27_fwwb_A08/project/frontend/src --include=*.ts --include=*.vue)",
+      "Bash(node -e \":*)",
+      "Bash(find /e/27_fwwb_A08/project -type f \\\\\\(-name *profile* -o -name *setting* -o -name *user* \\\\\\) \\\\\\(-name *.vue -o -name *.ts -o -name *.tsx \\\\\\))",
+      "Bash(grep -r \"anomal\" /e/27_fwwb_A08/project/backend/app/api/*.py)",
+      "Bash(xargs basename:*)"
     ]
   }
 }

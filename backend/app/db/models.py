@@ -562,6 +562,135 @@ class PredictedAnomalyEvent(Base):
 
 
 # ---------------------------------------------------------------------------
+# anomaly_incidents — 连续异常事件主表（incident 层）
+# ---------------------------------------------------------------------------
+
+class AnomalyIncident(Base):
+    """
+    Incident 主表：将多个连续异常点聚合为一个可管理的问题对象。
+    """
+    __tablename__ = "anomaly_incidents"
+
+    id: str = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    incident_id: str = Column(String(64), unique=True, nullable=False)
+
+    source: str = Column(String(32), nullable=False, server_default="auto_detect")
+    building_id: str = Column(
+        String,
+        ForeignKey("buildings.building_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    device_id: str = Column(String(128), nullable=True)
+    rule_triggered: str = Column(String(64), nullable=False)
+    hvac_root_cause: str = Column(String(64), nullable=True)
+    merge_key: str = Column(String(255), nullable=False)
+
+    incident_status: str = Column(String(32), nullable=False, default="open")
+    workflow_status: str = Column(String(32), nullable=True)
+    priority: str = Column(String(16), nullable=False, default="medium")
+
+    first_seen_at = Column(TIMESTAMP(timezone=True), nullable=False)
+    last_seen_at = Column(TIMESTAMP(timezone=True), nullable=False)
+    continuity_expires_at = Column(TIMESTAMP(timezone=True), nullable=False)
+    anomaly_count: int = Column(Integer, nullable=False, default=1)
+    peak_deviation_pct: float = Column(Float, nullable=True)
+    latest_actual_value: float = Column(Float, nullable=True)
+    latest_expected_value: float = Column(Float, nullable=True)
+    summary_text: str = Column(Text, nullable=False)
+
+    current_work_order_id: str = Column(
+        String, ForeignKey("work_orders.id", ondelete="SET NULL"), nullable=True
+    )
+    is_active: bool = Column(Boolean, nullable=False, default=True)
+    resolved_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    created_at = Column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at = Column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    event_links = relationship(
+        "IncidentEventLink", back_populates="incident", cascade="all, delete-orphan"
+    )
+
+    __table_args__ = (
+        Index("idx_incident_merge_key_active", "merge_key", "is_active"),
+        Index("idx_incident_workflow_status", "workflow_status"),
+        Index("idx_incident_building_last_seen", "building_id", "last_seen_at"),
+        Index("idx_incident_priority_last_seen", "priority", "last_seen_at"),
+    )
+
+
+class IncidentEventLink(Base):
+    """
+    Incident 与 anomaly_event 的证据时间线关联。
+    """
+    __tablename__ = "incident_event_links"
+
+    id: str = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    incident_id: str = Column(
+        String, ForeignKey("anomaly_incidents.id", ondelete="CASCADE"), nullable=False
+    )
+    anomaly_event_id: str = Column(
+        PG_UUID(as_uuid=False), ForeignKey("anomaly_events.id", ondelete="SET NULL"), nullable=True
+    )
+    sequence_no: int = Column(Integer, nullable=False, default=1)
+    data_timestamp = Column(TIMESTAMP(timezone=True), nullable=False)
+    actual_value: float = Column(Float, nullable=True)
+    expected_value: float = Column(Float, nullable=True)
+    deviation_pct: float = Column(Float, nullable=True)
+    rule_triggered: str = Column(String(64), nullable=False)
+    hvac_root_cause: str = Column(String(64), nullable=True)
+    created_at = Column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    incident = relationship("AnomalyIncident", back_populates="event_links")
+
+    __table_args__ = (
+        UniqueConstraint("incident_id", "anomaly_event_id", name="uq_incident_event_link"),
+        Index("idx_incident_event_incident", "incident_id"),
+        Index("idx_incident_event_timestamp", "data_timestamp"),
+    )
+
+
+class IncidentPredictionLink(Base):
+    """
+    Incident 与 predicted_anomaly_event 的关联，服务于预测预警 incident。
+    """
+    __tablename__ = "incident_prediction_links"
+
+    id: str = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    incident_id: str = Column(
+        String, ForeignKey("anomaly_incidents.id", ondelete="CASCADE"), nullable=False
+    )
+    predicted_anomaly_event_id: str = Column(
+        String, ForeignKey("predicted_anomaly_events.id", ondelete="SET NULL"), nullable=True
+    )
+    sequence_no: int = Column(Integer, nullable=False, default=1)
+    forecast_for_timestamp = Column(TIMESTAMP(timezone=True), nullable=False)
+    metric_name: str = Column(String(64), nullable=False)
+    predicted_value: float = Column(Float, nullable=True)
+    expected_value: float = Column(Float, nullable=True)
+    deviation_pct: float = Column(Float, nullable=True)
+    risk_level: str = Column(String(32), nullable=True)
+    created_at = Column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "incident_id",
+            "predicted_anomaly_event_id",
+            name="uq_incident_prediction_link",
+        ),
+        Index("idx_incident_prediction_incident", "incident_id"),
+        Index("idx_incident_prediction_timestamp", "forecast_for_timestamp"),
+    )
+
+
+# ---------------------------------------------------------------------------
 # work_orders — 工单持久化（替代内存 _work_orders 字典）
 # ---------------------------------------------------------------------------
 
@@ -629,6 +758,9 @@ class WorkOrder(Base):
     created_by: str = Column(
         String, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
+    incident_id: str = Column(
+        String, ForeignKey("anomaly_incidents.id", ondelete="SET NULL"), nullable=True
+    )
 
     # relationships
     anomaly_links = relationship(
@@ -643,6 +775,7 @@ class WorkOrder(Base):
         Index("idx_wo_building", "building_id"),
         Index("idx_wo_created", created_at.desc()),
         Index("idx_wo_assigned", "assigned_to", postgresql_where=Column("assigned_to").isnot(None)),
+        Index("idx_wo_incident", "incident_id"),
     )
 
 

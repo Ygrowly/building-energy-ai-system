@@ -19,6 +19,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.cache import delete_cache_by_prefix
 from app.db.models import Building
 from app.db.session import get_db_session as get_db, AsyncSessionLocal
 from app.services.kpi_expected_service import compute_and_store_all_buildings
@@ -125,6 +126,13 @@ async def rebuild_all():
 class RunForecastRequest(BaseModel):
     building_id: Optional[str] = None
     as_of: Optional[datetime] = None
+
+
+class RebuildIncidentsRequest(BaseModel):
+    building_id: Optional[str] = None
+    include_alerts: bool = True
+    include_predictions: bool = True
+    trigger_ai_review: bool = False
 
 
 @router.post("/run-forecast")
@@ -251,3 +259,81 @@ async def test_workorder():
             results[bid] = {"error": str(exc), "traceback": _tb.format_exc()}
 
     return results
+
+
+@router.post("/rebuild-incidents")
+async def rebuild_incidents(
+    body: RebuildIncidentsRequest = RebuildIncidentsRequest(),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    基于现有 anomaly_events / predicted_anomaly_events / work_orders 回填 incident 层。
+    不删除旧工单，只为其补充 incident 归属与聚合视图。
+    """
+    from app.services.auto_work_order_service import (
+        auto_create_alert_orders,
+        auto_create_prediction_orders,
+        trigger_ai_review_for_pending,
+    )
+
+    if not body.include_alerts and not body.include_predictions:
+        return {
+            "status": "ok",
+            "message": "未选择任何回填来源，本次未执行。",
+            "created": 0,
+            "merged": 0,
+            "skipped": 0,
+            "reviewed": 0,
+            "per_building": {},
+        }
+
+    if body.building_id:
+        building_ids = [body.building_id]
+    else:
+        result = await db.execute(
+            select(Building.building_id).order_by(Building.building_id)
+        )
+        building_ids = [r[0] for r in result.fetchall()]
+
+    total_created = 0
+    total_merged = 0
+    total_skipped = 0
+    reviewed = 0
+    per_building: dict[str, dict[str, object]] = {}
+
+    for bid in building_ids:
+        building_summary: dict[str, dict[str, int]] = {}
+
+        if body.include_alerts:
+            alert_summary = await auto_create_alert_orders(db, bid)
+            building_summary["alerts"] = alert_summary
+            total_created += alert_summary.get("created", 0)
+            total_merged += alert_summary.get("merged", 0)
+            total_skipped += alert_summary.get("skipped_dup", 0)
+
+        if body.include_predictions:
+            prediction_summary = await auto_create_prediction_orders(db, bid)
+            building_summary["predictions"] = prediction_summary
+            total_created += prediction_summary.get("created", 0)
+            total_merged += prediction_summary.get("merged", 0)
+            total_skipped += prediction_summary.get("skipped_dup", 0)
+
+        per_building[bid] = building_summary
+
+    if body.trigger_ai_review:
+        reviewed = await trigger_ai_review_for_pending(db)
+
+    await delete_cache_by_prefix("workorders:")
+    await delete_cache_by_prefix("incidents:")
+
+    return {
+        "status": "ok",
+        "scope": "single_building" if body.building_id else "all_buildings",
+        "include_alerts": body.include_alerts,
+        "include_predictions": body.include_predictions,
+        "created": total_created,
+        "merged": total_merged,
+        "skipped": total_skipped,
+        "reviewed": reviewed,
+        "per_building": per_building,
+    }

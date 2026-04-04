@@ -1,4 +1,4 @@
-import { post, get } from './request'
+import { post, get, patch } from './request'
 import type { UserRole } from '../constants/roles'
 
 /** 对齐后端 UserResponse */
@@ -56,5 +56,9 @@ export const authApi = {
       old_password: oldPassword,
       new_password: newPassword,
     })
+  },
+
+  updateProfile(profile: { username?: string; email?: string | null; phone?: string | null }): Promise<UserInfo> {
+    return patch<UserInfo>('/api/auth/me', profile)
   },
 }

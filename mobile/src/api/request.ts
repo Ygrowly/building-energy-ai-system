@@ -47,6 +47,7 @@ function clearAuth() {
 
 function redirectToLogin() {
   clearAuth()
+  uni.showToast({ title: '登录已过期，请重新登录', icon: 'none', duration: 2000 })
   uni.reLaunch({ url: '/pages/login/index' })
 }
 
@@ -146,6 +147,10 @@ async function doRequest<T>(options: RequestOptions, retried = false): Promise<T
                 const result = await doRequest<T>(options, true)
                 resolve(result)
               } catch (e) { reject(e) }
+              return
+            } else {
+              redirectToLogin()
+              reject(new Error('登录已过期'))
               return
             }
           }

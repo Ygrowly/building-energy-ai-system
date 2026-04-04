@@ -3,27 +3,27 @@
     <NavBar title="进行中" bg-color="#0f3d2e" />
 
     <scroll-view scroll-y class="list-area" @scrolltolower="loadMore">
-      <view v-if="loading && !orders.length">
+      <view v-if="loading && !incidents.length">
         <view v-for="i in 2" :key="i" class="wo-skeleton" />
       </view>
 
       <!-- 进行中工单（已派单，尚未提交反馈） -->
       <view
-        v-for="order in orders"
-        :key="order.id"
+        v-for="incident in incidents"
+        :key="incident.id"
         class="active-card"
-        @click="openDetail(order)"
+        @click="openDetail(incident)"
       >
         <view class="active-header">
-          <view class="priority-badge" :class="order.priority">
-            {{ PRIORITY_LABEL[order.priority] || order.priority }}
+          <view class="priority-badge" :class="incident.priority">
+            {{ PRIORITY_LABEL[incident.priority] || incident.priority }}
           </view>
-          <text class="ticket-id">#{{ order.ticket_id.slice(-8) }}</text>
+          <text class="ticket-id">#{{ (incident.current_work_order?.ticket_id || incident.incident_id).slice(-8) }}</text>
         </view>
 
-        <text class="building-name">{{ order.building_id }}</text>
-        <text v-if="order.device_id" class="device-id">{{ order.device_id }}</text>
-        <text class="description">{{ order.issue_description }}</text>
+        <text class="building-name">{{ incident.building_id }}</text>
+        <text v-if="incident.device_id" class="device-id">{{ incident.device_id }}</text>
+        <text class="description">{{ incident.summary_text }}</text>
 
         <!-- 进度指示 -->
         <view class="progress-row">
@@ -44,8 +44,8 @@
         </view>
       </view>
 
-      <view v-if="!loading && !orders.length" class="empty-state">
-        <text class="empty-icon">🔧</text>
+      <view v-if="!loading && !incidents.length" class="empty-state">
+        <image class="empty-icon" src="/static/icons/tab-wrench.svg" mode="aspectFit" />
         <text>暂无进行中的工单</text>
         <text class="empty-sub">前往「待处理」接单</text>
       </view>
@@ -63,24 +63,28 @@ import { useRouteGuard } from '../../../utils/route-guard'
 import { WORKER_TABS } from '../../../constants/tabs'
 import { WORKER_ROLES } from '../../../constants/roles'
 import { PRIORITY_LABEL } from '../../../constants/status'
-import { workOrderApi, type WorkOrder } from '../../../api/workorder'
+import { incidentApi, type Incident } from '../../../api/incident'
+import { getCache, setCache } from '../../../utils/cache'
 
 useRouteGuard(WORKER_ROLES)
 
-const orders = ref<WorkOrder[]>([])
+const incidents = ref<Incident[]>([])
 const loading = ref(false)
 const noMore = ref(false)
 const page = ref(1)
 
 async function loadData() {
-  loading.value = true
+  const cached = getCache<Incident[]>('worker_active')
+  if (cached) incidents.value = cached
+  loading.value = !cached
   try {
-    const res = await workOrderApi.list({
-      status: 'dispatched',
+    const res = await incidentApi.list({
+      workflow_status: 'dispatched',
       page: 1,
       page_size: 20,
     })
-    orders.value = res.work_orders
+    incidents.value = res.incidents
+    setCache('worker_active', res.incidents)
   } catch { /* handled */ }
   finally { loading.value = false }
 }
@@ -89,9 +93,11 @@ async function loadMore() {
   if (loading.value || noMore.value) return
 }
 
-function openDetail(order: WorkOrder) {
+function openDetail(incident: Incident) {
+  const ticketId = incident.current_work_order?.ticket_id
+  if (!ticketId) return
   uni.navigateTo({
-    url: `/pages/worker/workorder-detail/index?ticket_id=${order.ticket_id}`,
+    url: `/pages/worker/workorder-detail/index?incident_id=${incident.incident_id}&ticket_id=${ticketId}`,
   })
 }
 
@@ -217,7 +223,7 @@ onMounted(loadData)
   gap: 16rpx;
   color: #aaa;
 
-  .empty-icon { font-size: 80rpx; }
+  .empty-icon { width: 88rpx; height: 88rpx; opacity: 0.4; }
   font-size: 28rpx;
 }
 

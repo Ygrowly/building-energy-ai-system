@@ -8,10 +8,7 @@
       <view class="nav-row">
         <view class="brand">
           <view class="brand-icon">
-            <svg viewBox="0 0 28 28" fill="none">
-              <rect width="28" height="28" rx="7" fill="#22C55E"/>
-              <path d="M16 3L7 16h7l-2 9 10-12h-7V3z" fill="white"/>
-            </svg>
+            <view class="brand-icon-bolt" />
           </view>
           <text class="brand-name">建筑能源</text>
         </view>
@@ -23,14 +20,8 @@
 
         <view class="green-wrap anim-l2">
           <text class="t-line t-green t-accent">绿色能源</text>
-          <svg class="oval-svg" viewBox="0 0 260 80" fill="none" preserveAspectRatio="none">
-            <ellipse cx="130" cy="42" rx="120" ry="32"
-              stroke="#22C55E" stroke-width="2.5" stroke-linecap="round"
-              stroke-dasharray="7 3" transform="rotate(-2 130 42)" opacity="0.85"/>
-            <ellipse cx="132" cy="40" rx="115" ry="28"
-              stroke="#4ADE80" stroke-width="1.2" stroke-linecap="round"
-              stroke-dasharray="4 6" transform="rotate(2 132 40)" opacity="0.5"/>
-          </svg>
+          <view class="oval-ring oval-ring-main" />
+          <view class="oval-ring oval-ring-sub" />
         </view>
 
         <text class="t-line t-black t-dim anim-l3">的未来</text>
@@ -188,7 +179,39 @@ $font-cn: 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif;
   margin-bottom: 52rpx;
 }
 .brand      { display: flex; align-items: center; gap: 14rpx; }
-.brand-icon { width: 48rpx; height: 48rpx; svg { width: 100%; height: 100%; } }
+.brand-icon {
+  width: 48rpx;
+  height: 48rpx;
+  border-radius: 14rpx;
+  background: linear-gradient(135deg, #16a34a, #4ade80);
+  position: relative;
+  box-shadow: 0 10rpx 24rpx rgba(34, 197, 94, 0.24);
+}
+.brand-icon-bolt {
+  position: absolute;
+  top: 8rpx;
+  left: 16rpx;
+  width: 0;
+  height: 0;
+  border-left: 8rpx solid transparent;
+  border-right: 3rpx solid transparent;
+  border-top: 0 solid transparent;
+  border-bottom: 18rpx solid #fff;
+  transform: skewX(-18deg);
+
+  &::after {
+    content: '';
+    position: absolute;
+    top: 10rpx;
+    left: -6rpx;
+    width: 0;
+    height: 0;
+    border-left: 4rpx solid transparent;
+    border-right: 9rpx solid transparent;
+    border-top: 18rpx solid #fff;
+    border-bottom: 0 solid transparent;
+  }
+}
 .brand-name { font-size: 28rpx; font-weight: 800; color: #0A2312; letter-spacing: 3rpx; font-family: $font-cn; }
 
 // 入场动画
@@ -209,10 +232,8 @@ $font-cn: 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif;
   &.t-accent {
     font-size: 92rpx; letter-spacing: 4rpx;
     position: relative; z-index: 1;
-    background: linear-gradient(90deg, #16a34a 0%, #22c55e 40%, #4ade80 100%);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
+    color: #16a34a;
+    text-shadow: 0 6rpx 20rpx rgba(34, 197, 94, 0.14);
   }
   &.t-dim  { font-size: 76rpx; color: rgba(10,10,10,0.75); letter-spacing: 2rpx; font-weight: 800; }
   &.t-black { color: $ink; font-size: 84rpx; letter-spacing: 2rpx; }
@@ -225,13 +246,28 @@ $font-cn: 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif;
   margin: 2rpx 0;
 }
 
-.oval-svg {
+.oval-ring {
   position: absolute;
   top: -14rpx; left: -18rpx;
   width: calc(100% + 36rpx);
   height: calc(100% + 28rpx);
   pointer-events: none;
   z-index: 0;
+  border-radius: 999rpx;
+}
+
+.oval-ring-main {
+  border: 3rpx dashed rgba(34, 197, 94, 0.85);
+  transform: rotate(-2deg);
+}
+
+.oval-ring-sub {
+  top: -8rpx;
+  left: -10rpx;
+  width: calc(100% + 20rpx);
+  height: calc(100% + 16rpx);
+  border: 2rpx dashed rgba(74, 222, 128, 0.4);
+  transform: rotate(2deg);
 }
 
 .t-sub {

@@ -32,7 +32,7 @@
     {
       "path": "pages/operator/alerts/index",
       "style": {
-        "navigationBarTitleText": "异常告警",
+        "navigationBarTitleText": "消息中心",
         "navigationBarBackgroundColor": "#1a1a2e",
         "navigationBarTextStyle": "white",
         "navigationStyle": "custom"
@@ -51,6 +51,42 @@
       "path": "pages/operator/profile/index",
       "style": {
         "navigationBarTitleText": "我的",
+        "navigationBarBackgroundColor": "#1a1a2e",
+        "navigationBarTextStyle": "white",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/operator/profile/info",
+      "style": {
+        "navigationBarTitleText": "个人资料",
+        "navigationBarBackgroundColor": "#1a1a2e",
+        "navigationBarTextStyle": "white",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/operator/profile/security",
+      "style": {
+        "navigationBarTitleText": "账号与安全",
+        "navigationBarBackgroundColor": "#1a1a2e",
+        "navigationBarTextStyle": "white",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/operator/profile/notification",
+      "style": {
+        "navigationBarTitleText": "消息中心",
+        "navigationBarBackgroundColor": "#1a1a2e",
+        "navigationBarTextStyle": "white",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/operator/profile/about",
+      "style": {
+        "navigationBarTitleText": "关于",
         "navigationBarBackgroundColor": "#1a1a2e",
         "navigationBarTextStyle": "white",
         "navigationStyle": "custom"
@@ -96,6 +132,42 @@
       "path": "pages/worker/profile/index",
       "style": {
         "navigationBarTitleText": "我的",
+        "navigationBarBackgroundColor": "#0f3d2e",
+        "navigationBarTextStyle": "white",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/worker/profile/info",
+      "style": {
+        "navigationBarTitleText": "个人资料",
+        "navigationBarBackgroundColor": "#0f3d2e",
+        "navigationBarTextStyle": "white",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/worker/profile/security",
+      "style": {
+        "navigationBarTitleText": "账号与安全",
+        "navigationBarBackgroundColor": "#0f3d2e",
+        "navigationBarTextStyle": "white",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/worker/profile/notification",
+      "style": {
+        "navigationBarTitleText": "消息通知",
+        "navigationBarBackgroundColor": "#0f3d2e",
+        "navigationBarTextStyle": "white",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/worker/profile/about",
+      "style": {
+        "navigationBarTitleText": "关于",
         "navigationBarBackgroundColor": "#0f3d2e",
         "navigationBarTextStyle": "white",
         "navigationStyle": "custom"

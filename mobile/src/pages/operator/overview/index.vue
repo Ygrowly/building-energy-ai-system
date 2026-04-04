@@ -19,10 +19,18 @@
           <text class="header-name">{{ authStore.user?.username }}</text>
         </view>
       </view>
-      <view v-if="overview && overview.weather && overview.weather.temperature != null" class="weather-chip">
-        <image class="chip-icon" src="/static/icons/thermometer.svg" mode="aspectFit" />
-        <text class="chip-temp">{{ overview.weather.temperature }}°C</text>
-        <text class="chip-sub">{{ overview.weather.humidity }}%</text>
+      <view v-if="overview" class="weather-chip">
+        <view v-if="overview.data_date" class="chip-date-wrap">
+          <text class="chip-date-value">{{ overview.data_date }}</text>
+        </view>
+        <view
+          v-if="overview.weather && overview.weather.temperature != null"
+          class="chip-weather-wrap"
+        >
+          <image class="chip-icon" src="/static/icons/thermometer.svg" mode="aspectFit" />
+          <text class="chip-temp">{{ formatFixed(overview.weather.temperature, 1) }}°C</text>
+          <text class="chip-sub">{{ formatFixed(overview.weather.humidity, 1) }}%</text>
+        </view>
       </view>
     </view>
 
@@ -69,8 +77,10 @@
             :class="currentTab === 'all' ? 'tab-active' : ''"
             @click="currentTab = 'all'"
           >
-            <image class="filter-icon" src="/static/icons/tab-overview.svg" mode="aspectFit" />
-            <text class="filter-text">总览</text>
+            <view class="filter-tab-content">
+              <image class="filter-icon" src="/static/icons/tab-overview.svg" mode="aspectFit" />
+              <text class="filter-text">总览</text>
+            </view>
           </view>
           <view
             v-for="b in overview.buildings"
@@ -79,8 +89,10 @@
             :class="currentTab === b.building_type ? 'tab-active' : ''"
             @click="currentTab = b.building_type"
           >
-            <image class="filter-icon" :src="getBuildingIcon(b.building_type)" mode="aspectFit" />
-            <text class="filter-text">{{ (b.display_name || '').replace('楼', '') }}</text>
+            <view class="filter-tab-content">
+              <image class="filter-icon" :src="getBuildingIcon(b.building_type)" mode="aspectFit" />
+              <text class="filter-text">{{ (b.display_name || '').replace('楼', '') }}</text>
+            </view>
           </view>
         </view>
       </scroll-view>
@@ -88,105 +100,54 @@
 
     <!-- ==================== 总览视图 ==================== -->
     <view v-if="overview && currentTab === 'all'">
-      <!-- KPI 双卡片 -->
-      <view class="kpi-row">
-        <view class="kpi-card">
-          <view class="kpi-card-header">
-            <text class="kpi-card-title">总用电</text>
-            <image class="kpi-arrow" src="/static/icons/arrow-right.svg" mode="aspectFit" />
-          </view>
-          <view class="kpi-main">
-            <text class="kpi-value">{{ formatNum(overview.kpis.total_electricity_kwh) }}</text>
-            <text class="kpi-unit">kWh</text>
-          </view>
-          <view class="kpi-bars">
+      <!-- 待处理工单（AI驳回） -->
+      <view class="wo-section">
+        <view class="section-header">
+          <view class="section-dot dot-red" />
+          <text class="section-title">待处理工单</text>
+          <text class="section-count" v-if="rejectedOrders.length">{{ rejectedOrders.length }}条</text>
+          <view style="flex:1" />
+          <text class="section-link" @click="goWorkOrders">全部</text>
+        </view>
+
+        <view
+          v-for="wo in rejectedOrders.slice(0, 5)"
+          :key="wo.ticket_id"
+          class="wo-card"
+        >
+          <view class="wo-card-top">
             <view
-              v-for="(b, i) in overview.buildings.slice(0, 6)"
-              :key="'ke'+i"
-              class="kpi-bar-item"
+              class="wo-priority"
+              :style="{ background: getPriorityColor(wo.priority).bg, color: getPriorityColor(wo.priority).text }"
             >
-              <view
-                class="kpi-bar"
-                :style="{ height: getBarHeight(b.total_electricity_kwh, 56) + 'rpx' }"
-                :class="i % 2 === 0 ? 'bar-solid' : 'bar-light'"
-              />
+              {{ getPriorityLabel(wo.priority) }}
             </view>
+            <text class="wo-time">{{ formatTimeAgo(wo.created_at) }}</text>
           </view>
-          <view class="kpi-change" :class="changeClass(overview.kpis_change.total_electricity_pct)">
-            <text>环比 {{ formatPct(overview.kpis_change.total_electricity_pct) }}</text>
+          <text class="wo-desc">{{ sanitizeDisplayText(wo.issue_description) }}</text>
+          <view class="wo-meta">
+            <text class="wo-meta-item">{{ formatBuildingLabel(wo.building_id) }}</text>
+            <text v-if="formatDeviceLabel(wo.device_id, wo.building_id)" class="wo-meta-item">{{ formatDeviceLabel(wo.device_id, wo.building_id) }}</text>
+          </view>
+          <view v-if="wo.ai_reason" class="wo-reason">
+            <text class="wo-reason-label">AI驳回理由：</text>
+            <text class="wo-reason-text">{{ sanitizeDisplayText(wo.ai_reason) }}</text>
+          </view>
+          <view class="wo-actions">
+            <view class="wo-btn wo-btn-approve" @click="handleOverrideApprove(wo)">
+              <text>覆盖批准</text>
+            </view>
           </view>
         </view>
 
-        <view class="kpi-card">
-          <view class="kpi-card-header">
-            <text class="kpi-card-title">总用水</text>
-            <image class="kpi-arrow" src="/static/icons/arrow-right.svg" mode="aspectFit" />
-          </view>
-          <view class="kpi-main">
-            <text class="kpi-value">{{ formatNum(overview.kpis.total_water_m3) }}</text>
-            <text class="kpi-unit">m³</text>
-          </view>
-          <view class="ring-wrap">
-            <view class="ring-outer" :style="{ background: getRingGradient(waterUsagePercent) }">
-              <view class="ring-inner">
-                <text class="ring-pct">{{ waterUsagePercent }}%</text>
-                <text class="ring-sub">用量</text>
-              </view>
-            </view>
-          </view>
-          <view class="kpi-change" :class="changeClass(overview.kpis_change.total_water_pct)">
-            <text>环比 {{ formatPct(overview.kpis_change.total_water_pct) }}</text>
-          </view>
+        <view v-if="!woLoading && rejectedOrders.length === 0" class="wo-empty">
+          <image class="wo-empty-icon" src="/static/icons/check-circle.svg" mode="aspectFit" />
+          <text class="wo-empty-text">暂无AI驳回工单</text>
         </view>
-      </view>
 
-      <!-- 建筑能耗对比大卡片 -->
-      <view class="chart-card">
-        <view class="chart-header">
-          <view>
-            <text class="chart-title">建筑能耗</text>
-            <text class="chart-sub">{{ overview.data_date || '最近更新' }}</text>
-          </view>
-          <image class="chart-arrow" src="/static/icons/arrow-right.svg" mode="aspectFit" />
-        </view>
-        <view class="chart-main-row">
-          <text class="chart-big-num">{{ formatNum(overview.kpis.total_electricity_kwh) }}</text>
-          <text class="chart-big-unit">kWh</text>
-        </view>
-        <view class="chart-bars">
-          <view
-            v-for="(b, i) in overview.buildings"
-            :key="'cb'+i"
-            class="chart-bar-group"
-            @click="currentTab = b.building_type"
-          >
-            <view class="chart-bar-wrapper">
-              <view
-                class="chart-bar"
-                :style="{ height: getBarHeight(b.total_electricity_kwh, 150) + 'rpx' }"
-                :class="getChartBarClass(i)"
-              />
-            </view>
-            <text class="chart-bar-label">{{ (b.display_name || '').slice(0, 2) }}</text>
-          </view>
-        </view>
-      </view>
-
-      <!-- 暖通 / 异常 -->
-      <view class="stats-strip">
-        <view class="stat-chip">
-          <image class="stat-icon" src="/static/icons/flame.svg" mode="aspectFit" />
-          <view class="stat-info">
-            <text class="stat-val">{{ formatNum(overview.kpis.total_hac_energy_kwh) }} kWh</text>
-            <text class="stat-label">暖通总能耗</text>
-          </view>
-        </view>
-        <view class="stat-chip" :class="overview.kpis.anomaly_count > 0 ? 'chip-warn' : ''">
-          <image class="stat-icon" src="/static/icons/alert-triangle.svg" mode="aspectFit" />
-          <view class="stat-info">
-            <text class="stat-val">{{ overview.kpis.anomaly_count }} 个</text>
-            <text class="stat-label">异常</text>
-          </view>
+        <view v-if="woLoading && rejectedOrders.length === 0" class="wo-skeleton">
+          <view class="wo-sk-card" />
+          <view class="wo-sk-card" />
         </view>
       </view>
 
@@ -224,94 +185,139 @@
     <view v-if="overview && currentTab !== 'all' && activeBuilding">
       <!-- 建筑头部 -->
       <view class="detail-header">
-        <view class="detail-title-row">
-          <view class="detail-icon-box" :class="getBuildingBg(activeBuilding.building_type)">
-            <image class="detail-icon" :src="getBuildingIcon(activeBuilding.building_type)" mode="aspectFit" />
+        <view class="detail-header-main">
+          <view class="detail-title-row">
+            <view class="detail-icon-box" :class="getBuildingBg(activeBuilding.building_type)">
+              <image class="detail-icon" :src="getBuildingIcon(activeBuilding.building_type)" mode="aspectFit" />
+            </view>
+            <view class="detail-title-copy">
+              <text class="detail-name">{{ activeBuilding.display_name }}</text>
+              <text class="detail-sub">面积 {{ formatArea(activeBuilding.sqm) }} m²</text>
+            </view>
           </view>
-          <view>
-            <text class="detail-name">{{ activeBuilding.display_name }}</text>
-            <text class="detail-sub">面积 {{ activeBuilding.sqm }}m² · {{ overview.data_date }}</text>
-          </view>
-        </view>
-        <view class="detail-badges">
-          <view class="detail-badge" :class="activeBuilding.anomaly_status === 'Anomaly' ? 'dbadge-red' : 'dbadge-green'">
-            <view class="detail-dot" />
-            <text>{{ activeBuilding.anomaly_status === 'Anomaly' ? '异常' : '正常' }}</text>
-          </view>
-          <view v-if="activeBuilding.prediction_status !== 'normal'" class="detail-badge dbadge-orange">
-            <text>预警 {{ activeBuilding.prediction_warning_count }}</text>
+          <view class="detail-badges">
+            <view class="detail-badge" :class="activeBuilding.anomaly_status === 'Anomaly' ? 'dbadge-red' : 'dbadge-green'">
+              <view class="detail-dot" />
+              <text>{{ activeBuilding.anomaly_status === 'Anomaly' ? '异常' : '正常' }}</text>
+            </view>
+            <view v-if="activeBuilding.prediction_status !== 'normal'" class="detail-badge dbadge-orange">
+              <text>预警 {{ activeBuilding.prediction_warning_count }}</text>
+            </view>
           </view>
         </view>
       </view>
 
       <!-- 三项 KPI 卡片 -->
       <view class="detail-kpi-row">
-        <view class="detail-kpi">
+        <view class="detail-kpi kpi-electric">
           <view class="dkpi-head">
-            <image class="dkpi-icon" src="/static/icons/lightning.svg" mode="aspectFit" />
-            <text class="dkpi-label">电耗</text>
+            <view class="dkpi-head-left dkpi-head-stack">
+              <view class="dkpi-icon-wrap icon-green">
+                <image class="dkpi-icon" src="/static/icons/lightning.svg" mode="aspectFit" />
+              </view>
+              <text class="dkpi-label">电耗</text>
+            </view>
+          <view class="dkpi-main dkpi-main-top">
+              <text class="dkpi-value">{{ formatNum(activeBuilding.total_electricity_kwh) }}</text>
+              <text class="dkpi-unit">kWh</text>
+            </view>
           </view>
-          <text class="dkpi-value">{{ formatNum(activeBuilding.total_electricity_kwh) }}</text>
-          <text class="dkpi-unit">kWh</text>
-          <view class="dkpi-bar-track">
-            <view class="dkpi-bar-fill fill-green" :style="{ width: getProgressWidth(activeBuilding.total_electricity_kwh, 'electricity') + '%' }" />
+          <view class="dkpi-change" :class="changeClass(activeBuilding.electricity_change_pct)">
+            <image
+              v-if="getDeltaIcon(activeBuilding.electricity_change_pct)"
+              class="dkpi-change-icon"
+              :src="getDeltaIcon(activeBuilding.electricity_change_pct)"
+              mode="aspectFit"
+            />
+            <text>{{ formatDelta(activeBuilding.electricity_change_pct) }}</text>
           </view>
-          <text class="dkpi-change" :class="changeClass(activeBuilding.electricity_change_pct)">
-            {{ formatPct(activeBuilding.electricity_change_pct) }}
-          </text>
         </view>
-        <view class="detail-kpi">
+        <view class="detail-kpi kpi-water">
           <view class="dkpi-head">
-            <image class="dkpi-icon" src="/static/icons/droplet.svg" mode="aspectFit" />
-            <text class="dkpi-label">水耗</text>
+            <view class="dkpi-head-left dkpi-head-stack">
+              <view class="dkpi-icon-wrap icon-blue">
+                <image class="dkpi-icon" src="/static/icons/droplet.svg" mode="aspectFit" />
+              </view>
+              <text class="dkpi-label">水耗</text>
+            </view>
+          <view class="dkpi-main dkpi-main-top">
+              <text class="dkpi-value">{{ formatNum(activeBuilding.total_water_m3) }}</text>
+              <text class="dkpi-unit">m³</text>
+            </view>
           </view>
-          <text class="dkpi-value">{{ formatNum(activeBuilding.total_water_m3) }}</text>
-          <text class="dkpi-unit">m³</text>
-          <view class="dkpi-bar-track">
-            <view class="dkpi-bar-fill fill-blue" :style="{ width: getProgressWidth(activeBuilding.total_water_m3, 'water') + '%' }" />
+          <view class="dkpi-change" :class="changeClass(activeBuilding.water_change_pct)">
+            <image
+              v-if="getDeltaIcon(activeBuilding.water_change_pct)"
+              class="dkpi-change-icon"
+              :src="getDeltaIcon(activeBuilding.water_change_pct)"
+              mode="aspectFit"
+            />
+            <text>{{ formatDelta(activeBuilding.water_change_pct) }}</text>
           </view>
-          <text class="dkpi-change" :class="changeClass(activeBuilding.water_change_pct)">
-            {{ formatPct(activeBuilding.water_change_pct) }}
-          </text>
         </view>
-        <view class="detail-kpi">
+        <view class="detail-kpi kpi-hac">
           <view class="dkpi-head">
-            <image class="dkpi-icon" src="/static/icons/flame.svg" mode="aspectFit" />
-            <text class="dkpi-label">暖通</text>
+            <view class="dkpi-head-left dkpi-head-stack">
+              <view class="dkpi-icon-wrap icon-orange">
+                <image class="dkpi-icon" src="/static/icons/flame.svg" mode="aspectFit" />
+              </view>
+              <text class="dkpi-label">暖通</text>
+            </view>
+          <view class="dkpi-main dkpi-main-top">
+              <text class="dkpi-value">{{ formatNum(activeBuilding.total_hac_energy_kwh) }}</text>
+              <text class="dkpi-unit">kWh</text>
+            </view>
           </view>
-          <text class="dkpi-value">{{ formatNum(activeBuilding.total_hac_energy_kwh) }}</text>
-          <text class="dkpi-unit">kWh</text>
-          <view class="dkpi-bar-track">
-            <view class="dkpi-bar-fill fill-orange" :style="{ width: getProgressWidth(activeBuilding.total_hac_energy_kwh, 'hac') + '%' }" />
+          <view class="dkpi-change" :class="changeClass(activeBuilding.hac_change_pct)">
+            <image
+              v-if="getDeltaIcon(activeBuilding.hac_change_pct)"
+              class="dkpi-change-icon"
+              :src="getDeltaIcon(activeBuilding.hac_change_pct)"
+              mode="aspectFit"
+            />
+            <text>{{ formatDelta(activeBuilding.hac_change_pct) }}</text>
           </view>
-          <text class="dkpi-change" :class="changeClass(activeBuilding.hac_change_pct)">
-            {{ formatPct(activeBuilding.hac_change_pct) }}
-          </text>
         </view>
       </view>
 
-      <!-- 能耗对比柱状图 -->
-      <view class="detail-compare-card">
-        <text class="dc-title">能耗对比</text>
-        <text class="dc-sub">该建筑在所有建筑中的电耗排名</text>
-        <view class="dc-bars">
-          <view
-            v-for="(b, i) in overview.buildings"
-            :key="'dc'+i"
-            class="dc-bar-col"
-          >
-            <view class="dc-bar-wrap">
+      <!-- 7×24 热力图 -->
+      <view class="heatmap-card">
+        <view class="hm-header">
+          <text class="hm-title">7×24 用电热力图</text>
+          <text class="hm-sub">近14天小时均值</text>
+        </view>
+        <view v-if="heatmapData.length" class="hm-wrap">
+          <view class="hm-main">
+            <view class="hm-y-col">
+              <text v-for="d in heatmapDays" :key="d" class="hm-y-label">{{ d }}</text>
+            </view>
+            <view class="hm-cells">
               <view
-                class="dc-bar"
-                :style="{ height: getBarHeight(b.total_electricity_kwh, 120) + 'rpx' }"
-                :class="b.building_type === activeBuilding.building_type ? 'dc-bar-active' : 'dc-bar-dim'"
+                v-for="cell in heatmapData"
+                :key="`${cell.d}-${cell.h}`"
+                class="hm-cell"
+                :style="{ background: getHmColor(cell.v) }"
               />
             </view>
-            <text
-              class="dc-bar-label"
-              :class="b.building_type === activeBuilding.building_type ? 'dc-label-active' : ''"
-            >{{ (b.display_name || '').slice(0, 2) }}</text>
           </view>
+          <view class="hm-x-row">
+            <view class="hm-y-spacer" />
+            <view class="hm-x-labels">
+              <text
+                v-for="h in 24"
+                :key="'xh'+h"
+                class="hm-x-label"
+              >{{ [0, 6, 12, 18].includes(h - 1) ? `${h - 1}` : '' }}</text>
+            </view>
+          </view>
+          <view class="hm-legend">
+            <text class="hm-legend-text">低</text>
+            <view v-for="c in hmLegendColors" :key="c" class="hm-legend-cell" :style="{ background: c }" />
+            <text class="hm-legend-text">高</text>
+          </view>
+        </view>
+        <view v-else class="hm-empty">
+          <text class="hm-empty-text">{{ hmLoading ? '加载中...' : '暂无数据' }}</text>
         </view>
       </view>
 
@@ -320,14 +326,14 @@
         <view class="info-card">
           <text class="info-label">能耗强度</text>
           <view class="info-main">
-            <text class="info-value">{{ activeBuilding.energy_intensity_kwh_per_sqm || '--' }}</text>
+            <text class="info-value">{{ formatFixed(activeBuilding.energy_intensity_kwh_per_sqm, 2) }}</text>
             <text class="info-unit">kWh/m²</text>
           </view>
         </view>
         <view class="info-card">
           <text class="info-label">环境温度</text>
           <view class="info-main">
-            <text class="info-value">{{ activeBuilding.avg_ambient_temp != null ? activeBuilding.avg_ambient_temp : '--' }}</text>
+            <text class="info-value">{{ formatFixed(activeBuilding.avg_ambient_temp, 1) }}</text>
             <text class="info-unit">°C</text>
           </view>
         </view>
@@ -367,15 +373,19 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import NavBar from '../../../components/NavBar.vue'
 import TabBar from '../../../components/TabBar.vue'
 import { useAuthStore } from '../../../stores/auth'
 import { useRouteGuard } from '../../../utils/route-guard'
 import { OPERATOR_TABS } from '../../../constants/tabs'
 import { OPERATOR_ROLES } from '../../../constants/roles'
-import { dataApi, type OverviewResponse } from '../../../api/data'
+import { dataApi, type OverviewResponse, type HourlyPoint, type WeekdayPoint } from '../../../api/data'
+import { workOrderApi, type WorkOrder } from '../../../api/workorder'
+import { PRIORITY_LABEL, PRIORITY_COLOR } from '../../../constants/status'
 import { formatNum, formatPct } from '../../../utils/format'
+import { getCache, setCache } from '../../../utils/cache'
+import { formatBuildingLabel, formatDeviceLabel, sanitizeDisplayText } from '../../../utils/display'
 
 useRouteGuard(OPERATOR_ROLES)
 
@@ -384,6 +394,77 @@ const overview = ref<OverviewResponse | null>(null)
 const loading = ref(false)
 const currentTab = ref('all')
 
+const OVERVIEW_CACHE_KEY = 'operator_overview_data'
+const OVERVIEW_WORKORDERS_CACHE_KEY = 'operator_overview_rejected_workorders'
+const OVERVIEW_STATE_KEY = 'operator_overview_state'
+const OVERVIEW_STATE_TTL = 24 * 60 * 60 * 1000
+
+// 工单相关
+const rejectedOrders = ref<WorkOrder[]>([])
+const woLoading = ref(false)
+
+// 热力图相关
+const heatmapData = ref<Array<{ d: number; h: number; v: number }>>([])
+const hmMaxVal = ref(1)
+const hmLoading = ref(false)
+const heatmapDays = ['一', '二', '三', '四', '五', '六', '日']
+const hmLegendColors = ['#ebedf0', '#9be9a8', '#40c463', '#30a14e', '#216e39']
+
+function buildHeatmapCells(hourly: HourlyPoint[], weekly: WeekdayPoint[]) {
+  const hAvg = Array.from({ length: 24 }, (_, h) => {
+    const row = hourly.find(x => x.hour === h)
+    return row?.avg_value ?? 0
+  })
+  const wVals = weekly.map(w => w.avg_value).filter(v => v > 0)
+  const wMean = wVals.length ? wVals.reduce((a, b) => a + b, 0) / wVals.length : 1
+  const cells: Array<{ d: number; h: number; v: number }> = []
+  for (let d = 0; d < 7; d++) {
+    const wdProfile = weekly.find(w => w.weekday === d + 1)?.avg_value ?? wMean
+    const factor = wMean > 1e-9 ? wdProfile / wMean : 1
+    for (let h = 0; h < 24; h++) {
+      cells.push({ d, h, v: parseFloat(((hAvg[h] ?? 0) * factor).toFixed(2)) })
+    }
+  }
+  return cells
+}
+
+function getHmColor(v: number): string {
+  const ratio = Math.min(v / hmMaxVal.value, 1)
+  const palette = hmLegendColors
+  const breaks = [0.1, 0.3, 0.55, 0.75]
+  let idx = 0
+  for (const br of breaks) if (ratio > br) idx++
+  return palette[idx]
+}
+
+let prevBuildingType = ''
+async function loadHeatmap(buildingType: string) {
+  if (!buildingType || buildingType === 'all') { heatmapData.value = []; return }
+  if (buildingType === prevBuildingType && heatmapData.value.length) return
+  prevBuildingType = buildingType
+  const cacheKey = `operator_overview_heatmap_${buildingType}`
+  const cached = getCache<{ cells: Array<{ d: number; h: number; v: number }>; max: number }>(cacheKey)
+  if (cached) {
+    heatmapData.value = cached.cells
+    hmMaxVal.value = cached.max
+  }
+  hmLoading.value = true
+  try {
+    const res = await dataApi.loadProfile(buildingType)
+    const cells = buildHeatmapCells(res.hourly_profile, res.weekday_profile)
+    heatmapData.value = cells
+    hmMaxVal.value = Math.max(...cells.map(c => c.v), 1)
+    setCache(cacheKey, {
+      cells,
+      max: hmMaxVal.value,
+    })
+  } catch {
+    heatmapData.value = []
+  } finally {
+    hmLoading.value = false
+  }
+}
+
 const greeting = computed(() => {
   const h = new Date().getHours()
   if (h < 6) return '夜深了'
@@ -391,23 +472,6 @@ const greeting = computed(() => {
   if (h < 14) return '中午好'
   if (h < 18) return '下午好'
   return '晚上好'
-})
-
-const maxBuildingIdx = computed(() => {
-  const bs = overview.value?.buildings
-  if (!bs || !bs.length) return 0
-  let max = 0
-  let idx = 0
-  bs.slice(0, 5).forEach((b, i) => {
-    if (b.total_electricity_kwh > max) { max = b.total_electricity_kwh; idx = i }
-  })
-  return idx
-})
-
-const waterUsagePercent = computed(() => {
-  const pct = overview.value?.kpis_change?.total_water_pct
-  if (pct == null) return 50
-  return Math.min(99, Math.max(1, Math.round(50 + pct)))
 })
 
 /** Banner 碳排放：总览显示总量，选中建筑按电耗占比计算 */
@@ -426,9 +490,62 @@ const activeBuilding = computed(() => {
   return overview.value.buildings.find(b => b.building_type === currentTab.value) || null
 })
 
+watch(currentTab, (tab) => {
+  setCache(OVERVIEW_STATE_KEY, { currentTab: tab })
+  loadHeatmap(tab)
+})
+
+async function loadWorkOrders() {
+  const cached = getCache<WorkOrder[]>(OVERVIEW_WORKORDERS_CACHE_KEY)
+  if (cached) rejectedOrders.value = cached
+  woLoading.value = !cached
+  try {
+    const res = await workOrderApi.list({ status: 'auto_rejected', page: 1, page_size: 5 })
+    rejectedOrders.value = res.work_orders
+    setCache(OVERVIEW_WORKORDERS_CACHE_KEY, res.work_orders)
+  } catch { /* toast handled by request.ts */ }
+  finally { woLoading.value = false }
+}
+
+async function handleOverrideApprove(wo: WorkOrder) {
+  try {
+    await workOrderApi.adminReview(wo.ticket_id, 'override_approve')
+    uni.showToast({ title: '已批准', icon: 'success' })
+    rejectedOrders.value = rejectedOrders.value.filter(o => o.ticket_id !== wo.ticket_id)
+  } catch { /* toast handled by request.ts */ }
+}
+
+function goWorkOrders() {
+  uni.switchTab({ url: '/pages/operator/workorders/index' })
+}
+
+function getPriorityColor(p: string) {
+  return PRIORITY_COLOR[p] || { bg: '#f0f0f0', text: '#999' }
+}
+
+function getPriorityLabel(p: string) {
+  return PRIORITY_LABEL[p] || p
+}
+
+function formatTimeAgo(dateStr: string): string {
+  const diff = Date.now() - new Date(dateStr).getTime()
+  const mins = Math.floor(diff / 60000)
+  if (mins < 1) return '刚刚'
+  if (mins < 60) return `${mins}分钟前`
+  const hours = Math.floor(mins / 60)
+  if (hours < 24) return `${hours}小时前`
+  const days = Math.floor(hours / 24)
+  return `${days}天前`
+}
+
 async function loadData() {
-  loading.value = true
-  try { overview.value = await dataApi.overview() }
+  const cached = getCache<OverviewResponse>(OVERVIEW_CACHE_KEY)
+  if (cached) overview.value = cached
+  loading.value = !cached
+  try {
+    overview.value = await dataApi.overview()
+    setCache(OVERVIEW_CACHE_KEY, overview.value)
+  }
   catch { /* toast handled by request.ts */ }
   finally { loading.value = false }
 }
@@ -457,20 +574,10 @@ function getProgressWidth(val: number, type: string): number {
   return Math.min(100, Math.round((val / max) * 100))
 }
 
-function getRingGradient(percent: number): string {
-  const deg = Math.round((percent / 100) * 360)
-  return 'conic-gradient(#22c55e 0deg, #4ade80 ' + deg + 'deg, #e8eaf0 ' + deg + 'deg, #e8eaf0 360deg)'
-}
-
 /** Banner 柱状图是否高亮：总览时全亮，选中建筑时只亮对应的 */
 function isBannerBarActive(buildingType: string): boolean {
   if (currentTab.value === 'all') return true
   return currentTab.value === buildingType
-}
-
-function getChartBarClass(index: number): string {
-  if (index === maxBuildingIdx.value) return 'bar-active'
-  return index % 2 === 0 ? 'bar-normal' : 'bar-normal-light'
 }
 
 function getBuildingIcon(type: string): string {
@@ -492,8 +599,36 @@ function getBuildingBg(type: string): string {
   return map[type] || 'bg-gray'
 }
 
+function getDeltaIcon(value: number | null | undefined): string {
+  if (value == null || Number.isNaN(value) || value === 0) return ''
+  return value > 0 ? '/static/icons/arrow-up.svg' : '/static/icons/arrow-down.svg'
+}
+
+function formatDelta(value: number | null | undefined): string {
+  if (value == null || Number.isNaN(value)) return '--'
+  return formatPct(value)
+}
+
+function formatArea(area: number | null | undefined): string {
+  if (area == null || Number.isNaN(area)) return '--'
+  if (area >= 1000) return area.toFixed(1)
+  if (area >= 100) return area.toFixed(2)
+  return area.toFixed(2)
+}
+
+function formatFixed(value: number | null | undefined, digits = 1): string {
+  if (value == null || Number.isNaN(value)) return '--'
+  return value.toFixed(digits)
+}
+
 let timer: ReturnType<typeof setInterval>
-onMounted(() => { loadData(); timer = setInterval(loadData, 60000) })
+onMounted(() => {
+  const cachedState = getCache<{ currentTab?: string }>(OVERVIEW_STATE_KEY, OVERVIEW_STATE_TTL)
+  if (cachedState?.currentTab) currentTab.value = cachedState.currentTab
+  loadData()
+  loadWorkOrders()
+  timer = setInterval(() => { loadData(); loadWorkOrders() }, 60000)
+})
 onUnmounted(() => clearInterval(timer))
 </script>
 
@@ -506,20 +641,28 @@ onUnmounted(() => clearInterval(timer))
   padding: 24rpx 32rpx 16rpx;
 }
 .header-left { display: flex; align-items: center; gap: 16rpx; }
+.header-info { display: flex; align-items: baseline; gap: 10rpx; }
 .avatar-circle {
   width: 64rpx; height: 64rpx; border-radius: 50%;
   background: linear-gradient(135deg, #22c55e, #16a34a);
   display: flex; align-items: center; justify-content: center;
 }
 .avatar-text { font-size: 28rpx; font-weight: 700; color: #fff; }
-.header-greeting { display: block; font-size: 22rpx; color: #94a3b8; }
-.header-name { display: block; font-size: 32rpx; font-weight: 700; color: #1e293b; margin-top: 2rpx; }
+.header-greeting { font-size: 22rpx; color: #94a3b8; }
+.header-name { font-size: 32rpx; font-weight: 700; color: #1e293b; }
 
 .weather-chip {
   display: flex; align-items: center; gap: 8rpx;
   background: #fff; border-radius: 40rpx; padding: 14rpx 24rpx;
   box-shadow: 0 2rpx 16rpx rgba(0,0,0,0.05);
 }
+.chip-date-wrap {
+  display: inline-flex; align-items: center; gap: 8rpx;
+  padding-right: 14rpx; margin-right: 6rpx;
+  border-right: 1rpx solid #e2e8f0;
+}
+.chip-date-value { font-size: 22rpx; color: #475569; font-weight: 600; }
+.chip-weather-wrap { display: inline-flex; align-items: center; gap: 8rpx; }
 .chip-icon { width: 28rpx; height: 28rpx; }
 .chip-temp { font-size: 28rpx; font-weight: 600; color: #1e293b; }
 .chip-sub { font-size: 22rpx; color: #94a3b8; }
@@ -571,103 +714,99 @@ onUnmounted(() => clearInterval(timer))
 /* 筛选 Tab */
 .filter-bar {
   margin: 0 32rpx 24rpx; background: #fff;
-  border-radius: 20rpx; padding: 8rpx;
-  box-shadow: 0 2rpx 16rpx rgba(0,0,0,0.04);
+  border-radius: 26rpx; padding: 10rpx;
+  box-shadow: 0 10rpx 28rpx rgba(15, 23, 42, 0.06);
 }
 .filter-scroll { white-space: nowrap; }
-.filter-inner { display: flex; gap: 0; }
+.filter-inner { display: flex; gap: 10rpx; }
 .filter-tab {
-  display: flex; flex-direction: column; align-items: center; gap: 6rpx;
-  padding: 16rpx 24rpx; border-radius: 16rpx;
-  flex-shrink: 0; min-width: 100rpx;
+  display: flex; align-items: center; justify-content: center;
+  padding: 0 6rpx; border-radius: 999rpx;
+  flex-shrink: 0;
+  background: transparent;
   transition: all 0.25s ease;
 }
-.filter-tab.tab-active { background: #22c55e; }
+.filter-tab-content {
+  display: inline-flex; align-items: center; gap: 10rpx;
+  min-height: 64rpx; padding: 0 22rpx;
+  border-radius: 999rpx;
+  background: #f8fafc;
+  transition: all 0.25s ease;
+}
+.filter-tab.tab-active .filter-tab-content {
+  background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%);
+  box-shadow: 0 8rpx 18rpx rgba(34, 197, 94, 0.24);
+}
 .filter-tab.tab-active .filter-text { color: #fff; font-weight: 600; }
-.filter-tab.tab-active .filter-icon { opacity: 1; }
-.filter-icon { width: 36rpx; height: 36rpx; opacity: 0.5; }
-.filter-text { font-size: 22rpx; color: #94a3b8; white-space: nowrap; }
+.filter-tab.tab-active .filter-icon {
+  opacity: 1;
+  filter: brightness(0) invert(1);
+}
+.filter-icon { width: 28rpx; height: 28rpx; opacity: 0.72; }
+.filter-text {
+  font-size: 24rpx; color: #64748b; white-space: nowrap;
+  line-height: 1;
+}
 
 /* KPI 双卡片 */
-.kpi-row { display: flex; gap: 20rpx; padding: 0 32rpx; margin-bottom: 24rpx; }
-.kpi-card {
-  flex: 1; background: #fff; border-radius: 20rpx;
-  padding: 24rpx; box-shadow: 0 4rpx 24rpx rgba(0,0,0,0.04);
-}
-.kpi-card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14rpx; }
-.kpi-card-title { font-size: 24rpx; color: #94a3b8; font-weight: 500; }
-.kpi-arrow { width: 24rpx; height: 24rpx; opacity: 0.35; }
-.kpi-main { display: flex; align-items: baseline; gap: 6rpx; margin-bottom: 16rpx; }
-.kpi-value { font-size: 48rpx; font-weight: 700; color: #1e293b; line-height: 1; }
-.kpi-unit { font-size: 22rpx; color: #94a3b8; }
-
-.kpi-bars { display: flex; align-items: flex-end; gap: 8rpx; height: 60rpx; margin-bottom: 14rpx; }
-.kpi-bar-item { flex: 1; display: flex; align-items: flex-end; }
-.kpi-bar {
-  width: 100%; border-radius: 4rpx 4rpx 0 0; min-height: 6rpx; transition: height 0.6s ease;
-}
-.kpi-bar.bar-solid { background: #22c55e; }
-.kpi-bar.bar-light { background: #bbf7d0; }
-
-.ring-wrap { display: flex; justify-content: center; margin-bottom: 14rpx; }
-.ring-outer {
-  width: 110rpx; height: 110rpx; border-radius: 50%;
-  display: flex; align-items: center; justify-content: center;
-}
-.ring-inner {
-  width: 76rpx; height: 76rpx; border-radius: 50%;
-  background: #fff; display: flex; flex-direction: column;
-  align-items: center; justify-content: center;
-}
-.ring-pct { font-size: 22rpx; font-weight: 700; color: #22c55e; line-height: 1.2; }
-.ring-sub { font-size: 16rpx; color: #94a3b8; }
-.kpi-change { font-size: 20rpx; color: #94a3b8; text-align: center; }
-.kpi-change.up { color: #ef4444; }
-.kpi-change.down { color: #22c55e; }
-
-/* 大卡片柱状图 */
-.chart-card {
-  margin: 0 32rpx 24rpx; background: #fff;
-  border-radius: 24rpx; padding: 28rpx;
-  box-shadow: 0 4rpx 24rpx rgba(0,0,0,0.04);
-}
-.chart-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16rpx; }
-.chart-title { font-size: 30rpx; font-weight: 700; color: #1e293b; display: block; }
-.chart-sub { font-size: 22rpx; color: #94a3b8; display: block; margin-top: 4rpx; }
-.chart-arrow { width: 28rpx; height: 28rpx; opacity: 0.35; }
-.chart-main-row { display: flex; align-items: baseline; gap: 8rpx; margin-bottom: 24rpx; }
-.chart-big-num { font-size: 56rpx; font-weight: 700; color: #1e293b; line-height: 1; }
-.chart-big-unit { font-size: 24rpx; color: #94a3b8; }
-
-.chart-bars { display: flex; align-items: flex-end; gap: 0; height: 160rpx; padding-bottom: 8rpx; }
-.chart-bar-group { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 8rpx; }
-.chart-bar-wrapper {
-  width: 100%; display: flex; justify-content: center; align-items: flex-end; height: 150rpx;
-}
-.chart-bar {
-  width: 60%; border-radius: 6rpx 6rpx 0 0; min-height: 8rpx; transition: height 0.6s ease;
-}
-.chart-bar.bar-active { background: linear-gradient(180deg, #4ade80, #22c55e); }
-.chart-bar.bar-normal { background: #d1fae5; }
-.chart-bar.bar-normal-light { background: #e8eaf0; }
-.chart-bar-label { font-size: 20rpx; color: #94a3b8; }
-
-/* 暖通/异常 */
-.stats-strip { display: flex; gap: 16rpx; padding: 0 32rpx; margin-bottom: 28rpx; }
-.stat-chip {
-  flex: 1; display: flex; align-items: center; gap: 14rpx;
-  background: #fff; border-radius: 16rpx; padding: 20rpx;
-  box-shadow: 0 2rpx 12rpx rgba(0,0,0,0.04);
-}
-.stat-chip.chip-warn { border: 1rpx solid #fecaca; background: #fef2f2; }
-.stat-icon { width: 36rpx; height: 36rpx; }
-.stat-val { font-size: 26rpx; font-weight: 700; color: #1e293b; display: block; }
-.stat-label { font-size: 20rpx; color: #94a3b8; display: block; margin-top: 2rpx; }
-
 /* Section */
 .section-header { display: flex; align-items: center; gap: 12rpx; padding: 4rpx 32rpx 20rpx; }
 .section-dot { width: 10rpx; height: 10rpx; border-radius: 50%; background: #22c55e; }
+.section-dot.dot-red { background: #ef4444; }
 .section-title { font-size: 28rpx; font-weight: 600; color: #1e293b; }
+.section-count { font-size: 22rpx; color: #94a3b8; }
+.section-link { font-size: 24rpx; color: #3b82f6; font-weight: 500; }
+
+/* 待处理工单 */
+.wo-section { margin-bottom: 24rpx; }
+.wo-card {
+  margin: 0 32rpx 16rpx; background: #fff; border-radius: 16rpx;
+  padding: 24rpx; box-shadow: 0 2rpx 12rpx rgba(0,0,0,0.04);
+  border-left: 6rpx solid #ff4d4f;
+}
+.wo-card-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12rpx; }
+.wo-priority {
+  font-size: 20rpx; font-weight: 600; padding: 4rpx 14rpx;
+  border-radius: 8rpx; line-height: 1.4;
+}
+.wo-time { font-size: 22rpx; color: #94a3b8; }
+.wo-desc {
+  font-size: 28rpx; font-weight: 500; color: #1e293b;
+  margin-bottom: 10rpx; line-height: 1.5;
+  overflow: hidden; text-overflow: ellipsis;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+}
+.wo-meta { display: flex; gap: 16rpx; margin-bottom: 12rpx; }
+.wo-meta-item {
+  font-size: 22rpx; color: #64748b; background: #f1f5f9;
+  padding: 4rpx 12rpx; border-radius: 6rpx;
+}
+.wo-reason {
+  background: #fef2f2; border-radius: 10rpx; padding: 14rpx 16rpx;
+  margin-bottom: 16rpx;
+}
+.wo-reason-label { font-size: 22rpx; color: #ef4444; font-weight: 600; }
+.wo-reason-text { font-size: 22rpx; color: #7f1d1d; line-height: 1.5; }
+.wo-actions { display: flex; justify-content: flex-end; }
+.wo-btn {
+  font-size: 24rpx; font-weight: 500; padding: 10rpx 28rpx;
+  border-radius: 10rpx; line-height: 1.4;
+}
+.wo-btn-approve { background: #22c55e; color: #fff; }
+
+.wo-empty {
+  display: flex; flex-direction: column; align-items: center;
+  padding: 60rpx 0; gap: 16rpx;
+}
+.wo-empty-icon { width: 64rpx; height: 64rpx; opacity: 0.4; }
+.wo-empty-text { font-size: 26rpx; color: #94a3b8; }
+
+.wo-skeleton { padding: 0 32rpx; }
+.wo-sk-card {
+  height: 200rpx; background: #e2e8f0; border-radius: 16rpx;
+  margin-bottom: 16rpx; animation: pulse 1.5s ease-in-out infinite;
+}
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
 
 /* 建筑行 */
 .building-row {
@@ -705,10 +844,13 @@ onUnmounted(() => clearInterval(timer))
 /* ====== 建筑详情视图 ====== */
 .detail-header {
   margin: 0 32rpx 20rpx; background: #fff;
-  border-radius: 20rpx; padding: 28rpx;
-  box-shadow: 0 4rpx 20rpx rgba(0,0,0,0.04);
+  border-radius: 24rpx; padding: 28rpx;
+  box-shadow: 0 10rpx 28rpx rgba(15, 23, 42, 0.06);
 }
-.detail-title-row { display: flex; align-items: center; gap: 16rpx; margin-bottom: 16rpx; }
+.detail-header-main {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 16rpx;
+}
+.detail-title-row { display: flex; align-items: center; gap: 16rpx; flex: 1; min-width: 0; }
 .detail-icon-box {
   width: 60rpx; height: 60rpx; border-radius: 16rpx;
   display: flex; align-items: center; justify-content: center;
@@ -720,13 +862,17 @@ onUnmounted(() => clearInterval(timer))
 .detail-icon-box.bg-indigo { background: #eef2ff; }
 .detail-icon-box.bg-gray { background: #f3f4f6; }
 .detail-icon { width: 32rpx; height: 32rpx; }
+.detail-title-copy { flex: 1; min-width: 0; }
 .detail-name { display: block; font-size: 34rpx; font-weight: 700; color: #1e293b; }
-.detail-sub { display: block; font-size: 22rpx; color: #94a3b8; margin-top: 4rpx; }
+.detail-sub { display: block; font-size: 22rpx; color: #94a3b8; margin-top: 6rpx; }
 
-.detail-badges { display: flex; gap: 12rpx; }
+.detail-badges {
+  display: flex; flex-direction: column; align-items: flex-end; gap: 10rpx;
+  flex-shrink: 0;
+}
 .detail-badge {
   display: flex; align-items: center; gap: 6rpx;
-  padding: 8rpx 20rpx; border-radius: 24rpx; font-size: 22rpx; font-weight: 500;
+  padding: 8rpx 20rpx; border-radius: 24rpx; font-size: 22rpx; font-weight: 600;
 }
 .detail-badge.dbadge-green { background: #f0fdf4; color: #16a34a; }
 .detail-badge.dbadge-green .detail-dot { background: #22c55e; }
@@ -739,46 +885,84 @@ onUnmounted(() => clearInterval(timer))
 .detail-kpi-row { display: flex; gap: 16rpx; padding: 0 32rpx; margin-bottom: 20rpx; }
 .detail-kpi {
   flex: 1; background: #fff; border-radius: 18rpx;
-  padding: 22rpx 16rpx; box-shadow: 0 2rpx 16rpx rgba(0,0,0,0.04);
+  padding: 18rpx 18rpx 20rpx; box-shadow: 0 6rpx 20rpx rgba(15, 23, 42, 0.05);
   display: flex; flex-direction: column;
 }
-.dkpi-head { display: flex; align-items: center; gap: 8rpx; margin-bottom: 12rpx; }
-.dkpi-icon { width: 24rpx; height: 24rpx; opacity: 0.6; }
-.dkpi-label { font-size: 22rpx; color: #94a3b8; }
-.dkpi-value { font-size: 32rpx; font-weight: 700; color: #1e293b; line-height: 1.1; }
-.dkpi-unit { font-size: 18rpx; color: #94a3b8; margin-bottom: 12rpx; }
-
-.dkpi-bar-track {
-  width: 100%; height: 8rpx; background: #e8eaf0; border-radius: 4rpx;
-  overflow: hidden; margin-bottom: 8rpx;
+.dkpi-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8rpx; margin-bottom: 18rpx; }
+.dkpi-head-left { display: flex; align-items: center; gap: 8rpx; min-width: 0; }
+.dkpi-head-stack { flex-direction: column; align-items: flex-start; gap: 14rpx; }
+.dkpi-icon-wrap {
+  width: 44rpx; height: 44rpx; border-radius: 14rpx;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
 }
-.dkpi-bar-fill { height: 100%; border-radius: 4rpx; transition: width 0.6s ease; }
-.dkpi-bar-fill.fill-green { background: #22c55e; }
-.dkpi-bar-fill.fill-blue { background: #3b82f6; }
-.dkpi-bar-fill.fill-orange { background: #f97316; }
-.dkpi-change { font-size: 20rpx; color: #94a3b8; }
+.dkpi-icon-wrap.icon-green { background: #ecfdf3; }
+.dkpi-icon-wrap.icon-blue { background: #eff6ff; }
+.dkpi-icon-wrap.icon-orange { background: #fff7ed; }
+.dkpi-icon { width: 22rpx; height: 22rpx; opacity: 0.95; }
+.dkpi-label { font-size: 22rpx; color: #64748b; font-weight: 600; }
+.dkpi-main { display: flex; align-items: baseline; gap: 6rpx; margin-bottom: 6rpx; }
+.dkpi-main-top { margin-bottom: 0; justify-content: flex-end; text-align: right; flex-shrink: 0; }
+.dkpi-value { font-size: 40rpx; font-weight: 700; color: #0f172a; line-height: 1.05; }
+.dkpi-unit { font-size: 20rpx; color: #94a3b8; }
+.dkpi-change {
+  display: flex; align-items: baseline; justify-content: flex-end; gap: 6rpx;
+  font-size: 18rpx; color: #94a3b8; margin-top: auto;
+  line-height: 1;
+}
+.dkpi-change-icon {
+  width: 16rpx; height: 16rpx;
+  position: relative; top: 1rpx;
+}
 .dkpi-change.up { color: #ef4444; }
 .dkpi-change.down { color: #22c55e; }
 
-/* 能耗对比 */
-.detail-compare-card {
+/* 热力图 */
+.heatmap-card {
   margin: 0 32rpx 20rpx; background: #fff;
   border-radius: 24rpx; padding: 28rpx;
   box-shadow: 0 4rpx 20rpx rgba(0,0,0,0.04);
 }
-.dc-title { display: block; font-size: 28rpx; font-weight: 700; color: #1e293b; }
-.dc-sub { display: block; font-size: 22rpx; color: #94a3b8; margin: 4rpx 0 24rpx; }
+.hm-header { margin-bottom: 20rpx; }
+.hm-title { display: block; font-size: 28rpx; font-weight: 700; color: #1e293b; }
+.hm-sub { display: block; font-size: 22rpx; color: #94a3b8; margin-top: 4rpx; }
 
-.dc-bars { display: flex; align-items: flex-end; height: 140rpx; gap: 0; }
-.dc-bar-col { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 8rpx; }
-.dc-bar-wrap {
-  width: 100%; display: flex; justify-content: center; align-items: flex-end; height: 120rpx;
+.hm-wrap { display: flex; flex-direction: column; gap: 10rpx; }
+.hm-main { display: flex; align-items: stretch; gap: 12rpx; }
+.hm-y-col {
+  display: flex; flex-direction: column; justify-content: space-around;
+  width: 40rpx; flex-shrink: 0;
 }
-.dc-bar { width: 50%; border-radius: 6rpx 6rpx 0 0; min-height: 8rpx; transition: height 0.6s ease; }
-.dc-bar.dc-bar-active { background: linear-gradient(180deg, #4ade80, #22c55e); }
-.dc-bar.dc-bar-dim { background: #e8eaf0; }
-.dc-bar-label { font-size: 20rpx; color: #94a3b8; }
-.dc-bar-label.dc-label-active { color: #22c55e; font-weight: 600; }
+.hm-y-label {
+  font-size: 18rpx; color: #94a3b8; text-align: right;
+  flex: 1; display: flex; align-items: center; justify-content: flex-end;
+}
+.hm-cells {
+  flex: 1; display: grid;
+  grid-template-columns: repeat(24, 1fr); gap: 3rpx;
+}
+.hm-cell {
+  aspect-ratio: 1; border-radius: 4rpx;
+  min-width: 0; min-height: 0;
+}
+.hm-x-row { display: flex; align-items: center; gap: 12rpx; }
+.hm-y-spacer { width: 40rpx; flex-shrink: 0; }
+.hm-x-labels {
+  flex: 1; display: grid;
+  grid-template-columns: repeat(24, 1fr); gap: 3rpx;
+}
+.hm-x-label { font-size: 16rpx; color: #94a3b8; text-align: center; }
+.hm-legend {
+  display: flex; align-items: center; gap: 6rpx;
+  justify-content: flex-end; margin-top: 4rpx;
+}
+.hm-legend-text { font-size: 18rpx; color: #94a3b8; }
+.hm-legend-cell { width: 20rpx; height: 20rpx; border-radius: 4rpx; }
+
+.hm-empty {
+  display: flex; justify-content: center; padding: 40rpx 0;
+}
+.hm-empty-text { font-size: 24rpx; color: #94a3b8; }
 
 /* 强度+温度 */
 .detail-info-row { display: flex; gap: 16rpx; padding: 0 32rpx; margin-bottom: 20rpx; }

@@ -1,49 +1,94 @@
 <template>
   <view class="page">
-    <NavBar :title="readonly ? '工单详情' : '工单处理'" bg-color="#0f3d2e" :show-back="true" />
+    <NavBar :title="readonly ? '事件详情' : '事件处理'" bg-color="#0f3d2e" :show-back="true" />
 
     <!-- 加载中 -->
     <view v-if="loading" class="center-loading">
       <text>加载中...</text>
     </view>
 
-    <template v-else-if="order">
-      <!-- 工单基本信息 -->
+    <template v-else-if="incident && order">
+      <!-- incident 基本信息 -->
       <view class="info-card">
         <view class="info-header">
-          <view class="priority-badge" :class="order.priority">
-            {{ PRIORITY_LABEL[order.priority] || order.priority }}
+          <view class="priority-badge" :class="incident.priority">
+            {{ PRIORITY_LABEL[incident.priority] || incident.priority }}
           </view>
           <view class="status-tag" :class="order.status">
             {{ STATUS_LABEL[order.status] || order.status }}
           </view>
         </view>
 
-        <text class="ticket-no">工单 #{{ order.ticket_id.slice(-12) }}</text>
-        <text class="building">{{ order.building_id }}</text>
+        <text class="ticket-no">事件编号 {{ incident.incident_id }}</text>
+        <text class="building">{{ buildingLabel }}</text>
+        <text v-if="deviceLabel" class="device">{{ deviceLabel }}</text>
 
         <view class="info-row">
-          <text class="info-label">异常描述</text>
-          <text class="info-value">{{ order.issue_description }}</text>
+          <text class="info-label">事件摘要</text>
+          <text class="info-value">{{ summaryText }}</text>
+        </view>
+        <view class="info-row">
+          <text class="info-label">当前工单</text>
+          <text class="info-value">{{ order.ticket_id.slice(-12) }}</text>
         </view>
         <view class="info-row">
           <text class="info-label">建议措施</text>
           <text class="info-value">{{ order.suggested_action }}</text>
         </view>
         <view class="info-row">
-          <text class="info-label">生成时间</text>
-          <text class="info-value">{{ formatDateTime(order.created_at) }}</text>
+          <text class="info-label">首次发现</text>
+          <text class="info-value">{{ formatDateTime(incident.first_seen_at) }}</text>
+        </view>
+        <view class="info-row">
+          <text class="info-label">最近异常</text>
+          <text class="info-value">{{ formatDateTime(incident.last_seen_at) }}</text>
+        </view>
+        <view class="info-row">
+          <text class="info-label">连续次数</text>
+          <text class="info-value">{{ incident.anomaly_count }} 次</text>
+        </view>
+        <view class="info-row" v-if="incident.peak_deviation_pct !== null">
+          <text class="info-label">峰值偏差</text>
+          <text class="info-value">{{ formatPct(incident.peak_deviation_pct) }}</text>
         </view>
 
         <!-- AI 审批信息 -->
         <view v-if="order.ai_reason" class="ai-block">
           <view class="ai-block-title">
-            <text>🤖 AI 审批分析</text>
+            <text>AI 审批分析</text>
             <view class="ai-decision-tag" :class="order.ai_decision">
               {{ order.ai_decision === 'approved' ? '批准' : '驳回' }}
             </view>
           </view>
-          <text class="ai-reasoning">{{ order.ai_reason }}</text>
+          <text class="ai-reasoning">{{ aiReasonText }}</text>
+        </view>
+      </view>
+
+      <view class="timeline-card" v-if="timelineItems.length">
+        <text class="timeline-title">证据时间线</text>
+        <view
+          v-for="item in timelineItems"
+          :key="item.id"
+          class="timeline-item"
+        >
+          <view class="timeline-dot" :class="item.type" />
+          <view class="timeline-content">
+            <text class="timeline-time">{{ item.time }}</text>
+            <text class="timeline-text">{{ item.text }}</text>
+          </view>
+        </view>
+      </view>
+
+      <view class="timeline-card" v-if="incident.work_orders.length > 1">
+        <text class="timeline-title">工单记录</text>
+        <view
+          v-for="wo in incident.work_orders"
+          :key="wo.id"
+          class="workorder-history"
+        >
+          <text class="history-ticket">工单 {{ wo.ticket_id.slice(-12) }}</text>
+          <text class="history-status">{{ STATUS_LABEL[wo.status] || wo.status }}</text>
+          <text class="history-time">{{ formatDateTime(wo.updated_at || wo.created_at) }}</text>
         </view>
       </view>
 
@@ -61,21 +106,21 @@
             :loading="feedbackLoading === 'fixed'"
             @click="submitFeedback('fixed')"
           >
-            ✅ 已修复
+            已修复
           </button>
           <button
             class="feedback-btn false-alarm"
             :loading="feedbackLoading === 'false_alarm'"
             @click="submitFeedback('false_alarm')"
           >
-            ❌ 误报
+            误报
           </button>
           <button
             class="feedback-btn escalate"
             :loading="feedbackLoading === 'escalated'"
             @click="submitFeedback('escalated')"
           >
-            ⬆️ 升级处理
+            升级处理
           </button>
         </view>
 
@@ -103,28 +148,65 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import NavBar from '../../../components/NavBar.vue'
 import AiChat from '../../../components/AiChat.vue'
 import { workOrderApi, type WorkOrder } from '../../../api/workorder'
+import { incidentApi, type IncidentDetail } from '../../../api/incident'
 import { STATUS_LABEL, PRIORITY_LABEL, WORKER_RESULT_LABEL, type WorkerResult } from '../../../constants/status'
-import { formatDateTime } from '../../../utils/format'
+import { formatDateTime, formatMetricValue, formatPct } from '../../../utils/format'
+import { formatBuildingLabel, formatDeviceLabel, sanitizeDisplayText } from '../../../utils/display'
 
 // 路由参数
 const pages = getCurrentPages()
 const currentPage = pages[pages.length - 1] as any
 const ticketId = currentPage?.options?.ticket_id ?? ''
+const incidentId = currentPage?.options?.incident_id ?? ''
 const readonly = currentPage?.options?.readonly === '1'
 
+const incident = ref<IncidentDetail | null>(null)
 const order = ref<WorkOrder | null>(null)
 const loading = ref(false)
 const feedbackLoading = ref<string | null>(null)
 const workerNote = ref('')
 
+const activeTicketId = computed(() => order.value?.ticket_id || ticketId)
+const buildingLabel = computed(() => formatBuildingLabel(incident.value?.building_id))
+const deviceLabel = computed(() => formatDeviceLabel(incident.value?.device_id, incident.value?.building_id))
+const summaryText = computed(() => sanitizeDisplayText(incident.value?.summary_text))
+const aiReasonText = computed(() => sanitizeDisplayText(order.value?.ai_reason))
+
+const timelineItems = computed(() => {
+  if (!incident.value) return []
+
+  const eventItems = incident.value.event_links.map(item => ({
+    id: item.id,
+    type: 'event',
+    sortValue: new Date(item.data_timestamp || '').getTime() || 0,
+    time: formatDateTime(item.data_timestamp),
+    text: `实际 ${formatMetricValue(item.actual_value)} / 预期 ${formatMetricValue(item.expected_value)} / 偏差 ${formatPct(item.deviation_pct)}`,
+  }))
+  const predictionItems = incident.value.prediction_links.map(item => ({
+    id: item.id,
+    type: 'prediction',
+    sortValue: new Date(item.forecast_for_timestamp || '').getTime() || 0,
+    time: formatDateTime(item.forecast_for_timestamp),
+    text: `预测 ${formatMetricValue(item.predicted_value)} / 基线 ${formatMetricValue(item.expected_value)} / 预计偏差 ${formatPct(item.deviation_pct)}`,
+  }))
+  return [...eventItems, ...predictionItems].sort((a, b) => a.sortValue - b.sortValue)
+})
+
 async function loadOrder() {
   loading.value = true
   try {
-    order.value = await workOrderApi.detail(ticketId)
+    if (incidentId) {
+      incident.value = await incidentApi.detail(incidentId)
+      const current = incident.value.current_work_order
+      if (!current?.ticket_id) throw new Error('缺少当前工单')
+      order.value = await workOrderApi.detail(current.ticket_id)
+    } else {
+      order.value = await workOrderApi.detail(ticketId)
+    }
   } catch { uni.navigateBack() }
   finally { loading.value = false }
 }
@@ -146,8 +228,13 @@ async function submitFeedback(result: WorkerResult) {
 }
 
 async function doSubmit(result: WorkerResult) {
+  if (!activeTicketId.value) {
+    feedbackLoading.value = null
+    uni.showToast({ title: '缺少工单编号', icon: 'none' })
+    return
+  }
   try {
-    await workOrderApi.workerFeedback(ticketId, result, workerNote.value || undefined)
+    await workOrderApi.workerFeedback(activeTicketId.value, result, workerNote.value || undefined)
     uni.showToast({ title: '已提交', icon: 'success' })
     setTimeout(() => uni.navigateBack(), 1500)
   } catch { /* handled */ }
@@ -220,6 +307,13 @@ onMounted(loadOrder)
   margin-bottom: 20rpx;
 }
 
+.device {
+  display: block;
+  font-size: 26rpx;
+  color: #00b96b;
+  margin-bottom: 18rpx;
+}
+
 .info-row {
   display: flex;
   gap: 16rpx;
@@ -272,6 +366,82 @@ onMounted(loadOrder)
   font-size: 24rpx;
   color: #666;
   line-height: 1.6;
+}
+
+.timeline-card {
+  background: #fff;
+  margin: 0 24rpx 20rpx;
+  border-radius: 20rpx;
+  padding: 28rpx;
+  box-shadow: 0 2rpx 12rpx rgba(0,0,0,0.06);
+}
+
+.timeline-title {
+  display: block;
+  font-size: 28rpx;
+  font-weight: 700;
+  color: #1a1a2e;
+  margin-bottom: 20rpx;
+}
+
+.timeline-item {
+  display: flex;
+  gap: 16rpx;
+  margin-bottom: 18rpx;
+}
+
+.timeline-dot {
+  width: 18rpx;
+  height: 18rpx;
+  border-radius: 50%;
+  margin-top: 10rpx;
+  flex-shrink: 0;
+
+  &.event { background: #00b96b; }
+  &.prediction { background: #3b6cf4; }
+}
+
+.timeline-content {
+  flex: 1;
+}
+
+.timeline-time {
+  display: block;
+  font-size: 22rpx;
+  color: #999;
+  margin-bottom: 6rpx;
+}
+
+.timeline-text {
+  display: block;
+  font-size: 24rpx;
+  color: #333;
+  line-height: 1.5;
+}
+
+.workorder-history {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16rpx;
+  padding: 18rpx 0;
+  border-bottom: 1rpx solid #f0f0f0;
+}
+
+.history-ticket {
+  font-size: 24rpx;
+  color: #1a1a2e;
+  font-weight: 600;
+}
+
+.history-status {
+  font-size: 22rpx;
+  color: #3b6cf4;
+}
+
+.history-time {
+  font-size: 20rpx;
+  color: #aaa;
 }
 
 /* AI 对话区 */

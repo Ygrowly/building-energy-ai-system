@@ -50,6 +50,11 @@ def _require_role(user: User, *roles: str) -> None:
         raise HTTPException(status_code=403, detail="权限不足")
 
 
+async def _invalidate_related_cache() -> None:
+    await delete_cache_by_prefix("workorders:")
+    await delete_cache_by_prefix("incidents:")
+
+
 # ---------------------------------------------------------------------------
 # 工单注册（供 routes_chat.py 调用，替代旧的内存字典）
 # ---------------------------------------------------------------------------
@@ -85,7 +90,7 @@ async def register_pending_order(order_data: dict[str, Any]) -> WorkOrder | None
 
             # 非阻塞缓存失效
             try:
-                await delete_cache_by_prefix("workorders:")
+                await _invalidate_related_cache()
             except Exception:
                 pass
 
@@ -108,7 +113,7 @@ async def _trigger_ai_review(work_order_id: str) -> None:
         async with AsyncSessionLocal() as db:
             await review_work_order(db, work_order_id)
             await db.commit()
-        await delete_cache_by_prefix("workorders:")
+        await _invalidate_related_cache()
         logger.info("AI 审批完成: work_order_id=%s", work_order_id)
     except Exception:
         logger.exception("AI 审批失败（降级处理）: work_order_id=%s", work_order_id)
@@ -125,7 +130,7 @@ async def _trigger_ai_review(work_order_id: str) -> None:
                         fallback=True,
                     )
                     await db.commit()
-                    await delete_cache_by_prefix("workorders:")
+                    await _invalidate_related_cache()
         except Exception:
             logger.exception("降级批准也失败了: work_order_id=%s", work_order_id)
 
@@ -281,7 +286,7 @@ async def approve_work_order(
             )
 
         await db.commit()
-        await delete_cache_by_prefix("workorders:")
+        await _invalidate_related_cache()
 
         # 清理 session pending_action（兼容旧逻辑）
         try:
@@ -323,7 +328,7 @@ async def approve_work_order(
             )
 
         await db.commit()
-        await delete_cache_by_prefix("workorders:")
+        await _invalidate_related_cache()
 
         try:
             from app.api.routes_chat import _sessions
@@ -387,7 +392,7 @@ async def worker_feedback(
         )
 
     await db.commit()
-    await delete_cache_by_prefix("workorders:")
+    await _invalidate_related_cache()
 
     return {
         "status": wo.status,
@@ -483,7 +488,7 @@ async def admin_review(
         )
 
     await db.commit()
-    await delete_cache_by_prefix("workorders:")
+    await _invalidate_related_cache()
 
     return {
         "status": wo.status,
@@ -526,7 +531,7 @@ async def ai_review_trigger(
     import asyncio
     asyncio.create_task(_trigger_ai_review(wo.id))
 
-    await delete_cache_by_prefix("workorders:")
+    await _invalidate_related_cache()
 
     return {
         "ticket_id": ticket_id,

@@ -18,9 +18,9 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import AnomalyEvent, PredictedAnomalyEvent
-from app.services.work_order_service import (
-    check_duplicate_anomaly,
-    create_work_order,
+from app.services.incident_service import (
+    create_or_merge_alert_incident,
+    create_or_merge_prediction_incident,
 )
 
 logger = logging.getLogger(__name__)
@@ -172,8 +172,9 @@ async def auto_create_alert_orders(
 ) -> dict[str, int]:
     """
     对指定楼宇的所有 anomaly_events 自动创建工单。
-    去重：已关联到未关闭工单的异常事件不重复建单。
-    返回 {"created": N, "skipped_dup": M}。
+    去重：已进入 incident 时间线的异常事件不重复处理。
+    连续异常优先合并到同一个 incident，再决定是否复用当前工单。
+    返回 {"created": N, "merged": M, "skipped_dup": M}。
     """
     # 查询该楼所有异常事件
     result = await db.execute(
@@ -184,51 +185,30 @@ async def auto_create_alert_orders(
     events = list(result.scalars().all())
 
     if not events:
-        return {"created": 0, "skipped_dup": 0}
+        return {"created": 0, "merged": 0, "skipped_dup": 0}
 
     created = 0
+    merged = 0
     skipped = 0
 
     for event in events:
-        event_id_str = str(event.id)
-        # 去重
-        if await check_duplicate_anomaly(db, event_id_str):
+        incident, wo, created_new = await create_or_merge_alert_incident(db, event=event)
+        if incident is None:
             skipped += 1
             continue
+        if created_new:
+            created += 1
+        else:
+            merged += 1
 
-        priority = _assign_alert_priority(event)
-        issue, action = _build_alert_description(event)
-
-        evidence = [{
-            "anomaly_event_id": event_id_str,
-            "rule_triggered": event.rule_triggered,
-            "hvac_root_cause": event.hvac_root_cause,
-            "actual_value": event.actual_value,
-            "expected_value": event.expected_value,
-            "deviation_pct": event.deviation_pct,
-            "data_timestamp": event.data_timestamp,
-        }]
-
-        wo = await create_work_order(
-            db,
-            building_id=event.building_id,
-            device_id=event.meter_device_id,
-            issue_description=issue,
-            suggested_action=action,
-            priority=priority,
-            source="auto_detect",
-            anomaly_evidence=evidence,
-        )
-        created += 1
-
-    if created > 0:
+    if created > 0 or merged > 0:
         await db.commit()
         logger.info(
-            "自动建工单（告警）: building=%s created=%d skipped=%d",
-            building_id, created, skipped,
+            "自动建 incident/工单（告警）: building=%s created=%d merged=%d skipped=%d",
+            building_id, created, merged, skipped,
         )
 
-    return {"created": created, "skipped_dup": skipped}
+    return {"created": created, "merged": merged, "skipped_dup": skipped}
 
 
 # ---------------------------------------------------------------------------
@@ -239,8 +219,7 @@ async def auto_create_prediction_orders(
     building_id: str,
 ) -> dict[str, int]:
     """
-    对指定楼宇的 predicted_anomaly_events（risk_level != 'normal'）自动创建工单。
-    去重：按 (building_id, forecast_for_timestamp, metric_name) 检查是否已有对应工单。
+    对指定楼宇的 predicted_anomaly_events（risk_level != 'normal'）自动创建 incident/工单。
     """
     result = await db.execute(
         select(PredictedAnomalyEvent)
@@ -253,51 +232,30 @@ async def auto_create_prediction_orders(
     predictions = list(result.scalars().all())
 
     if not predictions:
-        return {"created": 0, "skipped_dup": 0}
+        return {"created": 0, "merged": 0, "skipped_dup": 0}
 
     created = 0
+    merged = 0
     skipped = 0
 
     for pred in predictions:
-        # 简单去重：检查是否已有相同描述前缀的未关闭工单
-        from app.db.models import WorkOrder
-        dup_result = await db.execute(
-            select(WorkOrder.id)
-            .where(
-                WorkOrder.building_id == pred.building_id,
-                WorkOrder.source == "prediction",
-                WorkOrder.status != "closed",
-                WorkOrder.issue_description.contains(
-                    pred.forecast_for_timestamp.strftime("%Y-%m-%d %H:%M")
-                ),
-            )
-            .limit(1)
-        )
-        if dup_result.scalar_one_or_none():
+        incident, wo, created_new = await create_or_merge_prediction_incident(db, pred=pred)
+        if incident is None:
             skipped += 1
             continue
+        if created_new:
+            created += 1
+        else:
+            merged += 1
 
-        priority = _assign_prediction_priority(pred)
-        issue, action = _build_prediction_description(pred)
-
-        wo = await create_work_order(
-            db,
-            building_id=pred.building_id,
-            issue_description=issue,
-            suggested_action=action,
-            priority=priority,
-            source="prediction",
-        )
-        created += 1
-
-    if created > 0:
+    if created > 0 or merged > 0:
         await db.commit()
         logger.info(
-            "自动建工单（预警）: building=%s created=%d skipped=%d",
-            building_id, created, skipped,
+            "自动建 incident/工单（预警）: building=%s created=%d merged=%d skipped=%d",
+            building_id, created, merged, skipped,
         )
 
-    return {"created": created, "skipped_dup": skipped}
+    return {"created": created, "merged": merged, "skipped_dup": skipped}
 
 
 # ---------------------------------------------------------------------------

@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.db.models import (
+    AnomalyIncident,
     WorkOrder,
     WorkOrderAnomalyLink,
     WorkOrderAuditLog,
@@ -97,6 +98,7 @@ async def create_work_order(
     source: str = "manual",
     session_id: str | None = None,
     created_by: str | None = None,
+    incident_id: str | None = None,
     anomaly_evidence: list[dict[str, Any]] | None = None,
 ) -> WorkOrder:
     """
@@ -118,6 +120,7 @@ async def create_work_order(
         status="pending_review",
         session_id=session_id,
         created_by=created_by,
+        incident_id=incident_id,
     )
     db.add(wo)
     await db.flush()  # 获取 wo.id
@@ -151,6 +154,88 @@ async def create_work_order(
     return wo
 
 
+async def append_anomaly_evidence_to_work_order(
+    db: AsyncSession,
+    *,
+    work_order: WorkOrder,
+    evidence: dict[str, Any],
+) -> None:
+    """
+    为已有工单追加异常证据快照。若同一 anomaly_event 已存在，则跳过。
+    """
+    anomaly_event_id = evidence.get("anomaly_event_id", evidence.get("id", ""))
+    existing = await db.execute(
+        select(WorkOrderAnomalyLink.id).where(
+            WorkOrderAnomalyLink.work_order_id == work_order.id,
+            WorkOrderAnomalyLink.anomaly_event_id == anomaly_event_id,
+        )
+    )
+    if existing.scalar_one_or_none():
+        return
+
+    db.add(
+        WorkOrderAnomalyLink(
+            work_order_id=work_order.id,
+            anomaly_event_id=anomaly_event_id,
+            rule_triggered=evidence.get("rule_triggered", "unknown"),
+            hvac_root_cause=evidence.get("hvac_root_cause"),
+            actual_value=evidence.get("actual_value"),
+            expected_value=evidence.get("expected_value"),
+            deviation_pct=evidence.get("deviation_pct"),
+            data_timestamp=evidence.get("data_timestamp", datetime.now(timezone.utc)),
+        )
+    )
+
+
+def _map_work_order_status_to_incident_status(status: str) -> tuple[str, bool]:
+    """
+    返回 (incident_status, is_active)。
+    is_active 表示 incident 是否仍可被视为活跃问题对象。
+    """
+    mapping: dict[str, tuple[str, bool]] = {
+        "pending_review": ("open", True),
+        "auto_approved": ("open", True),
+        "auto_rejected": ("watching", True),
+        "dispatched": ("dispatched", True),
+        "completed": ("resolved", False),
+        "false_alarm": ("false_positive", False),
+        "escalated": ("in_progress", False),
+        "admin_override_approved": ("dispatched", True),
+        "admin_override_rejected": ("closed", False),
+        "closed": ("closed", False),
+    }
+    return mapping.get(status, ("open", True))
+
+
+async def sync_incident_from_work_order(
+    db: AsyncSession,
+    *,
+    work_order: WorkOrder,
+) -> None:
+    """
+    将当前工单状态同步到 incident 的展示状态。
+    """
+    if not work_order.incident_id:
+        return
+
+    incident = await db.get(AnomalyIncident, work_order.incident_id)
+    if not incident:
+        return
+    if incident.current_work_order_id and incident.current_work_order_id != work_order.id:
+        return
+
+    now = datetime.now(timezone.utc)
+    incident.workflow_status = work_order.status
+    incident.priority = work_order.priority
+    incident.current_work_order_id = work_order.id
+    incident.incident_status, incident.is_active = _map_work_order_status_to_incident_status(
+        work_order.status
+    )
+    incident.updated_at = now
+    if not incident.is_active and incident.resolved_at is None:
+        incident.resolved_at = now
+
+
 # ---------------------------------------------------------------------------
 # 状态转移（通用）
 # ---------------------------------------------------------------------------
@@ -179,6 +264,8 @@ async def transition_status(
     work_order.updated_at = datetime.now(timezone.utc)
     if new_status == "closed":
         work_order.closed_at = datetime.now(timezone.utc)
+
+    await sync_incident_from_work_order(db, work_order=work_order)
 
     await _write_audit_log(
         db,
@@ -380,6 +467,7 @@ def serialize_work_order(wo: WorkOrder, include_links: bool = True) -> dict[str,
         "closed_at": wo.closed_at.isoformat() if wo.closed_at else None,
         "source": wo.source,
         "session_id": wo.session_id,
+        "incident_id": wo.incident_id,
     }
 
     if include_links and wo.anomaly_links:

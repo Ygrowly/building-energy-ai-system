@@ -21,35 +21,35 @@
     </view>
 
     <scroll-view scroll-y class="list-area" @scrolltolower="loadMore">
-      <view v-if="loading && !orders.length">
+      <view v-if="loading && !incidents.length">
         <view v-for="i in 4" :key="i" class="wo-skeleton" />
       </view>
 
       <view
-        v-for="order in orders"
-        :key="order.id"
+        v-for="incident in incidents"
+        :key="incident.id"
         class="history-card"
-        :class="order.worker_result"
-        @click="openDetail(order)"
+        :class="incident.current_work_order?.status"
+        @click="openDetail(incident)"
       >
         <view class="hc-header">
-          <text class="hc-date">{{ formatDate(order.updated_at) }}</text>
-          <view class="feedback-badge" :class="order.worker_result">
-            {{ WORKER_RESULT_LABEL[order.worker_result ?? ''] || '处理完成' }}
+          <text class="hc-date">{{ formatDate(incident.updated_at) }}</text>
+          <view class="feedback-badge" :class="incident.current_work_order?.status">
+            {{ WORKER_RESULT_LABEL[incident.current_work_order?.worker_result ?? ''] || '处理完成' }}
           </view>
         </view>
 
-        <text class="hc-building">{{ order.building_id }}</text>
-        <text class="hc-desc">{{ order.issue_description }}</text>
-        <text v-if="order.worker_notes" class="hc-note">备注：{{ order.worker_notes }}</text>
+        <text class="hc-building">{{ incident.building_id }}</text>
+        <text class="hc-desc">{{ incident.summary_text }}</text>
+        <text v-if="incident.current_work_order?.worker_notes" class="hc-note">备注：{{ incident.current_work_order.worker_notes }}</text>
       </view>
 
-      <view v-if="!loading && !orders.length" class="empty-state">
-        <text class="empty-icon">📂</text>
+      <view v-if="!loading && !incidents.length" class="empty-state">
+        <image class="empty-icon" src="/static/icons/tab-history.svg" mode="aspectFit" />
         <text>暂无历史记录</text>
       </view>
 
-      <view v-if="noMore && orders.length > 0" class="load-end">没有更多了</view>
+      <view v-if="noMore && incidents.length > 0" class="load-end">没有更多了</view>
     </scroll-view>
 
     <TabBar :tabs="WORKER_TABS" current="history" theme="worker" />
@@ -65,32 +65,36 @@ import { WORKER_TABS } from '../../../constants/tabs'
 import { WORKER_ROLES } from '../../../constants/roles'
 import { WORKER_RESULT_LABEL } from '../../../constants/status'
 import { formatDate } from '../../../utils/format'
-import { workOrderApi, type WorkOrder } from '../../../api/workorder'
+import { incidentApi, type Incident } from '../../../api/incident'
+import { getCache, setCache } from '../../../utils/cache'
 
 useRouteGuard(WORKER_ROLES)
 
-const orders = ref<WorkOrder[]>([])
+const incidents = ref<Incident[]>([])
 const loading = ref(false)
 const noMore = ref(false)
 const page = ref(1)
 const PAGE_SIZE = 15
 
 const stats = computed(() => ({
-  total:      orders.value.length,
-  fixed:      orders.value.filter(o => o.worker_result === 'fixed').length,
-  falseAlarm: orders.value.filter(o => o.worker_result === 'false_alarm').length,
+  total:      incidents.value.length,
+  fixed:      incidents.value.filter(o => o.current_work_order?.worker_result === 'fixed').length,
+  falseAlarm: incidents.value.filter(o => o.current_work_order?.worker_result === 'false_alarm').length,
 }))
 
 async function loadData() {
-  loading.value = true
+  const cached = getCache<Incident[]>('worker_history')
+  if (cached) incidents.value = cached
+  loading.value = !cached
   try {
-    const res = await workOrderApi.list({
-      status: 'completed,closed,false_alarm',
+    const res = await incidentApi.list({
+      workflow_status: 'completed,closed,false_alarm',
       page: 1,
       page_size: PAGE_SIZE,
     })
-    orders.value = res.work_orders
-    if (res.work_orders.length < PAGE_SIZE) noMore.value = true
+    incidents.value = res.incidents
+    setCache('worker_history', res.incidents)
+    if (res.incidents.length < PAGE_SIZE) noMore.value = true
   } catch { /* handled */ }
   finally { loading.value = false }
 }
@@ -99,19 +103,21 @@ async function loadMore() {
   if (loading.value || noMore.value) return
   page.value++
   try {
-    const res = await workOrderApi.list({
-      status: 'completed,closed,false_alarm',
+    const res = await incidentApi.list({
+      workflow_status: 'completed,closed,false_alarm',
       page: page.value,
       page_size: PAGE_SIZE,
     })
-    orders.value.push(...res.work_orders)
-    if (res.work_orders.length < PAGE_SIZE) noMore.value = true
+    incidents.value.push(...res.incidents)
+    if (res.incidents.length < PAGE_SIZE) noMore.value = true
   } catch { page.value-- }
 }
 
-function openDetail(order: WorkOrder) {
+function openDetail(incident: Incident) {
+  const ticketId = incident.current_work_order?.ticket_id
+  if (!ticketId) return
   uni.navigateTo({
-    url: `/pages/worker/workorder-detail/index?ticket_id=${order.ticket_id}&readonly=1`,
+    url: `/pages/worker/workorder-detail/index?incident_id=${incident.incident_id}&ticket_id=${ticketId}&readonly=1`,
   })
 }
 
@@ -160,9 +166,9 @@ onMounted(loadData)
   margin-bottom: 16rpx;
   border-left: 6rpx solid #e0e0e0;
 
-  &.fixed       { border-left-color: #00b96b; }
+  &.completed   { border-left-color: #00b96b; }
   &.false_alarm { border-left-color: #ff4d4f; }
-  &.escalated   { border-left-color: #3b6cf4; }
+  &.closed      { border-left-color: #3b6cf4; }
 }
 
 .hc-header {
@@ -179,9 +185,9 @@ onMounted(loadData)
   padding: 4rpx 14rpx;
   border-radius: 16rpx;
 
-  &.fixed       { background: #f0fff8; color: #00b96b; }
+  &.completed   { background: #f0fff8; color: #00b96b; }
   &.false_alarm { background: #fff2f0; color: #ff4d4f; }
-  &.escalated   { background: #f0f5ff; color: #3b6cf4; }
+  &.closed      { background: #f0f5ff; color: #3b6cf4; }
 }
 
 .hc-building {
@@ -218,7 +224,7 @@ onMounted(loadData)
   color: #aaa;
   font-size: 28rpx;
 
-  .empty-icon { font-size: 80rpx; }
+  .empty-icon { width: 88rpx; height: 88rpx; opacity: 0.4; }
 }
 
 .wo-skeleton {

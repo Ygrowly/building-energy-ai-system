@@ -103,6 +103,57 @@ export interface LoadProfileResponse {
   weekday_profile: WeekdayPoint[]
 }
 
+// ---- GET /api/buildings/risk-now 响应 ----
+
+export interface RiskItem {
+  building_id: string
+  building_name: string
+  building_type?: string
+  hvac_mode: string
+  hvac_mode_label: string
+  expected_hac: number
+  air_temp: number
+  risk_level: 'high' | 'medium' | 'low' | 'normal'
+  deviation_pct?: number | null
+  risk_desc: string
+}
+
+export interface RiskNowResponse {
+  risks: RiskItem[]
+}
+
+// ---- GET /api/predictions/recent 响应 ----
+
+export interface PredictionItem {
+  id: string
+  created_at: string | null
+  as_of_timestamp: string | null
+  forecast_for_timestamp: string | null
+  horizon_h: number
+  building_id: string
+  building_name: string
+  building_type?: string
+  metric_name: string
+  predicted_value: number | null
+  expected_value: number | null
+  deviation_pct: number | null
+  risk_level: 'warning' | 'critical' | 'normal'
+  rule_triggered: string | null
+  model_name: string | null
+  is_confirmed: boolean | null
+}
+
+export interface RecentPredictionsResponse {
+  predictions: PredictionItem[]
+  total: number
+  check_period: {
+    start: string | null
+    end: string | null
+    hours: number
+  }
+  message?: string
+}
+
 export const dataApi = {
   /** 全局总览（Dashboard KPI 汇总） */
   overview(date?: string): Promise<OverviewResponse> {
@@ -116,6 +167,20 @@ export const dataApi = {
     only_unresolved?: boolean
   }): Promise<RecentAnomaliesResponse> {
     return get<RecentAnomaliesResponse>('/api/anomalies/recent', params as Record<string, unknown>)
+  },
+
+  /** 实时能耗风险评估 */
+  riskNow(): Promise<RiskNowResponse> {
+    return get<RiskNowResponse>('/api/buildings/risk-now')
+  },
+
+  /** 近期预测预警记录 */
+  recentPredictions(params?: {
+    hours?: number
+    building_type?: string
+    risk_level?: 'warning' | 'critical'
+  }): Promise<RecentPredictionsResponse> {
+    return get<RecentPredictionsResponse>('/api/predictions/recent', params as Record<string, unknown>)
   },
 
   /** 建筑负荷曲线（热力图数据） */

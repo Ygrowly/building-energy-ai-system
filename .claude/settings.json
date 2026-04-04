@@ -27,7 +27,9 @@
       "Bash(npx --no-install vite --version)",
       "Bash(grep -r \"interface.*Heatmap\\\\|type.*Heatmap\\\\|export.*heatmap\" /e/27_fwwb_A08/project/frontend/src --include=*.ts --include=*.vue)",
       "Bash(node -e \":*)",
-      "Bash(find /e/27_fwwb_A08/project -type f \\\\\\(-name *profile* -o -name *setting* -o -name *user* \\\\\\) \\\\\\(-name *.vue -o -name *.ts -o -name *.tsx \\\\\\))"
+      "Bash(find /e/27_fwwb_A08/project -type f \\\\\\(-name *profile* -o -name *setting* -o -name *user* \\\\\\) \\\\\\(-name *.vue -o -name *.ts -o -name *.tsx \\\\\\))",
+      "Bash(grep -r \"anomal\" /e/27_fwwb_A08/project/backend/app/api/*.py)",
+      "Bash(xargs basename:*)"
     ]
   }
 }

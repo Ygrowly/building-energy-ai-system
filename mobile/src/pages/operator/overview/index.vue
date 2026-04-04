@@ -124,14 +124,14 @@
             </view>
             <text class="wo-time">{{ formatTimeAgo(wo.created_at) }}</text>
           </view>
-          <text class="wo-desc">{{ wo.issue_description }}</text>
+          <text class="wo-desc">{{ sanitizeDisplayText(wo.issue_description) }}</text>
           <view class="wo-meta">
-            <text class="wo-meta-item">{{ wo.building_id }}</text>
-            <text v-if="wo.device_id" class="wo-meta-item">{{ wo.device_id }}</text>
+            <text class="wo-meta-item">{{ formatBuildingLabel(wo.building_id) }}</text>
+            <text v-if="formatDeviceLabel(wo.device_id, wo.building_id)" class="wo-meta-item">{{ formatDeviceLabel(wo.device_id, wo.building_id) }}</text>
           </view>
           <view v-if="wo.ai_reason" class="wo-reason">
             <text class="wo-reason-label">AI驳回理由：</text>
-            <text class="wo-reason-text">{{ wo.ai_reason }}</text>
+            <text class="wo-reason-text">{{ sanitizeDisplayText(wo.ai_reason) }}</text>
           </view>
           <view class="wo-actions">
             <view class="wo-btn wo-btn-approve" @click="handleOverrideApprove(wo)">
@@ -384,6 +384,8 @@ import { dataApi, type OverviewResponse, type HourlyPoint, type WeekdayPoint } f
 import { workOrderApi, type WorkOrder } from '../../../api/workorder'
 import { PRIORITY_LABEL, PRIORITY_COLOR } from '../../../constants/status'
 import { formatNum, formatPct } from '../../../utils/format'
+import { getCache, setCache } from '../../../utils/cache'
+import { formatBuildingLabel, formatDeviceLabel, sanitizeDisplayText } from '../../../utils/display'
 
 useRouteGuard(OPERATOR_ROLES)
 
@@ -391,6 +393,11 @@ const authStore = useAuthStore()
 const overview = ref<OverviewResponse | null>(null)
 const loading = ref(false)
 const currentTab = ref('all')
+
+const OVERVIEW_CACHE_KEY = 'operator_overview_data'
+const OVERVIEW_WORKORDERS_CACHE_KEY = 'operator_overview_rejected_workorders'
+const OVERVIEW_STATE_KEY = 'operator_overview_state'
+const OVERVIEW_STATE_TTL = 24 * 60 * 60 * 1000
 
 // 工单相关
 const rejectedOrders = ref<WorkOrder[]>([])
@@ -435,12 +442,22 @@ async function loadHeatmap(buildingType: string) {
   if (!buildingType || buildingType === 'all') { heatmapData.value = []; return }
   if (buildingType === prevBuildingType && heatmapData.value.length) return
   prevBuildingType = buildingType
+  const cacheKey = `operator_overview_heatmap_${buildingType}`
+  const cached = getCache<{ cells: Array<{ d: number; h: number; v: number }>; max: number }>(cacheKey)
+  if (cached) {
+    heatmapData.value = cached.cells
+    hmMaxVal.value = cached.max
+  }
   hmLoading.value = true
   try {
     const res = await dataApi.loadProfile(buildingType)
     const cells = buildHeatmapCells(res.hourly_profile, res.weekday_profile)
     heatmapData.value = cells
     hmMaxVal.value = Math.max(...cells.map(c => c.v), 1)
+    setCache(cacheKey, {
+      cells,
+      max: hmMaxVal.value,
+    })
   } catch {
     heatmapData.value = []
   } finally {
@@ -473,13 +490,19 @@ const activeBuilding = computed(() => {
   return overview.value.buildings.find(b => b.building_type === currentTab.value) || null
 })
 
-watch(currentTab, (tab) => { loadHeatmap(tab) })
+watch(currentTab, (tab) => {
+  setCache(OVERVIEW_STATE_KEY, { currentTab: tab })
+  loadHeatmap(tab)
+})
 
 async function loadWorkOrders() {
-  woLoading.value = true
+  const cached = getCache<WorkOrder[]>(OVERVIEW_WORKORDERS_CACHE_KEY)
+  if (cached) rejectedOrders.value = cached
+  woLoading.value = !cached
   try {
     const res = await workOrderApi.list({ status: 'auto_rejected', page: 1, page_size: 5 })
     rejectedOrders.value = res.work_orders
+    setCache(OVERVIEW_WORKORDERS_CACHE_KEY, res.work_orders)
   } catch { /* toast handled by request.ts */ }
   finally { woLoading.value = false }
 }
@@ -516,8 +539,13 @@ function formatTimeAgo(dateStr: string): string {
 }
 
 async function loadData() {
-  loading.value = true
-  try { overview.value = await dataApi.overview() }
+  const cached = getCache<OverviewResponse>(OVERVIEW_CACHE_KEY)
+  if (cached) overview.value = cached
+  loading.value = !cached
+  try {
+    overview.value = await dataApi.overview()
+    setCache(OVERVIEW_CACHE_KEY, overview.value)
+  }
   catch { /* toast handled by request.ts */ }
   finally { loading.value = false }
 }
@@ -594,7 +622,13 @@ function formatFixed(value: number | null | undefined, digits = 1): string {
 }
 
 let timer: ReturnType<typeof setInterval>
-onMounted(() => { loadData(); loadWorkOrders(); timer = setInterval(() => { loadData(); loadWorkOrders() }, 60000) })
+onMounted(() => {
+  const cachedState = getCache<{ currentTab?: string }>(OVERVIEW_STATE_KEY, OVERVIEW_STATE_TTL)
+  if (cachedState?.currentTab) currentTab.value = cachedState.currentTab
+  loadData()
+  loadWorkOrders()
+  timer = setInterval(() => { loadData(); loadWorkOrders() }, 60000)
+})
 onUnmounted(() => clearInterval(timer))
 </script>
 

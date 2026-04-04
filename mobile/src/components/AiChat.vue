@@ -5,7 +5,7 @@
 <template>
   <view class="ai-chat">
     <view class="chat-header">
-      <text class="chat-title">🤖 AI 辅助维修</text>
+      <text class="chat-title">AI 辅助维修</text>
       <text class="chat-hint">基于当前工单自动提供诊断建议</text>
     </view>
 
@@ -149,7 +149,7 @@ async function sendMessage() {
       },
       onError(e) {
         removePendingThinking()
-        messages.value.push({ role: 'ai', content: `⚠ ${e.message}` })
+        messages.value.push({ role: 'ai', content: `提示：${e.message}` })
         sending.value = false
       },
       onDone(e) {
@@ -165,7 +165,7 @@ async function sendMessage() {
       },
       onNetworkError() {
         removePendingThinking()
-        messages.value.push({ role: 'ai', content: '⚠ 网络异常，请重试' })
+        messages.value.push({ role: 'ai', content: '网络异常，请重试' })
         sending.value = false
       },
     })

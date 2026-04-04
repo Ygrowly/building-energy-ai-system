@@ -36,23 +36,23 @@
     </view>
 
     <scroll-view scroll-y class="list-area" @scrolltolower="loadMore">
-      <view v-if="loading && !orders.length">
+      <view v-if="loading && !incidents.length">
         <view v-for="i in 3" :key="i" class="wo-skeleton" />
       </view>
 
-      <WorkOrderCard
-        v-for="order in filteredOrders"
-        :key="order.id"
-        :order="order"
+      <IncidentReviewCard
+        v-for="incident in filteredIncidents"
+        :key="incident.id"
+        :incident="incident"
         @click="openDetail"
       />
 
-      <view v-if="!loading && !filteredOrders.length" class="empty-state">
-        <text class="empty-icon">🎉</text>
+      <view v-if="!loading && !filteredIncidents.length" class="empty-state">
+        <image class="empty-icon" src="/static/icons/tab-wrench.svg" mode="aspectFit" />
         <text>暂无待处理工单</text>
       </view>
 
-      <view v-if="noMore && orders.length > 0" class="load-end">没有更多了</view>
+      <view v-if="noMore && incidents.length > 0" class="load-end">没有更多了</view>
     </scroll-view>
 
     <TabBar :tabs="WORKER_TABS" current="pending" theme="worker" />
@@ -63,11 +63,12 @@
 import { ref, computed, onMounted } from 'vue'
 import NavBar from '../../../components/NavBar.vue'
 import TabBar from '../../../components/TabBar.vue'
-import WorkOrderCard from '../../../components/WorkOrderCard.vue'
+import IncidentReviewCard from '../../../components/IncidentReviewCard.vue'
 import { useRouteGuard } from '../../../utils/route-guard'
 import { WORKER_TABS } from '../../../constants/tabs'
 import { WORKER_ROLES } from '../../../constants/roles'
-import { workOrderApi, type WorkOrder } from '../../../api/workorder'
+import { incidentApi, type Incident } from '../../../api/incident'
+import { getCache, setCache } from '../../../utils/cache'
 
 useRouteGuard(WORKER_ROLES)
 
@@ -79,35 +80,38 @@ const filters = [
 ]
 
 const activeFilter = ref('all')
-const orders = ref<WorkOrder[]>([])
+const incidents = ref<Incident[]>([])
 const loading = ref(false)
 const noMore = ref(false)
 const page = ref(1)
 const PAGE_SIZE = 15
 
 const counts = computed(() => ({
-  high:   orders.value.filter(o => o.priority === 'high').length,
-  medium: orders.value.filter(o => o.priority === 'medium').length,
-  low:    orders.value.filter(o => o.priority === 'low').length,
+  high:   incidents.value.filter(o => o.priority === 'high').length,
+  medium: incidents.value.filter(o => o.priority === 'medium').length,
+  low:    incidents.value.filter(o => o.priority === 'low').length,
 }))
 
-const filteredOrders = computed(() => {
-  if (activeFilter.value === 'all') return orders.value
-  return orders.value.filter(o => o.priority === activeFilter.value)
+const filteredIncidents = computed(() => {
+  if (activeFilter.value === 'all') return incidents.value
+  return incidents.value.filter(o => o.priority === activeFilter.value)
 })
 
 async function loadData() {
-  loading.value = true
+  const cached = getCache<Incident[]>('worker_pending')
+  if (cached) incidents.value = cached
+  loading.value = !cached
   page.value = 1
   noMore.value = false
   try {
-    const res = await workOrderApi.list({
-      status: 'dispatched',
+    const res = await incidentApi.list({
+      workflow_status: 'dispatched',
       page: 1,
       page_size: PAGE_SIZE,
     })
-    orders.value = res.work_orders
-    if (res.work_orders.length < PAGE_SIZE) noMore.value = true
+    incidents.value = res.incidents
+    setCache('worker_pending', res.incidents)
+    if (res.incidents.length < PAGE_SIZE) noMore.value = true
   } catch { /* handled */ }
   finally { loading.value = false }
 }
@@ -116,19 +120,21 @@ async function loadMore() {
   if (loading.value || noMore.value) return
   page.value++
   try {
-    const res = await workOrderApi.list({
-      status: 'dispatched',
+    const res = await incidentApi.list({
+      workflow_status: 'dispatched',
       page: page.value,
       page_size: PAGE_SIZE,
     })
-    orders.value.push(...res.work_orders)
-    if (res.work_orders.length < PAGE_SIZE) noMore.value = true
+    incidents.value.push(...res.incidents)
+    if (res.incidents.length < PAGE_SIZE) noMore.value = true
   } catch { page.value-- }
 }
 
-function openDetail(order: WorkOrder) {
+function openDetail(incident: Incident) {
+  const ticketId = incident.current_work_order?.ticket_id
+  if (!ticketId) return
   uni.navigateTo({
-    url: `/pages/worker/workorder-detail/index?ticket_id=${order.ticket_id}`,
+    url: `/pages/worker/workorder-detail/index?incident_id=${incident.incident_id}&ticket_id=${ticketId}`,
   })
 }
 
@@ -204,7 +210,7 @@ onMounted(loadData)
   color: #aaa;
   font-size: 28rpx;
 
-  .empty-icon { font-size: 80rpx; }
+  .empty-icon { width: 88rpx; height: 88rpx; opacity: 0.4; }
 }
 
 .wo-skeleton {

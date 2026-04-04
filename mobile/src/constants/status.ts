@@ -37,6 +37,38 @@ export const STATUS_COLOR: Record<string, string> = {
   closed:                  '#8c8c8c',
 }
 
+export type DispatchExecutionStatus =
+  | 'pending_accept'
+  | 'accepted'
+  | 'arrived'
+  | 'processing'
+  | 'waiting_support'
+  | 'overdue'
+
+export const DISPATCH_EXECUTION_STATUS_LABEL: Record<string, string> = {
+  pending_accept: '待接单',
+  accepted: '已接单',
+  arrived: '已到场',
+  processing: '处理中',
+  waiting_support: '待协同',
+  overdue: '已超时',
+}
+
+export const DISPATCH_EXECUTION_STATUS_COLOR: Record<string, { bg: string; text: string; border: string }> = {
+  pending_accept: { bg: '#eef4ff', text: '#2f6df6', border: '#dbe7ff' },
+  accepted: { bg: '#ebf8ff', text: '#0c7abf', border: '#cfeeff' },
+  arrived: { bg: '#ecfbf3', text: '#0f9f6e', border: '#cdeedd' },
+  processing: { bg: '#eefcf7', text: '#0f9f6e', border: '#d6f2e6' },
+  waiting_support: { bg: '#f3f0ff', text: '#6f42d8', border: '#e4ddff' },
+  overdue: { bg: '#fff1f0', text: '#e5484d', border: '#ffd8d3' },
+}
+
+export const SLA_STATUS_LABEL: Record<string, string> = {
+  normal: '正常',
+  warning: '临期',
+  overdue: '超时',
+}
+
 export type Priority = 'high' | 'medium' | 'low'
 
 export const PRIORITY_LABEL: Record<string, string> = {

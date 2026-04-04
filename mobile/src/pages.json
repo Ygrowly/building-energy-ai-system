@@ -32,7 +32,7 @@
     {
       "path": "pages/operator/alerts/index",
       "style": {
-        "navigationBarTitleText": "异常告警",
+        "navigationBarTitleText": "消息中心",
         "navigationBarBackgroundColor": "#1a1a2e",
         "navigationBarTextStyle": "white",
         "navigationStyle": "custom"
@@ -77,7 +77,7 @@
     {
       "path": "pages/operator/profile/notification",
       "style": {
-        "navigationBarTitleText": "消息通知",
+        "navigationBarTitleText": "消息中心",
         "navigationBarBackgroundColor": "#1a1a2e",
         "navigationBarTextStyle": "white",
         "navigationStyle": "custom"

@@ -37,7 +37,7 @@
       <view class="menu-divider" />
       <view class="menu-item" @click="goTo('notification')">
         <image class="menu-icon" src="/static/icons/bell-outline.svg" mode="aspectFit" />
-        <text class="menu-label">消息通知</text>
+        <text class="menu-label">消息中心</text>
         <image class="menu-arrow" src="/static/icons/arrow-right.svg" mode="aspectFit" />
       </view>
       <view class="menu-divider" />

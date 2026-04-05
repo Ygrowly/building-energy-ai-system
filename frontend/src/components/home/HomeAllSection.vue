@@ -230,7 +230,8 @@ function renderRadar() {
       },
     },
     legend: {
-      top: 4,
+      bottom: 0,
+      left: 'center',
       textStyle: { color: c.axis, fontSize: 10 },
       itemStyle: { borderWidth: 0 },
     },
@@ -242,8 +243,8 @@ function renderRadar() {
         { name: 'EUI\n偏离', max: 100 },
         { name: '告警数', max: 100 },
       ],
-      center: ['50%', '54%'],
-      radius: '65%',
+      center: ['50%', '48%'],
+      radius: '74%',
       axisLine:  { lineStyle: { color: c.grid } },
       splitLine: { lineStyle: { color: c.grid } },
       splitArea: { show: false },
@@ -323,7 +324,7 @@ function renderHvac() {
   const inst = echarts.init(hvacEl.value)
   inst.setOption({
     backgroundColor: 'transparent',
-    grid: { top: 32, right: 18, bottom: 36, left: 52 },
+    grid: { top: 52, left: '3%', right: '3%', bottom: '8%', containLabel: true },
     tooltip: {
       trigger: 'axis',
       backgroundColor: c.ttBg,
@@ -344,7 +345,7 @@ function renderHvac() {
         name: 'kWh',
         nameTextStyle: { color: c.axis, fontSize: 10 },
         axisLabel: { color: c.axis, fontSize: 10 },
-        splitLine: { lineStyle: { color: c.grid, type: 'dashed' } },
+        splitLine: { lineStyle: { color: '#f0f0f0', type: 'dashed' } },
       },
       {
         type: 'value',
@@ -466,7 +467,7 @@ function renderPie() {
     },
     legend: {
       orient: 'vertical',
-      right: 16,
+      right: '8%',
       top: 'middle',
       textStyle: { color: c.axis, fontSize: 11 },
       itemWidth: 10,
@@ -476,17 +477,11 @@ function renderPie() {
       {
         name: labelMap[compareMetric.value],
         type: 'pie',
-        radius: ['38%', '68%'],
-        center: ['38%', '50%'],
+        radius: ['52%', '74%'],
+        center: ['26%', '50%'],
         avoidLabelOverlap: true,
-        label: {
-          show: true,
-          formatter: '{b}\n{d}%',
-          color: c.axis,
-          fontSize: 11,
-          lineHeight: 16,
-        },
-        labelLine: { lineStyle: { color: c.grid } },
+        label: { show: false },
+        labelLine: { show: false },
         data: pieData.map((d, i) => ({
           ...d,
           itemStyle: { color: cfg.colors[i % cfg.colors.length] },
@@ -953,36 +948,61 @@ onUnmounted(() => {
   flex-direction: row;
   align-items: center;
   flex-wrap: wrap;
-  gap: 6px;
+  justify-content: space-between;
+  gap: 10px;
 }
 
 .compare-tabs {
-  display: flex;
+  display: inline-flex;
+  align-items: center;
   gap: 4px;
   margin-left: auto;
+  padding: 4px;
+  border: 1px solid rgba(120, 140, 160, 0.18);
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.05);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
 
 .compare-tab {
-  padding: 2px 10px;
-  border-radius: 12px;
-  border: 1px solid rgba(120, 140, 160, 0.3);
+  min-width: 68px;
+  padding: 5px 12px;
+  border-radius: 999px;
+  border: 0;
   background: transparent;
-  color: var(--color-text-secondary, #8a95a8);
+  color: var(--text-muted, #8a95a8);
   font-size: 11px;
+  font-weight: 600;
   cursor: pointer;
-  transition: all 0.18s ease;
+  transition: background-color 0.18s ease, color 0.18s ease, box-shadow 0.18s ease,
+    transform 0.18s ease;
   white-space: nowrap;
 }
 
 .compare-tab:hover {
-  border-color: rgba(120, 180, 200, 0.5);
-  color: var(--color-text-primary, #dde3f0);
+  background: rgba(148, 163, 184, 0.18);
+  color: var(--text-primary, #dde3f0);
 }
 
 .compare-tab.active {
-  background: rgba(90, 160, 190, 0.18);
-  border-color: rgba(90, 160, 190, 0.55);
-  color: #7ec8e3;
-  font-weight: 500;
+  background: linear-gradient(135deg, #0f766e 0%, #14b8a6 100%);
+  color: #f8fafc;
+  box-shadow: 0 10px 20px rgba(15, 118, 110, 0.24);
+  transform: translateY(-1px);
+}
+
+html[data-theme='light'] .compare-tabs {
+  background: #f4f7f5;
+  border-color: #e2e8e4;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+}
+
+html[data-theme='light'] .compare-tab {
+  color: #64748b;
+}
+
+html[data-theme='light'] .compare-tab:hover {
+  background: rgba(148, 163, 184, 0.14);
+  color: #111827;
 }
 </style>

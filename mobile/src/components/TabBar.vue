@@ -51,11 +51,11 @@ function onTab(tab: TabItem) {
   right: 0;
   height: calc(120rpx + env(safe-area-inset-bottom, 0px));
   padding-bottom: env(safe-area-inset-bottom, 0px);
-  background: #fff;
+  background: rgba(255,255,255,0.98);
   display: flex;
   flex-direction: row;
-  border-top: 1rpx solid #e8ecf0;
-  box-shadow: 0 -4rpx 20rpx rgba(0,0,0,0.06);
+  border-top: 1rpx solid rgba(228, 237, 184, 0.88);
+  box-shadow: 0 -12rpx 32rpx rgba(181, 196, 118, 0.12);
   z-index: 999;
 }
 
@@ -91,6 +91,6 @@ function onTab(tab: TabItem) {
 /* 维修主题激活色 */
 .worker .tab-item.active {
   .tab-icon  { transform: scale(1.1); }
-  .tab-label { color: #00b96b; font-weight: 600; }
+  .tab-label { color: #73854a; font-weight: 600; }
 }
 </style>

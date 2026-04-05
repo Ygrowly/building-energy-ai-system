@@ -5,12 +5,14 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.core.cache import get_or_compute_json
 from app.core.config import get_settings
 from app.core.security import get_current_user
-from app.db.models import User, WorkOrder, WorkOrderAuditLog
+from app.db.models import User, WorkOrder, WorkOrderAuditLog, WorkerProfile, WorkerProfileSkill
 from app.db.session import get_db_session
+from app.services.dispatch_service import load_current_dispatches_by_work_order_ids
 from app.services.incident_service import (
     get_incident_by_identifier,
     list_incident_event_links,
@@ -62,17 +64,29 @@ async def list_incidents_endpoint(
         work_orders_by_id: dict[str, WorkOrder] = {}
         assigned_users_by_id: dict[str, User] = {}
         audit_logs_by_work_order_id: dict[str, list[WorkOrderAuditLog]] = {}
+        current_dispatches_by_work_order_id: dict[str, Any] = {}
         if work_order_ids:
             result = await db.execute(
                 select(WorkOrder).where(WorkOrder.id.in_(work_order_ids))
             )
             work_orders = result.scalars().all()
             work_orders_by_id = {wo.id: wo for wo in work_orders}
+            current_dispatches_by_work_order_id = await load_current_dispatches_by_work_order_ids(
+                db,
+                work_order_ids=work_order_ids,
+            )
 
             assigned_user_ids = [wo.assigned_to for wo in work_orders if wo.assigned_to]
             if assigned_user_ids:
                 user_result = await db.execute(
-                    select(User).where(User.id.in_(assigned_user_ids))
+                    select(User)
+                    .options(
+                        selectinload(User.worker_profile).selectinload(WorkerProfile.team),
+                        selectinload(User.worker_profile)
+                        .selectinload(WorkerProfile.skill_links)
+                        .selectinload(WorkerProfileSkill.skill),
+                    )
+                    .where(User.id.in_(assigned_user_ids))
                 )
                 assigned_users_by_id = {u.id: u for u in user_result.scalars().all()}
 
@@ -82,6 +96,8 @@ async def list_incidents_endpoint(
                 .order_by(WorkOrderAuditLog.created_at.asc())
             )
             for log in audit_result.scalars().all():
+                if not getattr(log, "work_order_id", None):
+                    continue
                 audit_logs_by_work_order_id.setdefault(log.work_order_id, []).append(log)
 
         serialized_incidents: list[dict[str, Any]] = []
@@ -92,6 +108,7 @@ async def list_incidents_endpoint(
                 serialize_incident(
                     incident,
                     current_work_order=current_work_order,
+                    current_dispatch=current_dispatches_by_work_order_id.get(current_work_order.id) if current_work_order else None,
                     assigned_user=assigned_user,
                     audit_logs=audit_logs_by_work_order_id.get(incident.current_work_order_id or "", []),
                 )
@@ -139,11 +156,23 @@ async def get_incident_detail_endpoint(
 
         assigned_users_by_id: dict[str, User] = {}
         audit_logs_by_work_order_id: dict[str, list[WorkOrderAuditLog]] = {}
+        current_dispatches_by_work_order_id: dict[str, Any] = {}
         if work_orders:
             assigned_user_ids = [wo.assigned_to for wo in work_orders if wo.assigned_to]
+            current_dispatches_by_work_order_id = await load_current_dispatches_by_work_order_ids(
+                db,
+                work_order_ids=[wo.id for wo in work_orders],
+            )
             if assigned_user_ids:
                 user_result = await db.execute(
-                    select(User).where(User.id.in_(assigned_user_ids))
+                    select(User)
+                    .options(
+                        selectinload(User.worker_profile).selectinload(WorkerProfile.team),
+                        selectinload(User.worker_profile)
+                        .selectinload(WorkerProfile.skill_links)
+                        .selectinload(WorkerProfileSkill.skill),
+                    )
+                    .where(User.id.in_(assigned_user_ids))
                 )
                 assigned_users_by_id = {u.id: u for u in user_result.scalars().all()}
 
@@ -154,6 +183,8 @@ async def get_incident_detail_endpoint(
                 .order_by(WorkOrderAuditLog.created_at.asc())
             )
             for log in audit_result.scalars().all():
+                if not getattr(log, "work_order_id", None):
+                    continue
                 audit_logs_by_work_order_id.setdefault(log.work_order_id, []).append(log)
 
         event_links = await list_incident_event_links(db, incident_id=incident.id)
@@ -161,7 +192,9 @@ async def get_incident_detail_endpoint(
         return serialize_incident_detail(
             incident,
             current_work_order=current_work_order,
+            current_dispatch=current_dispatches_by_work_order_id.get(current_work_order.id) if current_work_order else None,
             work_orders=work_orders,
+            current_dispatches_by_work_order_id=current_dispatches_by_work_order_id,
             event_links=event_links,
             prediction_links=prediction_links,
             assigned_users_by_id=assigned_users_by_id,

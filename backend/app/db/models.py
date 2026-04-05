@@ -451,6 +451,139 @@ class User(Base):
     refresh_tokens = relationship(
         "RefreshToken", back_populates="user", cascade="all, delete-orphan"
     )
+    worker_profile = relationship(
+        "WorkerProfile", back_populates="user", uselist=False, cascade="all, delete-orphan"
+    )
+
+
+# ---------------------------------------------------------------------------
+# worker_teams / worker_skills / worker_profiles — 维修人员画像（派工第二阶段）
+# ---------------------------------------------------------------------------
+
+class WorkerTeam(Base):
+    """
+    维修班组。
+    service_buildings_json 记录该班组主要负责的楼宇范围（JSON 字符串数组）。
+    """
+    __tablename__ = "worker_teams"
+
+    id: str = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    team_code: str = Column(String(32), unique=True, nullable=False)
+    name: str = Column(String(64), nullable=False)
+    description: str = Column(Text, nullable=True)
+    service_buildings_json: str = Column(Text, nullable=True)
+    is_active: bool = Column(Boolean, nullable=False, default=True)
+    created_at = Column(
+        TIMESTAMP(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    members = relationship("WorkerProfile", back_populates="team")
+
+    __table_args__ = (
+        Index("idx_worker_teams_active", "is_active"),
+        Index("idx_worker_teams_code", "team_code"),
+    )
+
+
+class WorkerSkill(Base):
+    """
+    技能标签字典表。
+    code 用于排序与规则匹配，name 用于前端展示。
+    """
+    __tablename__ = "worker_skills"
+
+    id: str = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    code: str = Column(String(32), unique=True, nullable=False)
+    name: str = Column(String(64), nullable=False)
+    category: str = Column(String(32), nullable=True)
+    description: str = Column(Text, nullable=True)
+    is_active: bool = Column(Boolean, nullable=False, default=True)
+    created_at = Column(
+        TIMESTAMP(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    profile_links = relationship("WorkerProfileSkill", back_populates="skill")
+
+    __table_args__ = (
+        Index("idx_worker_skills_active", "is_active"),
+        Index("idx_worker_skills_code", "code"),
+    )
+
+
+class WorkerProfile(Base):
+    """
+    维修人员画像。
+    通过 user_id 与 users 1:1 对应，承载班组、值班、负载上限、楼宇覆盖等派工信息。
+    """
+    __tablename__ = "worker_profiles"
+
+    user_id: str = Column(
+        String,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    team_id: str = Column(
+        String,
+        ForeignKey("worker_teams.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    job_title: str = Column(String(64), nullable=True)
+    shift_status: str = Column(String(20), nullable=False, default="on_duty")
+    dispatch_enabled: bool = Column(Boolean, nullable=False, default=True)
+    max_active_orders: int = Column(Integer, nullable=False, default=4)
+    accepts_emergency: bool = Column(Boolean, nullable=False, default=True)
+    service_buildings_json: str = Column(Text, nullable=True)
+    notes: str = Column(Text, nullable=True)
+    created_at = Column(
+        TIMESTAMP(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at = Column(
+        TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    user = relationship("User", back_populates="worker_profile")
+    team = relationship("WorkerTeam", back_populates="members")
+    skill_links = relationship(
+        "WorkerProfileSkill", back_populates="profile", cascade="all, delete-orphan"
+    )
+
+    __table_args__ = (
+        Index("idx_worker_profiles_team", "team_id"),
+        Index("idx_worker_profiles_shift", "shift_status"),
+        Index("idx_worker_profiles_dispatch_enabled", "dispatch_enabled"),
+    )
+
+
+class WorkerProfileSkill(Base):
+    """
+    维修人员技能映射表。
+    proficiency 建议取 1-5，is_primary 用于标记主技能。
+    """
+    __tablename__ = "worker_profile_skills"
+
+    profile_user_id: str = Column(
+        String,
+        ForeignKey("worker_profiles.user_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    skill_id: str = Column(
+        String,
+        ForeignKey("worker_skills.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    proficiency: int = Column(Integer, nullable=False, default=3)
+    is_primary: bool = Column(Boolean, nullable=False, default=False)
+    created_at = Column(
+        TIMESTAMP(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    profile = relationship("WorkerProfile", back_populates="skill_links")
+    skill = relationship("WorkerSkill", back_populates="profile_links")
+
+    __table_args__ = (
+        Index("idx_worker_profile_skills_skill", "skill_id"),
+        Index("idx_worker_profile_skills_primary", "profile_user_id", "is_primary"),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -601,6 +734,23 @@ class AnomalyIncident(Base):
     current_work_order_id: str = Column(
         String, ForeignKey("work_orders.id", ondelete="SET NULL"), nullable=True
     )
+    current_dispatch_id: str = Column(
+        String, ForeignKey("dispatch_tasks.id", ondelete="SET NULL"), nullable=True
+    )
+    current_dispatch_status: str = Column(String(32), nullable=True)
+    current_assigned_to: str = Column(
+        String, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    current_assigned_team_id: str = Column(
+        String, ForeignKey("worker_teams.id", ondelete="SET NULL"), nullable=True
+    )
+    current_accept_deadline_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    current_arrive_deadline_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    current_finish_deadline_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    last_dispatch_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    dispatch_overdue_flag: bool = Column(Boolean, nullable=False, default=False)
+    dispatch_blocked_reason: str = Column(Text, nullable=True)
+    latest_dispatch_note: str = Column(Text, nullable=True)
     is_active: bool = Column(Boolean, nullable=False, default=True)
     resolved_at = Column(TIMESTAMP(timezone=True), nullable=True)
     created_at = Column(
@@ -619,6 +769,8 @@ class AnomalyIncident(Base):
         Index("idx_incident_workflow_status", "workflow_status"),
         Index("idx_incident_building_last_seen", "building_id", "last_seen_at"),
         Index("idx_incident_priority_last_seen", "priority", "last_seen_at"),
+        Index("idx_incident_current_dispatch", "current_dispatch_id"),
+        Index("idx_incident_dispatch_status", "current_dispatch_status"),
     )
 
 
@@ -697,9 +849,11 @@ class IncidentPredictionLink(Base):
 class WorkOrder(Base):
     """
     工单主表，完整生命周期：pending_review → AI 审批 → 派发 → 反馈 → 关闭。
-    状态合法值: pending_review, auto_approved, auto_rejected,
-               dispatched, completed, false_alarm, escalated,
-               admin_override_approved, admin_override_rejected, closed
+    状态合法值:
+      pending_review, pending_dispatch, auto_rejected,
+      dispatched, completed, false_alarm, escalated, closed
+    同时兼容历史状态:
+      auto_approved, admin_override_approved, admin_override_rejected
     """
     __tablename__ = "work_orders"
 
@@ -726,6 +880,9 @@ class WorkOrder(Base):
     ai_matched_event_ids: str = Column(Text, nullable=True)  # JSON array
     ai_reviewed_at = Column(TIMESTAMP(timezone=True), nullable=True)
     ai_fallback: bool = Column(Boolean, nullable=False, default=False)
+    pending_dispatch_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    dispatch_profile_json: str = Column(Text, nullable=True)
+    dispatch_blocked_reason: str = Column(Text, nullable=True)
 
     # 维修反馈
     worker_result: str = Column(String(32), nullable=True)
@@ -733,6 +890,13 @@ class WorkOrder(Base):
     worker_feedback_at = Column(TIMESTAMP(timezone=True), nullable=True)
     assigned_to: str = Column(
         String, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    assigned_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    accepted_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    arrived_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    processing_started_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    current_dispatch_id: str = Column(
+        String, ForeignKey("dispatch_tasks.id", ondelete="SET NULL"), nullable=True
     )
 
     # 管理员监督
@@ -769,6 +933,12 @@ class WorkOrder(Base):
     audit_logs = relationship(
         "WorkOrderAuditLog", back_populates="work_order", cascade="all, delete-orphan"
     )
+    dispatch_tasks = relationship(
+        "DispatchTask",
+        back_populates="work_order",
+        cascade="all, delete-orphan",
+        foreign_keys="DispatchTask.work_order_id",
+    )
 
     __table_args__ = (
         Index("idx_wo_status", "status"),
@@ -776,6 +946,129 @@ class WorkOrder(Base):
         Index("idx_wo_created", created_at.desc()),
         Index("idx_wo_assigned", "assigned_to", postgresql_where=Column("assigned_to").isnot(None)),
         Index("idx_wo_incident", "incident_id"),
+        Index("idx_wo_current_dispatch", "current_dispatch_id"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# dispatch_tasks / dispatch_events — 派工执行层（第三阶段）
+# ---------------------------------------------------------------------------
+
+class DispatchTask(Base):
+    """
+    一张工单的一次实际派工尝试。
+    """
+    __tablename__ = "dispatch_tasks"
+
+    id: str = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    work_order_id: str = Column(
+        String, ForeignKey("work_orders.id", ondelete="CASCADE"), nullable=False
+    )
+    incident_id: str = Column(
+        String, ForeignKey("anomaly_incidents.id", ondelete="SET NULL"), nullable=True
+    )
+    attempt_no: int = Column(Integer, nullable=False, default=1)
+    is_current: bool = Column(Boolean, nullable=False, default=True)
+
+    dispatch_mode: str = Column(String(24), nullable=False, default="manual")
+    dispatch_status: str = Column(String(32), nullable=False, default="assigned")
+    assigned_team_id: str = Column(
+        String, ForeignKey("worker_teams.id", ondelete="SET NULL"), nullable=True
+    )
+    assigned_to: str = Column(
+        String, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    assigned_by: str = Column(
+        String, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    selection_reason: str = Column(Text, nullable=True)
+    candidate_snapshot_json: str = Column(Text, nullable=True)
+    dispatch_profile_snapshot_json: str = Column(Text, nullable=True)
+
+    worker_result: str = Column(String(32), nullable=True)
+    reject_reason: str = Column(Text, nullable=True)
+    cancel_reason: str = Column(Text, nullable=True)
+    support_reason: str = Column(Text, nullable=True)
+    support_team_id: str = Column(
+        String, ForeignKey("worker_teams.id", ondelete="SET NULL"), nullable=True
+    )
+    transfer_from_dispatch_id: str = Column(
+        String, ForeignKey("dispatch_tasks.id", ondelete="SET NULL"), nullable=True
+    )
+
+    assigned_at = Column(TIMESTAMP(timezone=True), nullable=False, server_default=func.now())
+    accept_deadline_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    accepted_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    arrive_deadline_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    arrived_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    start_deadline_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    processing_started_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    finish_deadline_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    completed_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    closed_at = Column(TIMESTAMP(timezone=True), nullable=True)
+
+    reminder_count: int = Column(Integer, nullable=False, default=0)
+    last_reminded_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    timeout_level: str = Column(String(16), nullable=False, default="normal")
+    latest_note: str = Column(Text, nullable=True)
+
+    created_at = Column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at = Column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    work_order = relationship(
+        "WorkOrder", back_populates="dispatch_tasks", foreign_keys=[work_order_id]
+    )
+    events = relationship(
+        "DispatchEvent", back_populates="dispatch_task", cascade="all, delete-orphan"
+    )
+
+    __table_args__ = (
+        UniqueConstraint("work_order_id", "attempt_no", name="uq_dispatch_attempt"),
+        Index("idx_dispatch_work_order", "work_order_id"),
+        Index("idx_dispatch_incident", "incident_id"),
+        Index("idx_dispatch_assigned_to_status", "assigned_to", "dispatch_status"),
+        Index("idx_dispatch_team_status", "assigned_team_id", "dispatch_status"),
+        Index("idx_dispatch_current", "work_order_id", "is_current"),
+        Index("idx_dispatch_accept_deadline", "accept_deadline_at"),
+        Index("idx_dispatch_arrive_deadline", "arrive_deadline_at"),
+        Index("idx_dispatch_finish_deadline", "finish_deadline_at"),
+    )
+
+
+class DispatchEvent(Base):
+    """
+    派工执行动作事件流。
+    """
+    __tablename__ = "dispatch_events"
+
+    id: str = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    dispatch_task_id: str = Column(
+        String, ForeignKey("dispatch_tasks.id", ondelete="CASCADE"), nullable=False
+    )
+    work_order_id: str = Column(
+        String, ForeignKey("work_orders.id", ondelete="CASCADE"), nullable=False
+    )
+    incident_id: str = Column(
+        String, ForeignKey("anomaly_incidents.id", ondelete="SET NULL"), nullable=True
+    )
+    event_type: str = Column(String(32), nullable=False)
+    actor_type: str = Column(String(16), nullable=False)
+    actor_id: str = Column(String, nullable=True)
+    payload_json: str = Column(Text, nullable=True)
+    created_at = Column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    dispatch_task = relationship("DispatchTask", back_populates="events")
+
+    __table_args__ = (
+        Index("idx_dispatch_event_task_time", "dispatch_task_id", created_at.desc()),
+        Index("idx_dispatch_event_work_order_time", "work_order_id", created_at.desc()),
+        Index("idx_dispatch_event_incident_time", "incident_id", created_at.desc()),
     )
 
 

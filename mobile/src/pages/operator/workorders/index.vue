@@ -79,6 +79,91 @@
       <view v-if="noMore && incidents.length > 0" class="load-end">没有更多了</view>
     </scroll-view>
 
+    <view v-if="dispatchPanel.visible" class="dispatch-mask" @click="closeDispatchPanel">
+      <view class="dispatch-sheet" @click.stop>
+        <view class="dispatch-header">
+          <view>
+            <text class="dispatch-title">{{ dispatchPanel.mode === 'reassign' ? '改派中心' : '派工中心' }}</text>
+            <text class="dispatch-subtitle">{{ dispatchPanel.requirement?.summary || '为当前工单选择最合适的维修人员' }}</text>
+          </view>
+          <text class="dispatch-close" @click="closeDispatchPanel">关闭</text>
+        </view>
+
+        <view v-if="dispatchPanel.requirement" class="requirement-strip">
+          <view class="req-pill">
+            <text class="req-label">楼宇</text>
+            <text class="req-value">{{ dispatchPanel.requirement.building_id }}</text>
+          </view>
+          <view class="req-pill">
+            <text class="req-label">优先级</text>
+            <text class="req-value">{{ dispatchPanel.requirement.priority }}</text>
+          </view>
+          <view class="req-pill">
+            <text class="req-label">建议班组</text>
+            <text class="req-value">{{ dispatchPanel.requirement.preferred_team_name }}</text>
+          </view>
+        </view>
+
+        <view class="requirement-tags">
+          <text
+            v-for="skill in dispatchPanel.requirement?.required_skills || []"
+            :key="skill"
+            class="requirement-tag"
+          >{{ requirementSkillText(skill) }}</text>
+        </view>
+
+        <scroll-view scroll-y class="dispatch-list">
+          <view
+            v-for="candidate in dispatchPanel.candidates"
+            :key="candidate.user_id"
+            class="candidate-card"
+          >
+            <view class="candidate-top">
+              <view>
+                <text class="candidate-name">{{ candidate.username }}</text>
+                <text class="candidate-meta">{{ candidateMeta(candidate) }}</text>
+              </view>
+              <view class="score-pill">
+                <text class="score-label">推荐分</text>
+                <text class="score-value">{{ candidate.score }}</text>
+              </view>
+            </view>
+
+            <view class="candidate-stats">
+              <text class="candidate-stat">值班：{{ shiftText(candidate.shift_status) }}</text>
+              <text class="candidate-stat">负载：{{ candidate.current_active_orders }}/{{ candidate.max_active_orders }}</text>
+              <text class="candidate-stat">匹配技能：{{ candidate.matched_skill_names?.length || 0 }}</text>
+            </view>
+
+            <view class="badge-row">
+              <text v-for="badge in candidate.badges" :key="badge" class="badge-chip">{{ badge }}</text>
+            </view>
+
+            <view v-if="candidate.skill_names?.length" class="extra-row">
+              <text class="extra-label">技能</text>
+              <text class="extra-value">{{ candidate.skill_names.join(' / ') }}</text>
+            </view>
+            <view v-if="candidate.service_buildings?.length" class="extra-row">
+              <text class="extra-label">覆盖楼宇</text>
+              <text class="extra-value">{{ candidate.service_buildings.join(' / ') }}</text>
+            </view>
+
+            <text class="candidate-reason">{{ candidate.recommend_reason }}</text>
+
+            <button
+              class="dispatch-submit"
+              :loading="dispatchSubmitting === candidate.user_id"
+              @click="confirmDispatch(candidate)"
+            >{{ dispatchPanel.mode === 'reassign' ? '改派给TA' : '派给TA' }}</button>
+          </view>
+
+          <view v-if="!dispatchPanel.candidates.length" class="dispatch-empty">
+            暂无可用候选人
+          </view>
+        </scroll-view>
+      </view>
+    </view>
+
     <TabBar :tabs="OPERATOR_TABS" current="workorders" theme="operator" />
   </view>
 </template>
@@ -92,22 +177,35 @@ import { useRouteGuard } from '../../../utils/route-guard'
 import { OPERATOR_TABS } from '../../../constants/tabs'
 import { OPERATOR_ROLES } from '../../../constants/roles'
 import type { AdminAction } from '../../../constants/status'
-import { workOrderApi } from '../../../api/workorder'
+import { workOrderApi, type DispatchCandidate, type DispatchRequirement } from '../../../api/workorder'
 import { incidentApi, type Incident } from '../../../api/incident'
 import { getCache, setCache } from '../../../utils/cache'
 import { getDispatchSortScore, getDispatchSummaryStats } from '../../../utils/incident-card'
 
 useRouteGuard(OPERATOR_ROLES)
 
-interface ActionDef { action: AdminAction; label: string; style: string; confirmTitle: string }
+type OperatorAction = AdminAction | 'dispatch' | 'reassign'
+interface ActionDef { action: OperatorAction; label: string; style: string; confirmTitle: string }
+interface DispatchPanelState {
+  visible: boolean
+  ticketId: string | null
+  incidentId: string | null
+  dispatchId: string | null
+  mode: 'dispatch' | 'reassign'
+  requirement: DispatchRequirement | null
+  candidates: DispatchCandidate[]
+}
 
 // 对齐后端 admin-review 的 action 枚举
 function getActions(status: string): ActionDef[] {
   switch (status) {
+    case 'pending_dispatch':
     case 'auto_approved':
-      return [{ action: 'override_reject', label: '覆盖驳回', style: 'danger', confirmTitle: '确认覆盖AI决策，驳回此工单？' }]
+      return [{ action: 'dispatch', label: '立即派工', style: 'approve', confirmTitle: '选择维修人员并完成派工' }]
+    case 'dispatched':
+      return [{ action: 'reassign', label: '改派', style: 'neutral', confirmTitle: '为当前工单选择新的维修人员' }]
     case 'auto_rejected':
-      return [{ action: 'override_approve', label: '覆盖批准', style: 'approve', confirmTitle: '确认覆盖AI决策，批准派单？' }]
+      return [{ action: 'override_approve', label: '转待派工', style: 'approve', confirmTitle: '确认覆盖AI决策，将工单转入待派工？' }]
     case 'completed':
     case 'false_alarm':
       return [{ action: 'confirm', label: '确认关闭', style: 'neutral', confirmTitle: '确认关闭此工单？' }]
@@ -120,22 +218,34 @@ function getActions(status: string): ActionDef[] {
 
 const switchTabs = ref([
   { label: '待审阅',     value: 'pending_review', count: 0 },
+  { label: '待派工',     value: 'pending_dispatch', count: 0 },
   { label: 'AI已驳回',   value: 'auto_rejected',  count: 0 },
   { label: '已派单',     value: 'dispatched',     count: 0 },
   { label: '待关闭',     value: 'completed,false_alarm,escalated', count: 0 },
 ])
 
-const activeTab = ref('dispatched')
+const activeTab = ref('pending_dispatch')
 const incidents = ref<Incident[]>([])
 const loading = ref(false)
 const noMore = ref(false)
 const actionLoading = ref<string | null>(null)
+const dispatchSubmitting = ref<string | null>(null)
 const page = ref(1)
 const PAGE_SIZE = 15
+const dispatchPanel = ref<DispatchPanelState>({
+  visible: false,
+  ticketId: null,
+  incidentId: null,
+  dispatchId: null,
+  mode: 'dispatch',
+  requirement: null,
+  candidates: [],
+})
 
 const emptyText = computed(() => {
   const map: Record<string, string> = {
     pending_review: '暂无待审阅事件',
+    pending_dispatch: '暂无待派工工单',
     auto_rejected: '暂无AI已驳回工单',
     dispatched: '暂无已派单工单',
   }
@@ -186,7 +296,7 @@ async function loadData() {
 }
 
 async function loadCounts() {
-  const statuses = ['pending_review', 'auto_rejected', 'dispatched', 'completed,false_alarm,escalated']
+  const statuses = ['pending_review', 'pending_dispatch', 'auto_rejected', 'dispatched', 'completed,false_alarm,escalated']
   await Promise.allSettled(
     statuses.map(async (s, i) => {
       const res = await incidentApi.list({ workflow_status: s, page: 1, page_size: 1 })
@@ -206,6 +316,86 @@ async function loadMore() {
 }
 
 function onSwitchTab(val: string) { activeTab.value = val; loadData() }
+
+function shiftText(status?: string) {
+  const map: Record<string, string> = {
+    on_duty: '值班中',
+    standby: '待命',
+    off_duty: '离岗',
+  }
+  return map[status || ''] || '值班中'
+}
+
+function requirementSkillText(skill: string) {
+  const map: Record<string, string> = {
+    hvac: '暖通空调',
+    electrical: '电气配电',
+    plumbing: '给排水',
+    controls: '楼宇自控',
+    inspection: '现场巡检',
+  }
+  return map[skill] || skill
+}
+
+function candidateMeta(candidate: DispatchCandidate) {
+  return [candidate.team_name || '综合运维班', candidate.job_title || '维修工程师'].join(' · ')
+}
+
+function closeDispatchPanel() {
+  if (dispatchSubmitting.value) return
+  dispatchPanel.value = {
+    visible: false,
+    ticketId: null,
+    incidentId: null,
+    dispatchId: null,
+    mode: 'dispatch',
+    requirement: null,
+    candidates: [],
+  }
+}
+
+async function openDispatchPanel(incident: Incident, ticketId: string, mode: 'dispatch' | 'reassign' = 'dispatch') {
+  const result = await workOrderApi.dispatchCandidates(ticketId)
+  dispatchPanel.value = {
+    visible: true,
+    ticketId,
+    incidentId: incident.id,
+    dispatchId: incident.current_dispatch?.id || null,
+    mode,
+    requirement: result.requirement,
+    candidates: result.candidates,
+  }
+}
+
+async function confirmDispatch(candidate: DispatchCandidate) {
+  if (!dispatchPanel.value.ticketId) return
+  dispatchSubmitting.value = candidate.user_id
+  try {
+    if (dispatchPanel.value.mode === 'reassign' && dispatchPanel.value.dispatchId) {
+      await workOrderApi.reassignDispatchTask(
+        dispatchPanel.value.dispatchId,
+        candidate.user_id,
+        `调度改派：${candidate.recommend_reason}`,
+      )
+      uni.showToast({ title: `已改派给${candidate.username}`, icon: 'success' })
+    } else {
+      await workOrderApi.dispatch(
+        dispatchPanel.value.ticketId,
+        candidate.user_id,
+        candidate.recommend_reason,
+      )
+      uni.showToast({ title: `已派给${candidate.username}`, icon: 'success' })
+    }
+    incidents.value = incidents.value.filter(item => item.id !== dispatchPanel.value.incidentId)
+    dispatchSubmitting.value = null
+    closeDispatchPanel()
+    await loadCounts()
+  } catch {
+    uni.showToast({ title: '派工失败', icon: 'none' })
+  } finally {
+    dispatchSubmitting.value = null
+  }
+}
 
 function openDetail(incident: Incident) {
   const ticketId = incident.current_work_order?.ticket_id
@@ -236,11 +426,45 @@ function handleCardAction(payload: { type: 'trend' | 'contact' | 'nudge' | 'deta
   }
 }
 
-async function doAdminAction(incident: Incident, action: AdminAction, confirmTitle: string) {
+async function doAdminAction(incident: Incident, action: OperatorAction, confirmTitle: string) {
   const ticketId = incident.current_work_order?.ticket_id
   if (!ticketId) return
   const key = ticketId + '_' + action
   actionLoading.value = key
+
+  if (action === 'dispatch') {
+    try {
+      await openDispatchPanel(incident, ticketId, 'dispatch')
+      if (!dispatchPanel.value.candidates.length) {
+        uni.showToast({ title: '暂无可派工维修人员', icon: 'none' })
+        closeDispatchPanel()
+        return
+      }
+      actionLoading.value = null
+      return
+    } catch {
+      uni.showToast({ title: '候选人加载失败', icon: 'none' })
+      actionLoading.value = null
+      return
+    }
+  }
+
+  if (action === 'reassign') {
+    try {
+      await openDispatchPanel(incident, ticketId, 'reassign')
+      if (!dispatchPanel.value.candidates.length) {
+        uni.showToast({ title: '暂无可派工维修人员', icon: 'none' })
+        closeDispatchPanel()
+        return
+      }
+      actionLoading.value = null
+      return
+    } catch {
+      uni.showToast({ title: '候选人加载失败', icon: 'none' })
+      actionLoading.value = null
+      return
+    }
+  }
 
   uni.showModal({
     title: '操作确认',
@@ -435,9 +659,233 @@ onMounted(loadData)
   margin-bottom: 20rpx;
 }
 
+.dispatch-mask {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.34);
+  display: flex;
+  align-items: flex-end;
+  z-index: 30;
+}
+
+.dispatch-sheet {
+  width: 100%;
+  max-height: 78vh;
+  border-radius: 36rpx 36rpx 0 0;
+  background:
+    radial-gradient(circle at top right, rgba(59, 130, 246, 0.08), transparent 22%),
+    #fff;
+  padding: 26rpx 24rpx calc(env(safe-area-inset-bottom, 0px) + 24rpx);
+  box-sizing: border-box;
+  box-shadow: 0 -18rpx 40rpx rgba(15, 23, 42, 0.14);
+}
+
+.dispatch-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18rpx;
+}
+
+.dispatch-title {
+  display: block;
+  font-size: 32rpx;
+  font-weight: 800;
+  color: #162033;
+}
+
+.dispatch-subtitle {
+  display: block;
+  margin-top: 8rpx;
+  font-size: 22rpx;
+  line-height: 1.6;
+  color: #6b7280;
+}
+
+.dispatch-close {
+  padding: 10rpx 0 10rpx 18rpx;
+  font-size: 24rpx;
+  color: #2563eb;
+}
+
+.requirement-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12rpx;
+  margin-top: 20rpx;
+}
+
+.req-pill {
+  border-radius: 20rpx;
+  background: #f8fbff;
+  border: 1rpx solid rgba(59, 130, 246, 0.12);
+  padding: 16rpx 14rpx;
+}
+
+.req-label {
+  display: block;
+  font-size: 20rpx;
+  color: #7d8797;
+}
+
+.req-value {
+  display: block;
+  margin-top: 6rpx;
+  font-size: 24rpx;
+  font-weight: 700;
+  color: #1f2937;
+}
+
+.requirement-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10rpx;
+  margin-top: 14rpx;
+}
+
+.requirement-tag {
+  padding: 8rpx 14rpx;
+  border-radius: 999rpx;
+  background: #eef4ff;
+  color: #2563eb;
+  font-size: 20rpx;
+}
+
+.dispatch-list {
+  max-height: 50vh;
+  margin-top: 18rpx;
+}
+
+.candidate-card {
+  border-radius: 26rpx;
+  border: 1rpx solid rgba(226, 232, 240, 0.95);
+  padding: 20rpx;
+  margin-bottom: 16rpx;
+  background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);
+}
+
+.candidate-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16rpx;
+}
+
+.candidate-name {
+  display: block;
+  font-size: 30rpx;
+  font-weight: 800;
+  color: #182235;
+}
+
+.candidate-meta {
+  display: block;
+  margin-top: 6rpx;
+  font-size: 22rpx;
+  color: #7b8797;
+}
+
+.score-pill {
+  min-width: 108rpx;
+  border-radius: 18rpx;
+  padding: 12rpx 14rpx;
+  background: #eff7ff;
+  text-align: center;
+}
+
+.score-label {
+  display: block;
+  font-size: 18rpx;
+  color: #6b7280;
+}
+
+.score-value {
+  display: block;
+  margin-top: 4rpx;
+  font-size: 30rpx;
+  font-weight: 800;
+  color: #2563eb;
+}
+
+.candidate-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10rpx 18rpx;
+  margin-top: 16rpx;
+}
+
+.candidate-stat {
+  font-size: 22rpx;
+  color: #5b6576;
+}
+
+.badge-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10rpx;
+  margin-top: 16rpx;
+}
+
+.badge-chip {
+  padding: 8rpx 14rpx;
+  border-radius: 999rpx;
+  background: #f5f7fb;
+  color: #5a6475;
+  font-size: 20rpx;
+}
+
+.extra-row {
+  display: flex;
+  gap: 12rpx;
+  margin-top: 14rpx;
+}
+
+.extra-label {
+  flex-shrink: 0;
+  font-size: 22rpx;
+  color: #7b8797;
+}
+
+.extra-value {
+  flex: 1;
+  font-size: 22rpx;
+  color: #2a3445;
+  line-height: 1.6;
+}
+
+.candidate-reason {
+  display: block;
+  margin-top: 14rpx;
+  font-size: 22rpx;
+  line-height: 1.7;
+  color: #4b5563;
+}
+
+.dispatch-submit {
+  margin-top: 18rpx;
+  height: 74rpx;
+  border-radius: 18rpx;
+  border: none;
+  background: linear-gradient(135deg, #2563eb, #3b82f6);
+  color: #fff;
+  font-size: 24rpx;
+  font-weight: 700;
+}
+
+.dispatch-empty {
+  text-align: center;
+  padding: 90rpx 0 70rpx;
+  color: #94a3b8;
+  font-size: 24rpx;
+}
+
 @media (max-width: 430px) {
   .summary-strip {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .requirement-strip {
+    grid-template-columns: 1fr;
   }
 }
 </style>

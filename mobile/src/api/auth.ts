@@ -2,6 +2,33 @@ import { post, get, patch } from './request'
 import type { UserRole } from '../constants/roles'
 
 /** 对齐后端 UserResponse */
+export interface WorkerTeamInfo {
+  id: string
+  team_code: string
+  name: string
+}
+
+export interface WorkerSkillInfo {
+  code: string
+  name: string
+  category?: string | null
+  proficiency: number
+  is_primary: boolean
+}
+
+export interface WorkerProfileInfo {
+  user_id: string
+  team?: WorkerTeamInfo | null
+  job_title?: string | null
+  shift_status: 'on_duty' | 'standby' | 'off_duty' | string
+  dispatch_enabled: boolean
+  max_active_orders: number
+  accepts_emergency: boolean
+  service_buildings: string[]
+  skills: WorkerSkillInfo[]
+  notes?: string | null
+}
+
 export interface UserInfo {
   id: string
   username: string
@@ -10,6 +37,7 @@ export interface UserInfo {
   role: UserRole
   is_active: boolean
   created_at: string
+  worker_profile?: WorkerProfileInfo | null
 }
 
 /** 对齐后端 LoginResponse / RegisterResponse */

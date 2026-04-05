@@ -52,6 +52,7 @@ def _make_user(
     username: str = _VALID_USERNAME,
     password: str = _VALID_PASSWORD,
     is_active: bool = True,
+    role: str = "resident",
 ) -> MagicMock:
     """
     构造一个模拟 User ORM 对象。
@@ -62,6 +63,10 @@ def _make_user(
     user.username = username
     user.hashed_password = hash_password(password)
     user.is_active = is_active
+    user.role = role
+    user.email = None
+    user.phone = None
+    user.worker_profile = None
     user.created_at = datetime(2024, 1, 1, tzinfo=timezone.utc)
     return user
 
@@ -799,6 +804,47 @@ class TestMeEndpoint:
         assert data["username"] == "meuser"
         assert data["id"] == "me-user-001"
         assert "hashed_password" not in data
+
+    @pytest.mark.asyncio
+    async def test_me_returns_worker_profile_when_present(self, client):
+        user = _make_user(user_id="ops-001", username="worker1", role="ops")
+        team = MagicMock()
+        team.id = "team-hvac"
+        team.team_code = "hvac_team"
+        team.name = "暖通班"
+        skill = MagicMock()
+        skill.code = "hvac"
+        skill.name = "暖通空调"
+        skill.category = "facility"
+        link = MagicMock()
+        link.skill = skill
+        link.proficiency = 5
+        link.is_primary = True
+        profile = MagicMock()
+        profile.user_id = "ops-001"
+        profile.team = team
+        profile.job_title = "暖通工程师"
+        profile.shift_status = "on_duty"
+        profile.dispatch_enabled = True
+        profile.max_active_orders = 4
+        profile.accepts_emergency = True
+        profile.service_buildings_json = '["B1","B2"]'
+        profile.skill_links = [link]
+        profile.notes = "负责暖通系统"
+        user.worker_profile = profile
+
+        access_token, _ = create_access_token("ops-001")
+        db = _make_db([user])
+        with _override_db(db):
+            resp = await client.get(
+                "/api/auth/me",
+                headers={"Authorization": f"Bearer {access_token}"},
+            )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["worker_profile"]["team"]["name"] == "暖通班"
+        assert data["worker_profile"]["skills"][0]["code"] == "hvac"
+        assert data["worker_profile"]["service_buildings"] == ["B1", "B2"]
 
     @pytest.mark.asyncio
     async def test_me_without_token_returns_401(self, client):

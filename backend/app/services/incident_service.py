@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.models import (
     AnomalyEvent,
     AnomalyIncident,
+    DispatchTask,
     IncidentEventLink,
     IncidentPredictionLink,
     PredictedAnomalyEvent,
@@ -25,6 +26,7 @@ from app.db.models import (
     WorkOrderAuditLog,
     WorkOrderAnomalyLink,
 )
+from app.services.dispatch_service import derive_dispatch_ui_meta_from_task
 from app.services.work_order_service import (
     _write_audit_log,
     append_anomaly_evidence_to_work_order,
@@ -88,6 +90,7 @@ _PRIORITY_SLA_MINUTES = {
 
 _MERGEABLE_WORKFLOW_STATUSES = {
     "pending_review",
+    "pending_dispatch",
     "auto_approved",
     "dispatched",
     "admin_override_approved",
@@ -219,31 +222,54 @@ def _dt_to_iso(value: datetime | None) -> str | None:
 def _derive_dispatch_ui_meta(
     work_order: WorkOrder,
     *,
+    current_dispatch: DispatchTask | None = None,
     assigned_user: User | None = None,
     audit_logs: list[WorkOrderAuditLog] | None = None,
 ) -> dict[str, Any]:
-    logs = sorted((audit_logs or []), key=lambda item: item.created_at or datetime.min.replace(tzinfo=timezone.utc))
-    dispatch_log = next((log for log in logs if log.new_status == "dispatched"), None)
-    latest_log = logs[-1] if logs else None
+    if current_dispatch is not None:
+        return derive_dispatch_ui_meta_from_task(current_dispatch, assigned_user=assigned_user)
 
     assigned_to_name = assigned_user.username if assigned_user else None
     assigned_phone = assigned_user.phone if assigned_user else None
-    assigned_team_name = "运维班组" if assigned_user else None
-
-    dispatch_at = (
-        dispatch_log.created_at
-        or work_order.ai_reviewed_at
-        or work_order.updated_at
-        or work_order.created_at
-    )
+    profile = getattr(assigned_user, "worker_profile", None) if assigned_user else None
+    team = getattr(profile, "team", None) if profile else None
+    assigned_team_name = getattr(team, "name", None) if team else None
+    dispatch_at = getattr(work_order, "assigned_at", None)
+    now = datetime.now(timezone.utc)
 
     sla_due_at = None
     sla_minutes_left = None
     sla_status = None
-    if dispatch_at and work_order.status == "dispatched":
-        due = dispatch_at + timedelta(minutes=_PRIORITY_SLA_MINUTES.get(work_order.priority, 60))
-        sla_due_at = due
-        sla_minutes_left = int((due - datetime.now(timezone.utc)).total_seconds() // 60)
+    execution_status = getattr(work_order, "status", "")
+    priority = getattr(work_order, "priority", "medium")
+    accepted_at = getattr(work_order, "accepted_at", None)
+    arrived_at = getattr(work_order, "arrived_at", None)
+    processing_started_at = getattr(work_order, "processing_started_at", None)
+    worker_result = getattr(work_order, "worker_result", None)
+    worker_notes = getattr(work_order, "worker_notes", None)
+    worker_feedback_at = getattr(work_order, "worker_feedback_at", None)
+    updated_at = getattr(work_order, "updated_at", None)
+    ai_reason = getattr(work_order, "ai_reason", None)
+
+    if execution_status == "dispatched" and dispatch_at:
+        accept_minutes = 5 if priority == "high" else 10 if priority == "medium" else 15
+        arrive_minutes = 20 if priority == "high" else 30 if priority == "medium" else 60
+        finish_minutes = 90 if priority == "high" else 180 if priority == "medium" else 360
+
+        if not accepted_at:
+            sla_due_at = dispatch_at + timedelta(minutes=accept_minutes)
+        elif not arrived_at:
+            sla_due_at = accepted_at + timedelta(minutes=arrive_minutes)
+        else:
+            finish_anchor = (
+                processing_started_at
+                or arrived_at
+                or accepted_at
+                or dispatch_at
+            )
+            sla_due_at = finish_anchor + timedelta(minutes=finish_minutes)
+
+        sla_minutes_left = int((sla_due_at - now).total_seconds() // 60)
         if sla_minutes_left < 0:
             sla_status = "overdue"
         elif sla_minutes_left <= 30:
@@ -251,40 +277,58 @@ def _derive_dispatch_ui_meta(
         else:
             sla_status = "normal"
 
-    if work_order.status == "dispatched":
-        if work_order.worker_result == "needs_parts":
+    if execution_status == "pending_dispatch":
+        execution_status = "pending_dispatch"
+    elif execution_status == "dispatched":
+        if worker_result == "needs_parts":
             execution_status = "waiting_support"
-        elif sla_status == "overdue":
-            execution_status = "overdue"
-        elif work_order.assigned_to:
+        elif processing_started_at:
             execution_status = "processing"
+        elif arrived_at:
+            execution_status = "arrived"
+        elif accepted_at:
+            execution_status = "accepted"
         else:
             execution_status = "pending_accept"
-    else:
-        execution_status = work_order.status
+        if sla_status == "overdue":
+            execution_status = "overdue"
 
-    latest_progress_note = ""
-    if work_order.worker_result == "needs_parts":
-        latest_progress_note = work_order.worker_notes or "等待配件或协同支持"
-    elif work_order.worker_notes:
-        latest_progress_note = work_order.worker_notes
-    elif work_order.status == "dispatched" and assigned_to_name:
-        latest_progress_note = f"已派给 {assigned_to_name}，等待现场反馈"
-    elif work_order.status == "dispatched":
-        latest_progress_note = "已派单，等待接单处理"
-    else:
-        latest_progress_note = work_order.ai_reason or ""
+    latest_progress_note = ai_reason or ""
+    if getattr(work_order, "status", "") == "pending_dispatch":
+        latest_progress_note = "AI审批已通过，等待调度人员派工"
+    elif worker_result == "needs_parts":
+        latest_progress_note = worker_notes or "等待配件或协同支持"
+    elif worker_notes:
+        latest_progress_note = worker_notes
+    elif processing_started_at:
+        latest_progress_note = "维修人员已开始处理现场问题"
+    elif arrived_at:
+        latest_progress_note = "维修人员已到场排查"
+    elif accepted_at:
+        latest_progress_note = "维修人员已接单，正在前往现场"
+    elif getattr(work_order, "status", "") == "dispatched" and assigned_to_name:
+        latest_progress_note = f"已派给 {assigned_to_name}，等待接单"
+    elif getattr(work_order, "status", "") == "dispatched":
+        latest_progress_note = "已完成派工，等待接单处理"
+
+    latest_progress_at = (
+        worker_feedback_at
+        or processing_started_at
+        or arrived_at
+        or accepted_at
+        or dispatch_at
+        or updated_at
+    )
 
     return {
         "assigned_to_name": assigned_to_name,
         "assigned_phone": assigned_phone,
         "assigned_team_name": assigned_team_name,
         "dispatch_at": _dt_to_iso(dispatch_at),
-        "accepted_at": None,
-        "arrived_at": None,
-        "latest_progress_at": _dt_to_iso(
-            work_order.worker_feedback_at or (latest_log.created_at if latest_log else work_order.updated_at)
-        ),
+        "accepted_at": _dt_to_iso(accepted_at),
+        "arrived_at": _dt_to_iso(arrived_at),
+        "processing_started_at": _dt_to_iso(processing_started_at),
+        "latest_progress_at": _dt_to_iso(latest_progress_at),
         "latest_progress_note": latest_progress_note,
         "execution_status": execution_status,
         "sla_due_at": _dt_to_iso(sla_due_at),
@@ -714,6 +758,7 @@ def serialize_incident(
     incident: AnomalyIncident,
     *,
     current_work_order: WorkOrder | None = None,
+    current_dispatch: DispatchTask | None = None,
     assigned_user: User | None = None,
     audit_logs: list[WorkOrderAuditLog] | None = None,
 ) -> dict[str, Any]:
@@ -724,21 +769,36 @@ def serialize_incident(
             "ticket_id": current_work_order.ticket_id,
             "status": current_work_order.status,
             "priority": current_work_order.priority,
-            "ai_decision": current_work_order.ai_decision,
-            "ai_reason": current_work_order.ai_reason,
-            "ai_fallback": current_work_order.ai_fallback,
-            "worker_result": current_work_order.worker_result,
-            "worker_notes": current_work_order.worker_notes,
-            "assigned_to": current_work_order.assigned_to,
-            "suggested_action": current_work_order.suggested_action,
-            "created_at": current_work_order.created_at.isoformat() if current_work_order.created_at else None,
-            "updated_at": current_work_order.updated_at.isoformat() if current_work_order.updated_at else None,
+            "ai_decision": getattr(current_work_order, "ai_decision", None),
+            "ai_reason": getattr(current_work_order, "ai_reason", None),
+            "ai_fallback": getattr(current_work_order, "ai_fallback", False),
+            "worker_result": getattr(current_work_order, "worker_result", None),
+            "worker_notes": getattr(current_work_order, "worker_notes", None),
+            "assigned_to": getattr(current_work_order, "assigned_to", None),
+            "suggested_action": getattr(current_work_order, "suggested_action", None),
+            "created_at": current_work_order.created_at.isoformat() if getattr(current_work_order, "created_at", None) else None,
+            "updated_at": current_work_order.updated_at.isoformat() if getattr(current_work_order, "updated_at", None) else None,
             **_derive_dispatch_ui_meta(
                 current_work_order,
+                current_dispatch=current_dispatch,
                 assigned_user=assigned_user,
                 audit_logs=audit_logs,
             ),
         }
+
+    current_dispatch_meta = (
+        _derive_dispatch_ui_meta(
+            current_work_order,
+            current_dispatch=current_dispatch,
+            assigned_user=assigned_user,
+        )
+        if current_dispatch and current_work_order
+        else (
+            derive_dispatch_ui_meta_from_task(current_dispatch, assigned_user=assigned_user)
+            if current_dispatch
+            else None
+        )
+    )
 
     return {
         "id": incident.id,
@@ -766,6 +826,15 @@ def serialize_incident(
         "created_at": incident.created_at.isoformat() if incident.created_at else None,
         "updated_at": incident.updated_at.isoformat() if incident.updated_at else None,
         "current_work_order": current_work_order_data,
+        "current_dispatch": (
+            {
+                "id": current_dispatch.id,
+                "dispatch_status": current_dispatch.dispatch_status,
+                "attempt_no": current_dispatch.attempt_no,
+                **(current_dispatch_meta or {}),
+            }
+            if current_dispatch else None
+        ),
     }
 
 
@@ -773,7 +842,9 @@ def serialize_incident_detail(
     incident: AnomalyIncident,
     *,
     current_work_order: WorkOrder | None = None,
+    current_dispatch: DispatchTask | None = None,
     work_orders: list[WorkOrder] | None = None,
+    current_dispatches_by_work_order_id: dict[str, DispatchTask] | None = None,
     event_links: list[IncidentEventLink] | None = None,
     prediction_links: list[IncidentPredictionLink] | None = None,
     assigned_users_by_id: dict[str, User] | None = None,
@@ -782,6 +853,7 @@ def serialize_incident_detail(
     data = serialize_incident(
         incident,
         current_work_order=current_work_order,
+        current_dispatch=current_dispatch,
         assigned_user=(
             assigned_users_by_id or {}
         ).get(current_work_order.assigned_to or "") if current_work_order else None,
@@ -795,15 +867,16 @@ def serialize_incident_detail(
             "priority": wo.priority,
             "created_at": wo.created_at.isoformat() if wo.created_at else None,
             "updated_at": wo.updated_at.isoformat() if wo.updated_at else None,
-            "worker_result": wo.worker_result,
-            "worker_notes": wo.worker_notes,
-            "ai_decision": wo.ai_decision,
-            "ai_reason": wo.ai_reason,
-            "assigned_to": wo.assigned_to,
-            "suggested_action": wo.suggested_action,
+            "worker_result": getattr(wo, "worker_result", None),
+            "worker_notes": getattr(wo, "worker_notes", None),
+            "ai_decision": getattr(wo, "ai_decision", None),
+            "ai_reason": getattr(wo, "ai_reason", None),
+            "assigned_to": getattr(wo, "assigned_to", None),
+            "suggested_action": getattr(wo, "suggested_action", None),
             **_derive_dispatch_ui_meta(
                 wo,
-                assigned_user=(assigned_users_by_id or {}).get(wo.assigned_to or ""),
+                current_dispatch=(current_dispatches_by_work_order_id or {}).get(wo.id),
+                assigned_user=(assigned_users_by_id or {}).get(getattr(wo, "assigned_to", "") or ""),
                 audit_logs=(audit_logs_by_work_order_id or {}).get(wo.id, []),
             ),
         }

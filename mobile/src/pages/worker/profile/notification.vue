@@ -1,6 +1,6 @@
 <template>
   <view class="page">
-    <NavBar title="消息通知" bg-color="#0f3d2e" :show-back="true" />
+    <NavBar title="消息通知" bg-color="#E4EDB8" text-color="#5f7137" :show-back="true" />
 
     <view class="section">
       <view class="section-title">推送设置</view>
@@ -10,7 +10,7 @@
             <text class="switch-label">工单状态通知</text>
             <text class="switch-desc">工单分配、状态变更时推送通知</text>
           </view>
-          <switch :checked="workorderNotify" color="#00b96b" @change="onWorkorderChange" />
+          <switch :checked="workorderNotify" color="#b5c875" @change="onWorkorderChange" />
         </view>
         <view class="card-divider" />
         <view class="switch-item">
@@ -18,7 +18,7 @@
             <text class="switch-label">异常告警通知</text>
             <text class="switch-desc">设备能耗异常时推送告警通知</text>
           </view>
-          <switch :checked="alertNotify" color="#00b96b" @change="onAlertChange" />
+          <switch :checked="alertNotify" color="#b5c875" @change="onAlertChange" />
         </view>
       </view>
     </view>
@@ -68,7 +68,7 @@ function onAlertChange(e: any) {
 </script>
 
 <style lang="scss" scoped>
-.page { background: #f0f5f2; min-height: 100vh; }
+.page { background: #f7faef; min-height: 100vh; }
 
 .section {
   margin: 24rpx 32rpx 0;

@@ -176,11 +176,11 @@
               <p class="wo-meta">设备 {{ wo.device_id }} · {{ wo.building_id }} · {{ formatTime(wo.created_at) }}</p>
             </div>
           </div>
-          <span class="wo-status pending">待审批</span>
+          <span class="wo-status pending">{{ workOrderPreviewStatus(wo.status) }}</span>
         </div>
       </div>
       <div v-else-if="!workOrderLoading" class="empty-state-small">
-        暂无待审批工单。可通过右侧 AI 控制台触发故障诊断生成工单。
+        暂无待审阅或待派工工单。可通过右侧 AI 控制台触发故障诊断生成工单。
       </div>
     </section>
 
@@ -275,7 +275,7 @@ const pendingOrders = ref<any[]>([])
 async function fetchPendingOrders() {
   workOrderLoading.value = true
   try {
-    const data = await apiFetch<any>('/api/work-orders?status=pending_approval')
+    const data = await apiFetch<any>('/api/work-orders?status=pending_review,pending_dispatch')
     pendingOrders.value = data?.work_orders ?? []
   } catch {
     // 静默处理，不影响主界面
@@ -348,6 +348,14 @@ watch(predictions, (data) => {
 // ── 工具函数 ───────────────────────────────────────
 function buildingName(type: string): string {
   return buildingStore.getBuildingName(type)
+}
+
+function workOrderPreviewStatus(status: string): string {
+  const map: Record<string, string> = {
+    pending_review: '待AI审阅',
+    pending_dispatch: '待派工',
+  }
+  return map[status] || '处理中'
 }
 
 // ── notebook v2 辅助函数 ──────────────────────────────

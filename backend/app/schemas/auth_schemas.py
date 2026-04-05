@@ -115,6 +115,35 @@ class TokenResponse(BaseModel):
     expires_in: int = Field(description="access token 有效秒数")
 
 
+class WorkerTeamResponse(BaseModel):
+    id: str
+    team_code: str
+    name: str
+
+    model_config = {"from_attributes": True}
+
+
+class WorkerSkillResponse(BaseModel):
+    code: str
+    name: str
+    category: Optional[str] = None
+    proficiency: int = 3
+    is_primary: bool = False
+
+
+class WorkerProfileResponse(BaseModel):
+    user_id: str
+    team: Optional[WorkerTeamResponse] = None
+    job_title: Optional[str] = None
+    shift_status: str = "on_duty"
+    dispatch_enabled: bool = True
+    max_active_orders: int = 4
+    accepts_emergency: bool = True
+    service_buildings: list[str] = Field(default_factory=list)
+    skills: list[WorkerSkillResponse] = Field(default_factory=list)
+    notes: Optional[str] = None
+
+
 class UserResponse(BaseModel):
     id: str
     username: str
@@ -123,6 +152,7 @@ class UserResponse(BaseModel):
     role: str = "resident"
     is_active: bool
     created_at: datetime
+    worker_profile: Optional[WorkerProfileResponse] = None
 
     model_config = {"from_attributes": True}
 

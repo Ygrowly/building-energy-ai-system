@@ -137,7 +137,7 @@ defineEmits<{ (e: 'click', order: WorkOrder): void }>()
   border-radius: 12rpx;
   font-size: 20rpx;
 
-  &.approved { background: #f0fff4; color: #00b96b; }
+  &.approved { background: #f4f8e6; color: #73854a; }
   &.rejected { background: #fff0f0; color: #ff4d4f; }
 }
 </style>

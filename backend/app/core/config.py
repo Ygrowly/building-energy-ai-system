@@ -3,6 +3,9 @@
 使用 pydantic-settings BaseSettings，兼容 Docker 环境变量注入。
 """
 from functools import lru_cache
+from typing import Any
+
+from pydantic import field_validator
 from pydantic_settings import BaseSettings
 
 
@@ -110,6 +113,17 @@ class Settings(BaseSettings):
     CACHE_LOCAL_DEFAULT_TTL_SECONDS: int = 60
 
     model_config = {"env_file": ".env", "extra": "ignore"}
+
+    @field_validator("DEBUG", mode="before")
+    @classmethod
+    def _normalize_debug_flag(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"release", "production", "prod"}:
+                return False
+            if normalized in {"development", "dev", "debug"}:
+                return True
+        return value
 
 
 @lru_cache

@@ -219,7 +219,7 @@ function removePendingThinking() {
   text { display: block; margin-bottom: 6rpx; &:last-child { margin-bottom: 0; } }
 
   &.user {
-    background: #00b96b;
+    background: linear-gradient(135deg, #d6e29f, #b5c875);
     color: #fff;
     border-bottom-right-radius: 4rpx;
   }
@@ -294,7 +294,7 @@ function removePendingThinking() {
 .send-btn {
   width: 100rpx;
   height: 72rpx;
-  background: #00b96b;
+  background: linear-gradient(135deg, #d6e29f, #b5c875);
   border-radius: 12rpx;
   display: flex;
   align-items: center;

@@ -1,4 +1,5 @@
 import { get } from './request'
+import type { DispatchTask } from './workorder'
 
 export interface IncidentCurrentWorkOrder {
   id: string
@@ -18,6 +19,7 @@ export interface IncidentCurrentWorkOrder {
   dispatch_at?: string | null
   accepted_at?: string | null
   arrived_at?: string | null
+  processing_started_at?: string | null
   latest_progress_at?: string | null
   latest_progress_note?: string | null
   execution_status?: string | null
@@ -52,6 +54,7 @@ export interface Incident {
   created_at: string | null
   updated_at: string | null
   current_work_order: IncidentCurrentWorkOrder | null
+  current_dispatch?: Pick<DispatchTask, 'id' | 'dispatch_status' | 'attempt_no' | 'execution_status' | 'sla_due_at' | 'sla_status' | 'sla_minutes_left'> | null
 }
 
 export interface IncidentListResponse {
@@ -102,6 +105,7 @@ export interface IncidentWorkOrder {
   dispatch_at?: string | null
   accepted_at?: string | null
   arrived_at?: string | null
+  processing_started_at?: string | null
   latest_progress_at?: string | null
   latest_progress_note?: string | null
   execution_status?: string | null

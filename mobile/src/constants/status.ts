@@ -1,24 +1,26 @@
 /** 工单状态（严格对齐后端 VALID_TRANSITIONS） */
 export type WorkOrderStatus =
   | 'pending_review'
-  | 'auto_approved'
+  | 'pending_dispatch'
   | 'auto_rejected'
   | 'dispatched'
   | 'completed'
   | 'false_alarm'
   | 'escalated'
+  | 'auto_approved'
   | 'admin_override_approved'
   | 'admin_override_rejected'
   | 'closed'
 
 export const STATUS_LABEL: Record<string, string> = {
   pending_review:          '待AI审批',
-  auto_approved:           'AI已批准',
+  pending_dispatch:        '待派工',
   auto_rejected:           'AI已驳回',
   dispatched:              '已派单',
   completed:               '已修复',
   false_alarm:             '误报',
   escalated:               '已升级',
+  auto_approved:           'AI已批准',
   admin_override_approved: '管理员批准',
   admin_override_rejected: '管理员驳回',
   closed:                  '已关闭',
@@ -26,18 +28,20 @@ export const STATUS_LABEL: Record<string, string> = {
 
 export const STATUS_COLOR: Record<string, string> = {
   pending_review:          '#d48806',
-  auto_approved:           '#096dd9',
+  pending_dispatch:        '#2f6df6',
   auto_rejected:           '#ff4d4f',
   dispatched:              '#1890ff',
   completed:               '#389e0d',
   false_alarm:             '#595959',
   escalated:               '#722ed1',
+  auto_approved:           '#096dd9',
   admin_override_approved: '#096dd9',
   admin_override_rejected: '#ff4d4f',
   closed:                  '#8c8c8c',
 }
 
 export type DispatchExecutionStatus =
+  | 'pending_dispatch'
   | 'pending_accept'
   | 'accepted'
   | 'arrived'
@@ -46,6 +50,7 @@ export type DispatchExecutionStatus =
   | 'overdue'
 
 export const DISPATCH_EXECUTION_STATUS_LABEL: Record<string, string> = {
+  pending_dispatch: '待派工',
   pending_accept: '待接单',
   accepted: '已接单',
   arrived: '已到场',
@@ -55,6 +60,7 @@ export const DISPATCH_EXECUTION_STATUS_LABEL: Record<string, string> = {
 }
 
 export const DISPATCH_EXECUTION_STATUS_COLOR: Record<string, { bg: string; text: string; border: string }> = {
+  pending_dispatch: { bg: '#f0f5ff', text: '#1d4ed8', border: '#dbe7ff' },
   pending_accept: { bg: '#eef4ff', text: '#2f6df6', border: '#dbe7ff' },
   accepted: { bg: '#ebf8ff', text: '#0c7abf', border: '#cfeeff' },
   arrived: { bg: '#ecfbf3', text: '#0f9f6e', border: '#cdeedd' },

@@ -324,6 +324,7 @@ function renderHvac() {
   const inst = echarts.init(hvacEl.value)
   inst.setOption({
     backgroundColor: 'transparent',
+    color: [MC.terra, MC.blue, MC.sage],
     grid: { top: 52, left: '3%', right: '3%', bottom: '8%', containLabel: true },
     tooltip: {
       trigger: 'axis',
@@ -365,7 +366,8 @@ function renderHvac() {
         data: outdoorTemp,
         smooth: true,
         symbol: 'none',
-        lineStyle: { width: 0 },
+        lineStyle: { color: MC.terra, width: 0 },
+        itemStyle: { color: MC.terra },
         areaStyle: {
           color: {
             type: 'linear',
@@ -374,8 +376,8 @@ function renderHvac() {
             x2: 0,
             y2: 1,
             colorStops: [
-              { offset: 0, color: 'rgba(196,149,106,0.22)' },
-              { offset: 1, color: 'rgba(196,149,106,0.02)' },
+              { offset: 0, color: 'rgba(245, 158, 11, 0.24)' },
+              { offset: 1, color: 'rgba(245, 158, 11, 0.03)' },
             ],
           },
         },
@@ -567,6 +569,12 @@ function renderSankey() {
     value: link.value,
   }))
   const sourceNames = new Set(normalizedLinks.map((l) => l.source))
+  const sourceNameList = Array.from(sourceNames)
+  const targetNameList = Array.from(new Set(normalizedLinks.map((l) => l.target)))
+  const sourcePalette = [MC.terra, '#14b8a6', MC.blue, '#2563eb', '#d97706', MC.rose, '#8b5cf6', '#ec4899', '#ef4444']
+  const targetPalette = [MC.blue, MC.rose, MC.sage, MC.teal, MC.terra, '#8b5cf6', '#6366f1', '#ef4444', '#f97316', '#06b6d4', '#1d4ed8', '#22c55e', '#0ea5e9', '#3b82f6', '#f59e0b']
+  const sourceColorMap = Object.fromEntries(sourceNameList.map((name, index) => [name, sourcePalette[index % sourcePalette.length]]))
+  const targetColorMap = Object.fromEntries(targetNameList.map((name, index) => [name, targetPalette[index % targetPalette.length]]))
   const nodeNames = Array.from(
     new Set([
       ...sd!.nodes.map((n) => normalizeSankeyLabel(n.name)),
@@ -577,8 +585,8 @@ function renderSankey() {
     name,
     itemStyle: {
       color: sourceNames.has(name)
-        ? _SANKEY_SOURCE_COLORS[name] ?? MC.blue
-        : _SANKEY_TARGET_COLORS[name] ?? MC.lav,
+        ? sourceColorMap[name] ?? MC.blue
+        : targetColorMap[name] ?? MC.lav,
     },
   }))
 
@@ -983,10 +991,10 @@ onUnmounted(() => {
 }
 
 .compare-tab.active {
-  background: linear-gradient(135deg, #0f766e 0%, #14b8a6 100%);
-  color: #f8fafc;
-  box-shadow: 0 10px 20px rgba(15, 118, 110, 0.24);
-  transform: translateY(-1px);
+  background: rgba(20, 184, 166, 0.16);
+  color: #0f766e;
+  box-shadow: inset 0 0 0 1px rgba(15, 118, 110, 0.22), 0 4px 10px rgba(15, 118, 110, 0.12);
+  transform: none;
 }
 
 html[data-theme='light'] .compare-tabs {
@@ -1002,5 +1010,11 @@ html[data-theme='light'] .compare-tab {
 html[data-theme='light'] .compare-tab:hover {
   background: rgba(148, 163, 184, 0.14);
   color: #111827;
+}
+
+html[data-theme='light'] .compare-tab.active {
+  background: rgba(20, 184, 166, 0.14);
+  color: #0f766e;
+  box-shadow: inset 0 0 0 1px rgba(15, 118, 110, 0.18), 0 4px 8px rgba(15, 118, 110, 0.08);
 }
 </style>

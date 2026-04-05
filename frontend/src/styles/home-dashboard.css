@@ -1,15 +1,67 @@
 /* 首页大屏图表区（挂载在 .home-page 下，避免污染全局） */
 
+.home-page .home-all-section {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  align-items: start;
+}
+
+.home-page .home-all-section > .bento-row,
+.home-page .home-all-section > .bento-r3,
+.home-page .home-all-section > .bento-r3 > .cpanel-col {
+  display: contents;
+}
+
+.home-page .panel-radar {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.home-page .panel-compare {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.home-page .panel-hvac {
+  grid-column: 1;
+  grid-row: 2;
+}
+
+.home-page .panel-sankey {
+  grid-column: 2;
+  grid-row: 2;
+}
+
+.home-page .panel-heatmap {
+  grid-column: 1;
+  grid-row: 3;
+}
+
+.home-page .panel-anomaly {
+  grid-column: 2;
+  grid-row: 3;
+}
+
+.home-page .home-actions-panel {
+  grid-column: 1 / -1;
+  grid-row: 4;
+}
+
+.home-page .panel-risk {
+  display: none !important;
+}
+
 .home-page .bento-row {
   display: grid;
   gap: 14px;
   align-items: start;
 }
 .home-page .bento-r1 {
-  grid-template-columns: 1.5fr 1fr;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.25fr);
 }
 .home-page .bento-r2 {
-  grid-template-columns: 1.2fr 1fr;
+  grid-template-columns: minmax(0, 1.06fr) minmax(0, 0.94fr);
 }
 .home-page .bento-r3 {
   display: grid;
@@ -225,11 +277,14 @@
 }
 
 @container (max-width: 899px) {
+  .home-page .home-all-section {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
   .home-page .bento-r1 {
-    grid-template-columns: 1.3fr 1fr;
+    grid-template-columns: minmax(0, 0.96fr) minmax(0, 1.12fr);
   }
   .home-page .bento-r2 {
-    grid-template-columns: 1.1fr 1fr;
+    grid-template-columns: minmax(0, 1.03fr) minmax(0, 0.97fr);
   }
   .home-page .bento-r1 .cpanel-body {
     height: 260px !important;
@@ -240,6 +295,20 @@
 }
 
 @container (max-width: 699px) {
+  .home-page .home-all-section {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+  .home-page .panel-radar,
+  .home-page .panel-compare,
+  .home-page .panel-hvac,
+  .home-page .panel-sankey,
+  .home-page .panel-heatmap,
+  .home-page .panel-anomaly,
+  .home-page .home-actions-panel {
+    grid-column: 1 !important;
+    grid-row: auto !important;
+  }
   .home-page .bento-r1,
   .home-page .bento-r2,
   .home-page .bento-r3 {
@@ -295,6 +364,9 @@
 }
 
 @container (max-width: 399px) {
+  .home-page .home-all-section {
+    gap: 8px;
+  }
   .home-page .bento-row {
     gap: 8px;
   }

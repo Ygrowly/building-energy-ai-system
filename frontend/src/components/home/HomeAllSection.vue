@@ -243,8 +243,8 @@ function renderRadar() {
         { name: 'EUI\n偏离', max: 100 },
         { name: '告警数', max: 100 },
       ],
-      center: ['50%', '48%'],
-      radius: '74%',
+      center: ['50%', '47%'],
+      radius: '70%',
       axisLine:  { lineStyle: { color: c.grid } },
       splitLine: { lineStyle: { color: c.grid } },
       splitArea: { show: false },
@@ -466,9 +466,8 @@ function renderPie() {
       formatter: (p: any) => `${p.name}<br/>${labelMap[compareMetric.value]} ${p.value} ${cfg.unit}<br/>占比 ${p.percent}%`,
     },
     legend: {
-      orient: 'vertical',
-      right: '8%',
-      top: 'middle',
+      bottom: 8,
+      left: 'center',
       textStyle: { color: c.axis, fontSize: 11 },
       itemWidth: 10,
       itemHeight: 10,
@@ -477,8 +476,8 @@ function renderPie() {
       {
         name: labelMap[compareMetric.value],
         type: 'pie',
-        radius: ['52%', '74%'],
-        center: ['26%', '50%'],
+        radius: ['46%', '66%'],
+        center: ['50%', '48%'],
         avoidLabelOverlap: true,
         label: { show: false },
         labelLine: { show: false },
@@ -740,7 +739,6 @@ function renderAll() {
   renderRadar()
   renderHvac()
   renderPie()
-  renderRisk()
   renderSankey()
   renderAnomalyDist()
   nextTick(() => {
@@ -802,9 +800,9 @@ onUnmounted(() => {
 
 <template>
   <div class="home-all-section">
-    <div class="bento-row bento-r1">
+    <div class="bento-row bento-r2">
       <div
-        class="cpanel"
+        class="cpanel panel-radar"
         data-pick-id="chart-eui-radar"
         data-pick-type="chart"
         data-pick-title="楼宇多维能耗对比"
@@ -817,7 +815,7 @@ onUnmounted(() => {
         <div ref="radarEl" class="cpanel-body" style="height: 300px" />
       </div>
       <div
-        class="cpanel"
+        class="cpanel panel-hvac"
         data-pick-id="chart-hvac"
         data-pick-type="chart"
         data-pick-title="HVAC 虚实映射分析"
@@ -832,7 +830,7 @@ onUnmounted(() => {
     </div>
 
     <div class="bento-row bento-r1">
-      <div class="cpanel">
+      <div class="cpanel panel-compare">
         <div class="cpanel-hd">
           <span class="cpanel-title">多楼栋能耗占比</span>
           <div class="compare-tabs">
@@ -847,20 +845,20 @@ onUnmounted(() => {
             </button>
           </div>
         </div>
-        <div ref="compareEl" class="cpanel-body" style="height: 260px" />
+        <div ref="compareEl" class="cpanel-body" style="height: 280px" />
       </div>
-      <div class="cpanel">
+      <div class="cpanel panel-risk">
         <div class="cpanel-hd">
           <span class="cpanel-title">建筑风险排行</span>
           <span class="cpanel-sub">按待处理告警条数统计</span>
         </div>
-        <div ref="riskEl" class="cpanel-body" style="height: 280px" />
+        <div ref="riskEl" class="cpanel-body" style="height: 248px" />
       </div>
     </div>
 
     <div class="bento-r3">
       <div
-        class="cpanel"
+        class="cpanel panel-heatmap"
         data-pick-id="chart-heatmap"
         data-pick-type="heatmap"
         data-pick-title="24h 能耗日历热力图"
@@ -902,22 +900,22 @@ onUnmounted(() => {
         </div>
       </div>
       <div class="cpanel-col">
-        <div class="cpanel">
+        <div class="cpanel panel-sankey">
           <div class="cpanel-hd">
             <span class="cpanel-title">异常根因桑基图</span>
             <span class="cpanel-sub">规则流向根因类型</span>
           </div>
-          <div ref="sankeyEl" class="cpanel-body" style="height: 230px" />
+          <div ref="sankeyEl" class="cpanel-body" style="height: 300px" />
         </div>
-        <div class="cpanel">
+        <div class="cpanel panel-anomaly">
           <div class="cpanel-hd">
             <span class="cpanel-title">异常事件楼宇分布</span>
             <span class="cpanel-sub">近 7 天各楼宇待处理与已解决异常条数</span>
           </div>
-          <div ref="anomalyEl" class="cpanel-body" style="height: 138px" />
+          <div ref="anomalyEl" class="cpanel-body" style="height: 240px" />
         </div>
       </div>
-      <HomeActionCards tab="all" :anomalies="anomalyData" />
+      <HomeActionCards class="home-actions-panel" tab="all" :anomalies="anomalyData" />
     </div>
 
     <Teleport to="body">

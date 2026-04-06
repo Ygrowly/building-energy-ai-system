@@ -83,7 +83,7 @@
       </div>
     </section>
 
-    <HomeAllSection
+    <HomeAllOverviewSection
       v-if="activeBuilding === 'all'"
       :overview-data="overviewData"
       :anomaly-data="anomalyData"
@@ -107,12 +107,13 @@ import { apiFetch } from '@/api/http'
 import { useBuildingStore } from '@/stores/buildingStore'
 import { useAuthStore } from '@/stores/authStore'
 import { useNotificationStore } from '@/stores/notificationStore'
-import HomeAllSection from '@/components/home/HomeAllSection.vue'
+import HomeAllOverviewSection from '@/components/home/HomeAllOverviewSection.vue'
 import HomeTeachingSection from '@/components/home/HomeTeachingSection.vue'
 import HomeOfficeSection from '@/components/home/HomeOfficeSection.vue'
 import HomePublicSection from '@/components/home/HomePublicSection.vue'
 import { MC } from '@/utils/homeCharts'
 import { useReportExport } from '@/composables/useReportExport'
+import type { ReportCardItem } from '@/stores/reportStore'
 
 const buildingStore = useBuildingStore()
 const authStore     = useAuthStore()
@@ -181,6 +182,25 @@ const dataDateForSections = computed(() => {
 })
 
 const CARBON_FACTOR = 0.5703
+const REPORT_BUILDING_ORDER = ['Education', 'Office', 'Public services'] as const
+const SANKEY_LABEL_MAP: Record<string, string> = {
+  water_leak: '水耗异常',
+  electricity_overload: '电耗过载',
+  hvac_overconsumption: 'HVAC 过耗',
+  supply_temp_deviation: '供水温度偏离',
+  return_temp_deviation: '回水温度偏离',
+  db_flagged: '标注异常',
+  night_high_power: '夜间高耗',
+  flag_water: '水耗偏高',
+  flag_electricity: '总电耗偏高',
+  flag_hvac_energy: 'HVAC 能耗偏高',
+  flag_supply_deviation: '供水温度偏离',
+  flag_return_deviation: '回水温度偏离',
+  A_low_efficiency: '主机效率衰退',
+  B_small_deltaT: '水力失调',
+  C_unexpected_on: '非预期开机',
+  other_hvac: '其他 HVAC 故障',
+}
 const kpis = computed(() => {
   void forceSliderUpdate.value
   const ov = overviewData.value
@@ -279,6 +299,183 @@ const kpis = computed(() => {
   ]
 })
 
+function formatMetric(value: number | null | undefined, unit: string, digits = 1): string {
+  const n = Number(value ?? 0)
+  return `${n.toFixed(digits)} ${unit}`
+}
+
+function formatBuildingLabel(buildingType: string): string {
+  return buildingStore.getBuildingName(buildingType)
+}
+
+function buildHomeReportKpis(ov: any) {
+  const totals = ov?.kpis ?? {}
+  const chg = ov?.kpis_change ?? {}
+  const totalElectricity = Number(totals.total_electricity_kwh ?? 0)
+  const totalWater = Number(totals.total_water_m3 ?? 0)
+  const totalHvac = Number(totals.total_hac_energy_kwh ?? 0)
+  const totalCarbon = totalElectricity * CARBON_FACTOR
+
+  return [
+    { label: '日总用电 (kWh)', value: totalElectricity.toFixed(1), trend: chg.total_electricity_pct ?? null },
+    { label: '日总用水 (m³)', value: totalWater.toFixed(1), trend: chg.total_water_pct ?? null },
+    { label: 'HVAC 能耗 (kWh)', value: totalHvac.toFixed(1), trend: chg.total_hac_pct ?? null },
+    { label: '碳排放量 (kg)', value: totalCarbon.toFixed(1), trend: chg.total_carbon_pct ?? null },
+    { label: '预测预警', value: String(Number(totals.prediction_warning_count ?? 0)), trend: null },
+  ]
+}
+
+function buildHomeBuildingCards(ov: any, anomalies: any[]) {
+  const buildings: any[] = ov?.buildings ?? []
+  const anomalyCountMap = new Map<string, number>()
+  anomalies.forEach((item: any) => {
+    const key = String(item?.building_type ?? '')
+    anomalyCountMap.set(key, (anomalyCountMap.get(key) ?? 0) + 1)
+  })
+
+  return REPORT_BUILDING_ORDER
+    .map((buildingType) => {
+      const building = buildings.find((item: any) => item.building_type === buildingType)
+      if (!building) return null
+      return {
+        title: formatBuildingLabel(buildingType),
+        subtitle: '当日楼宇摘要',
+        metrics: [
+          { label: '日用电', value: formatMetric(building.total_electricity_kwh, 'kWh') },
+          { label: '日用水', value: formatMetric(building.total_water_m3, 'm³') },
+          { label: 'HVAC', value: formatMetric(building.total_hac_energy_kwh, 'kWh') },
+          { label: '近 7 天异常', value: `${anomalyCountMap.get(buildingType) ?? 0} 条` },
+        ],
+      }
+    })
+    .filter((item): item is ReportCardItem & { subtitle: string } => item != null)
+}
+
+function resolveSankeyNodeName(value: string | number, nodes: { name: string }[]): string {
+  const raw = typeof value === 'number' ? nodes[value]?.name ?? String(value) : value
+  return raw.replace(/\((?:direct|直接)\)$/i, '')
+}
+
+function resolveTopSankeyCause(data: typeof sankeyData.value): string | null {
+  if (!data?.links?.length) return null
+  const weights = new Map<string, number>()
+  data.links.forEach((link) => {
+    const target = resolveSankeyNodeName(link.target, data.nodes)
+    weights.set(target, (weights.get(target) ?? 0) + Number(link.value ?? 0))
+  })
+  const [topCause] = [...weights.entries()].sort((a, b) => b[1] - a[1])[0] ?? []
+  if (!topCause) return null
+  return SANKEY_LABEL_MAP[topCause] ?? topCause
+}
+
+function buildHomeInsight(ov: any, anomalies: any[], data: typeof sankeyData.value): string {
+  const buildings: any[] = ov?.buildings ?? []
+  const totalElectricity = Number(ov?.kpis?.total_electricity_kwh ?? 0)
+  const totalWater = Number(ov?.kpis?.total_water_m3 ?? 0)
+  const totalHvac = Number(ov?.kpis?.total_hac_energy_kwh ?? 0)
+  const predictionCount = Number(ov?.kpis?.prediction_warning_count ?? 0)
+
+  const topElectricity = [...buildings].sort(
+    (a, b) => Number(b.total_electricity_kwh ?? 0) - Number(a.total_electricity_kwh ?? 0),
+  )[0]
+  const topHvac = [...buildings].sort(
+    (a, b) => Number(b.total_hac_energy_kwh ?? 0) - Number(a.total_hac_energy_kwh ?? 0),
+  )[0]
+
+  const anomalyCountMap = new Map<string, number>()
+  anomalies.forEach((item: any) => {
+    const key = String(item?.building_type ?? '')
+    anomalyCountMap.set(key, (anomalyCountMap.get(key) ?? 0) + 1)
+  })
+  const [topAnomalyEntry] = [...anomalyCountMap.entries()].sort((a, b) => b[1] - a[1])[0] ?? []
+  const topCause = resolveTopSankeyCause(data)
+
+  const summaryLines = [
+    `- 今日总用电为 **${totalElectricity.toFixed(1)} kWh**，总用水为 **${totalWater.toFixed(1)} m³**，HVAC 能耗为 **${totalHvac.toFixed(1)} kWh**。`,
+    topElectricity
+      ? `- **${formatBuildingLabel(topElectricity.building_type)}** 是当前综合能耗的主要贡献楼宇，用电 ${formatMetric(topElectricity.total_electricity_kwh, 'kWh')}。`
+      : '- 当前暂无可用楼宇对比数据。',
+    topHvac
+      ? `- HVAC 负荷最高的楼宇为 **${formatBuildingLabel(topHvac.building_type)}**，暖通能耗 ${formatMetric(topHvac.total_hac_energy_kwh, 'kWh')}。`
+      : '- 当前暂无 HVAC 负荷对比数据。',
+  ]
+
+  const riskLines = [
+    anomalies.length > 0
+      ? `- 近 7 天累计异常 **${anomalies.length}** 条，预测预警 **${predictionCount}** 条。`
+      : `- 当前未发现近期异常事件，但仍有 **${predictionCount}** 条预测预警需持续跟踪。`,
+    topAnomalyEntry
+      ? `- 异常最集中的楼宇为 **${formatBuildingLabel(topAnomalyEntry[0])}**，共 ${topAnomalyEntry[1]} 条。`
+      : '- 当前异常分布较为均匀，未出现单一楼宇集中失稳。',
+    topCause
+      ? `- 桑基图显示当前最主要的异常根因为 **${topCause}**。`
+      : '- 当前未形成明确的根因聚集，需要结合时段与设备进一步复核。',
+  ]
+
+  const actionLines = [
+    topAnomalyEntry
+      ? `1. 优先复核 **${formatBuildingLabel(topAnomalyEntry[0])}** 的高频异常时段与对应设备。`
+      : '1. 继续保持现有运行策略，并关注新增预测预警。',
+    topHvac
+      ? `2. 针对 **${formatBuildingLabel(topHvac.building_type)}** 复查 HVAC 开停策略与节能基准偏差。`
+      : '2. 对关键楼宇执行一次 HVAC 运行参数抽查。',
+    topCause
+      ? `3. 围绕 **${topCause}** 对应回路补做一次定向排查与复盘。`
+      : '3. 结合异常事件与楼宇占比图，补做一次分时段能耗复盘。',
+  ]
+
+  return [
+    '### 管理摘要',
+    ...summaryLines,
+    '',
+    '### 风险提示',
+    ...riskLines,
+    '',
+    '### 建议动作',
+    ...actionLines,
+  ].join('\n')
+}
+
+function registerHomeReportSections() {
+  const ov = overviewData.value
+  if (!ov) return
+
+  setReportMeta({
+    title: '首页总览报表',
+    subtitle: dataDate.value ? `数据日期：${dataDate.value.slice(0, 10)}` : '首页全局概览快照',
+  })
+
+  registerSection({
+    id: 'home-kpi',
+    title: '核心 KPI',
+    type: 'kpi',
+    order: 10,
+    kpis: buildHomeReportKpis(ov),
+  })
+
+  const cards = buildHomeBuildingCards(ov, anomalyData.value)
+  if (cards.length) {
+    registerSection({
+      id: 'home-buildings',
+      title: '楼宇摘要卡',
+      description: '按教学楼、办公楼、公共楼展示当日能耗与近 7 天异常概况。',
+      type: 'cards',
+      order: 20,
+      cards,
+    })
+  }
+
+  registerSection({
+    id: 'home-insight',
+    title: 'AI 洞察与建议',
+    description: '基于首页总览数据自动生成的运行摘要、风险提示与建议动作。',
+    type: 'text',
+    contentFormat: 'markdown',
+    content: buildHomeInsight(ov, anomalyData.value, sankeyData.value),
+    order: 50,
+  })
+}
+
 async function fetchOverview() {
   try {
     const data = await apiFetch<any>('/api/overview')
@@ -373,6 +570,20 @@ watch(anomalyData, (data) => {
       { label: '严重级别', value: String(data.filter((a: any) => a.severity === 'critical').length) + ' 条 CRITICAL' },
       { label: '告警级别', value: String(data.filter((a: any) => a.severity === 'warning').length) + ' 条 WARNING' },
     ],
+  })
+})
+
+watch([overviewData, anomalyData, sankeyData], () => {
+  const overview = overviewData.value
+  if (!overview) return
+
+  registerHomeReportSections()
+  registerSection({
+    id: 'home-anomalies',
+    title: '近期异常概况',
+    type: 'text',
+    content: '',
+    order: 30,
   })
 })
 

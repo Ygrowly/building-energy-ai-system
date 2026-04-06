@@ -30,6 +30,12 @@ export interface SummaryItem {
   value: string
 }
 
+export interface ReportCardItem {
+  title: string
+  subtitle?: string
+  metrics: SummaryItem[]
+}
+
 export interface FormalReportMeta {
   severity?: string
   confidence?: string
@@ -55,7 +61,7 @@ export interface ReportSection {
   namespace: string              // 注册方命名空间，用于页面切换时清理
   title: string
   description?: string
-  type: 'kpi' | 'table' | 'chart' | 'text' | 'summary' | 'artifact'
+  type: 'kpi' | 'table' | 'chart' | 'text' | 'summary' | 'artifact' | 'cards'
   // type=kpi
   kpis?: KpiItem[]
   // type=table
@@ -65,6 +71,8 @@ export interface ReportSection {
   chartImage?: string            // base64 PNG data URL
   // type=summary
   summaryItems?: SummaryItem[]
+  // type=cards
+  cards?: ReportCardItem[]
   // type=text
   content?: string
   contentFormat?: 'plain' | 'markdown'

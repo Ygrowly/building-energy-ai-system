@@ -5,6 +5,7 @@ import { Icon } from '@iconify/vue'
 import { apiFetch } from '@/api/http'
 import { MC, gc, isoDate } from '@/utils/homeCharts'
 import HomeActionCards from './HomeActionCards.vue'
+import HomeEnergyHeatmap from './HomeEnergyHeatmap.vue'
 import HomeMiniMetricCards from './HomeMiniMetricCards.vue'
 
 const props = defineProps<{
@@ -472,6 +473,17 @@ onUnmounted(() => {
         tab="Public services"
         :anomalies="anomalies"
         :rated-anomaly-hours="ratedSummary?.anomaly_hours ?? null"
+      />
+    </div>
+
+    <div class="bento-row bento-r-full">
+      <HomeEnergyHeatmap
+        :building-types="[BT]"
+        title="24h 能耗日历热力图"
+        subtitle="近两周公共楼逐时负荷合成的 7×24 节律"
+        pick-id="public-chart-heatmap"
+        pick-title="公共楼 24h 能耗日历热力图"
+        pick-subtitle="近两周公共楼典型负荷节律"
       />
     </div>
 

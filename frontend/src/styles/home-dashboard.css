@@ -29,8 +29,20 @@
 }
 
 .home-page .panel-sankey {
-  grid-column: 2;
+  grid-column: 1;
   grid-row: 2;
+}
+
+.home-page .overview-top-row {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(0, 7fr) minmax(0, 3fr);
+  gap: 14px;
+  align-items: stretch;
+}
+
+.home-page .overview-top-row > .cpanel {
+  min-width: 0;
 }
 
 .home-page .panel-heatmap {
@@ -44,8 +56,8 @@
 }
 
 .home-page .home-actions-panel {
-  grid-column: 1 / -1;
-  grid-row: 4;
+  grid-column: 2;
+  grid-row: 2;
 }
 
 .home-page .panel-risk {
@@ -62,6 +74,9 @@
 }
 .home-page .bento-r2 {
   grid-template-columns: minmax(0, 1.06fr) minmax(0, 0.94fr);
+}
+.home-page .bento-r-full {
+  grid-template-columns: minmax(0, 1fr);
 }
 .home-page .bento-r3 {
   display: grid;
@@ -280,6 +295,9 @@
   .home-page .home-all-section {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+  .home-page .overview-top-row {
+    grid-template-columns: minmax(0, 7fr) minmax(0, 3fr);
+  }
   .home-page .bento-r1 {
     grid-template-columns: minmax(0, 0.96fr) minmax(0, 1.12fr);
   }
@@ -299,9 +317,14 @@
     grid-template-columns: 1fr;
     gap: 10px;
   }
+  .home-page .overview-top-row {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
   .home-page .panel-radar,
   .home-page .panel-compare,
   .home-page .panel-hvac,
+  .home-page .panel-overview-energy,
   .home-page .panel-sankey,
   .home-page .panel-heatmap,
   .home-page .panel-anomaly,
@@ -365,6 +388,9 @@
 
 @container (max-width: 399px) {
   .home-page .home-all-section {
+    gap: 8px;
+  }
+  .home-page .overview-top-row {
     gap: 8px;
   }
   .home-page .bento-row {

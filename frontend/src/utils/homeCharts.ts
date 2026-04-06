@@ -10,6 +10,15 @@ export const MC = {
   teal:  '#22d3ee',  // 青色   — 周末柱 / 预留
 }
 
+export const HOME_BUILDING_ORDER = ['Education', 'Office', 'Public services'] as const
+export type HomeBuildingType = typeof HOME_BUILDING_ORDER[number]
+
+export const HOME_BUILDING_COLORS: Record<HomeBuildingType, string> = {
+  Education: MC.blue,
+  Office: MC.sage,
+  'Public services': MC.terra,
+}
+
 export function gc() {
   const dark = document.documentElement.dataset.theme !== 'light'
   return {
@@ -28,6 +37,10 @@ export const EUI_BASELINE: Record<string, number> = {
   Education: 50,
   'Public services': 65,
 }
+
+export const STANDARD_COAL_ELECTRICITY_FACTOR = 0.1229
+export const STANDARD_COAL_WATER_FACTOR = 0.085
+export const ELECTRICITY_CARBON_FACTOR = 0.5703
 
 export function isoDate(d: Date): string {
   return d.toISOString().slice(0, 10)

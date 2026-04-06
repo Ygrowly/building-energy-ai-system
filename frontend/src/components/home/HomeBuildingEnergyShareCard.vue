@@ -2,7 +2,6 @@
 import { computed } from 'vue'
 import { Icon } from '@iconify/vue'
 import {
-  ELECTRICITY_CARBON_FACTOR,
   HOME_BUILDING_COLORS,
   HOME_BUILDING_ORDER,
   type HomeBuildingType,
@@ -12,7 +11,7 @@ const props = defineProps<{
   overviewData: any
 }>()
 
-type BuildingShareMetricKey = 'electricity' | 'water' | 'hvac' | 'carbon'
+type BuildingShareMetricKey = 'electricity' | 'water' | 'hvac'
 
 interface BuildingShareSegment {
   buildingType: HomeBuildingType
@@ -82,7 +81,6 @@ const rows = computed<BuildingShareRow[]>(() => {
   const totalElectricity = Number(kpis.total_electricity_kwh ?? 0)
   const totalWater = Number(kpis.total_water_m3 ?? 0)
   const totalHvac = Number(kpis.total_hac_energy_kwh ?? 0)
-  const totalCarbon = totalElectricity * ELECTRICITY_CARBON_FACTOR
 
   return [
     {
@@ -111,15 +109,6 @@ const rows = computed<BuildingShareRow[]>(() => {
       hasData: totalHvac > 0,
       totalValueText: `今日空调能耗 ${formatValue(totalHvac)} kWh`,
       segments: createSegments(totalHvac, (building) => Number(building?.total_hac_energy_kwh ?? 0)),
-    },
-    {
-      key: 'carbon',
-      title: '今日碳排放量',
-      icon: 'mdi:leaf',
-      unit: 'kg',
-      hasData: totalCarbon > 0,
-      totalValueText: `今日碳排放量 ${formatValue(totalCarbon)} kg`,
-      segments: createSegments(totalCarbon, (building) => Number(building?.total_electricity_kwh ?? 0) * ELECTRICITY_CARBON_FACTOR),
     },
   ]
 })

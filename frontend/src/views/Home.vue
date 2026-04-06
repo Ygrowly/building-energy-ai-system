@@ -85,9 +85,14 @@
 
     <HomeAllOverviewSection
       v-if="activeBuilding === 'all'"
+      :ai-steward-loading="aiStewardLoading"
       :overview-data="overviewData"
       :anomaly-data="anomalyData"
       :sankey-data="sankeyData"
+      @refresh="handleAiStewardRefresh"
+      @view-all="handleAiStewardViewAll"
+      @view-curve="handleAiStewardViewCurve"
+      @apply-strategy="handleAiStewardApplyStrategy"
     />
     <HomeTeachingSection v-else-if="activeBuilding === 'Education'" :data-date="dataDateForSections" />
     <HomeOfficeSection
@@ -136,6 +141,7 @@ const weatherTemp = ref<number | null>(null)
 const weatherHumi = ref<number | null>(null)
 const overviewData = ref<any>(null)
 const anomalyData = ref<any[]>([])
+const aiStewardLoading = ref(false)
 const sankeyData = ref<{
   nodes: { name: string }[]
   links: { source: string | number; target: string | number; value: number }[]
@@ -506,6 +512,28 @@ async function fetchSankeyData() {
   } catch {
     /* silent */
   }
+}
+
+async function handleAiStewardRefresh() {
+  if (aiStewardLoading.value) return
+  aiStewardLoading.value = true
+  try {
+    await Promise.all([fetchOverview(), fetchAnomalies(), fetchSankeyData()])
+  } finally {
+    aiStewardLoading.value = false
+  }
+}
+
+function handleAiStewardViewAll() {
+  activeBuilding.value = 'all'
+}
+
+function handleAiStewardViewCurve() {
+  activeBuilding.value = 'all'
+}
+
+function handleAiStewardApplyStrategy() {
+  activeBuilding.value = 'all'
 }
 
 onMounted(async () => {

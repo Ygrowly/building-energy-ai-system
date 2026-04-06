@@ -10,17 +10,25 @@ import {
   STANDARD_COAL_WATER_FACTOR,
   ELECTRICITY_CARBON_FACTOR,
 } from '@/utils/homeCharts'
-import HomeActionCards from './HomeActionCards.vue'
+import HomeAiStewardCard from './HomeAiStewardCard.vue'
 import HomeBuildingEnergyShareCard from './HomeBuildingEnergyShareCard.vue'
 import { useReportExport } from '@/composables/useReportExport'
 
 const props = defineProps<{
   overviewData: any
   anomalyData: any[]
+  aiStewardLoading?: boolean
   sankeyData: {
     nodes: { name: string }[]
     links: { source: string | number; target: string | number; value: number }[]
   } | null
+}>()
+
+const emit = defineEmits<{
+  (e: 'refresh'): void
+  (e: 'view-all'): void
+  (e: 'view-curve'): void
+  (e: 'apply-strategy'): void
 }>()
 
 type OverviewMetricTab = 'energy' | 'carbon'
@@ -529,6 +537,23 @@ onUnmounted(() => {
   ro?.disconnect()
   ro = null
 })
+
+function handleStewardRefresh() {
+  emit('refresh')
+}
+
+function handleStewardViewAll() {
+  emit('view-all')
+}
+
+function handleStewardViewCurve() {
+  energyEl.value?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+  emit('view-curve')
+}
+
+function handleStewardApplyStrategy() {
+  emit('apply-strategy')
+}
 </script>
 
 <template>
@@ -562,13 +587,13 @@ onUnmounted(() => {
             </button>
           </div>
         </div>
-        <div ref="energyEl" class="cpanel-body" style="height: 340px" />
+        <div ref="energyEl" class="cpanel-body" style="height: 316px" />
       </div>
 
       <HomeBuildingEnergyShareCard :overview-data="overviewData" />
     </div>
 
-    <div class="bento-row bento-r1">
+    <div class="overview-bottom-row">
       <div class="cpanel panel-sankey">
         <div class="cpanel-hd">
           <span class="cpanel-title">异常根因桑基图</span>
@@ -576,12 +601,34 @@ onUnmounted(() => {
         </div>
         <div ref="sankeyEl" class="cpanel-body" style="height: 300px" />
       </div>
-      <HomeActionCards class="home-actions-panel" tab="all" :anomalies="anomalyData" />
+      <HomeAiStewardCard
+        class="home-actions-panel"
+        :loading="aiStewardLoading"
+        @refresh="handleStewardRefresh"
+        @view-all="handleStewardViewAll"
+        @view-curve="handleStewardViewCurve"
+        @apply-strategy="handleStewardApplyStrategy"
+      />
     </div>
   </div>
 </template>
 
 <style>
+.home-page .home-all-overview-section > .overview-bottom-row {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(0, 7fr);
+  gap: 14px;
+  align-items: stretch;
+}
+
+.home-page .home-all-overview-section > .overview-bottom-row > .panel-sankey,
+.home-page .home-all-overview-section > .overview-bottom-row > .home-actions-panel {
+  grid-column: auto;
+  grid-row: auto;
+  min-width: 0;
+}
+
 .home-all-overview-section .cpanel-hd:has(.overview-tabs) {
   flex-direction: row;
   align-items: center;
@@ -653,5 +700,24 @@ html[data-theme='light'] .overview-tab.active {
   background: #ffffff;
   color: #1d4ed8;
   box-shadow: 0 8px 16px rgba(148, 163, 184, 0.18), inset 0 0 0 1px rgba(191, 219, 254, 0.9);
+}
+
+@container (max-width: 899px) {
+  .home-page .home-all-overview-section > .overview-bottom-row {
+    grid-template-columns: minmax(0, 3fr) minmax(0, 7fr);
+  }
+}
+
+@container (max-width: 699px) {
+  .home-page .home-all-overview-section > .overview-bottom-row {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+}
+
+@container (max-width: 399px) {
+  .home-page .home-all-overview-section > .overview-bottom-row {
+    gap: 8px;
+  }
 }
 </style>

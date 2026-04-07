@@ -1,20 +1,24 @@
 <template>
   <div class="workorders">
     <header class="page-header">
-      <h1><Icon icon="mdi:clipboard-list" width="22" class="page-icon" /> 工单管理</h1>
-      <span class="subtitle">人机协同 · 审批派单 · HITL 闭环</span>
+      <div class="header-copy">
+        <h1><Icon icon="mdi:clipboard-list" width="22" class="page-icon" /> {{ workspaceConfig.title }}</h1>
+        <span class="subtitle">{{ workspaceConfig.subtitle }}</span>
+      </div>
+      <div class="workspace-pills" aria-label="工单页面切换">
+        <button
+          v-for="item in workspaceSwitchItems"
+          :key="item.mode"
+          class="workspace-pill"
+          :class="{ active: workspaceMode === item.mode }"
+          @click="switchWorkspace(item.path)"
+        >
+          <Icon :icon="item.icon" width="14" />
+          <span>{{ item.label }}</span>
+        </button>
+      </div>
     </header>
 
-    <!-- 无 Session 警告：审批需要 AI 会话 -->
-    <div class="session-warn" v-if="!chatStore.currentSessionId">
-      <span class="warn-icon"><Icon icon="mdi:alert" width="18" /></span>
-      <div>
-        <p class="warn-title">审批功能需要先建立 AI 会话</p>
-        <p class="warn-sub">请在右侧控制台向 AI 发送任意消息，建立会话后即可在此页面审批工单。</p>
-      </div>
-    </div>
-
-    <!-- 状态筛选 + 刷新 -->
     <div class="toolbar">
       <div class="tab-group">
         <button
@@ -25,690 +29,526 @@
           @click="switchTab(tab.value)"
         >
           {{ tab.label }}
-          <span class="tab-count" v-if="tab.value === 'pending_approval'">{{ pendingCount }}</span>
+          <span class="tab-count" v-if="tabCount(tab.value) > 0">{{ tabCount(tab.value) }}</span>
         </button>
       </div>
-      <button class="refresh-btn" @click="fetchOrders(true)" :disabled="loading">
-        <Icon :icon="loading ? 'mdi:loading' : 'mdi:refresh'" width="14" class="btn-icon" />
-        {{ loading ? '刷新中...' : '刷新' }}
-      </button>
+      <div class="toolbar-actions">
+        <button
+          v-if="activeTab === 'pending_dispatch'"
+          class="refresh-btn accent"
+          @click="openBatchDispatchPanel"
+          :disabled="loading || batchPreviewLoading"
+        >
+          <Icon :icon="batchPreviewLoading ? 'mdi:loading' : 'mdi:playlist-plus'" width="14" class="btn-icon" />
+          {{ batchPreviewLoading ? '生成中...' : '批量推荐' }}
+        </button>
+        <button class="refresh-btn" @click="fetchOrders" :disabled="loading">
+          <Icon :icon="loading ? 'mdi:loading' : 'mdi:refresh'" width="14" class="btn-icon" />
+          {{ loading ? '刷新中...' : '刷新' }}
+        </button>
+      </div>
     </div>
 
-    <!-- 加载 / 错误 -->
+    <div class="summary-strip" v-if="activeTab !== 'shared_hall' && allOrders.length">
+      <div class="summary-pill">
+        <span class="summary-value">{{ allOrders.length }}</span>
+        <span class="summary-label">工单总数</span>
+      </div>
+      <div class="summary-pill warning">
+        <span class="summary-value">{{ tabCount('pending_dispatch') }}</span>
+        <span class="summary-label">待派工</span>
+      </div>
+      <div class="summary-pill active">
+        <span class="summary-value">{{ tabCount('dispatched') }}</span>
+        <span class="summary-label">执行中</span>
+      </div>
+      <div class="summary-pill danger">
+        <span class="summary-value">{{ overdueCount }}</span>
+        <span class="summary-label">高风险</span>
+      </div>
+    </div>
+
+    <div class="summary-strip" v-if="activeTab === 'shared_hall' && hallEntries.length">
+      <div class="summary-pill">
+        <span class="summary-value">{{ hallEntries.length }}</span>
+        <span class="summary-label">大厅事项</span>
+      </div>
+      <div class="summary-pill active">
+        <span class="summary-value">{{ hallSupportCount }}</span>
+        <span class="summary-label">协同事项</span>
+      </div>
+      <div class="summary-pill warning">
+        <span class="summary-value">{{ hallTakeoverCount }}</span>
+        <span class="summary-label">待接管</span>
+      </div>
+      <div class="summary-pill danger">
+        <span class="summary-value">{{ hallPendingApplicationCount }}</span>
+        <span class="summary-label">待处理申请</span>
+      </div>
+    </div>
+
     <div v-if="loading" class="loading-bar">加载工单列表...</div>
     <div v-if="fetchError" class="error-bar"><Icon icon="mdi:alert" width="14" class="bar-icon" /> {{ fetchError }}</div>
 
-    <!-- 工单列表 -->
-    <div v-if="!loading && filteredOrders.length > 0" class="order-list">
-      <div
-        class="order-card"
-        v-for="wo in filteredOrders"
-        :key="wo.ticket_id"
-        :class="statusCardClass(wo.status)"
-      >
-        <!-- 卡片头部 -->
-        <div class="card-header" @click="toggleExpand(wo.ticket_id)">
-          <div class="card-header-left">
-            <span class="priority-badge" :class="'p-' + (wo.priority ?? 'medium').toLowerCase()">
-              {{ wo.priority ?? 'Medium' }}
-            </span>
-            <div class="card-title-block">
-              <p class="card-title">{{ wo.issue_description ?? wo.ticket_id }}</p>
-              <p class="card-meta">
-                工单 {{ wo.ticket_id }} · 设备 {{ wo.device_id ?? '—' }} · {{ buildingName(wo.building_id) }}
-                · {{ formatTime(wo.created_at) }}
-              </p>
-            </div>
-          </div>
-          <div class="card-header-right">
-            <span class="status-chip" :class="statusChipClass(wo.status)">
-              {{ STATUS_LABELS[wo.status] ?? wo.status }}
-            </span>
-            <span class="expand-btn">{{ expandedId === wo.ticket_id ? '▲' : '▼' }}</span>
-          </div>
-        </div>
+    <WorkOrdersHallList
+      v-if="!loading && activeTab === 'shared_hall' && hallEntries.length > 0"
+      :hall-entries="hallEntries"
+      :action-loading="actionLoading"
+      :priority-labels="PRIORITY_LABELS"
+      :format-time="formatTime"
+      :building-name="buildingName"
+      :hall-pending-applications="hallPendingApplications"
+      :hall-entry-title="hallEntryTitle"
+      :hall-entry-owner="hallEntryOwner"
+      :hall-entry-reason="hallEntryReason"
+      :hall-empty-hint="hallEmptyHint"
+      :can-suggest-hall-takeover="canSuggestHallTakeover"
+      :can-nudge-hall-owner="canNudgeHallOwner"
+      :hall-action-key="hallActionKey"
+      @approve="approveHallApplication"
+      @reject="rejectHallApplication"
+      @suggest="openHallReassignSuggestion"
+      @nudge="nudgeHallOwner"
+      @close-entry="closeHallEntry"
+    />
 
-        <!-- 展开详情 -->
-        <Transition name="slide">
-          <div class="card-body" v-if="expandedId === wo.ticket_id">
-            <div class="detail-grid">
-              <div class="detail-row" v-for="row in detailRows(wo)" :key="row.label">
-                <span class="detail-label">{{ row.label }}</span>
-                <span class="detail-val" :class="row.cls">{{ row.value }}</span>
-              </div>
-            </div>
+    <WorkOrdersOrderList
+      v-else-if="!loading && filteredOrders.length > 0"
+      :orders="filteredOrders"
+      :expanded-id="expandedId"
+      :action-loading="actionLoading"
+      :rejecting-id="rejectingId"
+      :reject-reason="rejectReason"
+      :action-result="actionResult"
+      :priority-labels="PRIORITY_LABELS"
+      :status-labels="STATUS_LABELS"
+      :execution-labels="EXECUTION_LABELS"
+      :status-card-class="statusCardClass"
+      :status-chip-class="statusChipClass"
+      :execution-chip-class="executionChipClass"
+      :building-name="buildingName"
+      :format-time="formatTime"
+      :detail-rows="detailRows"
+      :timeline-rows="timelineRows"
+      :is-timeline-loading="isTimelineLoading"
+      :timeline-error="timelineError"
+      :actions-for-order="actionsForOrder"
+      @toggle-expand="toggleExpand"
+      @run-action="runAction"
+      @start-reject="startReject"
+      @update-reject-reason="(reason) => { rejectReason = reason }"
+      @cancel-reject="cancelReject"
+    />
 
-            <!-- 审批操作（仅 pending_approval 状态显示） -->
-            <div class="action-bar" v-if="wo.status === 'pending_approval'">
-              <div v-if="!chatStore.currentSessionId" class="action-no-session">
-                <Icon icon="mdi:alert" width="14" class="bar-icon" /> 需先在 AI 控制台建立会话才能审批
-              </div>
-              <template v-else>
-                <button
-                  class="btn-approve"
-                  @click="approve(wo.ticket_id, true)"
-                  :disabled="approving === wo.ticket_id"
-                >
-                  <Icon icon="mdi:check-circle" width="14" class="btn-icon" />
-                  {{ approving === wo.ticket_id ? '处理中...' : '批准派单' }}
-                </button>
-                <button
-                  class="btn-reject"
-                  @click="startReject(wo.ticket_id)"
-                  :disabled="approving === wo.ticket_id"
-                >
-                  <Icon icon="mdi:close-circle" width="14" class="btn-icon" /> 驳回
-                </button>
-              </template>
-            </div>
-
-            <!-- 驳回原因输入框 -->
-            <div class="reject-area" v-if="rejectingId === wo.ticket_id">
-              <input
-                v-model="rejectReason"
-                placeholder="驳回原因（可选）"
-                @keyup.enter="approve(wo.ticket_id, false)"
-                class="reject-input"
-              />
-              <button class="btn-reject-confirm" @click="approve(wo.ticket_id, false)">
-                确认驳回
-              </button>
-              <button class="btn-cancel" @click="rejectingId = null; rejectReason = ''">
-                取消
-              </button>
-            </div>
-
-            <!-- 操作结果提示 -->
-            <div class="action-result success" v-if="actionResult[wo.ticket_id]?.type === 'success'">
-              <Icon icon="mdi:check-circle" width="14" class="bar-icon" /> {{ actionResult[wo.ticket_id].message }}
-            </div>
-            <div class="action-result error" v-if="actionResult[wo.ticket_id]?.type === 'error'">
-              <Icon icon="mdi:alert" width="14" class="bar-icon" /> {{ actionResult[wo.ticket_id].message }}
-            </div>
-          </div>
-        </Transition>
-      </div>
-    </div>
-
-    <!-- 空状态 -->
-    <div v-if="!loading && filteredOrders.length === 0 && !fetchError" class="empty-state">
+    <div v-if="!loading && isCurrentTabEmpty && !fetchError" class="empty-state">
       <p class="empty-icon"><Icon icon="mdi:clipboard-list" width="40" /></p>
       <p>{{ emptyMessage }}</p>
-      <p class="empty-sub">可通过右侧 AI 控制台触发故障诊断，AI 将自动生成工单待审批。</p>
+      <p class="empty-sub">系统会根据 AI 审阅、派工和执行推进自动更新这里的状态。</p>
     </div>
+
+    <WorkOrdersDispatchSheet
+      :visible="dispatchPanel.visible"
+      :panel="dispatchPanel"
+      :priority-labels="PRIORITY_LABELS"
+      :dispatch-submitting="dispatchSubmitting"
+      @close="closeDispatchPanel"
+      @confirm-candidate="confirmDispatchCandidate"
+    />
+
+    <WorkOrdersBatchSheet
+      :visible="batchPanel.visible"
+      :panel="batchPanel"
+      :batch-preview-loading="batchPreviewLoading"
+      :batch-dispatch-applying="batchDispatchApplying"
+      :batch-sample-options="batchSampleOptions"
+      :batch-worker-cap-options="batchWorkerCapOptions"
+      :batch-priority-options="batchPriorityOptions"
+      :batch-options="batchOptions"
+      :batch-worker-loads="batchWorkerLoads"
+      :retryable-batch-failures="retryableBatchFailures"
+      :priority-labels="PRIORITY_LABELS"
+      :status-labels="STATUS_LABELS"
+      :building-name="buildingName"
+      :shift-label="shiftLabel"
+      @close="closeBatchDispatchPanel"
+      @refresh-preview="refreshBatchDispatchPreview"
+      @select-sample-size="selectBatchSampleSize"
+      @select-priority="selectBatchPriority"
+      @select-worker-cap="selectBatchWorkerCap"
+      @retry-failed="retryBatchFailedItems"
+      @review-failed="reviewBatchFailedItem"
+      @confirm-dispatch="confirmBatchDispatch"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { Icon } from '@iconify/vue'
-import { apiFetch } from '@/api/http'
+import WorkOrdersBatchSheet from '@/components/workorders/WorkOrdersBatchSheet.vue'
+import WorkOrdersDispatchSheet from '@/components/workorders/WorkOrdersDispatchSheet.vue'
+import WorkOrdersHallList from '@/components/workorders/WorkOrdersHallList.vue'
+import WorkOrdersOrderList from '@/components/workorders/WorkOrdersOrderList.vue'
+import { useBatchDispatch } from '@/composables/workorders/useBatchDispatch'
+import { useDispatchHallAdmin } from '@/composables/workorders/useDispatchHallAdmin'
+import { useWorkOrderActions } from '@/composables/workorders/useWorkOrderActions'
+import { useWorkOrderPresentation } from '@/composables/workorders/useWorkOrderPresentation'
+import { useWorkOrdersData } from '@/composables/workorders/useWorkOrdersData'
+import {
+  EXECUTION_LABELS,
+  PRIORITY_LABELS,
+  STATUS_LABELS,
+  WORK_ORDER_WORKSPACE_CONFIG,
+  type WorkOrderTabKey,
+  type WorkOrderWorkspaceMode,
+} from '@/constants/workOrders'
 import { cachedApiFetch, peekCachedApi, invalidateCachedApi } from '@/api/cached'
 import { useChatStore } from '@/stores/chatStore'
 import { useBuildingStore } from '@/stores/buildingStore'
 import { useReportExport } from '@/composables/useReportExport'
 
+type Candidate = any
+
 const chatStore = useChatStore()
 const buildingStore = useBuildingStore()
+const route = useRoute()
+const router = useRouter()
 const { registerSection, setReportMeta } = useReportExport('workorders')
 
-// ── 数据 ──────────────────────────────────────────
-const loading = ref(false)
-const fetchError = ref('')
-const allOrders = ref<any[]>([])
-const WORK_ORDERS_CACHE_TTL = 30_000
-
-const activeTab = ref<string>('all')
-const expandedId = ref<string | null>(null)
-const approving = ref<string | null>(null)
+const actionLoading = ref<string | null>(null)
 const rejectingId = ref<string | null>(null)
 const rejectReason = ref('')
 const actionResult = ref<Record<string, { type: 'success' | 'error'; message: string }>>({})
 
-const tabs = [
-  { label: '全部', value: 'all' },
-  { label: '待审批', value: 'pending_approval' },
-  { label: '已批准', value: 'approved' },
-  { label: '已驳回', value: 'rejected' },
+const dispatchSubmitting = ref<string | null>(null)
+const dispatchPanel = ref({
+  visible: false,
+  mode: 'dispatch' as 'dispatch' | 'reassign',
+  ticketId: null as string | null,
+  dispatchId: null as string | null,
+  requirement: null as any | null,
+  candidates: [] as Candidate[],
+})
+const pendingFocus = ref<{ ticketId: string; action: 'dispatch' | 'reassign' } | null>(null)
+
+const workspaceSwitchItems: Array<{ mode: WorkOrderWorkspaceMode; label: string; icon: string; path: string }> = [
+  { mode: 'all', label: '总览', icon: 'mdi:view-dashboard-outline', path: '/workorders' },
+  { mode: 'review', label: '工单审阅', icon: 'mdi:clipboard-check-outline', path: '/workorders/review' },
+  { mode: 'dispatch', label: '派工中心', icon: 'mdi:account-hard-hat-outline', path: '/workorders/dispatch' },
+  { mode: 'tracking', label: '执行跟踪', icon: 'mdi:timeline-check-outline', path: '/workorders/tracking' },
 ]
 
-const STATUS_LABELS: Record<string, string> = {
-  pending_approval: '待审批',
-  approved: '已批准',
-  rejected: '已驳回',
-}
+const workspaceMode = computed<WorkOrderWorkspaceMode>(() => {
+  const rawMode = route.meta.workOrderMode
+  if (typeof rawMode === 'string' && rawMode in WORK_ORDER_WORKSPACE_CONFIG) {
+    return rawMode as WorkOrderWorkspaceMode
+  }
+  return 'all'
+})
+const workspaceConfig = computed(() => WORK_ORDER_WORKSPACE_CONFIG[workspaceMode.value])
+const tabs = computed(() => workspaceConfig.value.tabs)
 
-// ── 计算 ──────────────────────────────────────────
-const filteredOrders = computed(() => {
-  if (activeTab.value === 'all') return allOrders.value
-  return allOrders.value.filter(o => o.status === activeTab.value)
+const {
+  loading,
+  fetchError,
+  allOrders,
+  hallEntries,
+  activeTab,
+  expandedId,
+  orderTimelines,
+  filteredOrders,
+  overdueCount,
+  isCurrentTabEmpty,
+  emptyMessage,
+  tabCount,
+  fetchOrders,
+  switchTab,
+  toggleExpand,
+  ensureTimeline,
+  isTimelineLoading,
+  timelineError,
+} = useWorkOrdersData({
+  route,
+  defaultTab: workspaceConfig.value.defaultTab,
+  onSelectionReset: cancelReject,
+  onOrdersLoaded: maybeHandlePendingFocus,
 })
 
-const pendingCount = computed(() =>
-  allOrders.value.filter(o => o.status === 'pending_approval').length,
-)
-
-const emptyMessage = computed(() => {
-  const map: Record<string, string> = {
-    all: '暂无工单记录',
-    pending_approval: '暂无待审批工单',
-    approved: '暂无已批准工单',
-    rejected: '暂无已驳回工单',
-  }
-  return map[activeTab.value] ?? '暂无数据'
+const {
+  currentDispatchForOrder,
+  detailRows,
+  timelineRows,
+  buildingName,
+  formatTime,
+  statusCardClass,
+  statusChipClass,
+  executionChipClass,
+} = useWorkOrderPresentation({
+  orderTimelines,
+  statusLabels: STATUS_LABELS,
+  executionLabels: EXECUTION_LABELS,
+  getBuildingName: (id) => buildingStore.getBuildingName(id),
 })
 
-// ── 获取工单列表 ──────────────────────────────────
-function applyOrdersData(data: any) {
-  allOrders.value = data?.work_orders ?? []
-}
-
-function hydrateOrdersCache() {
-  const snapshot = peekCachedApi<any>('/api/work-orders', { ttlMs: WORK_ORDERS_CACHE_TTL })
-  if (snapshot.data) {
-    applyOrdersData(snapshot.data)
-  }
-  return snapshot.isFresh
-}
-
-async function fetchOrders(force = false) {
-  loading.value = true
-  fetchError.value = ''
-  try {
-    const data = await cachedApiFetch<any>('/api/work-orders', undefined, {
-      force,
-      ttlMs: WORK_ORDERS_CACHE_TTL,
-    })
-    applyOrdersData(data)
-  } catch (e: any) {
-    fetchError.value = e.message
-  } finally {
-    loading.value = false
-  }
-}
-
-onMounted(() => {
-  const cacheFresh = hydrateOrdersCache()
-  if (!cacheFresh) {
-    void fetchOrders(true)
-  }
+const {
+  runAction,
+  openDispatchPanel,
+  closeDispatchPanel,
+  confirmDispatchCandidate,
+  actionsForOrder,
+} = useWorkOrderActions({
+  currentSessionId: () => chatStore.currentSessionId,
+  rejectReason,
+  actionLoading,
+  actionResult,
+  dispatchPanel,
+  dispatchSubmitting,
+  fetchOrders,
+  cancelReject,
+  currentDispatchForOrder,
 })
 
-// ── 报表集成 ──────────────────────────────────────
-const STATUS_LABELS_REPORT: Record<string, string> = {
-  pending_approval: '待审批',
-  approved: '已批准',
-  rejected: '已驳回',
+const {
+  batchPanel,
+  batchOptions,
+  batchPreviewLoading,
+  batchDispatchApplying,
+  batchSampleOptions,
+  batchWorkerCapOptions,
+  batchPriorityOptions,
+  batchWorkerLoads,
+  retryableBatchFailures,
+  closeBatchDispatchPanel,
+  refreshBatchDispatchPreview,
+  openBatchDispatchPanel,
+  selectBatchSampleSize,
+  selectBatchPriority,
+  selectBatchWorkerCap,
+  confirmBatchDispatch,
+  retryBatchFailedItems,
+  reviewBatchFailedItem,
+  shiftLabel,
+} = useBatchDispatch({
+  activeTab,
+  allOrders,
+  expandedId,
+  fetchError,
+  fetchOrders,
+  ensureTimeline,
+  openDispatchPanel,
+})
+
+const {
+  hallPendingApplicationCount,
+  hallSupportCount,
+  hallTakeoverCount,
+  hallPendingApplications,
+  hallEntryTitle,
+  hallEntryOwner,
+  hallEntryReason,
+  hallEmptyHint,
+  canSuggestHallTakeover,
+  canNudgeHallOwner,
+  hallActionKey,
+  approveHallApplication,
+  rejectHallApplication,
+  closeHallEntry,
+  openHallReassignSuggestion,
+  nudgeHallOwner,
+} = useDispatchHallAdmin({
+  hallEntries,
+  actionLoading,
+  fetchError,
+  dispatchPanel,
+  fetchOrders,
+  closeDispatchPanel,
+})
+
+function startReject(ticketId: string) {
+  rejectingId.value = ticketId
+  rejectReason.value = ''
+}
+
+function cancelReject() {
+  rejectingId.value = null
+  rejectReason.value = ''
+}
+
+function isVisibleTab(tab: unknown): tab is WorkOrderTabKey {
+  return typeof tab === 'string' && workspaceConfig.value.tabs.some((item) => item.value === tab)
+}
+
+function applyRouteTabState() {
+  if (isVisibleTab(route.query.active_tab)) {
+    activeTab.value = route.query.active_tab
+  } else if (!isVisibleTab(activeTab.value)) {
+    activeTab.value = workspaceConfig.value.defaultTab
+  }
+}
+
+function switchWorkspace(path: string) {
+  if (route.path === path) return
+  router.push({ path })
+}
+
+async function maybeHandlePendingFocus() {
+  if (!pendingFocus.value) return
+  const target = allOrders.value.find((item) => item.ticket_id === pendingFocus.value?.ticketId)
+  if (!target) return
+  const focus = pendingFocus.value
+  pendingFocus.value = null
+  expandedId.value = focus.ticketId
+  await ensureTimeline(focus.ticketId)
+  await openDispatchPanel(target, focus.action)
+  await router.replace({
+    path: route.path,
+    query: {
+      ...route.query,
+      focus_ticket: undefined,
+      focus_action: undefined,
+    },
+  })
 }
 
 watch(allOrders, (orders) => {
   if (!orders.length) return
   setReportMeta({ title: '工单管理报表' })
-
-  const pending = orders.filter(o => o.status === 'pending_approval').length
-  const approved = orders.filter(o => o.status === 'approved').length
-  const rejected = orders.filter(o => o.status === 'rejected').length
-
   registerSection({
     id: 'wo-kpi',
-    title: '工单统计概览',
+    title: '工单概览',
     type: 'kpi',
+    order: 10,
     kpis: [
       { label: '工单总数', value: String(orders.length) },
-      { label: '待审批', value: String(pending) },
-      { label: '已批准', value: String(approved) },
-      { label: '已驳回', value: String(rejected) },
+      { label: '待AI审阅', value: String(tabCount('pending_review')) },
+      { label: '待派工', value: String(tabCount('pending_dispatch')) },
+      { label: '执行中', value: String(tabCount('dispatched')) },
     ],
-    order: 10,
   })
-
   registerSection({
     id: 'wo-table',
     title: '工单列表',
     type: 'table',
+    order: 20,
     columns: [
       { key: 'ticket_id', label: '工单 ID', align: 'left' },
-      { key: 'device_id', label: '设备 ID', align: 'left' },
       { key: 'building', label: '楼宇', align: 'left' },
       { key: 'priority', label: '优先级', align: 'left' },
-      { key: 'issue', label: '问题描述', align: 'left' },
-      { key: 'action', label: '建议操作', align: 'left' },
-      { key: 'status', label: '状态', align: 'left' },
+      { key: 'status', label: '主状态', align: 'left' },
+      { key: 'execution', label: '执行状态', align: 'left' },
+      { key: 'assignee', label: '责任人', align: 'left' },
       { key: 'created_at', label: '创建时间', align: 'left' },
     ],
     rows: orders.map(wo => ({
       ticket_id: wo.ticket_id,
-      device_id: wo.device_id ?? '—',
       building: buildingName(wo.building_id),
-      priority: wo.priority ?? '—',
-      issue: wo.issue_description ?? '—',
-      action: wo.suggested_action ?? '—',
-      status: STATUS_LABELS_REPORT[wo.status] ?? wo.status,
+      priority: PRIORITY_LABELS[wo.priority] ?? wo.priority ?? '—',
+      status: STATUS_LABELS[wo.status] ?? wo.status,
+      execution: EXECUTION_LABELS[wo.execution_status] ?? wo.execution_status ?? '—',
+      assignee: wo.assigned_to_name || '未派工',
       created_at: formatTime(wo.created_at),
     })),
-    order: 20,
   })
+}, { deep: true })
+
+onMounted(async () => {
+  applyRouteTabState()
+  if (typeof route.query.focus_ticket === 'string' && (route.query.focus_action === 'dispatch' || route.query.focus_action === 'reassign')) {
+    pendingFocus.value = {
+      ticketId: route.query.focus_ticket,
+      action: route.query.focus_action,
+    }
+    activeTab.value = 'dispatched'
+  }
+  await fetchOrders()
 })
 
-// ── 交互 ──────────────────────────────────────────
-function switchTab(val: string) {
-  activeTab.value = val
-  expandedId.value = null
-}
-
-function toggleExpand(id: string) {
-  expandedId.value = expandedId.value === id ? null : id
-  rejectingId.value = null
-  rejectReason.value = ''
-}
-
-function startReject(id: string) {
-  rejectingId.value = id
-  rejectReason.value = ''
-}
-
-// ── 审批 ──────────────────────────────────────────
-async function approve(ticketId: string, approved: boolean) {
-  if (!chatStore.currentSessionId) return
-
-  approving.value = ticketId
-  actionResult.value = { ...actionResult.value, [ticketId]: undefined as any }
-
-  try {
-    const result = await apiFetch<any>('/api/work-orders/approve', {
-      method: 'POST',
-      body: JSON.stringify({
-        session_id: chatStore.currentSessionId,
-        ticket_id: ticketId,
-        approved,
-        reason: approved ? undefined : (rejectReason.value || undefined),
-      }),
-    })
-
-    // 更新本地状态，不需要重新请求
-    const order = allOrders.value.find(o => o.ticket_id === ticketId)
-    if (order) {
-      order.status = approved ? 'approved' : 'rejected'
-      if (!approved) order.reject_reason = rejectReason.value
-    }
-    invalidateCachedApi('/api/work-orders')
-    invalidateCachedApi('/api/operations/bundle')
-
-    actionResult.value = {
-      ...actionResult.value,
-      [ticketId]: { type: 'success', message: result.message },
-    }
-    rejectingId.value = null
-    rejectReason.value = ''
-  } catch (e: any) {
-    actionResult.value = {
-      ...actionResult.value,
-      [ticketId]: { type: 'error', message: e.message },
-    }
-  } finally {
-    approving.value = null
-  }
-}
-
-// ── 工具函数 ──────────────────────────────────────
-function buildingName(id: string): string {
-  if (!id) return '—'
-  return buildingStore.getBuildingName(id)
-}
-
-function formatTime(iso: string): string {
-  if (!iso) return '—'
-  try {
-    return new Date(iso).toLocaleString('zh-CN', {
-      month: '2-digit', day: '2-digit',
-      hour: '2-digit', minute: '2-digit',
-    })
-  } catch {
-    return iso
-  }
-}
-
-function statusCardClass(status: string): Record<string, boolean> {
-  return {
-    'status-pending': status === 'pending_approval',
-    'status-approved': status === 'approved',
-    'status-rejected': status === 'rejected',
-  }
-}
-
-function statusChipClass(status: string): Record<string, boolean> {
-  return {
-    'chip-pending':  status === 'pending_approval',
-    'chip-approved': status === 'approved',
-    'chip-rejected': status === 'rejected',
-  }
-}
-
-function detailRows(wo: any) {
-  return [
-    { label: '工单 ID',  value: wo.ticket_id,          cls: 'mono accent' },
-    { label: '设备 ID',  value: wo.device_id ?? '—',   cls: 'mono' },
-    { label: '楼宇',     value: buildingName(wo.building_id) },
-    { label: '优先级',   value: wo.priority ?? '—' },
-    { label: '问题描述', value: wo.issue_description ?? '—' },
-    { label: '建议操作', value: wo.suggested_action ?? '—',   cls: 'warning-text' },
-    { label: '状态',     value: STATUS_LABELS[wo.status] ?? wo.status },
-    { label: '创建时间', value: formatTime(wo.created_at),    cls: 'muted' },
-    wo.reject_reason ? { label: '驳回原因', value: wo.reject_reason, cls: 'danger-text' } : null,
-  ].filter((r): r is NonNullable<typeof r> => r != null)
-}
+watch(workspaceMode, async () => {
+  applyRouteTabState()
+  await fetchOrders()
+})
 </script>
 
 <style scoped>
 .workorders { padding: 24px; }
-.page-header { margin-bottom: 20px; }
-.page-header h1 { font-size: 22px; font-weight: 700; margin-bottom: 4px; }
-.subtitle { color: var(--text-secondary); font-size: 13px; }
-
-/* 无 Session 警告 */
-.session-warn {
-  display: flex;
-  gap: 12px;
-  align-items: flex-start;
-  background: rgba(251,191,36,0.08);
-  border: 1px solid rgba(251,191,36,0.35);
-  border-radius: 10px;
-  padding: 14px 16px;
+.page-header {
   margin-bottom: 20px;
-  font-size: 13px;
-}
-.warn-icon { display: flex; align-items: center; color: var(--warning); flex-shrink: 0; }
-.warn-title { font-weight: 600; color: var(--warning); margin-bottom: 4px; }
-.warn-sub { font-size: 12px; color: var(--text-secondary); }
-
-/* 工具栏 */
-.toolbar {
   display: flex;
+  align-items: center;
   justify-content: space-between;
-  align-items: center;
-  margin-bottom: 16px;
-}
-
-.tab-group { display: flex; gap: 4px; }
-
-.tab-btn {
-  background: none;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  color: var(--text-secondary);
-  font-size: 13px;
-  padding: 6px 14px;
-  cursor: pointer;
-  transition: all 0.2s;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.tab-btn:hover { background: var(--bg-hover); }
-.tab-btn.active {
-  background: var(--accent-glow);
-  border-color: var(--border-accent);
-  color: var(--accent);
-  font-weight: 600;
-}
-
-.tab-count {
-  background: var(--warning);
-  color: #000;
-  font-size: 10px;
-  font-weight: 700;
-  padding: 1px 6px;
-  border-radius: 10px;
-  min-width: 18px;
-  text-align: center;
-}
-
-.refresh-btn {
-  background: none;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  color: var(--text-secondary);
-  font-size: 12px;
-  padding: 6px 12px;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-.refresh-btn:hover { border-color: var(--accent); color: var(--accent); }
-.refresh-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-
-/* 状态条 */
-.loading-bar {
-  background: var(--accent-glow);
-  border: 1px solid var(--border-accent);
-  border-radius: 8px;
-  padding: 10px 16px;
-  color: var(--accent);
-  font-size: 13px;
-  margin-bottom: 12px;
-}
-.error-bar {
-  background: rgba(248,113,113,0.08);
-  border: 1px solid rgba(248,113,113,0.22);
-  border-radius: 8px;
-  padding: 10px 16px;
-  color: var(--danger);
-  font-size: 13px;
-  margin-bottom: 12px;
-}
-
-/* 工单卡片 */
-.order-list { display: flex; flex-direction: column; gap: 8px; }
-
-.order-card {
-  background: var(--bg-panel);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  overflow: hidden;
-  transition: box-shadow 0.2s, border-color 0.2s;
-  box-shadow: var(--card-shadow);
-}
-.order-card:hover {
-  box-shadow: var(--card-shadow-hover);
-}
-.order-card.status-pending  { border-left: 4px solid var(--warning); }
-.order-card.status-approved { border-left: 4px solid var(--success); }
-.order-card.status-rejected { border-left: 4px solid var(--text-muted); }
-
-.card-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
+  gap: 18px;
   padding: 14px 16px;
-  cursor: pointer;
-  user-select: none;
-  gap: 12px;
+  border: 1px solid rgba(245, 158, 11, 0.24);
+  border-radius: 18px;
+  background:
+    linear-gradient(135deg, rgba(255, 251, 235, 0.84), rgba(240, 253, 244, 0.7)),
+    var(--bg-panel);
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.06);
 }
-.card-header:hover { background: var(--bg-hover); }
-
-.card-header-left {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex: 1;
-  min-width: 0;
-}
-
-.priority-badge {
-  font-size: 11px;
-  font-weight: 700;
-  padding: 3px 8px;
-  border-radius: 4px;
-  flex-shrink: 0;
-  text-transform: uppercase;
-}
-.p-low      { background: rgba(74,222,128,0.15);  color: var(--success); }
-.p-medium   { background: rgba(251,191,36,0.15);  color: var(--warning); }
-.p-high     { background: rgba(248,113,113,0.15); color: var(--danger); }
-.p-critical { background: rgba(248,113,113,0.25); color: var(--danger); }
-
-.card-title-block { min-width: 0; }
-.card-title { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-bottom: 3px; }
-.card-meta  { font-size: 11px; color: var(--text-muted); }
-
-.card-header-right { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
-
-.status-chip {
-  font-size: 11px;
-  padding: 3px 10px;
-  border-radius: 10px;
-  font-weight: 600;
-}
-.chip-pending  { background: rgba(251,191,36,0.15);  color: var(--warning); }
-.chip-approved { background: rgba(74,222,128,0.15);  color: var(--success); }
-.chip-rejected { background: rgba(148,163,184,0.15); color: var(--text-muted); }
-
-.expand-btn { color: var(--text-muted); font-size: 11px; }
-
-/* 展开详情 */
-.card-body {
-  border-top: 1px solid var(--border);
-  padding: 16px;
-  background: var(--bg-card);
-}
-
-.detail-grid { display: flex; flex-direction: column; gap: 0; margin-bottom: 16px; }
-
-.detail-row {
-  display: grid;
-  grid-template-columns: 90px 1fr;
-  gap: 8px;
-  padding: 6px 0;
-  border-bottom: 1px solid var(--border);
-  font-size: 13px;
-}
-.detail-row:last-child { border-bottom: none; }
-
-.detail-label { color: var(--text-muted); font-size: 12px; align-self: center; }
-.detail-val { color: var(--text-primary); word-break: break-all; }
-.detail-val.mono        { font-family: monospace; }
-.detail-val.accent      { color: var(--accent); }
-.detail-val.muted       { color: var(--text-muted); }
-.detail-val.warning-text { color: var(--warning); }
-.detail-val.danger-text  { color: var(--danger); }
-
-/* 操作区 */
-.action-bar {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  padding-top: 14px;
-  border-top: 1px solid var(--border);
-}
-
-.action-no-session {
-  font-size: 12px;
-  color: var(--warning);
-}
-
-.btn-approve {
-  background: var(--success);
-  border: none;
-  border-radius: 6px;
-  color: #000;
-  font-size: 13px;
-  font-weight: 600;
-  padding: 8px 20px;
-  cursor: pointer;
-  transition: opacity 0.2s;
-}
-.btn-approve:hover { opacity: 0.85; }
-.btn-approve:disabled { opacity: 0.5; cursor: not-allowed; }
-
-.btn-reject {
-  background: none;
-  border: 1px solid var(--danger);
-  border-radius: 6px;
-  color: var(--danger);
-  font-size: 13px;
-  font-weight: 600;
-  padding: 8px 20px;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-.btn-reject:hover { background: rgba(248,113,113,0.1); }
-.btn-reject:disabled { opacity: 0.5; cursor: not-allowed; }
-
-.reject-area {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  margin-top: 10px;
-}
-
-.reject-input {
-  flex: 1;
-  background: var(--bg-panel);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  color: var(--text-primary);
-  font-size: 13px;
-  padding: 7px 12px;
-  transition: border-color 0.2s;
-}
-.reject-input:focus { outline: none; border-color: var(--danger); }
-
-.btn-reject-confirm {
-  background: var(--danger);
-  border: none;
-  border-radius: 6px;
-  color: #fff;
-  font-size: 13px;
-  font-weight: 600;
-  padding: 7px 16px;
-  cursor: pointer;
-}
-
-.btn-cancel {
-  background: none;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  color: var(--text-secondary);
-  font-size: 13px;
-  padding: 7px 12px;
-  cursor: pointer;
-}
-
-.action-result {
-  margin-top: 10px;
-  padding: 8px 12px;
-  border-radius: 6px;
-  font-size: 13px;
-}
-.action-result.success { background: rgba(74,222,128,0.1); color: var(--success); border: 1px solid rgba(74,222,128,0.3); }
-.action-result.error   { background: rgba(248,113,113,0.1); color: var(--danger);  border: 1px solid rgba(248,113,113,0.3); }
-
-/* 空状态 */
-.empty-state {
-  background: var(--bg-panel);
-  border: 2px dashed var(--border);
-  border-radius: 12px;
-  padding: 48px 20px;
-  text-align: center;
-  color: var(--text-secondary);
-  font-size: 14px;
-}
-.empty-icon { display: flex; justify-content: center; color: var(--text-muted); margin-bottom: 12px; }
-.empty-sub  { font-size: 12px; color: var(--text-muted); margin-top: 8px; line-height: 1.7; }
-
-/* 展开动画 */
-.slide-enter-active, .slide-leave-active { transition: all 0.25s ease; overflow: hidden; }
-.slide-enter-from, .slide-leave-to { opacity: 0; max-height: 0; }
-.slide-enter-to, .slide-leave-from { opacity: 1; max-height: 600px; }
-
-.page-icon { vertical-align: middle; margin-right: 6px; }
-.bar-icon  { vertical-align: middle; flex-shrink: 0; }
-.btn-icon  { vertical-align: middle; }
-
-.refresh-btn, .btn-approve, .btn-reject {
+.header-copy { min-width: 0; }
+.page-header h1 { font-size: 22px; font-weight: 700; margin-bottom: 4px; display: flex; align-items: center; gap: 8px; }
+.subtitle { color: var(--text-secondary); font-size: 13px; }
+.workspace-pills {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 4px;
+  flex-shrink: 0;
+  padding: 4px;
+  border: 1px solid rgba(245, 158, 11, 0.26);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.68);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
 }
+.workspace-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  border-radius: 999px;
+  padding: 8px 13px;
+  background: transparent;
+  color: #7c6f4b;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: all 0.18s ease;
+}
+.workspace-pill:hover {
+  color: #166534;
+  background: rgba(22, 163, 74, 0.08);
+}
+.workspace-pill.active {
+  color: #065f46;
+  background: linear-gradient(135deg, rgba(34, 197, 94, 0.18), rgba(250, 204, 21, 0.16));
+  box-shadow: 0 6px 16px rgba(22, 163, 74, 0.12);
+}
+.toolbar { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 16px; }
+.toolbar-actions { display: flex; align-items: center; gap: 10px; }
+.tab-group { display: flex; flex-wrap: wrap; gap: 6px; }
+.tab-btn, .refresh-btn, .link-btn { background: none; border: 1px solid var(--border); border-radius: 8px; color: var(--text-secondary); font-size: 13px; padding: 8px 14px; cursor: pointer; transition: all 0.2s; }
+.tab-btn { display: flex; align-items: center; gap: 6px; }
+.tab-btn.active { background: var(--accent-glow); border-color: var(--border-accent); color: var(--accent); font-weight: 600; }
+.refresh-btn.accent { background: var(--accent); border-color: var(--accent); color: white; }
+.refresh-btn.inline { padding: 7px 12px; }
+.refresh-btn.warn { border-color: rgba(245, 158, 11, 0.24); color: #b45309; background: rgba(245, 158, 11, 0.08); }
+.tab-count { background: rgba(59, 130, 246, 0.12); color: var(--accent); border-radius: 999px; padding: 1px 8px; font-size: 11px; }
+.summary-strip { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 16px; }
+.summary-pill { background: var(--bg-panel); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; display: flex; flex-direction: column; gap: 4px; }
+.summary-pill.warning { border-color: rgba(59, 130, 246, 0.22); }
+.summary-pill.active { border-color: rgba(16, 185, 129, 0.22); }
+.summary-pill.danger { border-color: rgba(248, 113, 113, 0.22); }
+.summary-value { font-size: 22px; font-weight: 700; color: var(--text-primary); }
+.summary-label { font-size: 12px; color: var(--text-muted); }
+.loading-bar, .error-bar { border-radius: 10px; padding: 12px 16px; font-size: 13px; margin-bottom: 12px; }
+.loading-bar { background: var(--accent-glow); border: 1px solid var(--border-accent); color: var(--accent); }
+.error-bar { background: rgba(248,113,113,0.08); border: 1px solid rgba(248,113,113,0.24); color: var(--danger); }
+.empty-state { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 100px 0; color: var(--text-muted); }
+.empty-sub { font-size: 12px; }
 
-.action-result { display: flex; align-items: center; gap: 6px; }
+@media (max-width: 1100px) {
+  .page-header { align-items: flex-start; flex-direction: column; }
+  .workspace-pills { width: 100%; overflow-x: auto; }
+}
 </style>

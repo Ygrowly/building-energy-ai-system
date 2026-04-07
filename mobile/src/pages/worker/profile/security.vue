@@ -1,6 +1,6 @@
 <template>
   <view class="page">
-    <NavBar title="账号与安全" bg-color="#0f3d2e" :show-back="true" />
+    <NavBar title="账号与安全" bg-color="#E4EDB8" text-color="#5f7137" :show-back="true" />
 
     <!-- 账户状态 -->
     <view class="section">
@@ -69,7 +69,7 @@ async function doChangePwd() {
 </script>
 
 <style lang="scss" scoped>
-.page { background: #f0f5f2; min-height: 100vh; }
+.page { background: #f7faef; min-height: 100vh; }
 
 .section {
   margin: 24rpx 32rpx 0;
@@ -97,7 +97,7 @@ async function doChangePwd() {
   border-radius: 8rpx;
   background: #ccc;
 
-  &.active { background: #52c41a; }
+  &.active { background: #b5c875; }
 }
 
 .status-text {
@@ -133,7 +133,7 @@ async function doChangePwd() {
 .save-btn {
   width: 100%;
   height: 88rpx;
-  background: #00b96b;
+  background: linear-gradient(135deg, #d6e29f, #b5c875);
   color: #fff;
   font-size: 30rpx;
   font-weight: 600;

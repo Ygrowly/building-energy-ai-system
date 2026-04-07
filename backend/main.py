@@ -19,6 +19,8 @@ from app.api.routes_datacenter import router as datacenter_router
 from app.api.routes_report import router as report_router
 from app.api.routes_workorder import router as workorder_router
 from app.api.routes_incidents import router as incidents_router
+from app.api.routes_dispatch import router as dispatch_router
+from app.api.routes_dispatch_hall import router as dispatch_hall_router
 from app.api.routes_context_events import router as context_events_router
 from app.api.routes_admin import router as admin_router
 from app.core.config import get_settings
@@ -115,6 +117,14 @@ async def lifespan(app: FastAPI):
                     )
                 )
             )
+        if settings.ENABLE_DISPATCH_SLA_JOB:
+            tasks.append(
+                asyncio.create_task(
+                    _periodic_dispatch_sla_scan(
+                        interval_seconds=settings.DISPATCH_SLA_JOB_INTERVAL_SECONDS
+                    )
+                )
+            )
 
     yield
 
@@ -178,6 +188,22 @@ async def _wait_until_next_hour(offset_seconds: int = 0) -> None:
         wait += 3600  # 如果离整点太近，跳到下下个整点
     logging.getLogger(__name__).info(
         "定时任务将在 %d 秒后（整点 +%ds）首次执行", wait, offset_seconds,
+    )
+    await asyncio.sleep(wait)
+
+
+async def _wait_until_next_minute(offset_seconds: int = 0) -> None:
+    """等待到下一个整分钟 + offset_seconds，用于分钟级调度任务。"""
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc)
+    wait = 60 - now.second + offset_seconds
+    if wait > 60:
+        wait -= 60
+    if wait < 3:
+        wait += 60
+    logging.getLogger(__name__).info(
+        "分钟级任务将在 %d 秒后（整分钟 +%ds）首次执行", wait, offset_seconds,
     )
     await asyncio.sleep(wait)
 
@@ -274,6 +300,37 @@ async def _periodic_forecast(interval_seconds: int = 3600) -> None:
         await asyncio.sleep(interval_seconds)
 
 
+async def _periodic_dispatch_sla_scan(interval_seconds: int = 60) -> None:
+    """定时扫描派工任务 SLA，写入临期/超时事件。"""
+    from app.core.cache import delete_cache_by_prefix
+    from app.db.session import AsyncSessionLocal
+    from app.services.dispatch_service import scan_dispatch_sla_states
+
+    log = logging.getLogger(__name__)
+
+    await _wait_until_next_minute(offset_seconds=5)
+
+    while True:
+        try:
+            async with AsyncSessionLocal() as db:
+                summary = await scan_dispatch_sla_states(db)
+                await db.commit()
+            if summary.get("updated", 0) > 0:
+                await delete_cache_by_prefix("workorders:")
+                await delete_cache_by_prefix("incidents:")
+            log.info(
+                "dispatch SLA 扫描完成: scanned=%d updated=%d warnings=%d overdue=%d",
+                summary.get("scanned", 0),
+                summary.get("updated", 0),
+                summary.get("warning_events", 0),
+                summary.get("overdue_events", 0),
+            )
+        except Exception:
+            log.exception("dispatch SLA 扫描任务异常")
+
+        await asyncio.sleep(interval_seconds)
+
+
 app = FastAPI(
     title="楼宇能耗多智能体系统 API",
     description="基于 LangGraph + MCP 的楼宇能耗管理智能体后端",
@@ -304,6 +361,8 @@ app.include_router(data_router, prefix="/api")
 app.include_router(datacenter_router, prefix="/api")
 app.include_router(workorder_router, prefix="/api")
 app.include_router(incidents_router, prefix="/api")
+app.include_router(dispatch_router, prefix="/api")
+app.include_router(dispatch_hall_router, prefix="/api")
 app.include_router(context_events_router, prefix="/api")
 app.include_router(report_router, prefix="/api")
 app.include_router(admin_router)

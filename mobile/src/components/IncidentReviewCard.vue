@@ -76,6 +76,18 @@
         <text class="detail-title">建议</text>
         <text class="detail-line">{{ suggestedActionText }}</text>
       </view>
+      <view v-if="dispatchAttemptText" class="detail-block">
+        <text class="detail-title">历史派工</text>
+        <text class="detail-line">{{ dispatchAttemptText }}</text>
+      </view>
+      <view v-if="currentBlockReason" class="detail-block">
+        <text class="detail-title">当前阻塞</text>
+        <text class="detail-line">{{ currentBlockReason }}</text>
+      </view>
+      <view v-if="latestReassignReason" class="detail-block">
+        <text class="detail-title">最近改派</text>
+        <text class="detail-line">{{ latestReassignReason }}</text>
+      </view>
       <view v-if="aiReasonText" class="detail-block">
         <text class="detail-title">AI 判断</text>
         <text class="detail-line">{{ aiReasonText }}</text>
@@ -83,6 +95,7 @@
       <view v-if="showQuickActions" class="secondary-actions">
         <view class="quick-btn" @click="emitAction('trend')">趋势</view>
         <view class="quick-btn" @click="emitAction('contact')">联系</view>
+        <view v-if="showSuggestReassign" class="quick-btn" @click="emitAction('suggest_reassign')">改派建议</view>
       </view>
     </view>
   </view>
@@ -197,7 +210,7 @@ const props = withDefaults(defineProps<{
 
 const emit = defineEmits<{
   (e: 'click', incident: Incident): void
-  (e: 'action', payload: { type: 'trend' | 'contact' | 'nudge' | 'detail'; incident: Incident }): void
+  (e: 'action', payload: { type: 'trend' | 'contact' | 'nudge' | 'detail' | 'suggest_reassign'; incident: Incident }): void
 }>()
 
 const isStatusDrivenCard = computed(() => props.mode === 'operator-review' && props.incident.workflow_status === 'dispatched')
@@ -209,6 +222,7 @@ const classicRuleLabel = computed(() => formatRuleLabel(props.incident.rule_trig
 const causeLabel = computed(() => formatRootCauseLabel(props.incident.hvac_root_cause))
 const summaryText = computed(() => sanitizeDisplayText(props.incident.summary_text))
 const aiReasonText = computed(() => sanitizeDisplayText(props.incident.current_work_order?.ai_reason))
+const currentDispatch = computed(() => props.incident.current_dispatch || null)
 const signedPeak = computed(() => {
   const value = props.incident.peak_deviation_pct
   if (value === null || value === undefined) return ''
@@ -240,13 +254,38 @@ const progressText = computed(() => buildProgressText(props.incident))
 const impactText = computed(() => buildImpactText(props.incident))
 const suggestedActionText = computed(() => buildSuggestedActionText(props.incident))
 const ruleLabel = computed(() => buildRuleLabel(props.incident))
-const assigneeText = computed(() => props.incident.current_work_order?.assigned_to_name || '待分配责任人')
-const teamText = computed(() => props.incident.current_work_order?.assigned_team_name || '')
+const assigneeText = computed(() => currentDispatch.value?.assigned_to_name || props.incident.current_work_order?.assigned_to_name || '待分配责任人')
+const teamText = computed(() => currentDispatch.value?.assigned_team_name || props.incident.current_work_order?.assigned_team_name || '')
+const dispatchAttemptText = computed(() => {
+  const attemptNo = currentDispatch.value?.attempt_no || 0
+  if (attemptNo <= 1) return ''
+  return `当前已进入第 ${attemptNo} 次派工`
+})
+const currentBlockReason = computed(() => sanitizeDisplayText(
+  props.incident.dispatch_blocked_reason
+  || props.incident.current_work_order?.dispatch_blocked_reason
+  || currentDispatch.value?.support_reason
+  || currentDispatch.value?.reject_reason
+  || ''
+))
+const latestReassignReason = computed(() => {
+  const selectionReason = currentDispatch.value?.selection_reason
+  if (!selectionReason) return ''
+  if ((currentDispatch.value?.attempt_no || 0) <= 1 && !currentDispatch.value?.transfer_from_dispatch_id) {
+    return ''
+  }
+  return sanitizeDisplayText(selectionReason)
+})
 const detailsExpanded = ref(false)
 const primaryActionType = computed<'trend' | 'nudge'>(() => {
   return executionStatus.value === 'overdue' || executionStatus.value === 'pending_accept' ? 'nudge' : 'trend'
 })
 const primaryActionLabel = computed(() => primaryActionType.value === 'nudge' ? '催办' : '趋势')
+const showSuggestReassign = computed(() => (
+  Boolean(props.incident.current_work_order?.ticket_id)
+  && Boolean(currentDispatch.value?.id)
+  && ['pending_accept', 'waiting_support', 'overdue'].includes(executionStatus.value)
+))
 const headerSlaText = computed(() => {
   if (slaMeta.value.tone === 'overdue') {
     return `${Math.abs(slaMeta.value.minutesLeft || 0)} 分钟`
@@ -263,7 +302,7 @@ const progressMetaText = computed(() => {
   return '处理中'
 })
 
-function emitAction(type: 'trend' | 'contact' | 'nudge' | 'detail') {
+function emitAction(type: 'trend' | 'contact' | 'nudge' | 'detail' | 'suggest_reassign') {
   emit('action', { type, incident: props.incident })
 }
 

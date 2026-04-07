@@ -5,11 +5,11 @@
     <view class="nav-content">
       <!-- 左侧：返回按钮或空 -->
       <view class="nav-left" @click="onBack">
-        <text v-if="showBack" class="back-icon">‹</text>
+        <text v-if="showBack" class="back-icon" :style="{ color: textColor }">‹</text>
         <slot name="left" />
       </view>
       <!-- 标题 -->
-      <text class="nav-title">{{ title }}</text>
+      <text class="nav-title" :style="{ color: textColor }">{{ title }}</text>
       <!-- 右侧插槽 -->
       <view class="nav-right">
         <slot name="right" />
@@ -26,10 +26,12 @@ import { ref, computed, onMounted } from 'vue'
 const props = withDefaults(defineProps<{
   title?: string
   bgColor?: string
+  textColor?: string
   showBack?: boolean
 }>(), {
   title: '',
   bgColor: '#1a1a2e',
+  textColor: '#fff',
   showBack: false,
 })
 

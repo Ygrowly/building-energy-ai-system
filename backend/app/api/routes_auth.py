@@ -10,11 +10,14 @@
 """
 from __future__ import annotations
 
+import json
 import logging
 from datetime import timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, NoInspectionAvailable
+from sqlalchemy.inspection import inspect as sa_inspect
+from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
@@ -26,7 +29,7 @@ from app.core.security import (
     hash_password_async,
     verify_password_async,
 )
-from app.db.models import RefreshToken, User
+from app.db.models import RefreshToken, User, WorkerProfile, WorkerProfileSkill
 from app.db.session import get_db_session
 from app.schemas.auth_schemas import (
     ChangePasswordRequest,
@@ -38,6 +41,8 @@ from app.schemas.auth_schemas import (
     TokenResponse,
     UpdateProfileRequest,
     UserResponse,
+    WorkerProfileResponse,
+    WorkerSkillResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -51,6 +56,93 @@ router = APIRouter(prefix="/auth", tags=["认证"])
 async def _get_user_by_username(db: AsyncSession, username: str) -> User | None:
     result = await db.execute(select(User).where(User.username == username))
     return result.scalar_one_or_none()
+
+
+def _parse_json_list(raw: str | None) -> list[str]:
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw)
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(data, list):
+        return []
+    return [str(item) for item in data if item not in (None, "")]
+
+
+def _build_worker_profile_response(profile: WorkerProfile | None) -> WorkerProfileResponse | None:
+    if profile is None:
+        return None
+
+    skills: list[WorkerSkillResponse] = []
+    for link in getattr(profile, "skill_links", []) or []:
+        skill = getattr(link, "skill", None)
+        if skill is None:
+            continue
+        skills.append(
+            WorkerSkillResponse(
+                code=getattr(skill, "code", ""),
+                name=getattr(skill, "name", ""),
+                category=getattr(skill, "category", None),
+                proficiency=int(getattr(link, "proficiency", 3) or 3),
+                is_primary=bool(getattr(link, "is_primary", False)),
+            )
+        )
+
+    skills.sort(key=lambda item: (not item.is_primary, item.name))
+    return WorkerProfileResponse(
+        user_id=profile.user_id,
+        team=getattr(profile, "team", None),
+        job_title=profile.job_title,
+        shift_status=profile.shift_status or "on_duty",
+        dispatch_enabled=bool(profile.dispatch_enabled),
+        max_active_orders=int(profile.max_active_orders or 4),
+        accepts_emergency=bool(profile.accepts_emergency),
+        service_buildings=_parse_json_list(profile.service_buildings_json),
+        skills=skills,
+        notes=profile.notes,
+    )
+
+
+async def _serialize_user_response(db: AsyncSession, user: User) -> UserResponse:
+    try:
+        sa_inspect(user)
+    except NoInspectionAvailable:
+        profile = _build_worker_profile_response(getattr(user, "worker_profile", None))
+        return UserResponse(
+            id=user.id,
+            username=user.username,
+            email=getattr(user, "email", None),
+            phone=getattr(user, "phone", None),
+            role=getattr(user, "role", "resident"),
+            is_active=bool(user.is_active),
+            created_at=user.created_at,
+            worker_profile=profile,
+        )
+
+    result = await db.execute(
+        select(User)
+        .options(
+            selectinload(User.worker_profile).selectinload(WorkerProfile.team),
+            selectinload(User.worker_profile)
+            .selectinload(WorkerProfile.skill_links)
+            .selectinload(WorkerProfileSkill.skill),
+        )
+        .where(User.id == user.id)
+    )
+    loaded_user = result.scalar_one_or_none()
+    if not isinstance(loaded_user, User):
+        loaded_user = user
+    return UserResponse(
+        id=loaded_user.id,
+        username=loaded_user.username,
+        email=getattr(loaded_user, "email", None),
+        phone=getattr(loaded_user, "phone", None),
+        role=getattr(loaded_user, "role", None) or "resident",
+        is_active=bool(loaded_user.is_active),
+        created_at=loaded_user.created_at,
+        worker_profile=_build_worker_profile_response(getattr(loaded_user, "worker_profile", None)),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -95,7 +187,7 @@ async def register(
     logger.info("新用户注册成功: user_id=%s ip=%s", user.id, request.client.host if request.client else "unknown")
 
     return RegisterResponse(
-        user=UserResponse.model_validate(user),
+        user=await _serialize_user_response(db, user),
         access_token=access_token,
         refresh_token=refresh_token_str,
         expires_in=expires_in,
@@ -142,7 +234,7 @@ async def login(
     logger.info("用户登录成功: user_id=%s ip=%s", user.id, client_ip)
 
     return LoginResponse(
-        user=UserResponse.model_validate(user),
+        user=await _serialize_user_response(db, user),
         access_token=access_token,
         refresh_token=refresh_token_str,
         expires_in=expires_in,
@@ -269,8 +361,9 @@ async def logout(
 )
 async def get_me(
     current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db_session),
 ) -> UserResponse:
-    return UserResponse.model_validate(current_user)
+    return await _serialize_user_response(db, current_user)
 
 
 # ---------------------------------------------------------------------------
@@ -350,4 +443,4 @@ async def update_me(
         )
     await db.refresh(user)
     logger.info("用户资料已更新: user_id=%s", current_user.id)
-    return UserResponse.model_validate(user)
+    return await _serialize_user_response(db, user)

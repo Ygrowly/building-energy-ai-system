@@ -1,4 +1,5 @@
 import { get } from './request'
+import type { DispatchTask } from './workorder'
 
 export interface IncidentCurrentWorkOrder {
   id: string
@@ -15,9 +16,11 @@ export interface IncidentCurrentWorkOrder {
   assigned_phone?: string | null
   assigned_team_name?: string | null
   suggested_action?: string | null
+  dispatch_blocked_reason?: string | null
   dispatch_at?: string | null
   accepted_at?: string | null
   arrived_at?: string | null
+  processing_started_at?: string | null
   latest_progress_at?: string | null
   latest_progress_note?: string | null
   execution_status?: string | null
@@ -51,7 +54,10 @@ export interface Incident {
   resolved_at: string | null
   created_at: string | null
   updated_at: string | null
+  dispatch_blocked_reason?: string | null
+  latest_dispatch_note?: string | null
   current_work_order: IncidentCurrentWorkOrder | null
+  current_dispatch?: (Partial<DispatchTask> & Pick<DispatchTask, 'id' | 'dispatch_status' | 'attempt_no'>) | null
 }
 
 export interface IncidentListResponse {
@@ -102,6 +108,7 @@ export interface IncidentWorkOrder {
   dispatch_at?: string | null
   accepted_at?: string | null
   arrived_at?: string | null
+  processing_started_at?: string | null
   latest_progress_at?: string | null
   latest_progress_note?: string | null
   execution_status?: string | null

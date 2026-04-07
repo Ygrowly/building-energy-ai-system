@@ -5,12 +5,16 @@
   GET  /api/work-orders                          — 工单列表（分页、筛选）
   GET  /api/work-orders/{ticket_id}              — 单个工单详情
   POST /api/work-orders/approve                  — 兼容旧前端的审批接口
+  GET  /api/work-orders/{ticket_id}/dispatch-candidates — 派工候选人
+  POST /api/work-orders/{ticket_id}/dispatch     — 派工
+  POST /api/work-orders/{ticket_id}/worker-action — 维修执行动作
   POST /api/work-orders/{ticket_id}/worker-feedback  — 维修人员反馈
   POST /api/work-orders/{ticket_id}/admin-review     — 管理员监督/覆盖
   POST /api/work-orders/{ticket_id}/ai-review-trigger — 手动触发 AI 重审
 """
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timezone
 from typing import Any
@@ -18,21 +22,33 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 from sqlalchemy.future import select
+from sqlalchemy.orm import selectinload
 
 from app.core.cache import delete_cache_by_prefix, get_or_compute_json
 from app.core.config import get_settings
 from app.core.security import get_current_user, get_current_user_optional
-from app.db.models import WorkOrder, User
+from app.db.models import WorkOrder, WorkOrderAuditLog, User, WorkerProfile, WorkerProfileSkill
 from app.db.session import get_db_session, AsyncSessionLocal
+from app.services.dispatch_service import (
+    complete_dispatch_task,
+    get_current_dispatch_task,
+    load_current_dispatches_by_work_order_ids,
+    load_dispatch_events_by_task_ids,
+    list_dispatch_tasks_for_work_order,
+    serialize_dispatch_task,
+)
 from app.services.work_order_service import (
+    DISPATCHABLE_WORK_ORDER_STATUSES,
+    build_batch_dispatch_preview,
     create_work_order,
     get_work_order_by_ticket_id,
     list_work_orders as svc_list_work_orders,
+    list_dispatch_candidates,
     serialize_work_order,
     transition_status,
-    validate_transition,
+    assign_work_order,
+    record_worker_dispatch_action,
     apply_ai_review,
 )
 
@@ -48,6 +64,32 @@ router = APIRouter(prefix="/work-orders", tags=["工单"])
 def _require_role(user: User, *roles: str) -> None:
     if user.role not in roles:
         raise HTTPException(status_code=403, detail="权限不足")
+
+
+def _resolve_work_order_assigned_user_id(
+    *,
+    work_order: WorkOrder,
+    current_dispatch: Any | None = None,
+) -> str | None:
+    return getattr(current_dispatch, "assigned_to", None) or getattr(work_order, "assigned_to", None)
+
+
+def _collect_work_order_assigned_user_ids(
+    *,
+    work_orders: list[WorkOrder],
+    current_dispatches_by_work_order_id: dict[str, Any] | None = None,
+) -> list[str]:
+    assigned_user_ids: list[str] = []
+    seen: set[str] = set()
+    for work_order in work_orders:
+        assigned_user_id = _resolve_work_order_assigned_user_id(
+            work_order=work_order,
+            current_dispatch=(current_dispatches_by_work_order_id or {}).get(work_order.id),
+        )
+        if assigned_user_id and assigned_user_id not in seen:
+            seen.add(assigned_user_id)
+            assigned_user_ids.append(assigned_user_id)
+    return assigned_user_ids
 
 
 async def _invalidate_related_cache() -> None:
@@ -151,11 +193,205 @@ class WorkerFeedbackRequest(BaseModel):
     notes: str | None = None
 
 
+class DispatchRequest(BaseModel):
+    assigned_to: str
+    dispatch_mode: str = Field(default="manual", pattern=r"^(manual|assisted|auto|reassigned|escalation)$")
+    assigned_team_id: str | None = None
+    selection_reason: str | None = None
+    notes: str | None = None
+
+
+class BatchDispatchApplyItemRequest(BaseModel):
+    ticket_id: str
+    assigned_to: str
+    dispatch_mode: str = Field(default="assisted", pattern=r"^(manual|assisted|auto|reassigned|escalation)$")
+    selection_reason: str | None = None
+    notes: str | None = None
+
+
+class BatchDispatchApplyRequest(BaseModel):
+    items: list[BatchDispatchApplyItemRequest] = Field(..., min_length=1, max_length=20)
+
+
+class WorkerActionRequest(BaseModel):
+    action: str = Field(..., pattern=r"^(accept|arrive|start|request_support|support_resolved)$")
+    notes: str | None = None
+    support_team_id: str | None = None
+
+
 class AdminReviewRequest(BaseModel):
     action: str = Field(
         ..., pattern=r"^(confirm|override_approve|override_reject|close_escalated)$"
     )
     notes: str | None = None
+
+
+async def _load_assigned_users(
+    db: AsyncSession,
+    work_orders: list[WorkOrder],
+) -> dict[str, User]:
+    return await _load_users_by_ids(
+        db,
+        [wo.assigned_to for wo in work_orders if wo.assigned_to],
+    )
+
+
+async def _load_users_by_ids(
+    db: AsyncSession,
+    user_ids: list[str | None],
+) -> dict[str, User]:
+    assigned_user_ids = [user_id for user_id in dict.fromkeys(user_ids) if user_id]
+    if not assigned_user_ids:
+        return {}
+    result = await db.execute(
+        select(User)
+        .options(
+            selectinload(User.worker_profile).selectinload(WorkerProfile.team),
+            selectinload(User.worker_profile)
+            .selectinload(WorkerProfile.skill_links)
+            .selectinload(WorkerProfileSkill.skill),
+        )
+        .where(User.id.in_(assigned_user_ids))
+    )
+    return {user.id: user for user in result.scalars().all()}
+
+
+def _safe_load_json(raw: str | None) -> Any:
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _serialize_audit_log(log_item: WorkOrderAuditLog) -> dict[str, Any]:
+    return {
+        "id": log_item.id,
+        "action": log_item.action,
+        "old_status": log_item.old_status,
+        "new_status": log_item.new_status,
+        "actor_type": log_item.actor_type,
+        "actor_id": log_item.actor_id,
+        "detail": _safe_load_json(log_item.detail_json),
+        "created_at": log_item.created_at.isoformat() if log_item.created_at else None,
+    }
+
+
+def _dispatch_event_label(event_type: str) -> str:
+    labels = {
+        "assigned": "人工派工",
+        "auto_assigned": "系统自动派工",
+        "reminded": "调度催办",
+        "accepted": "维修人员接单",
+        "arrived": "维修人员到场",
+        "started": "开始处理",
+        "support_requested": "申请协同",
+        "support_resolved": "协同完成，恢复处理",
+        "rejected": "维修人员拒单",
+        "transferred": "改派/转派",
+        "cancelled": "取消派工",
+        "timeout_warning": "临近超时",
+        "timeout_overdue": "已超时",
+        "completed": "处理完成",
+        "escalated": "升级处理",
+    }
+    return labels.get(event_type, event_type)
+
+
+def _audit_log_label(action: str) -> str:
+    labels = {
+        "create": "工单已创建",
+        "ai_approve": "AI审批通过",
+        "ai_fallback_approve": "AI审批通过（降级）",
+        "ai_reject": "AI审批驳回",
+        "admin_override": "管理员覆盖决策",
+        "dispatch": "工单已进入派工流程",
+        "dispatch_accept": "维修人员确认接单",
+        "dispatch_arrive": "维修人员确认到场",
+        "dispatch_start": "维修人员开始处理",
+        "dispatch_request_support": "维修人员申请协同",
+        "dispatch_support_resolved": "协同事项已解决，恢复处理",
+        "dispatch_nudge": "调度已催办",
+        "dispatch_reject": "维修人员拒单，工单回到待派工",
+        "dispatch_reassign": "管理员改派",
+        "dispatch_cancel": "管理员取消当前派工",
+        "worker_feedback": "维修结果已提交",
+        "close": "工单已关闭",
+    }
+    return labels.get(action, action)
+
+
+def _build_work_order_timeline(
+    *,
+    audit_logs: list[dict[str, Any]],
+    dispatch_tasks: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    timeline: list[dict[str, Any]] = []
+
+    for log_item in audit_logs:
+        detail = log_item.get("detail") or {}
+        note = (
+            detail.get("notes")
+            or detail.get("reason")
+            or detail.get("result")
+            or detail.get("admin_action")
+        )
+        timeline.append(
+            {
+                "id": f"audit:{log_item['id']}",
+                "kind": "work_order_audit",
+                "occurred_at": log_item.get("created_at"),
+                "label": _audit_log_label(log_item.get("action", "")),
+                "note": note,
+                "attempt_no": None,
+                "dispatch_task_id": detail.get("dispatch_id"),
+                "sort_value": log_item.get("created_at") or "",
+            }
+        )
+
+    for dispatch_task in dispatch_tasks:
+        events = dispatch_task.get("events") or []
+        if not events and dispatch_task.get("assigned_at"):
+            timeline.append(
+                {
+                    "id": f"dispatch:{dispatch_task['id']}:assigned",
+                    "kind": "dispatch_event",
+                    "occurred_at": dispatch_task.get("assigned_at"),
+                    "label": "人工派工",
+                    "note": dispatch_task.get("selection_reason"),
+                    "attempt_no": dispatch_task.get("attempt_no"),
+                    "dispatch_task_id": dispatch_task.get("id"),
+                    "sort_value": dispatch_task.get("assigned_at") or "",
+                }
+            )
+            continue
+
+        for event in events:
+            payload = event.get("payload") or {}
+            note = (
+                payload.get("notes")
+                or payload.get("reason")
+                or payload.get("selection_reason")
+                or payload.get("result")
+                or payload.get("message")
+                or payload.get("dispatch_mode")
+            )
+            timeline.append(
+                {
+                    "id": f"dispatch:{dispatch_task['id']}:{event['id']}",
+                    "kind": "dispatch_event",
+                    "occurred_at": event.get("created_at"),
+                    "label": _dispatch_event_label(event.get("event_type", "")),
+                    "note": note,
+                    "attempt_no": dispatch_task.get("attempt_no"),
+                    "dispatch_task_id": dispatch_task.get("id"),
+                    "sort_value": event.get("created_at") or "",
+                }
+            )
+
+    timeline.sort(key=lambda item: item.get("sort_value") or "")
+    return timeline
 
 
 # ---------------------------------------------------------------------------
@@ -203,14 +439,215 @@ async def list_work_orders_endpoint(
             page=page,
             page_size=page_size,
         )
+        current_dispatches = await load_current_dispatches_by_work_order_ids(
+            db,
+            work_order_ids=[wo.id for wo in items],
+        )
+        assigned_users_by_id = await _load_users_by_ids(
+            db,
+            _collect_work_order_assigned_user_ids(
+                work_orders=items,
+                current_dispatches_by_work_order_id=current_dispatches,
+            ),
+        )
         return {
             "total": total,
             "page": page,
             "page_size": page_size,
-            "work_orders": [serialize_work_order(wo) for wo in items],
+            "work_orders": [
+                serialize_work_order(
+                    wo,
+                    assigned_user=assigned_users_by_id.get(
+                        _resolve_work_order_assigned_user_id(
+                            work_order=wo,
+                            current_dispatch=current_dispatches.get(wo.id),
+                        )
+                        or ""
+                    ),
+                    current_dispatch=current_dispatches.get(wo.id),
+                )
+                for wo in items
+            ],
         }
 
     return await get_or_compute_json(cache_key, ttl, _compute)
+
+
+# ---------------------------------------------------------------------------
+# GET /api/work-orders/batch-dispatch-preview — 批量派工预览
+# ---------------------------------------------------------------------------
+@router.get("/batch-dispatch-preview", summary="获取批量派工推荐")
+async def batch_dispatch_preview_endpoint(
+    sample_size: int = Query(default=10, ge=1, le=20),
+    scan_limit: int = Query(default=40, ge=1, le=200),
+    min_score: int = Query(default=100, ge=0, le=200),
+    min_gap: int = Query(default=10, ge=0, le=100),
+    building_id: str | None = Query(default=None),
+    priority: str | None = Query(default=None),
+    max_per_worker: int | None = Query(default=2, ge=1, le=10),
+    db: AsyncSession = Depends(get_db_session),
+    user: User = Depends(get_current_user),
+):
+    _require_role(user, "admin", "manager")
+    return await build_batch_dispatch_preview(
+        db,
+        sample_size=sample_size,
+        scan_limit=scan_limit,
+        min_score=min_score,
+        min_gap=min_gap,
+        building_id=building_id,
+        priority=priority,
+        max_per_worker=max_per_worker,
+    )
+
+
+# ---------------------------------------------------------------------------
+# POST /api/work-orders/batch-dispatch — 批量派工
+# ---------------------------------------------------------------------------
+@router.post("/batch-dispatch", summary="批量派工")
+async def batch_dispatch_work_orders(
+    req: BatchDispatchApplyRequest,
+    db: AsyncSession = Depends(get_db_session),
+    user: User = Depends(get_current_user),
+):
+    _require_role(user, "admin", "manager")
+
+    assigned_users = await _load_users_by_ids(
+        db,
+        [item.assigned_to for item in req.items],
+    )
+    applied: list[dict[str, Any]] = []
+    failed: list[dict[str, Any]] = []
+
+    def _failure_payload(
+        *,
+        item: BatchDispatchApplyItemRequest,
+        reason: str,
+        reason_code: str,
+        current_status: str | None = None,
+        assigned_user: User | None = None,
+        retryable: bool = False,
+        manual_review_recommended: bool = False,
+    ) -> dict[str, Any]:
+        return {
+            "ticket_id": item.ticket_id,
+            "assigned_to": item.assigned_to,
+            "assigned_to_name": assigned_user.username if assigned_user else None,
+            "dispatch_mode": item.dispatch_mode,
+            "selection_reason": item.selection_reason or item.notes,
+            "reason": reason,
+            "reason_code": reason_code,
+            "current_status": current_status,
+            "retryable": retryable,
+            "manual_review_recommended": manual_review_recommended,
+        }
+
+    for item in req.items:
+        work_order = await get_work_order_by_ticket_id(db, item.ticket_id)
+        assigned_user = assigned_users.get(item.assigned_to)
+        if work_order is None:
+            failed.append(
+                _failure_payload(
+                    item=item,
+                    assigned_user=assigned_user,
+                    reason="工单不存在",
+                    reason_code="work_order_missing",
+                )
+            )
+            continue
+        if work_order.status not in set(DISPATCHABLE_WORK_ORDER_STATUSES):
+            failed.append(
+                _failure_payload(
+                    item=item,
+                    assigned_user=assigned_user,
+                    reason=f"当前状态 {work_order.status} 不支持派工",
+                    reason_code="status_invalid",
+                    current_status=work_order.status,
+                    manual_review_recommended=work_order.status == "pending_dispatch",
+                )
+            )
+            continue
+
+        if not assigned_user or assigned_user.role != "ops" or not assigned_user.is_active:
+            failed.append(
+                _failure_payload(
+                    item=item,
+                    reason="目标维修人员不存在或不可用",
+                    reason_code="assignee_unavailable",
+                    current_status=work_order.status,
+                    manual_review_recommended=True,
+                )
+            )
+            continue
+
+        candidate_snapshot = {
+            "user_id": assigned_user.id,
+            "username": assigned_user.username,
+            "phone": assigned_user.phone,
+            "team_name": getattr(getattr(assigned_user.worker_profile, "team", None), "name", None),
+            "assigned_team_id": getattr(assigned_user.worker_profile, "team_id", None),
+            "dispatch_mode": item.dispatch_mode,
+        }
+        selection_reason = item.selection_reason or item.notes or "批量派工确认"
+
+        try:
+            await assign_work_order(
+                db,
+                work_order=work_order,
+                assigned_user=assigned_user,
+                actor_type="admin",
+                actor_id=user.id,
+                dispatch_mode=item.dispatch_mode,
+                candidate_snapshot=candidate_snapshot,
+                notes=selection_reason,
+            )
+            await db.commit()
+            applied.append(
+                {
+                    "ticket_id": work_order.ticket_id,
+                    "dispatch_id": work_order.current_dispatch_id,
+                    "assigned_to": assigned_user.id,
+                    "assigned_to_name": assigned_user.username,
+                    "status": work_order.status,
+                }
+            )
+        except ValueError as exc:
+            await db.rollback()
+            failed.append(
+                _failure_payload(
+                    item=item,
+                    assigned_user=assigned_user,
+                    reason=str(exc),
+                    reason_code="validation_error",
+                    current_status=work_order.status,
+                    manual_review_recommended=True,
+                )
+            )
+        except Exception as exc:
+            await db.rollback()
+            logger.exception("批量派工失败: ticket_id=%s", item.ticket_id)
+            failed.append(
+                _failure_payload(
+                    item=item,
+                    assigned_user=assigned_user,
+                    reason=f"{type(exc).__name__}: {exc}",
+                    reason_code="server_error",
+                    current_status=work_order.status,
+                    retryable=True,
+                    manual_review_recommended=True,
+                )
+            )
+
+    if applied:
+        await _invalidate_related_cache()
+
+    return {
+        "requested_count": len(req.items),
+        "dispatched_count": len(applied),
+        "failed_count": len(failed),
+        "applied": applied,
+        "failed": failed,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -228,7 +665,110 @@ async def get_work_order_endpoint(
         wo = await get_work_order_by_ticket_id(db, ticket_id)
         if not wo:
             raise HTTPException(status_code=404, detail=f"工单 {ticket_id} 不存在")
-        return serialize_work_order(wo)
+        current_dispatch = await get_current_dispatch_task(db, work_order=wo)
+        assigned_user = None
+        assigned_user_id = _resolve_work_order_assigned_user_id(
+            work_order=wo,
+            current_dispatch=current_dispatch,
+        )
+        if assigned_user_id:
+            result = await db.execute(
+                select(User)
+                .options(
+                    selectinload(User.worker_profile).selectinload(WorkerProfile.team),
+                    selectinload(User.worker_profile)
+                    .selectinload(WorkerProfile.skill_links)
+                    .selectinload(WorkerProfileSkill.skill),
+                )
+                .where(User.id == assigned_user_id)
+            )
+            assigned_user = result.scalar_one_or_none()
+        dispatch_events = []
+        if current_dispatch is not None:
+            dispatch_events_map = await load_dispatch_events_by_task_ids(
+                db,
+                dispatch_task_ids=[current_dispatch.id],
+            )
+            dispatch_events = dispatch_events_map.get(current_dispatch.id, [])
+        return serialize_work_order(
+            wo,
+            assigned_user=assigned_user,
+            current_dispatch=current_dispatch,
+            dispatch_events=dispatch_events,
+        )
+
+    return await get_or_compute_json(cache_key, ttl, _compute)
+
+
+# ---------------------------------------------------------------------------
+# GET /api/work-orders/{ticket_id}/timeline — 工单派工历史 / 时间线
+# ---------------------------------------------------------------------------
+@router.get("/{ticket_id}/timeline", summary="获取工单时间线")
+async def get_work_order_timeline_endpoint(
+    ticket_id: str,
+    db: AsyncSession = Depends(get_db_session),
+):
+    cache_key = f"workorders:timeline:{ticket_id}"
+    ttl = settings.CACHE_WORKORDERS_TTL_SECONDS
+
+    async def _compute() -> dict[str, Any]:
+        wo = await get_work_order_by_ticket_id(db, ticket_id)
+        if not wo:
+            raise HTTPException(status_code=404, detail=f"工单 {ticket_id} 不存在")
+
+        current_dispatch = await get_current_dispatch_task(db, work_order=wo)
+        dispatch_tasks = await list_dispatch_tasks_for_work_order(db, work_order_id=wo.id)
+        dispatch_events_map = await load_dispatch_events_by_task_ids(
+            db,
+            dispatch_task_ids=[item.id for item in dispatch_tasks],
+        )
+        assigned_users_by_id = await _load_users_by_ids(
+            db,
+            [
+                _resolve_work_order_assigned_user_id(
+                    work_order=wo,
+                    current_dispatch=current_dispatch,
+                ),
+                *[item.assigned_to for item in dispatch_tasks],
+            ],
+        )
+        audit_logs_result = await db.execute(
+            select(WorkOrderAuditLog)
+            .where(WorkOrderAuditLog.work_order_id == wo.id)
+            .order_by(WorkOrderAuditLog.created_at.asc())
+        )
+        audit_logs = [_serialize_audit_log(item) for item in audit_logs_result.scalars().all()]
+        serialized_dispatch_tasks = [
+            serialize_dispatch_task(
+                item,
+                assigned_user=assigned_users_by_id.get(item.assigned_to or ""),
+                events=dispatch_events_map.get(item.id, []),
+            )
+            for item in dispatch_tasks
+        ]
+        work_order_data = serialize_work_order(
+            wo,
+            assigned_user=assigned_users_by_id.get(
+                _resolve_work_order_assigned_user_id(
+                    work_order=wo,
+                    current_dispatch=current_dispatch,
+                )
+                or ""
+            ),
+            current_dispatch=current_dispatch,
+            dispatch_events=dispatch_events_map.get(current_dispatch.id, []) if current_dispatch else [],
+        )
+
+        return {
+            "ticket_id": ticket_id,
+            "work_order": work_order_data,
+            "dispatch_tasks": serialized_dispatch_tasks,
+            "audit_logs": audit_logs,
+            "timeline": _build_work_order_timeline(
+                audit_logs=audit_logs,
+                dispatch_tasks=serialized_dispatch_tasks,
+            ),
+        }
 
     return await get_or_compute_json(cache_key, ttl, _compute)
 
@@ -259,13 +799,9 @@ async def approve_work_order(
             wo.admin_notes = req.reason
             wo.admin_reviewed_at = now
             await transition_status(
-                db, work_order=wo, new_status="admin_override_approved",
+                db, work_order=wo, new_status="pending_dispatch",
                 action="admin_override", actor_type="admin",
                 detail={"action": "override_approve", "notes": req.reason},
-            )
-            await transition_status(
-                db, work_order=wo, new_status="dispatched",
-                action="dispatch", actor_type="system",
             )
         elif wo.status in ("completed", "false_alarm"):
             wo.admin_action = "confirm"
@@ -304,18 +840,14 @@ async def approve_work_order(
             "message": f"工单 {req.ticket_id} 已处理（{wo.status}）。",
         }
     else:
-        if wo.status == "auto_approved":
+        if wo.status in ("pending_dispatch", "auto_approved"):
             wo.admin_action = "override_reject"
             wo.admin_notes = req.reason
             wo.admin_reviewed_at = now
             await transition_status(
-                db, work_order=wo, new_status="admin_override_rejected",
+                db, work_order=wo, new_status="closed",
                 action="admin_override", actor_type="admin",
                 detail={"action": "override_reject", "notes": req.reason},
-            )
-            await transition_status(
-                db, work_order=wo, new_status="closed",
-                action="close", actor_type="admin",
             )
         elif wo.status == "pending_review":
             await apply_ai_review(
@@ -348,6 +880,136 @@ async def approve_work_order(
 
 
 # ---------------------------------------------------------------------------
+# GET /api/work-orders/{ticket_id}/dispatch-candidates — 派工候选人
+# ---------------------------------------------------------------------------
+@router.get("/{ticket_id}/dispatch-candidates", summary="获取派工候选人")
+async def get_dispatch_candidates(
+    ticket_id: str,
+    db: AsyncSession = Depends(get_db_session),
+    user: User = Depends(get_current_user),
+):
+    _require_role(user, "admin", "manager")
+
+    wo = await get_work_order_by_ticket_id(db, ticket_id)
+    if not wo:
+        raise HTTPException(status_code=404, detail="工单不存在")
+    if wo.status not in ("pending_dispatch", "auto_approved", "admin_override_approved"):
+        raise HTTPException(status_code=409, detail=f"当前状态 {wo.status} 不支持派工")
+
+    candidate_payload = await list_dispatch_candidates(db, work_order=wo)
+    return {
+        "ticket_id": ticket_id,
+        "status": wo.status,
+        "requirement": candidate_payload["requirement"],
+        "candidates": candidate_payload["candidates"],
+    }
+
+
+# ---------------------------------------------------------------------------
+# POST /api/work-orders/{ticket_id}/dispatch — 派工
+# ---------------------------------------------------------------------------
+@router.post("/{ticket_id}/dispatch", summary="派工")
+async def dispatch_work_order(
+    ticket_id: str,
+    req: DispatchRequest,
+    db: AsyncSession = Depends(get_db_session),
+    user: User = Depends(get_current_user),
+):
+    _require_role(user, "admin", "manager")
+
+    wo = await get_work_order_by_ticket_id(db, ticket_id)
+    if not wo:
+        raise HTTPException(status_code=404, detail="工单不存在")
+
+    assigned_user_result = await db.execute(
+        select(User)
+        .options(
+            selectinload(User.worker_profile).selectinload(WorkerProfile.team),
+            selectinload(User.worker_profile)
+            .selectinload(WorkerProfile.skill_links)
+            .selectinload(WorkerProfileSkill.skill),
+        )
+        .where(User.id == req.assigned_to)
+    )
+    assigned_user = assigned_user_result.scalar_one_or_none()
+    if not assigned_user or assigned_user.role != "ops" or not assigned_user.is_active:
+        raise HTTPException(status_code=404, detail="目标维修人员不存在或不可用")
+
+    try:
+        candidate_snapshot = {
+            "user_id": assigned_user.id,
+            "username": assigned_user.username,
+            "phone": assigned_user.phone,
+            "team_name": getattr(getattr(assigned_user.worker_profile, "team", None), "name", None),
+            "assigned_team_id": req.assigned_team_id,
+            "dispatch_mode": req.dispatch_mode,
+        }
+        await assign_work_order(
+            db,
+            work_order=wo,
+            assigned_user=assigned_user,
+            actor_type="admin",
+            actor_id=user.id,
+            dispatch_mode=req.dispatch_mode,
+            candidate_snapshot=candidate_snapshot,
+            notes=req.selection_reason or req.notes,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    await db.commit()
+    await _invalidate_related_cache()
+
+    return {
+        "status": wo.status,
+        "ticket_id": ticket_id,
+        "dispatch_id": wo.current_dispatch_id,
+        "message": f"工单已派给 {assigned_user.username}",
+    }
+
+
+# ---------------------------------------------------------------------------
+# POST /api/work-orders/{ticket_id}/worker-action — 维修执行动作
+# ---------------------------------------------------------------------------
+@router.post("/{ticket_id}/worker-action", summary="维修执行动作")
+async def worker_action(
+    ticket_id: str,
+    req: WorkerActionRequest,
+    db: AsyncSession = Depends(get_db_session),
+    user: User = Depends(get_current_user),
+):
+    _require_role(user, "ops", "admin", "manager")
+
+    wo = await get_work_order_by_ticket_id(db, ticket_id)
+    if not wo:
+        raise HTTPException(status_code=404, detail="工单不存在")
+    current_dispatch = await get_current_dispatch_task(db, work_order=wo)
+    if user.role == "ops" and (current_dispatch is None or current_dispatch.assigned_to != user.id):
+        raise HTTPException(status_code=403, detail="只能操作派发给自己的工单")
+
+    try:
+        await record_worker_dispatch_action(
+            db,
+            work_order=wo,
+            action=req.action,
+            actor_id=user.id,
+            notes=req.notes,
+            support_team_id=req.support_team_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    await db.commit()
+    await _invalidate_related_cache()
+
+    return {
+        "status": wo.status,
+        "ticket_id": ticket_id,
+        "message": f"执行动作已记录：{req.action}",
+    }
+
+
+# ---------------------------------------------------------------------------
 # POST /api/work-orders/{ticket_id}/worker-feedback — 维修人员反馈
 # ---------------------------------------------------------------------------
 @router.post("/{ticket_id}/worker-feedback", summary="维修人员提交反馈")
@@ -370,13 +1032,25 @@ async def worker_feedback(
         )
 
     # ops 角色只能反馈派发给自己的工单
-    if user.role == "ops" and wo.assigned_to and wo.assigned_to != user.id:
+    current_dispatch = await get_current_dispatch_task(db, work_order=wo)
+    if user.role == "ops" and (current_dispatch is None or current_dispatch.assigned_to != user.id):
         raise HTTPException(status_code=403, detail="只能反馈派发给自己的工单")
 
     now = datetime.now(timezone.utc)
     wo.worker_result = req.result
     wo.worker_notes = req.notes
     wo.worker_feedback_at = now
+    if current_dispatch is None:
+        raise HTTPException(status_code=409, detail="当前工单缺少有效派工任务")
+    await complete_dispatch_task(
+        db,
+        work_order=wo,
+        dispatch_task=current_dispatch,
+        actor_type="worker",
+        actor_id=user.id,
+        result=req.result,
+        notes=req.notes,
+    )
 
     # needs_parts 不变更状态，仅记录
     if req.result != "needs_parts":
@@ -451,29 +1125,21 @@ async def admin_review(
                     detail="已超过 48 小时审阅窗口，无法推翻",
                 )
         await transition_status(
-            db, work_order=wo, new_status="admin_override_approved",
+            db, work_order=wo, new_status="pending_dispatch",
             action="admin_override", actor_type="admin", actor_id=user.id,
             detail={"admin_action": "override_approve", "notes": req.notes},
         )
-        await transition_status(
-            db, work_order=wo, new_status="dispatched",
-            action="dispatch", actor_type="system",
-        )
 
     elif req.action == "override_reject":
-        if wo.status != "auto_approved":
+        if wo.status not in ("pending_dispatch", "auto_approved"):
             raise HTTPException(
                 status_code=409,
-                detail=f"override_reject 要求状态为 auto_approved（未派发前），当前为 {wo.status}",
+                detail=f"override_reject 要求状态为 pending_dispatch（未派发前），当前为 {wo.status}",
             )
-        await transition_status(
-            db, work_order=wo, new_status="admin_override_rejected",
-            action="admin_override", actor_type="admin", actor_id=user.id,
-            detail={"admin_action": "override_reject", "notes": req.notes},
-        )
         await transition_status(
             db, work_order=wo, new_status="closed",
             action="close", actor_type="admin", actor_id=user.id,
+            detail={"admin_action": "override_reject", "notes": req.notes},
         )
 
     elif req.action == "close_escalated":
@@ -513,10 +1179,10 @@ async def ai_review_trigger(
     if not wo:
         raise HTTPException(status_code=404, detail="工单不存在")
 
-    if wo.status not in ("auto_approved", "auto_rejected"):
+    if wo.status not in ("pending_dispatch", "auto_rejected", "auto_approved"):
         raise HTTPException(
             status_code=409,
-            detail=f"仅 auto_approved 或 auto_rejected 状态可重审，当前为 {wo.status}",
+            detail=f"仅 pending_dispatch 或 auto_rejected 状态可重审，当前为 {wo.status}",
         )
 
     # 重置 AI 审批字段，回到 pending_review 重新审

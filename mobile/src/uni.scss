@@ -1,12 +1,16 @@
-/* Noto Sans SC — 从 npm 包直接引入（本地，无需网络） */
-@import '@fontsource/noto-sans-sc/400.css';
-@import '@fontsource/noto-sans-sc/700.css';
-@import '@fontsource/noto-sans-sc/900.css';
+/* 锐字真言体 — 本地字体 */
+@font-face {
+  font-family: 'RuiZiZhenYan';
+  src: url('/static/fonts/RuiZiZhenYanTiMianFeiShangYong-2.ttf') format('truetype');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
 
 /* 全局 CSS 变量 */
 page {
   background-color: #f5f7fa;
-  font-family: 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif;
 }
 
 /* ---- 运维端色系 ---- */
@@ -19,10 +23,10 @@ page {
 
 /* ---- 维修端色系 ---- */
 .theme-worker {
-  --primary: #00b96b;
-  --primary-dark: #0f3d2e;
-  --primary-light: #e6f7f1;
-  --accent: #38ef7d;
+  --primary: #e4edb8;
+  --primary-dark: #5f7137;
+  --primary-light: #f7faef;
+  --accent: #b5c875;
 }
 
 /* ---- 通用色 ---- */
@@ -115,7 +119,7 @@ $color-white: #ffffff;
   background: #3b6cf4;
   border: none;
 
-  &.worker { background: #00b96b; }
+  &.worker { background: linear-gradient(135deg, #d6e29f, #b5c875); }
   &.danger  { background: $color-high; }
   &.ghost {
     background: transparent;

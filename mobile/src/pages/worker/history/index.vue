@@ -1,243 +1,327 @@
 <template>
   <view class="page">
-    <NavBar title="历史记录" bg-color="#0f3d2e" />
+    <NavBar title="消息" bg-color="#E4EDB8" text-color="#5f7137">
+      <template #right>
+        <text class="nav-action" @click="loadData">↻</text>
+      </template>
+    </NavBar>
 
-    <!-- 统计卡 -->
-    <view class="stats-card" v-if="stats.total > 0">
-      <view class="stat">
-        <text class="stat-n">{{ stats.total }}</text>
-        <text class="stat-l">累计工单</text>
-      </view>
-      <view class="stat-sep" />
-      <view class="stat">
-        <text class="stat-n green">{{ stats.fixed }}</text>
-        <text class="stat-l">已修复</text>
-      </view>
-      <view class="stat-sep" />
-      <view class="stat">
-        <text class="stat-n orange">{{ stats.falseAlarm }}</text>
-        <text class="stat-l">误报</text>
-      </view>
-    </view>
-
-    <scroll-view scroll-y class="list-area" @scrolltolower="loadMore">
-      <view v-if="loading && !incidents.length">
-        <view v-for="i in 4" :key="i" class="wo-skeleton" />
+    <scroll-view scroll-y class="page-scroll">
+      <view class="card-grid">
+        <view
+          v-for="card in messageCards"
+          :key="card.key"
+          class="entry-card"
+          @click="openEntry(card.key)"
+        >
+          <view class="entry-icon" :style="{ background: card.accent }">
+            <text>{{ iconText(card.key) }}</text>
+            <view v-if="card.count" class="entry-badge">{{ card.count > 99 ? '99+' : card.count }}</view>
+          </view>
+          <text class="entry-title">{{ card.label }}</text>
+        </view>
       </view>
 
-      <view
-        v-for="incident in incidents"
-        :key="incident.id"
-        class="history-card"
-        :class="incident.current_work_order?.status"
-        @click="openDetail(incident)"
-      >
-        <view class="hc-header">
-          <text class="hc-date">{{ formatDate(incident.updated_at) }}</text>
-          <view class="feedback-badge" :class="incident.current_work_order?.status">
-            {{ WORKER_RESULT_LABEL[incident.current_work_order?.worker_result ?? ''] || '处理完成' }}
+      <view class="feed-card">
+        <view
+          v-for="item in messageItems"
+          :key="item.id"
+          class="feed-item"
+          @click="openMessage(item)"
+        >
+          <view class="feed-avatar" :class="item.category">
+            <text>{{ avatarText(item.category) }}</text>
+          </view>
+
+          <view class="feed-main">
+            <view class="feed-top">
+              <text class="feed-title">{{ item.title }}</text>
+              <text class="feed-time">{{ item.time }}</text>
+            </view>
+            <view class="feed-bottom">
+              <text class="feed-excerpt">{{ item.excerpt }}</text>
+              <view v-if="item.unread" class="feed-unread">{{ item.unread }}</view>
+            </view>
           </view>
         </view>
-
-        <text class="hc-building">{{ incident.building_id }}</text>
-        <text class="hc-desc">{{ incident.summary_text }}</text>
-        <text v-if="incident.current_work_order?.worker_notes" class="hc-note">备注：{{ incident.current_work_order.worker_notes }}</text>
       </view>
-
-      <view v-if="!loading && !incidents.length" class="empty-state">
-        <image class="empty-icon" src="/static/icons/tab-history.svg" mode="aspectFit" />
-        <text>暂无历史记录</text>
-      </view>
-
-      <view v-if="noMore && incidents.length > 0" class="load-end">没有更多了</view>
     </scroll-view>
 
-    <TabBar :tabs="WORKER_TABS" current="history" theme="worker" />
+    <TabBar :tabs="WORKER_TABS" current="messages" theme="worker" />
   </view>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { onShow } from '@dcloudio/uni-app'
 import NavBar from '../../../components/NavBar.vue'
 import TabBar from '../../../components/TabBar.vue'
-import { useRouteGuard } from '../../../utils/route-guard'
-import { WORKER_TABS } from '../../../constants/tabs'
-import { WORKER_ROLES } from '../../../constants/roles'
-import { WORKER_RESULT_LABEL } from '../../../constants/status'
-import { formatDate } from '../../../utils/format'
 import { incidentApi, type Incident } from '../../../api/incident'
+import { useRouteGuard } from '../../../utils/route-guard'
+import { WORKER_ROLES } from '../../../constants/roles'
+import { WORKER_TABS } from '../../../constants/tabs'
 import { getCache, setCache } from '../../../utils/cache'
+import { getWorkerMessageCards, getWorkerMessageItems, type WorkerMessageItem } from '../../../utils/worker-ui'
+import { subscribeWorkerOrdersUpdated } from '../../../utils/worker-sync'
 
 useRouteGuard(WORKER_ROLES)
 
 const incidents = ref<Incident[]>([])
 const loading = ref(false)
-const noMore = ref(false)
-const page = ref(1)
-const PAGE_SIZE = 15
+const hasLoadedOnce = ref(false)
+let unsubscribeWorkerSync: (() => void) | null = null
 
-const stats = computed(() => ({
-  total:      incidents.value.length,
-  fixed:      incidents.value.filter(o => o.current_work_order?.worker_result === 'fixed').length,
-  falseAlarm: incidents.value.filter(o => o.current_work_order?.worker_result === 'false_alarm').length,
-}))
+const messageCards = computed(() => getWorkerMessageCards(incidents.value))
+const messageItems = computed(() => getWorkerMessageItems(incidents.value))
 
 async function loadData() {
-  const cached = getCache<Incident[]>('worker_history')
+  const cached = getCache<Incident[]>('worker_messages')
   if (cached) incidents.value = cached
   loading.value = !cached
+
   try {
     const res = await incidentApi.list({
-      workflow_status: 'completed,closed,false_alarm',
+      workflow_status: 'dispatched,completed,closed,false_alarm,escalated',
       page: 1,
-      page_size: PAGE_SIZE,
+      page_size: 40,
     })
     incidents.value = res.incidents
-    setCache('worker_history', res.incidents)
-    if (res.incidents.length < PAGE_SIZE) noMore.value = true
-  } catch { /* handled */ }
-  finally { loading.value = false }
+    setCache('worker_messages', res.incidents)
+    hasLoadedOnce.value = true
+  } catch {
+    if (!incidents.value.length) {
+      uni.showToast({ title: '消息加载失败', icon: 'none' })
+    }
+  } finally {
+    loading.value = false
+  }
 }
 
-async function loadMore() {
-  if (loading.value || noMore.value) return
-  page.value++
-  try {
-    const res = await incidentApi.list({
-      workflow_status: 'completed,closed,false_alarm',
-      page: page.value,
-      page_size: PAGE_SIZE,
+function iconText(key: string) {
+  if (key === 'customer') return '客'
+  if (key === 'notice') return '通'
+  return '讯'
+}
+
+function avatarText(key: string) {
+  if (key === 'customer') return '客'
+  if (key === 'notice') return '单'
+  return '资'
+}
+
+function openEntry(key: string) {
+  if (key === 'customer' || key === 'notice') {
+    uni.reLaunch({ url: '/pages/worker/active/index' })
+    return
+  }
+  uni.navigateTo({ url: '/pages/worker/profile/notification' })
+}
+
+function openMessage(item: WorkerMessageItem) {
+  if (item.ticketId && item.incidentId) {
+    const readonlyQuery = item.readonly ? '&readonly=1' : ''
+    uni.navigateTo({
+      url: `/pages/worker/workorder-detail/index?incident_id=${item.incidentId}&ticket_id=${item.ticketId}${readonlyQuery}`,
     })
-    incidents.value.push(...res.incidents)
-    if (res.incidents.length < PAGE_SIZE) noMore.value = true
-  } catch { page.value-- }
+    return
+  }
+  uni.reLaunch({ url: '/pages/worker/active/index' })
 }
 
-function openDetail(incident: Incident) {
-  const ticketId = incident.current_work_order?.ticket_id
-  if (!ticketId) return
-  uni.navigateTo({
-    url: `/pages/worker/workorder-detail/index?incident_id=${incident.incident_id}&ticket_id=${ticketId}&readonly=1`,
+onMounted(() => {
+  unsubscribeWorkerSync = subscribeWorkerOrdersUpdated(async () => {
+    await loadData()
   })
-}
+  void loadData()
+})
 
-onMounted(loadData)
+onShow(() => {
+  if (!hasLoadedOnce.value) return
+  void loadData()
+})
+
+onUnmounted(() => {
+  unsubscribeWorkerSync?.()
+  unsubscribeWorkerSync = null
+})
 </script>
 
 <style lang="scss" scoped>
-.page { background: #f0f5f2; min-height: 100vh; }
-
-.stats-card {
-  display: flex;
-  align-items: center;
-  justify-content: space-around;
-  background: linear-gradient(135deg, #0f3d2e, #00b96b);
-  padding: 28rpx 32rpx;
+.page {
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at top, rgba(174, 203, 150, 0.20), transparent 35%),
+    linear-gradient(180deg, #f2fbe9 0%, #fbfdf8 100%);
 }
 
-.stat { display: flex; flex-direction: column; align-items: center; }
+.nav-action {
+  font-size: 36rpx;
+  color: #5f7137;
+}
 
-.stat-n {
-  font-size: 44rpx;
-  font-weight: 700;
+.page-scroll {
+  height: calc(100vh - 132rpx);
+  padding: 24rpx 24rpx calc(168rpx + env(safe-area-inset-bottom, 0px));
+  box-sizing: border-box;
+}
+
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 18rpx;
+}
+
+.entry-card,
+.feed-card {
+  background: rgba(255, 255, 255, 0.97);
+  border-radius: 30rpx;
+  box-shadow: 0 14rpx 36rpx rgba(181, 196, 118, 0.08);
+}
+
+.entry-card {
+  min-height: 190rpx;
+  padding: 24rpx 18rpx;
+}
+
+.entry-icon {
+  position: relative;
+  width: 92rpx;
+  height: 92rpx;
+  border-radius: 28rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  text {
+    font-size: 34rpx;
+    color: #fff;
+    font-weight: 700;
+  }
+}
+
+.entry-badge {
+  position: absolute;
+  top: -10rpx;
+  right: -10rpx;
+  min-width: 34rpx;
+  height: 34rpx;
+  padding: 0 8rpx;
+  border-radius: 17rpx;
+  background: #ff4d4f;
   color: #fff;
-
-  &.green  { color: #b7eb8f; }
-  &.orange { color: #ffd591; }
-}
-
-.stat-l { font-size: 22rpx; color: rgba(255,255,255,0.7); margin-top: 4rpx; }
-
-.stat-sep {
-  width: 1rpx;
-  height: 48rpx;
-  background: rgba(255,255,255,0.2);
-}
-
-.list-area {
-  height: calc(100vh - 300rpx);
-  padding: 20rpx 32rpx;
-}
-
-.history-card {
-  background: #fff;
-  border-radius: 16rpx;
-  padding: 24rpx;
-  margin-bottom: 16rpx;
-  border-left: 6rpx solid #e0e0e0;
-
-  &.completed   { border-left-color: #00b96b; }
-  &.false_alarm { border-left-color: #ff4d4f; }
-  &.closed      { border-left-color: #3b6cf4; }
-}
-
-.hc-header {
+  font-size: 18rpx;
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  margin-bottom: 12rpx;
+  justify-content: center;
+  border: 4rpx solid #fff;
 }
 
-.hc-date { font-size: 22rpx; color: #aaa; }
-
-.feedback-badge {
-  font-size: 22rpx;
-  padding: 4rpx 14rpx;
-  border-radius: 16rpx;
-
-  &.completed   { background: #f0fff8; color: #00b96b; }
-  &.false_alarm { background: #fff2f0; color: #ff4d4f; }
-  &.closed      { background: #f0f5ff; color: #3b6cf4; }
-}
-
-.hc-building {
+.entry-title {
   display: block;
-  font-size: 28rpx;
+  margin-top: 24rpx;
+  font-size: 30rpx;
+  color: #302825;
   font-weight: 700;
-  color: #1a1a2e;
-  margin-bottom: 4rpx;
 }
 
-.hc-desc {
-  display: block;
+.feed-card {
+  margin-top: 22rpx;
+  padding: 10rpx 24rpx;
+}
+
+.feed-item {
+  display: flex;
+  gap: 18rpx;
+  padding: 24rpx 0;
+  border-bottom: 1rpx solid #e8eddf;
+}
+
+.feed-item:last-child {
+  border-bottom: none;
+}
+
+.feed-avatar {
+  width: 74rpx;
+  height: 74rpx;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+
+  text {
+    font-size: 28rpx;
+    color: #fff;
+    font-weight: 700;
+  }
+}
+
+.feed-avatar.customer {
+  background: linear-gradient(135deg, #ff7b92, #ff5d7d);
+}
+
+.feed-avatar.notice {
+  background: linear-gradient(135deg, #d6e29f, #b5c875);
+}
+
+.feed-avatar.bulletin {
+  background: linear-gradient(135deg, #72b8ff, #4d93ff);
+}
+
+.feed-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.feed-top,
+.feed-bottom {
+  display: flex;
+  align-items: center;
+}
+
+.feed-top {
+  justify-content: space-between;
+  gap: 14rpx;
+}
+
+.feed-title {
+  flex: 1;
+  font-size: 30rpx;
+  color: #312925;
+  font-weight: 700;
+}
+
+.feed-time {
+  font-size: 22rpx;
+  color: #aaa09c;
+}
+
+.feed-bottom {
+  margin-top: 10rpx;
+  gap: 12rpx;
+}
+
+.feed-excerpt {
+  flex: 1;
   font-size: 24rpx;
-  color: #666;
-  margin-bottom: 8rpx;
+  line-height: 1.6;
+  color: #8f817b;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
 
-.hc-note {
-  font-size: 22rpx;
-  color: #aaa;
-  font-style: italic;
-}
-
-.empty-state {
+.feed-unread {
+  min-width: 34rpx;
+  height: 34rpx;
+  padding: 0 8rpx;
+  border-radius: 17rpx;
+  background: #ff3b30;
+  color: #fff;
+  font-size: 18rpx;
   display: flex;
-  flex-direction: column;
   align-items: center;
-  padding: 120rpx 0;
-  gap: 16rpx;
-  color: #aaa;
-  font-size: 28rpx;
-
-  .empty-icon { width: 88rpx; height: 88rpx; opacity: 0.4; }
-}
-
-.wo-skeleton {
-  height: 120rpx;
-  background: linear-gradient(90deg, #e8f5f0, #d4ede4, #e8f5f0);
-  border-radius: 16rpx;
-  margin-bottom: 16rpx;
-}
-
-.load-end {
-  text-align: center;
-  font-size: 24rpx;
-  color: #ccc;
-  padding: 20rpx;
+  justify-content: center;
 }
 </style>

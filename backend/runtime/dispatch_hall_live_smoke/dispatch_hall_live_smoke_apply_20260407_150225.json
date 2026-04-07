@@ -1,0 +1,183 @@
+{
+  "generated_at": "2026-04-07T07:01:49.560387+00:00",
+  "apply": true,
+  "actors": {
+    "manager": {
+      "id": "d36df059-752a-4a12-b160-ee6a9da2745d",
+      "username": "test1",
+      "role": "manager",
+      "team_id": null,
+      "team_name": null
+    },
+    "support_owner": {
+      "id": "92a81828-b57f-4b23-980b-331b589d33ef",
+      "username": "ops_hvac_01",
+      "role": "ops",
+      "team_id": "team_hvac",
+      "team_name": "暖通班"
+    },
+    "support_applicant": {
+      "id": "43c2c2fd-c58a-4c4c-bb06-6f47a3cb7469",
+      "username": "ops_controls_01",
+      "role": "ops",
+      "team_id": "team_controls",
+      "team_name": "自控班"
+    },
+    "takeover_owner": {
+      "id": "a8a06cf4-6a36-458a-a489-a027db2db2e2",
+      "username": "ops_electrical_01",
+      "role": "ops",
+      "team_id": "team_electrical",
+      "team_name": "电气班"
+    },
+    "takeover_applicant": {
+      "id": "fc168e5d-218d-45c2-8bc0-1e581d2dcf0f",
+      "username": "ops_plumbing_01",
+      "role": "ops",
+      "team_id": "team_plumbing",
+      "team_name": "给排水班"
+    }
+  },
+  "selected_work_orders": [
+    {
+      "id": "d3a66ed2-bbb2-4691-a5ce-6563d23f343d",
+      "ticket_id": "WO-20260328-009",
+      "status": "pending_dispatch",
+      "priority": "high",
+      "building_id": "Fox_education_Louie",
+      "device_id": "Fox_education_Louie",
+      "issue_description": "[Louie 教学楼] 2026-01-03 04:00 检测到电耗异常偏高，偏离 +546.5%（实际=28.7，预期=4.4）"
+    },
+    {
+      "id": "169336cf-a5a8-4600-bd02-dd76dabc01a9",
+      "ticket_id": "WO-20260328-010",
+      "status": "pending_dispatch",
+      "priority": "high",
+      "building_id": "Fox_education_Louie",
+      "device_id": "Fox_education_Louie",
+      "issue_description": "[Louie 教学楼] 2026-01-03 04:00 检测到暖通能耗异常偏高，偏离 +1719.3%（实际=22.7，预期=1.2），根因分析：非营业时段空调异常运行"
+    }
+  ],
+  "before_counts": {
+    "entries_total": 0,
+    "applications_total": 0,
+    "entry_counts": {},
+    "application_counts": {}
+  },
+  "samples": {
+    "support_request": {
+      "work_order": {
+        "id": "d3a66ed2-bbb2-4691-a5ce-6563d23f343d",
+        "ticket_id": "WO-20260328-009",
+        "status": "pending_dispatch",
+        "priority": "high",
+        "building_id": "Fox_education_Louie",
+        "device_id": "Fox_education_Louie",
+        "issue_description": "[Louie 教学楼] 2026-01-03 04:00 检测到电耗异常偏高，偏离 +546.5%（实际=28.7，预期=4.4）"
+      },
+      "dispatch_id": "ff69039e-ad2e-4804-bb79-1ee00e652e95",
+      "dispatch_status": "waiting_support",
+      "owner": {
+        "id": "92a81828-b57f-4b23-980b-331b589d33ef",
+        "username": "ops_hvac_01",
+        "role": "ops",
+        "team_id": "team_hvac",
+        "team_name": "暖通班"
+      },
+      "applicant": {
+        "id": "43c2c2fd-c58a-4c4c-bb06-6f47a3cb7469",
+        "username": "ops_controls_01",
+        "role": "ops",
+        "team_id": "team_controls",
+        "team_name": "自控班"
+      },
+      "hall_entry": {
+        "id": "d1213365-bc13-49dc-98ce-dd253a3843cd",
+        "entry_type": "support_request",
+        "status": "open",
+        "work_order_id": "d3a66ed2-bbb2-4691-a5ce-6563d23f343d",
+        "source_dispatch_id": "ff69039e-ad2e-4804-bb79-1ee00e652e95",
+        "visibility_scope": "team_skill_or_recommended",
+        "assigned_to": null,
+        "reason": "工单大厅联调：需要跨班组协同确认",
+        "support_reason": "工单大厅联调：需要跨班组协同确认",
+        "sla_stage": "waiting_support",
+        "overdue_level": null,
+        "target_team_ids_json": "[\"team_electrical\"]",
+        "target_skill_tags_json": "[\"electrical\"]",
+        "target_user_ids_json": "[\"a8a06cf4-6a36-458a-a489-a027db2db2e2\", \"4b9293c5-dce2-4970-a9cd-3ec46ebb6d93\", \"f04ab81c-7263-490e-9f0b-752d98f18efc\"]"
+      },
+      "application": {
+        "id": "65d90642-587b-481d-981d-678d780dac0b",
+        "hall_entry_id": "d1213365-bc13-49dc-98ce-dd253a3843cd",
+        "applicant_user_id": "43c2c2fd-c58a-4c4c-bb06-6f47a3cb7469",
+        "application_type": "support",
+        "status": "pending",
+        "note": "工单大厅联调：我可协同处理"
+      }
+    },
+    "takeover_candidate": {
+      "work_order": {
+        "id": "169336cf-a5a8-4600-bd02-dd76dabc01a9",
+        "ticket_id": "WO-20260328-010",
+        "status": "pending_dispatch",
+        "priority": "high",
+        "building_id": "Fox_education_Louie",
+        "device_id": "Fox_education_Louie",
+        "issue_description": "[Louie 教学楼] 2026-01-03 04:00 检测到暖通能耗异常偏高，偏离 +1719.3%（实际=22.7，预期=1.2），根因分析：非营业时段空调异常运行"
+      },
+      "dispatch_id": "24e398a9-5852-4e21-ae0b-4017c93ae387",
+      "dispatch_status": "assigned",
+      "owner": {
+        "id": "a8a06cf4-6a36-458a-a489-a027db2db2e2",
+        "username": "ops_electrical_01",
+        "role": "ops",
+        "team_id": "team_electrical",
+        "team_name": "电气班"
+      },
+      "applicant": {
+        "id": "fc168e5d-218d-45c2-8bc0-1e581d2dcf0f",
+        "username": "ops_plumbing_01",
+        "role": "ops",
+        "team_id": "team_plumbing",
+        "team_name": "给排水班"
+      },
+      "hall_entry": {
+        "id": "2392a4a7-bbaf-4b8f-9671-324a433656f2",
+        "entry_type": "takeover_candidate",
+        "status": "open",
+        "work_order_id": "169336cf-a5a8-4600-bd02-dd76dabc01a9",
+        "source_dispatch_id": "24e398a9-5852-4e21-ae0b-4017c93ae387",
+        "visibility_scope": "team_skill_or_recommended",
+        "assigned_to": null,
+        "reason": "工单大厅联调：模拟超时待接管，等待管理员确认",
+        "support_reason": null,
+        "sla_stage": "assigned",
+        "overdue_level": "overdue",
+        "target_team_ids_json": "[\"team_controls\"]",
+        "target_skill_tags_json": "[\"hvac\", \"controls\"]",
+        "target_user_ids_json": "[\"f04ab81c-7263-490e-9f0b-752d98f18efc\", \"92a81828-b57f-4b23-980b-331b589d33ef\", \"43c2c2fd-c58a-4c4c-bb06-6f47a3cb7469\"]"
+      },
+      "application": {
+        "id": "ab3d4c70-70cd-4f07-b697-32572687c80a",
+        "hall_entry_id": "2392a4a7-bbaf-4b8f-9671-324a433656f2",
+        "applicant_user_id": "fc168e5d-218d-45c2-8bc0-1e581d2dcf0f",
+        "application_type": "takeover",
+        "status": "pending",
+        "note": "工单大厅联调：我可接管处理"
+      }
+    }
+  },
+  "after_counts": {
+    "entries_total": 2,
+    "applications_total": 2,
+    "entry_counts": {
+      "support_request:open": 1,
+      "takeover_candidate:open": 1
+    },
+    "application_counts": {
+      "support:pending": 1,
+      "takeover:pending": 1
+    }
+  }
+}

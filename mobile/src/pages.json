@@ -95,8 +95,8 @@
     {
       "path": "pages/worker/pending/index",
       "style": {
-        "navigationBarTitleText": "待处理",
-        "navigationBarBackgroundColor": "#0f3d2e",
+        "navigationBarTitleText": "工作台",
+        "navigationBarBackgroundColor": "#E4EDB8",
         "navigationBarTextStyle": "white",
         "navigationStyle": "custom"
       }
@@ -104,8 +104,17 @@
     {
       "path": "pages/worker/active/index",
       "style": {
-        "navigationBarTitleText": "进行中",
-        "navigationBarBackgroundColor": "#0f3d2e",
+        "navigationBarTitleText": "我的工单",
+        "navigationBarBackgroundColor": "#E4EDB8",
+        "navigationBarTextStyle": "white",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/worker/hall/index",
+      "style": {
+        "navigationBarTitleText": "工单大厅",
+        "navigationBarBackgroundColor": "#E4EDB8",
         "navigationBarTextStyle": "white",
         "navigationStyle": "custom"
       }
@@ -114,7 +123,7 @@
       "path": "pages/worker/workorder-detail/index",
       "style": {
         "navigationBarTitleText": "工单详情",
-        "navigationBarBackgroundColor": "#0f3d2e",
+        "navigationBarBackgroundColor": "#E4EDB8",
         "navigationBarTextStyle": "white",
         "navigationStyle": "custom"
       }
@@ -122,8 +131,8 @@
     {
       "path": "pages/worker/history/index",
       "style": {
-        "navigationBarTitleText": "历史记录",
-        "navigationBarBackgroundColor": "#0f3d2e",
+        "navigationBarTitleText": "消息",
+        "navigationBarBackgroundColor": "#E4EDB8",
         "navigationBarTextStyle": "white",
         "navigationStyle": "custom"
       }
@@ -132,7 +141,7 @@
       "path": "pages/worker/profile/index",
       "style": {
         "navigationBarTitleText": "我的",
-        "navigationBarBackgroundColor": "#0f3d2e",
+        "navigationBarBackgroundColor": "#E4EDB8",
         "navigationBarTextStyle": "white",
         "navigationStyle": "custom"
       }
@@ -141,7 +150,7 @@
       "path": "pages/worker/profile/info",
       "style": {
         "navigationBarTitleText": "个人资料",
-        "navigationBarBackgroundColor": "#0f3d2e",
+        "navigationBarBackgroundColor": "#E4EDB8",
         "navigationBarTextStyle": "white",
         "navigationStyle": "custom"
       }
@@ -150,7 +159,7 @@
       "path": "pages/worker/profile/security",
       "style": {
         "navigationBarTitleText": "账号与安全",
-        "navigationBarBackgroundColor": "#0f3d2e",
+        "navigationBarBackgroundColor": "#E4EDB8",
         "navigationBarTextStyle": "white",
         "navigationStyle": "custom"
       }
@@ -159,7 +168,7 @@
       "path": "pages/worker/profile/notification",
       "style": {
         "navigationBarTitleText": "消息通知",
-        "navigationBarBackgroundColor": "#0f3d2e",
+        "navigationBarBackgroundColor": "#E4EDB8",
         "navigationBarTextStyle": "white",
         "navigationStyle": "custom"
       }
@@ -168,7 +177,7 @@
       "path": "pages/worker/profile/about",
       "style": {
         "navigationBarTitleText": "关于",
-        "navigationBarBackgroundColor": "#0f3d2e",
+        "navigationBarBackgroundColor": "#E4EDB8",
         "navigationBarTextStyle": "white",
         "navigationStyle": "custom"
       }

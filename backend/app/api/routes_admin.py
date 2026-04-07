@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.cache import delete_cache_by_prefix
 from app.db.models import Building
 from app.db.session import get_db_session as get_db, AsyncSessionLocal
+from app.services.dispatch_service import scan_dispatch_sla_states
 from app.services.kpi_expected_service import compute_and_store_all_buildings
 from app.services.anomaly_detection_service import detect_and_store_all_buildings
 from app.services.forecast_service import forecast_building_kpi
@@ -360,4 +361,24 @@ async def rebuild_incidents(
         "skipped": total_skipped,
         "reviewed": reviewed,
         "per_building": per_building,
+    }
+
+
+@router.post("/scan-dispatch-sla")
+async def scan_dispatch_sla(db: AsyncSession = Depends(get_db)):
+    """
+    手动扫描当前活跃派工任务的 SLA 状态。
+
+    - 识别临期与超时
+    - 写入 dispatch_events: timeout_warning / timeout_overdue
+    - 刷新 incident/work_order 读模型
+    """
+    summary = await scan_dispatch_sla_states(db)
+    await db.commit()
+    if summary.get("updated", 0) > 0:
+        await delete_cache_by_prefix("workorders:")
+        await delete_cache_by_prefix("incidents:")
+    return {
+        "status": "ok",
+        **summary,
     }

@@ -1,6 +1,6 @@
 <template>
   <view class="page">
-    <NavBar title="关于" bg-color="#0f3d2e" :show-back="true" />
+    <NavBar title="关于" bg-color="#E4EDB8" text-color="#5f7137" :show-back="true" />
 
     <view class="about-card">
       <view class="app-logo">
@@ -45,7 +45,7 @@ onMounted(() => {
 </script>
 
 <style lang="scss" scoped>
-.page { background: #f0f5f2; min-height: 100vh; }
+.page { background: #f7faef; min-height: 100vh; }
 
 .about-card {
   display: flex;
@@ -58,7 +58,7 @@ onMounted(() => {
   width: 120rpx;
   height: 120rpx;
   border-radius: 28rpx;
-  background: linear-gradient(135deg, #00b96b, #38ef7d);
+  background: linear-gradient(135deg, #d6e29f, #b5c875);
   display: flex;
   align-items: center;
   justify-content: center;

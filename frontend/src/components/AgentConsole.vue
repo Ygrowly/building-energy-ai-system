@@ -1326,6 +1326,7 @@ function buildInlineSegments(msg: ChatMessage): InlineSegment[] {
   display: flex;
   flex-direction: column;
   height: 100%;
+  min-width: 0;
   background: var(--bg-card);           /* Cursor 风格：整面板统一底色 */
   /* 原底色 var(--bg-panel)，后续可恢复 */
   border-left: 1px solid var(--border);
@@ -1838,10 +1839,12 @@ html[data-theme="light"] .tab.active .tab-close {
 .messages {
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden;
   padding: 12px 12px;
   display: flex;
   flex-direction: column;
   gap: 8px;
+  min-width: 0;
   background: transparent;              /* 继承 .console 底色，统一 */
 }
 
@@ -1890,9 +1893,10 @@ html[data-theme="light"] .tab.active .tab-close {
   box-shadow: var(--card-shadow-hover);
 }
 
-.msg { display: flex; align-items: flex-start; gap: 8px; }
+.msg { display: flex; align-items: flex-start; gap: 8px; min-width: 0; max-width: 100%; }
 .msg-user { justify-content: flex-start; width: 100%; }
 .msg-error { justify-content: flex-start; }
+.msg-ai { width: 100%; overflow: hidden; }
 
 .bubble {
   max-width: 85%;
@@ -1942,6 +1946,7 @@ html[data-theme="light"] .tab.active .tab-close {
   line-height: 1.85;
   letter-spacing: 0.015em;
   word-break: break-word;
+  overflow: hidden;
 }
 
 /* ── Markdown 排版样式（marked 原生 HTML 标签） ───────────────────────────── */
@@ -1992,6 +1997,27 @@ html[data-theme="light"] .tab.active .tab-close {
 .ai-bubble .md-block {
   display: block;
   min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.ai-bubble :deep(img) {
+  display: block;
+  max-width: 100%;
+  max-height: 280px;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  border-radius: 10px;
+  margin: 8px 0;
+  border: 1px solid var(--border);
+  box-shadow: var(--card-shadow);
+}
+
+.ai-bubble :deep(a),
+.ai-bubble :deep(p) {
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 
 /* 段落 */

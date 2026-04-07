@@ -35,17 +35,29 @@ function getFallbackSlaMinutes(priority?: string | null): number {
   return PRIORITY_SLA_MINUTES[priority || 'medium'] || 60
 }
 
+function getCurrentDispatch(incident?: Incident | null) {
+  return incident?.current_dispatch ?? null
+}
+
 export function resolveExecutionStatus(incident: Incident): string {
+  const dispatch = getCurrentDispatch(incident)
   const order = incident.current_work_order
+  if (dispatch?.execution_status) return dispatch.execution_status
   if (!order) return 'pending_accept'
   if (order.execution_status) return order.execution_status
+
+  if (dispatch?.dispatch_status) {
+    if (dispatch.sla_status === 'overdue') return 'overdue'
+    if (dispatch.dispatch_status === 'assigned') return 'pending_accept'
+    return dispatch.dispatch_status
+  }
 
   if (order.status === 'dispatched') {
     if (order.worker_result === 'needs_parts') return 'waiting_support'
     const dueAt = resolveSlaDueAt(incident)
     const dueTs = toTime(dueAt)
     if (dueTs && dueTs < Date.now()) return 'overdue'
-    if (order.assigned_to) return 'processing'
+    if (order.processing_started_at || order.arrived_at || order.accepted_at || order.latest_progress_at) return 'processing'
     return 'pending_accept'
   }
 
@@ -58,14 +70,16 @@ export function resolveExecutionLabel(incident: Incident): string {
 }
 
 export function resolveSlaDueAt(incident: Incident): string | null {
+  const dispatch = getCurrentDispatch(incident)
   const order = incident.current_work_order
-  if (!order) return null
+  if (dispatch?.sla_due_at) return dispatch.sla_due_at
+  if (!order && !dispatch) return null
   if (order.sla_due_at) return order.sla_due_at
 
-  const dispatchAt = order.dispatch_at || order.updated_at || order.created_at
+  const dispatchAt = dispatch?.dispatch_at || order?.dispatch_at || order?.updated_at || order?.created_at
   const dispatchTs = toTime(dispatchAt)
   if (!dispatchTs) return null
-  const dueTs = dispatchTs + getFallbackSlaMinutes(order.priority) * 60 * 1000
+  const dueTs = dispatchTs + getFallbackSlaMinutes(order?.priority || incident.priority) * 60 * 1000
   return new Date(dueTs).toISOString()
 }
 
@@ -74,14 +88,15 @@ export function resolveSlaMeta(incident: Incident): {
   text: string
   minutesLeft: number | null
 } {
+  const dispatch = getCurrentDispatch(incident)
   const order = incident.current_work_order
   const dueAt = resolveSlaDueAt(incident)
   const dueTs = toTime(dueAt)
-  if (!order || !dueTs) {
+  if ((!order && !dispatch) || !dueTs) {
     return { tone: 'normal', text: 'SLA 待确认', minutesLeft: null }
   }
 
-  const rawMinutes = order.sla_minutes_left
+  const rawMinutes = dispatch?.sla_minutes_left ?? order?.sla_minutes_left
   const minutesLeft = rawMinutes ?? Math.floor((dueTs - Date.now()) / 60000)
   if (minutesLeft < 0) {
     return { tone: 'overdue', text: `已超时 ${Math.abs(minutesLeft)} 分钟`, minutesLeft }
@@ -140,9 +155,12 @@ export function buildStateText(incident: Incident): string {
 }
 
 export function buildProgressText(incident: Incident): string {
+  const dispatch = getCurrentDispatch(incident)
   const order = incident.current_work_order
+  if (dispatch?.latest_progress_note) return sanitizeDisplayText(dispatch.latest_progress_note)
   if (!order) return '等待工单同步'
   if (order.latest_progress_note) return sanitizeDisplayText(order.latest_progress_note)
+  if (dispatch?.latest_note) return sanitizeDisplayText(dispatch.latest_note)
   if (order.worker_notes) return sanitizeDisplayText(order.worker_notes)
   if (resolveExecutionStatus(incident) === 'pending_accept') return '已派单，等待接单处理'
   return '处理中'
@@ -164,8 +182,9 @@ export function buildImpactText(incident: Incident): string {
 }
 
 export function buildCardTimeRow(incident: Incident): string {
-  const dispatchAt = incident.current_work_order?.dispatch_at || incident.current_work_order?.created_at
-  const progressAt = incident.current_work_order?.latest_progress_at || incident.current_work_order?.updated_at
+  const dispatch = getCurrentDispatch(incident)
+  const dispatchAt = dispatch?.dispatch_at || incident.current_work_order?.dispatch_at || incident.current_work_order?.created_at
+  const progressAt = dispatch?.latest_progress_at || incident.current_work_order?.latest_progress_at || incident.current_work_order?.updated_at
   const left = dispatchAt ? `派单 ${formatServerDateTime(dispatchAt).slice(5, 16)}` : ''
   const right = progressAt ? `更新 ${formatServerDateTime(progressAt).slice(5, 16)}` : ''
   return unique([left, right]).join('   ')

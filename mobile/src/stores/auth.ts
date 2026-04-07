@@ -3,11 +3,15 @@ import { ref, computed } from 'vue'
 import { authApi, type UserInfo } from '../api/auth'
 import { isOperatorRole, isWorkerRole, ALLOWED_ROLES, type UserRole } from '../constants/roles'
 import { rememberLoginPersona } from '../utils/login-persona'
+import { refreshAccessToken } from '../api/request'
+import { clearCache } from '../utils/cache'
 
 export const useAuthStore = defineStore('auth', () => {
   const user = ref<UserInfo | null>(null)
   const accessToken = ref<string | null>(null)
   const refreshToken = ref<string | null>(null)
+  const sessionReady = ref(false)
+  let ensureSessionPromise: Promise<boolean> | null = null
 
   const isLoggedIn = computed(() => !!accessToken.value && !!user.value)
   const isOperator = computed(() => !!user.value && isOperatorRole(user.value.role))
@@ -18,23 +22,61 @@ export const useAuthStore = defineStore('auth', () => {
    * 跳转逻辑由启动页（splash）在计时结束后统一调用 redirectAfterSplash()。
    */
   function init() {
-    const token       = uni.getStorageSync('access_token')
-    const storedUser  = uni.getStorageSync('user_info')
+    const token = uni.getStorageSync('access_token')
+    const storedUser = uni.getStorageSync('user_info')
     const storedRefresh = uni.getStorageSync('refresh_token')
 
-    if (token && storedUser) {
-      accessToken.value  = token
+    if (token && storedUser && storedRefresh) {
+      accessToken.value = token
       refreshToken.value = storedRefresh
       try {
         user.value = typeof storedUser === 'string' ? JSON.parse(storedUser) : storedUser
       } catch {
         _clearTokens()
       }
+      return
+    }
+    _clearTokens()
+  }
+
+  async function ensureSessionReady() {
+    if (sessionReady.value) {
+      return isLoggedIn.value
+    }
+    if (ensureSessionPromise) {
+      return ensureSessionPromise
+    }
+
+    ensureSessionPromise = (async () => {
+      init()
+      if (!user.value || !refreshToken.value) {
+        sessionReady.value = true
+        return false
+      }
+
+      const newToken = await refreshAccessToken()
+      if (!newToken) {
+        _clearTokens()
+        sessionReady.value = true
+        return false
+      }
+
+      accessToken.value = newToken
+      refreshToken.value = uni.getStorageSync('refresh_token') || refreshToken.value
+      sessionReady.value = true
+      return true
+    })()
+
+    try {
+      return await ensureSessionPromise
+    } finally {
+      ensureSessionPromise = null
     }
   }
 
   /** 启动页计时结束后调用：已登录 → 跳首页，未登录 → 跳登录页 */
-  function redirectAfterSplash() {
+  async function redirectAfterSplash() {
+    await ensureSessionReady()
     if (isLoggedIn.value && user.value) {
       redirectByRole()
     } else {
@@ -46,9 +88,11 @@ export const useAuthStore = defineStore('auth', () => {
     if (!ALLOWED_ROLES.includes(res.user.role as UserRole)) {
       throw new Error('当前账号角色暂不支持移动端登录')
     }
+    clearCache()
     accessToken.value = res.access_token
     refreshToken.value = res.refresh_token
     user.value = res.user
+    sessionReady.value = true
     uni.setStorageSync('access_token', res.access_token)
     uni.setStorageSync('refresh_token', res.refresh_token)
     uni.setStorageSync('user_info', JSON.stringify(res.user))
@@ -77,9 +121,11 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   function _clearTokens() {
+    clearCache()
     user.value = null
     accessToken.value = null
     refreshToken.value = null
+    sessionReady.value = false
     uni.removeStorageSync('access_token')
     uni.removeStorageSync('refresh_token')
     uni.removeStorageSync('user_info')
@@ -97,5 +143,18 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
-  return { user, accessToken, isLoggedIn, isOperator, isWorker, init, redirectAfterSplash, login, register, logout, _clearTokens }
+  return {
+    user,
+    accessToken,
+    isLoggedIn,
+    isOperator,
+    isWorker,
+    init,
+    ensureSessionReady,
+    redirectAfterSplash,
+    login,
+    register,
+    logout,
+    _clearTokens,
+  }
 })

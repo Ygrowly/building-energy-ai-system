@@ -1,0 +1,75 @@
+{
+  "generated_at": "2026-04-07T07:12:39.618962+00:00",
+  "apply": false,
+  "actors": {
+    "manager": {
+      "id": "d36df059-752a-4a12-b160-ee6a9da2745d",
+      "username": "test1",
+      "role": "manager",
+      "team_id": null,
+      "team_name": null
+    },
+    "support_owner": {
+      "id": "92a81828-b57f-4b23-980b-331b589d33ef",
+      "username": "ops_hvac_01",
+      "role": "ops",
+      "team_id": "team_hvac",
+      "team_name": "暖通班"
+    },
+    "support_applicant": {
+      "id": "43c2c2fd-c58a-4c4c-bb06-6f47a3cb7469",
+      "username": "ops_controls_01",
+      "role": "ops",
+      "team_id": "team_controls",
+      "team_name": "自控班"
+    },
+    "takeover_owner": {
+      "id": "a8a06cf4-6a36-458a-a489-a027db2db2e2",
+      "username": "ops_electrical_01",
+      "role": "ops",
+      "team_id": "team_electrical",
+      "team_name": "电气班"
+    },
+    "takeover_applicant": {
+      "id": "fc168e5d-218d-45c2-8bc0-1e581d2dcf0f",
+      "username": "ops_plumbing_01",
+      "role": "ops",
+      "team_id": "team_plumbing",
+      "team_name": "给排水班"
+    }
+  },
+  "selected_work_orders": [
+    {
+      "id": "f747f62d-2eb9-429d-9a85-b1a6ea6fd856",
+      "ticket_id": "WO-20260328-011",
+      "status": "pending_dispatch",
+      "priority": "high",
+      "building_id": "Fox_education_Louie",
+      "device_id": "Fox_education_Louie",
+      "issue_description": "[Louie 教学楼] 2026-01-03 05:00 检测到电耗异常偏高，偏离 +583.5%（实际=30.4，预期=4.4）"
+    },
+    {
+      "id": "badb80ba-cd60-45d2-bc9b-02b244aba5a1",
+      "ticket_id": "WO-20260328-012",
+      "status": "pending_dispatch",
+      "priority": "high",
+      "building_id": "Fox_education_Louie",
+      "device_id": "Fox_education_Louie",
+      "issue_description": "[Louie 教学楼] 2026-01-03 05:00 检测到暖通能耗异常偏高，偏离 +1844.1%（实际=24.3，预期=1.2），根因分析：非营业时段空调异常运行"
+    }
+  ],
+  "before_counts": {
+    "entries_total": 2,
+    "applications_total": 2,
+    "entry_counts": {
+      "support_request:open": 1,
+      "takeover_candidate:open": 1
+    },
+    "application_counts": {
+      "support:pending": 1,
+      "takeover:pending": 1
+    }
+  },
+  "samples": {},
+  "message": "dry-run only; rerun with --apply to create the two hall samples"
+}

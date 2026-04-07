@@ -681,10 +681,8 @@ async def list_incidents(
     count_query = select(sa_func.count(AnomalyIncident.id))
 
     if assigned_to:
-        query = query.join(WorkOrder, WorkOrder.id == AnomalyIncident.current_work_order_id)
-        count_query = count_query.join(WorkOrder, WorkOrder.id == AnomalyIncident.current_work_order_id)
-        query = query.where(WorkOrder.assigned_to == assigned_to)
-        count_query = count_query.where(WorkOrder.assigned_to == assigned_to)
+        query = query.where(AnomalyIncident.current_assigned_to == assigned_to)
+        count_query = count_query.where(AnomalyIncident.current_assigned_to == assigned_to)
 
     if workflow_status_filter:
         query = query.where(AnomalyIncident.workflow_status.in_(workflow_status_filter))
@@ -754,6 +752,19 @@ async def list_incident_prediction_links(
     return list(result.scalars().all())
 
 
+def resolve_incident_assigned_user_id(
+    *,
+    incident: AnomalyIncident | None = None,
+    work_order: WorkOrder | None = None,
+    current_dispatch: DispatchTask | None = None,
+) -> str | None:
+    return (
+        getattr(current_dispatch, "assigned_to", None)
+        or getattr(incident, "current_assigned_to", None)
+        or getattr(work_order, "assigned_to", None)
+    )
+
+
 def serialize_incident(
     incident: AnomalyIncident,
     *,
@@ -774,8 +785,16 @@ def serialize_incident(
             "ai_fallback": getattr(current_work_order, "ai_fallback", False),
             "worker_result": getattr(current_work_order, "worker_result", None),
             "worker_notes": getattr(current_work_order, "worker_notes", None),
-            "assigned_to": getattr(current_work_order, "assigned_to", None),
+            "assigned_to": resolve_incident_assigned_user_id(
+                incident=incident,
+                work_order=current_work_order,
+                current_dispatch=current_dispatch,
+            ),
             "suggested_action": getattr(current_work_order, "suggested_action", None),
+            "dispatch_blocked_reason": (
+                getattr(current_work_order, "dispatch_blocked_reason", None)
+                or getattr(incident, "dispatch_blocked_reason", None)
+            ),
             "created_at": current_work_order.created_at.isoformat() if getattr(current_work_order, "created_at", None) else None,
             "updated_at": current_work_order.updated_at.isoformat() if getattr(current_work_order, "updated_at", None) else None,
             **_derive_dispatch_ui_meta(
@@ -825,12 +844,21 @@ def serialize_incident(
         "resolved_at": incident.resolved_at.isoformat() if incident.resolved_at else None,
         "created_at": incident.created_at.isoformat() if incident.created_at else None,
         "updated_at": incident.updated_at.isoformat() if incident.updated_at else None,
+        "dispatch_blocked_reason": getattr(incident, "dispatch_blocked_reason", None),
+        "latest_dispatch_note": getattr(incident, "latest_dispatch_note", None),
         "current_work_order": current_work_order_data,
         "current_dispatch": (
             {
                 "id": current_dispatch.id,
                 "dispatch_status": current_dispatch.dispatch_status,
                 "attempt_no": current_dispatch.attempt_no,
+                "assigned_to": getattr(current_dispatch, "assigned_to", None),
+                "assigned_by": getattr(current_dispatch, "assigned_by", None),
+                "selection_reason": getattr(current_dispatch, "selection_reason", None),
+                "reject_reason": getattr(current_dispatch, "reject_reason", None),
+                "support_reason": getattr(current_dispatch, "support_reason", None),
+                "latest_note": getattr(current_dispatch, "latest_note", None),
+                "transfer_from_dispatch_id": getattr(current_dispatch, "transfer_from_dispatch_id", None),
                 **(current_dispatch_meta or {}),
             }
             if current_dispatch else None
@@ -850,13 +878,21 @@ def serialize_incident_detail(
     assigned_users_by_id: dict[str, User] | None = None,
     audit_logs_by_work_order_id: dict[str, list[WorkOrderAuditLog]] | None = None,
 ) -> dict[str, Any]:
+    current_assigned_user_id = None
+    if current_work_order:
+        current_dispatch_for_order = (current_dispatches_by_work_order_id or {}).get(current_work_order.id)
+        current_assigned_user_id = resolve_incident_assigned_user_id(
+            incident=incident,
+            work_order=current_work_order,
+            current_dispatch=current_dispatch_for_order,
+        )
     data = serialize_incident(
         incident,
         current_work_order=current_work_order,
         current_dispatch=current_dispatch,
         assigned_user=(
             assigned_users_by_id or {}
-        ).get(current_work_order.assigned_to or "") if current_work_order else None,
+        ).get(current_assigned_user_id or "") if current_work_order else None,
         audit_logs=(audit_logs_by_work_order_id or {}).get(current_work_order.id, []) if current_work_order else None,
     )
     data["work_orders"] = [
@@ -871,12 +907,25 @@ def serialize_incident_detail(
             "worker_notes": getattr(wo, "worker_notes", None),
             "ai_decision": getattr(wo, "ai_decision", None),
             "ai_reason": getattr(wo, "ai_reason", None),
-            "assigned_to": getattr(wo, "assigned_to", None),
+            "assigned_to": resolve_incident_assigned_user_id(
+                incident=incident if current_work_order and wo.id == current_work_order.id else None,
+                work_order=wo,
+                current_dispatch=(current_dispatches_by_work_order_id or {}).get(wo.id),
+            ),
             "suggested_action": getattr(wo, "suggested_action", None),
             **_derive_dispatch_ui_meta(
                 wo,
                 current_dispatch=(current_dispatches_by_work_order_id or {}).get(wo.id),
-                assigned_user=(assigned_users_by_id or {}).get(getattr(wo, "assigned_to", "") or ""),
+                assigned_user=(assigned_users_by_id or {}).get(
+                    (
+                        resolve_incident_assigned_user_id(
+                            incident=incident if current_work_order and wo.id == current_work_order.id else None,
+                            work_order=wo,
+                            current_dispatch=(current_dispatches_by_work_order_id or {}).get(wo.id),
+                        )
+                        or ""
+                    )
+                ),
                 audit_logs=(audit_logs_by_work_order_id or {}).get(wo.id, []),
             ),
         }

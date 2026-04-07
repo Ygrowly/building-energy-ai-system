@@ -767,8 +767,10 @@ class AnomalyIncident(Base):
     __table_args__ = (
         Index("idx_incident_merge_key_active", "merge_key", "is_active"),
         Index("idx_incident_workflow_status", "workflow_status"),
+        Index("idx_incident_workflow_last_seen", "workflow_status", last_seen_at.desc(), created_at.desc()),
         Index("idx_incident_building_last_seen", "building_id", "last_seen_at"),
         Index("idx_incident_priority_last_seen", "priority", "last_seen_at"),
+        Index("idx_incident_assignee_last_seen", "current_assigned_to", last_seen_at.desc(), created_at.desc()),
         Index("idx_incident_current_dispatch", "current_dispatch_id"),
         Index("idx_incident_dispatch_status", "current_dispatch_status"),
     )
@@ -944,6 +946,7 @@ class WorkOrder(Base):
         Index("idx_wo_status", "status"),
         Index("idx_wo_building", "building_id"),
         Index("idx_wo_created", created_at.desc()),
+        Index("idx_wo_status_pending_dispatch_created", "status", pending_dispatch_at.asc(), created_at.asc()),
         Index("idx_wo_assigned", "assigned_to", postgresql_where=Column("assigned_to").isnot(None)),
         Index("idx_wo_incident", "incident_id"),
         Index("idx_wo_current_dispatch", "current_dispatch_id"),
@@ -1031,8 +1034,10 @@ class DispatchTask(Base):
         Index("idx_dispatch_work_order", "work_order_id"),
         Index("idx_dispatch_incident", "incident_id"),
         Index("idx_dispatch_assigned_to_status", "assigned_to", "dispatch_status"),
+        Index("idx_dispatch_assignee_current_time", "assigned_to", "is_current", assigned_at.desc(), attempt_no.desc()),
         Index("idx_dispatch_team_status", "assigned_team_id", "dispatch_status"),
         Index("idx_dispatch_current", "work_order_id", "is_current"),
+        Index("idx_dispatch_current_status_assigned_at", "is_current", "dispatch_status", assigned_at.asc()),
         Index("idx_dispatch_accept_deadline", "accept_deadline_at"),
         Index("idx_dispatch_arrive_deadline", "arrive_deadline_at"),
         Index("idx_dispatch_finish_deadline", "finish_deadline_at"),
@@ -1069,6 +1074,120 @@ class DispatchEvent(Base):
         Index("idx_dispatch_event_task_time", "dispatch_task_id", created_at.desc()),
         Index("idx_dispatch_event_work_order_time", "work_order_id", created_at.desc()),
         Index("idx_dispatch_event_incident_time", "incident_id", created_at.desc()),
+    )
+
+
+# ---------------------------------------------------------------------------
+# dispatch_hall_entries / dispatch_hall_applications — 共享工单大厅（一期）
+# ---------------------------------------------------------------------------
+
+class DispatchHallEntry(Base):
+    """
+    共享工单大厅曝光项。
+    用于承接“未指派协同”和“超时待接管”这类尚未正式落到具体人的共享机会。
+    """
+    __tablename__ = "dispatch_hall_entries"
+
+    id: str = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    work_order_id: str = Column(
+        String, ForeignKey("work_orders.id", ondelete="CASCADE"), nullable=False
+    )
+    incident_id: str = Column(
+        String, ForeignKey("anomaly_incidents.id", ondelete="SET NULL"), nullable=True
+    )
+    source_dispatch_id: str = Column(
+        String, ForeignKey("dispatch_tasks.id", ondelete="SET NULL"), nullable=True
+    )
+
+    entry_type: str = Column(String(32), nullable=False)
+    status: str = Column(String(24), nullable=False, default="open")
+    visibility_scope: str = Column(String(32), nullable=False, default="all_ops")
+
+    target_team_ids_json: str = Column(Text, nullable=True)
+    target_skill_tags_json: str = Column(Text, nullable=True)
+    target_user_ids_json: str = Column(Text, nullable=True)
+
+    reason: str = Column(Text, nullable=True)
+    support_reason: str = Column(Text, nullable=True)
+    sla_stage: str = Column(String(32), nullable=True)
+    overdue_level: str = Column(String(16), nullable=True)
+    allow_direct_claim: bool = Column(Boolean, nullable=False, default=False)
+
+    assigned_to: str = Column(
+        String, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    assigned_team_id: str = Column(
+        String, ForeignKey("worker_teams.id", ondelete="SET NULL"), nullable=True
+    )
+    assigned_by: str = Column(
+        String, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_by: str = Column(
+        String, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+    expired_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    assigned_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    closed_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    created_at = Column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at = Column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    applications = relationship(
+        "DispatchHallApplication",
+        back_populates="hall_entry",
+        cascade="all, delete-orphan",
+    )
+
+    __table_args__ = (
+        Index("idx_dispatch_hall_type_status", "entry_type", "status"),
+        Index("idx_dispatch_hall_status_type_created", "status", "entry_type", created_at.desc(), id.desc()),
+        Index("idx_dispatch_hall_work_order", "work_order_id"),
+        Index("idx_dispatch_hall_incident", "incident_id"),
+        Index("idx_dispatch_hall_source_dispatch", "source_dispatch_id"),
+        Index("idx_dispatch_hall_assigned_to_status", "assigned_to", "status"),
+        Index("idx_dispatch_hall_created", created_at.desc()),
+    )
+
+
+class DispatchHallApplication(Base):
+    """
+    共享工单大厅的报名/申请记录。
+    """
+    __tablename__ = "dispatch_hall_applications"
+
+    id: str = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    hall_entry_id: str = Column(
+        String, ForeignKey("dispatch_hall_entries.id", ondelete="CASCADE"), nullable=False
+    )
+    applicant_user_id: str = Column(
+        String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    application_type: str = Column(String(24), nullable=False)
+    status: str = Column(String(24), nullable=False, default="pending")
+    note: str = Column(Text, nullable=True)
+    handle_note: str = Column(Text, nullable=True)
+    handled_by: str = Column(
+        String, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    handled_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    created_at = Column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at = Column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    hall_entry = relationship("DispatchHallEntry", back_populates="applications")
+
+    __table_args__ = (
+        Index("idx_dispatch_hall_application_entry_status", "hall_entry_id", "status"),
+        Index("idx_dispatch_hall_application_entry_created", "hall_entry_id", created_at.asc()),
+        Index("idx_dispatch_hall_application_user_status", "applicant_user_id", "status"),
+        Index("idx_dispatch_hall_application_created", created_at.desc()),
     )
 
 

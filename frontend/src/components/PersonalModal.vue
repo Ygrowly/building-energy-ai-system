@@ -241,8 +241,8 @@
                     @click="switchMsgTab('workorder')"
                   >
                     <Icon icon="mdi:clipboard-clock-outline" width="13" />
-                    待审批工单
-                    <span v-if="pendingSessions.length > 0" class="capsule-dot ok">{{ pendingSessions.length }}</span>
+                    工单动态
+                    <span v-if="workorderItems.length > 0" class="capsule-dot ok">{{ workorderItems.length }}</span>
                   </button>
                   <button
                     class="capsule-btn"
@@ -344,35 +344,108 @@
                 </div>
               </div>
 
-              <!-- ── Tab: 待审批工单 ── -->
+              <!-- ── Tab: 工单动态 ── -->
               <div v-if="msgTab === 'workorder'" class="msg-tab-content">
                 <div class="msg-block">
                   <p class="block-label">
                     <Icon icon="mdi:clipboard-clock-outline" width="13" />
-                    待审批工单
-                    <span v-if="pendingSessions.length > 0" class="count-badge">{{ pendingSessions.length }}</span>
+                    工单动态
+                    <span v-if="filteredWorkorderItems.length > 0" class="count-badge">{{ filteredWorkorderItems.length }}</span>
                   </p>
-                  <div v-if="pendingSessions.length === 0" class="empty-state ok">
+                  <div v-if="workorderLoading && workorderItems.length === 0" class="empty-state">
+                    <Icon icon="mdi:loading" width="24" class="empty-icon spin" />
+                    <p>工单动态加载中…</p>
+                  </div>
+                  <div v-else-if="filteredWorkorderItems.length === 0" class="empty-state ok">
                     <Icon icon="mdi:check-circle-outline" width="26" class="empty-icon" />
-                    <p>暂无待审批工单</p>
+                    <p>{{ hasActiveFilter ? '当前筛选条件下暂无工单提醒' : '暂无待处理工单提醒' }}</p>
                   </div>
                   <div v-else class="msg-list">
-                    <div
-                      v-for="sess in pendingSessions"
-                      :key="sess.session_id"
-                      class="msg-item clickable"
-                      @click="gotoWorkOrder(sess.session_id)"
-                    >
-                      <div class="msg-icon workorder">
-                        <Icon icon="mdi:wrench-clock" width="15" />
+                    <template v-if="workorderGroups.review.length">
+                      <p class="block-label block-label-hint">待审批 / 待派工 / 工单大厅申请</p>
+                      <div
+                        v-for="item in workorderGroups.review"
+                        :key="item.id"
+                        class="msg-item clickable"
+                        @click="gotoWorkOrder(item)"
+                      >
+                        <div class="msg-icon workorder">
+                          <Icon icon="mdi:wrench-clock" width="15" />
+                        </div>
+                        <div class="msg-body">
+                          <p class="msg-title">{{ item.title }}</p>
+                          <p class="msg-sub">{{ item.subtitle }}</p>
+                          <p class="msg-detail">{{ item.detail }}</p>
+                          <div v-if="hasWorkorderQuickActions(item)" class="msg-actions" @click.stop>
+                            <button
+                              v-if="canNudgeWorkorderItem(item)"
+                              class="msg-action-btn accent"
+                              @click.stop="handleWorkorderQuickAction(item, 'nudge')"
+                            >催办</button>
+                            <button
+                              v-if="canSuggestReassign(item)"
+                              class="msg-action-btn warn"
+                              @click.stop="handleWorkorderQuickAction(item, 'suggest_reassign')"
+                            >改派建议</button>
+                          </div>
+                        </div>
+                        <span class="msg-tag" :class="'tag-' + item.tone">{{ item.tag }}</span>
+                        <Icon icon="mdi:chevron-right" width="14" class="msg-chevron" />
                       </div>
-                      <div class="msg-body">
-                        <p class="msg-title">{{ sess.title || '未命名会话' }}</p>
-                        <p class="msg-sub">{{ formatDate(sess.updated_at) }}</p>
+                    </template>
+
+                    <template v-if="workorderGroups.execution.length">
+                      <p class="block-label block-label-hint">执行提醒</p>
+                      <div
+                        v-for="item in workorderGroups.execution"
+                        :key="item.id"
+                        class="msg-item clickable"
+                        @click="gotoWorkOrder(item)"
+                      >
+                        <div class="msg-icon workorder" :class="'icon-' + item.tone">
+                          <Icon
+                            :icon="item.category === 'waiting_support'
+                              ? 'mdi:account-group-outline'
+                              : item.category === 'overdue'
+                                ? 'mdi:timer-alert-outline'
+                                : item.dispatchStage === 'arrive'
+                                  ? 'mdi:map-marker-path'
+                                  : item.dispatchStage === 'accept'
+                                    ? 'mdi:send-check-outline'
+                                    : 'mdi:bell-ring-outline'"
+                            width="15"
+                          />
+                        </div>
+                        <div class="msg-body">
+                          <p class="msg-title">{{ item.title }}</p>
+                          <p class="msg-sub">{{ item.subtitle }}</p>
+                          <p class="msg-detail">{{ item.detail }}</p>
+                        </div>
+                        <span class="msg-tag" :class="'tag-' + item.tone">{{ item.tag }}</span>
+                        <Icon icon="mdi:chevron-right" width="14" class="msg-chevron" />
                       </div>
-                      <span class="msg-tag pending">待审批</span>
-                      <Icon icon="mdi:chevron-right" width="14" class="msg-chevron" />
-                    </div>
+                    </template>
+
+                    <template v-if="workorderGroups.closing.length">
+                      <p class="block-label block-label-hint">待复核 / 待关闭</p>
+                      <div
+                        v-for="item in workorderGroups.closing"
+                        :key="item.id"
+                        class="msg-item clickable"
+                        @click="gotoWorkOrder(item)"
+                      >
+                        <div class="msg-icon workorder icon-success">
+                          <Icon icon="mdi:clipboard-check-outline" width="15" />
+                        </div>
+                        <div class="msg-body">
+                          <p class="msg-title">{{ item.title }}</p>
+                          <p class="msg-sub">{{ item.subtitle }}</p>
+                          <p class="msg-detail">{{ item.detail }}</p>
+                        </div>
+                        <span class="msg-tag tag-success">{{ item.tag }}</span>
+                        <Icon icon="mdi:chevron-right" width="14" class="msg-chevron" />
+                      </div>
+                    </template>
                   </div>
                 </div>
               </div>
@@ -538,9 +611,17 @@ import { ref, computed, reactive, watch, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { Icon } from '@iconify/vue'
 import { useAuthStore } from '@/stores/authStore'
-import { useChatStore } from '@/stores/chatStore'
+import { useNotificationStore } from '@/stores/notificationStore'
 import { apiChangePassword, apiUpdateProfile } from '@/api/auth'
 import { apiFetch } from '@/api/http'
+import {
+  buildWorkorderNotificationItems,
+  filterWorkorderNotificationItems,
+  groupWorkorderNotificationItems,
+  type WorkorderNotificationHallEntry,
+  type WorkorderNotificationIncident,
+  type WorkorderNotificationItem,
+} from '@/utils/workorderNotification'
 
 const props = defineProps<{
   visible: boolean
@@ -550,7 +631,7 @@ const emit = defineEmits<{ close: [] }>()
 
 const router = useRouter()
 const authStore = useAuthStore()
-const chatStore = useChatStore()
+const notificationStore = useNotificationStore()
 
 const user = computed(() => authStore.user)
 
@@ -620,8 +701,7 @@ function onAvatarChange(e: Event) {
   reader.onload = async (ev) => {
     const dataUrl = ev.target?.result as string
     avatarUrl.value = dataUrl
-    const { useNotificationStore } = await import('@/stores/notificationStore')
-    useNotificationStore().saveAvatar(user.value?.id ?? 'guest', dataUrl)
+    notificationStore.saveAvatar(user.value?.id ?? 'guest', dataUrl)
   }
   reader.readAsDataURL(file)
   if (avatarInputRef.value) avatarInputRef.value.value = ''
@@ -809,12 +889,27 @@ const filteredPredictions = computed(() =>
     : latestPredictions.value.filter(p => p.horizon_h === filterHours.value && p.building_type === filterBuilding.value)
 )
 
-const pendingSessions = computed(() =>
-  chatStore.sessionList.filter(s => s.has_pending_action)
+const workorderIncidents = ref<WorkorderNotificationIncident[]>([])
+const workorderHallEntries = ref<WorkorderNotificationHallEntry[]>([])
+const workorderLoading = ref(false)
+const workorderItems = computed(() =>
+  buildWorkorderNotificationItems(workorderIncidents.value, workorderHallEntries.value)
 )
+const filteredWorkorderItems = computed(() =>
+  filterWorkorderNotificationItems(workorderItems.value, {
+    buildingId: filterBuilding.value,
+    hours: filterHours.value,
+  })
+)
+const workorderGroups = computed(() =>
+  groupWorkorderNotificationItems(filteredWorkorderItems.value)
+)
+
+type WorkorderQuickAction = 'nudge' | 'suggest_reassign'
 
 function switchMsgTab(tab: 'workorder' | 'anomaly' | 'warning') {
   msgTab.value = tab
+  if (tab === 'workorder' && workorderItems.value.length === 0) loadWorkorderNotifications()
   if (tab === 'warning') {
     if (![6, 12].includes(filterHours.value)) filterHours.value = 6
     if (predictions.value.length === 0) loadPredictions()
@@ -823,10 +918,113 @@ function switchMsgTab(tab: 'workorder' | 'anomaly' | 'warning') {
   }
 }
 
-function gotoWorkOrder(sessionId: string) {
-  chatStore.switchSession(sessionId)
+async function loadWorkorderNotifications() {
+  workorderLoading.value = true
+  try {
+    const [incidentData, hallData] = await Promise.all([
+      apiFetch<{ incidents?: WorkorderNotificationIncident[] }>(
+        '/api/incidents?workflow_status=pending_review,pending_dispatch,dispatched,completed,false_alarm,escalated&page=1&page_size=80',
+      ),
+      apiFetch<{ hall_entries?: WorkorderNotificationHallEntry[] }>(
+        '/api/dispatch-hall?status=open&entry_type=support_request,takeover_candidate&include_applications=true&page=1&page_size=50',
+      ),
+    ])
+    workorderIncidents.value = incidentData?.incidents ?? []
+    workorderHallEntries.value = hallData?.hall_entries ?? []
+  } catch {
+    workorderIncidents.value = []
+    workorderHallEntries.value = []
+  } finally {
+    workorderLoading.value = false
+  }
+}
+
+function gotoWorkOrder(item: WorkorderNotificationItem) {
   emit('close')
+  if (item.category === 'hall_application' || item.category === 'takeover_recommendation') {
+    router.push({
+      path: '/workorders',
+      query: {
+        active_tab: 'shared_hall',
+        hall_entry_id: item.hallEntryId ?? undefined,
+      },
+    })
+    return
+  }
   router.push('/workorders')
+}
+
+function incidentForWorkorderItem(item: WorkorderNotificationItem) {
+  if (item.category === 'hall_application' || item.category === 'takeover_recommendation') return null
+  return workorderIncidents.value.find((incident) => incident.id === item.id) || null
+}
+
+function canNudgeWorkorderItem(item: WorkorderNotificationItem) {
+  return ['pending_accept', 'warning', 'overdue', 'waiting_support'].includes(item.category)
+    && Boolean(incidentForWorkorderItem(item)?.current_dispatch?.id)
+}
+
+function canSuggestReassign(item: WorkorderNotificationItem) {
+  return (
+    ['pending_accept', 'overdue', 'waiting_support', 'takeover_recommendation'].includes(item.category)
+    && Boolean(item.ticketId || item.hallEntryId)
+  )
+}
+
+function hasWorkorderQuickActions(item: WorkorderNotificationItem) {
+  return canNudgeWorkorderItem(item) || canSuggestReassign(item)
+}
+
+function buildNudgeMessage(item: WorkorderNotificationItem) {
+  if (item.category === 'pending_accept') return '工单已派发，请尽快接单确认并同步预计到场时间'
+  if (item.category === 'waiting_support') return '当前工单处于待协同状态，请尽快同步协同进展'
+  if (item.category === 'warning' || item.category === 'overdue') {
+    if (item.dispatchStage === 'accept') return '当前工单接单节点临近或已经超时，请立即接单并反馈现场计划'
+    if (item.dispatchStage === 'arrive') return '当前工单到场节点临近或已经超时，请尽快到场并同步现场进展'
+    return '当前工单处理节点临近或已经超时，请尽快处理并回传最新进展'
+  }
+  return '请尽快跟进当前工单，并同步处理进度'
+}
+
+async function handleWorkorderQuickAction(item: WorkorderNotificationItem, action: WorkorderQuickAction) {
+  if (action === 'suggest_reassign' && item.category === 'takeover_recommendation') {
+    emit('close')
+    await router.push({
+      path: '/workorders',
+      query: {
+        active_tab: 'shared_hall',
+        hall_entry_id: item.hallEntryId ?? undefined,
+      },
+    })
+    return
+  }
+
+  const target = incidentForWorkorderItem(item)
+  if (!target) return
+
+  if (action === 'nudge') {
+    if (!target.current_dispatch?.id) return
+    try {
+      await apiFetch(`/api/dispatch-tasks/${target.current_dispatch.id}/nudge`, {
+        method: 'POST',
+        body: JSON.stringify({ message: buildNudgeMessage(item) }),
+      })
+      await loadWorkorderNotifications()
+      await notificationStore.refresh()
+    } catch {
+      // 静默失败，避免打断消息面板使用
+    }
+    return
+  }
+
+  emit('close')
+  await router.push({
+    path: '/workorders',
+    query: {
+      focus_ticket: item.ticketId ?? undefined,
+      focus_action: 'reassign',
+    },
+  })
 }
 
 // ── 异常告警 ──────────────────────────────────
@@ -893,9 +1091,7 @@ async function loadAnomalies() {
   try {
     const data = await apiFetch<{ anomalies: AnomalyItem[] }>('/api/anomalies/recent?hours=168')
     anomalies.value = data?.anomalies ?? []
-    // 刷新后清除角标
-    const { useNotificationStore } = await import('@/stores/notificationStore')
-    useNotificationStore().clearBadge()
+    notificationStore.clearBadge()
   } catch (e: unknown) {
     anomalyError.value = (e as Error).message ?? '加载失败'
   } finally {
@@ -1066,7 +1262,7 @@ function predictionSummary(item: PredictionItem): string {
 
 // ── 初始化 ──────────────────────────────────
 onMounted(() => {
-  if (chatStore.sessionList.length === 0) chatStore.loadSessionList()
+  loadWorkorderNotifications()
   loadAnomalies()
   loadPredictions()
   document.addEventListener('click', closeDropdowns)
@@ -1661,6 +1857,9 @@ onUnmounted(() => {
 
 .msg-block { margin-bottom: 20px; }
 .msg-block:last-child { margin-bottom: 0; }
+.msg-list > .block-label-hint:not(:first-child) {
+  margin-top: 8px;
+}
 .block-label {
   display: flex; align-items: center; gap: 7px;
   font-size: 11px; font-weight: 600; color: #9ca3af;
@@ -1717,6 +1916,9 @@ onUnmounted(() => {
   display: flex; align-items: center; justify-content: center;
 }
 .msg-icon.workorder { background: rgba(80, 200, 120, 0.1); color: #50c878; }
+.msg-icon.workorder.icon-warning { background: rgba(245, 158, 11, 0.12); color: #d97706; }
+.msg-icon.workorder.icon-danger { background: rgba(239, 68, 68, 0.12); color: #dc2626; }
+.msg-icon.workorder.icon-success { background: rgba(34, 197, 94, 0.12); color: #16a34a; }
 .msg-icon.anom      { background: rgba(239, 68, 68, 0.08); color: #ef4444; }
 .sev-high .msg-icon.anom   { background: rgba(239, 68, 68, 0.1); color: #ef4444; }
 .sev-medium .msg-icon.anom { background: rgba(251, 191, 36, 0.08); color: #f59e0b; }
@@ -1729,9 +1931,26 @@ onUnmounted(() => {
 }
 .msg-sub { font-size: 11px; color: #9ca3af; margin: 0; }
 .msg-detail { font-size: 11px; color: #6b7280; margin: 3px 0 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.msg-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.msg-action-btn {
+  border: none;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  background: rgba(15, 23, 42, 0.05);
+  color: #526071;
+  cursor: pointer;
+}
+.msg-action-btn.accent { background: rgba(59, 130, 246, 0.12); color: #2563eb; }
+.msg-action-btn.warn { background: rgba(245, 158, 11, 0.14); color: #d97706; }
 .msg-chevron { color: #d1d5db; flex-shrink: 0; }
 .msg-tag { font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 20px; flex-shrink: 0; }
 .msg-tag.pending { background: rgba(80, 200, 120, 0.1); color: #16a34a; }
+.msg-tag.tag-pending { background: rgba(80, 200, 120, 0.1); color: #16a34a; }
+.msg-tag.tag-warning { background: rgba(245, 158, 11, 0.12); color: #d97706; }
+.msg-tag.tag-danger { background: rgba(239, 68, 68, 0.12); color: #dc2626; }
+.msg-tag.tag-success { background: rgba(34, 197, 94, 0.12); color: #16a34a; }
 .msg-tag.tag-high   { background: rgba(239, 68, 68, 0.1); color: #dc2626; }
 .msg-tag.tag-medium { background: rgba(251, 191, 36, 0.1); color: #d97706; }
 .msg-tag.tag-low    { background: rgba(80, 200, 120, 0.1); color: #16a34a; }

@@ -7,8 +7,8 @@
           :class="{ active: msgTab === 'workorder' }"
           @click="switchTab('workorder')"
         >
-          <text>待审批工单</text>
-          <view v-if="pendingCount > 0" class="capsule-dot ok">{{ pendingCount }}</view>
+          <text>工单动态</text>
+          <view v-if="workorderCount > 0" class="capsule-dot ok">{{ workorderCount }}</view>
         </view>
         <view
           class="capsule-btn"
@@ -79,41 +79,124 @@
 
     <scroll-view v-if="msgTab === 'workorder'" scroll-y class="list-area" :style="listAreaStyle">
       <view class="block-label-row">
-        <text class="block-label">待审批工单</text>
-        <view v-if="pendingCount > 0" class="count-badge">{{ pendingCount }}</view>
+        <text class="block-label">工单动态</text>
+        <view v-if="filteredWorkorderItems.length > 0" class="count-badge">{{ filteredWorkorderItems.length }}</view>
       </view>
 
-      <view v-if="pendingLoading && !pendingIncidents.length">
+      <view v-if="workorderLoading && !workorderItems.length">
         <view v-for="i in 3" :key="i" class="msg-item skeleton">
           <view class="sk-line" />
           <view class="sk-line short" />
         </view>
       </view>
 
-      <view v-else-if="!pendingIncidents.length" class="empty-block">
+      <view v-else-if="!filteredWorkorderItems.length" class="empty-block">
         <text class="empty-check">✓</text>
-        <text class="empty-text">暂无待审批工单</text>
+        <text class="empty-text">{{ hasActiveFilter ? '当前筛选条件下暂无工单提醒' : '暂无待处理工单提醒' }}</text>
       </view>
 
-      <view
-        v-for="incident in pendingIncidents"
-        :key="incident.id"
-        class="msg-item clickable"
-        @click="openDetail(incident)"
-      >
-        <view class="msg-icon workorder">
-          <text>🔧</text>
+      <template v-else>
+        <view v-if="workorderGroups.review.length" class="message-group">
+          <view class="block-label-row group-row">
+            <text class="block-label">待审批 / 待派工 / 工单大厅申请</text>
+          </view>
+          <view
+            v-for="item in workorderGroups.review"
+            :key="item.id"
+            class="msg-item clickable"
+            @click="openWorkorderItem(item)"
+          >
+            <view class="msg-icon workorder">
+              <text>🔧</text>
+            </view>
+            <view class="msg-body">
+              <text class="msg-title">{{ formatBuildingLabel(item.buildingId) }} · {{ item.title }}</text>
+              <text class="msg-sub">{{ item.subtitle }}</text>
+              <text class="msg-detail">{{ item.detail }}</text>
+              <text class="msg-time">{{ formatRelativeTime(item.occurredAt) }}</text>
+              <view v-if="hasWorkorderQuickActions(item)" class="msg-actions" @click.stop>
+                <view
+                  v-if="canNudgeWorkorderItem(item)"
+                  class="msg-action-btn accent"
+                  @click.stop="handleWorkorderQuickAction(item, 'nudge')"
+                >
+                  <text>催办</text>
+                </view>
+                <view
+                  v-if="canContactWorkorderItem(item)"
+                  class="msg-action-btn"
+                  @click.stop="handleWorkorderQuickAction(item, 'contact')"
+                >
+                  <text>联系</text>
+                </view>
+                <view
+                  v-if="canSuggestReassign(item)"
+                  class="msg-action-btn warn"
+                  @click.stop="handleWorkorderQuickAction(item, 'suggest_reassign')"
+                >
+                  <text>改派建议</text>
+                </view>
+              </view>
+            </view>
+            <view class="msg-tag" :class="'tag-' + item.tone">
+              <text>{{ item.tag }}</text>
+            </view>
+            <text class="msg-arrow">›</text>
+          </view>
         </view>
-        <view class="msg-body">
-          <text class="msg-title">{{ formatBuildingLabel(incident.building_id) }}</text>
-          <text class="msg-sub">{{ sanitizeDisplayText(incident.summary_text || incident.incident_id) }}</text>
-          <text class="msg-time">{{ formatRelativeTime(incident.updated_at) }}</text>
+
+        <view v-if="workorderGroups.execution.length" class="message-group">
+          <view class="block-label-row group-row">
+            <text class="block-label">执行提醒</text>
+          </view>
+          <view
+            v-for="item in workorderGroups.execution"
+            :key="item.id"
+            class="msg-item clickable"
+            @click="openWorkorderItem(item)"
+          >
+            <view class="msg-icon workorder" :class="'tone-' + item.tone">
+              <text>{{ item.category === 'waiting_support' ? '🤝' : item.category === 'overdue' ? '⏰' : item.dispatchStage === 'arrive' ? '📍' : item.dispatchStage === 'accept' ? '📨' : '📣' }}</text>
+            </view>
+            <view class="msg-body">
+              <text class="msg-title">{{ formatBuildingLabel(item.buildingId) }} · {{ item.title }}</text>
+              <text class="msg-sub">{{ item.subtitle }}</text>
+              <text class="msg-detail">{{ item.detail }}</text>
+              <text class="msg-time">{{ formatRelativeTime(item.occurredAt) }}</text>
+            </view>
+            <view class="msg-tag" :class="'tag-' + item.tone">
+              <text>{{ item.tag }}</text>
+            </view>
+            <text class="msg-arrow">›</text>
+          </view>
         </view>
-        <view class="msg-tag pending">
-          <text>待审批</text>
+
+        <view v-if="workorderGroups.closing.length" class="message-group">
+          <view class="block-label-row group-row">
+            <text class="block-label">待复核 / 待关闭</text>
+          </view>
+          <view
+            v-for="item in workorderGroups.closing"
+            :key="item.id"
+            class="msg-item clickable"
+            @click="openWorkorderItem(item)"
+          >
+            <view class="msg-icon workorder tone-success">
+              <text>✅</text>
+            </view>
+            <view class="msg-body">
+              <text class="msg-title">{{ formatBuildingLabel(item.buildingId) }} · {{ item.title }}</text>
+              <text class="msg-sub">{{ item.subtitle }}</text>
+              <text class="msg-detail">{{ item.detail }}</text>
+              <text class="msg-time">{{ formatRelativeTime(item.occurredAt) }}</text>
+            </view>
+            <view class="msg-tag tag-success">
+              <text>{{ item.tag }}</text>
+            </view>
+            <text class="msg-arrow">›</text>
+          </view>
         </view>
-        <text class="msg-arrow">›</text>
-      </view>
+      </template>
     </scroll-view>
 
     <scroll-view v-if="msgTab === 'anomaly'" scroll-y class="list-area" :style="listAreaStyle">
@@ -227,9 +310,16 @@ import { computed, onMounted, ref } from 'vue'
 import { RULE_LABEL } from '../constants/status'
 import { dataApi, type AnomalyItem, type PredictionItem } from '../api/data'
 import { incidentApi, type Incident } from '../api/incident'
+import { workOrderApi, type DispatchHallEntry } from '../api/workorder'
 import { formatRelativeTime, formatServerDateTime } from '../utils/format'
 import { getCache, setCache } from '../utils/cache'
 import { formatBuildingLabel, sanitizeDisplayText } from '../utils/display'
+import {
+  buildOperatorWorkorderMessageItems,
+  filterOperatorWorkorderMessageItems,
+  groupOperatorWorkorderMessageItems,
+  type OperatorWorkorderMessageItem,
+} from '../utils/operator-message'
 
 const props = withDefaults(defineProps<{
   withTabBar?: boolean
@@ -361,7 +451,7 @@ function selectTime(value: number) {
 
 function switchTab(tab: 'workorder' | 'anomaly' | 'warning') {
   msgTab.value = tab
-  if (tab === 'workorder' && !pendingIncidents.value.length) loadPending()
+  if (tab === 'workorder' && !workorderIncidents.value.length) loadWorkorders()
   if (tab === 'anomaly' && !anomalies.value.length) loadAnomalies()
   if (tab === 'warning') {
     if (![6, 12].includes(filterHours.value)) filterHours.value = 6
@@ -372,27 +462,60 @@ function switchTab(tab: 'workorder' | 'anomaly' | 'warning') {
   saveViewState()
 }
 
-const pendingIncidents = ref<Incident[]>([])
-const pendingLoading = ref(false)
+const workorderIncidents = ref<Incident[]>([])
+const workorderHallEntries = ref<DispatchHallEntry[]>([])
+const workorderLoading = ref(false)
 
-const pendingCount = computed(() => pendingIncidents.value.length)
+const workorderItems = computed(() =>
+  buildOperatorWorkorderMessageItems(workorderIncidents.value, workorderHallEntries.value),
+)
+const filteredWorkorderItems = computed(() =>
+  filterOperatorWorkorderMessageItems(workorderItems.value, {
+    buildingId: filterBuilding.value,
+    hours: filterHours.value,
+  }),
+)
+const workorderGroups = computed(() =>
+  groupOperatorWorkorderMessageItems(filteredWorkorderItems.value),
+)
+const workorderCount = computed(() => workorderItems.value.length)
 
-async function loadPending() {
-  const cached = getCache<Incident[]>('msg_pending')
-  if (cached) pendingIncidents.value = cached
-  pendingLoading.value = !cached
+type WorkorderQuickAction = 'nudge' | 'contact' | 'suggest_reassign'
+
+async function loadWorkorders() {
+  const cached = getCache<Incident[]>('msg_workorders')
+  const hallCached = getCache<DispatchHallEntry[]>('msg_workorder_hall')
+  if (cached) workorderIncidents.value = cached
+  if (hallCached) workorderHallEntries.value = hallCached
+  workorderLoading.value = !cached && !hallCached
   try {
-    const res = await incidentApi.list({
-      workflow_status: 'pending_review',
-      page: 1,
-      page_size: 50,
-    })
-    pendingIncidents.value = res.incidents
-    setCache('msg_pending', res.incidents)
+    const [incidentRes, hallRes] = await Promise.allSettled([
+      incidentApi.list({
+        workflow_status: 'pending_review,pending_dispatch,dispatched,completed,false_alarm,escalated',
+        page: 1,
+        page_size: 80,
+      }),
+      workOrderApi.listDispatchHallEntries({
+        status: 'open',
+        entry_type: 'support_request,takeover_candidate',
+        include_applications: true,
+        page: 1,
+        page_size: 50,
+      }),
+    ])
+
+    if (incidentRes.status === 'fulfilled') {
+      workorderIncidents.value = incidentRes.value.incidents
+      setCache('msg_workorders', incidentRes.value.incidents)
+    }
+    if (hallRes.status === 'fulfilled') {
+      workorderHallEntries.value = hallRes.value.hall_entries
+      setCache('msg_workorder_hall', hallRes.value.hall_entries)
+    }
   } catch {
     // noop
   } finally {
-    pendingLoading.value = false
+    workorderLoading.value = false
   }
 }
 
@@ -401,6 +524,103 @@ function openDetail(incident: Incident) {
   if (!ticketId) return
   uni.navigateTo({
     url: `/pages/worker/workorder-detail/index?incident_id=${incident.incident_id}&ticket_id=${ticketId}&readonly=1`,
+  })
+}
+
+function openWorkorderItem(item: OperatorWorkorderMessageItem) {
+  if (item.category === 'hall_application' || item.category === 'takeover_recommendation') {
+    const query = item.hallEntryId
+      ? `?active_tab=shared_hall&hall_entry_id=${encodeURIComponent(item.hallEntryId)}`
+      : '?active_tab=shared_hall'
+    uni.navigateTo({ url: `/pages/operator/workorders/index${query}` })
+    return
+  }
+  const target = workorderIncidents.value.find((incident) => incident.id === item.id)
+  if (!target) return
+  openDetail(target)
+}
+
+function incidentForMessage(item: OperatorWorkorderMessageItem) {
+  if (item.category === 'hall_application' || item.category === 'takeover_recommendation') return null
+  return workorderIncidents.value.find((incident) => incident.id === item.id) || null
+}
+
+function canNudgeWorkorderItem(item: OperatorWorkorderMessageItem) {
+  return ['pending_accept', 'warning', 'overdue', 'waiting_support'].includes(item.category)
+    && Boolean(incidentForMessage(item)?.current_dispatch?.id)
+}
+
+function canContactWorkorderItem(item: OperatorWorkorderMessageItem) {
+  const target = incidentForMessage(item)
+  return Boolean(target?.current_dispatch?.assigned_phone || target?.current_work_order?.assigned_phone)
+}
+
+function canSuggestReassign(item: OperatorWorkorderMessageItem) {
+  return (
+    ['pending_accept', 'overdue', 'waiting_support', 'takeover_recommendation'].includes(item.category)
+    && Boolean(item.ticketId || item.hallEntryId)
+  )
+}
+
+function hasWorkorderQuickActions(item: OperatorWorkorderMessageItem) {
+  return canNudgeWorkorderItem(item) || canContactWorkorderItem(item) || canSuggestReassign(item)
+}
+
+function buildNudgeMessage(item: OperatorWorkorderMessageItem) {
+  if (item.category === 'pending_accept') return '工单已派发，请尽快接单确认并同步预计到场时间'
+  if (item.category === 'waiting_support') return '当前工单处于待协同状态，请尽快同步协同进展'
+  if (item.category === 'warning' || item.category === 'overdue') {
+    if (item.dispatchStage === 'accept') return '当前工单接单节点临近或已经超时，请立即接单并反馈现场计划'
+    if (item.dispatchStage === 'arrive') return '当前工单到场节点临近或已经超时，请尽快到场并同步现场进展'
+    return '当前工单处理节点临近或已经超时，请尽快处理并回传最新进展'
+  }
+  return '请尽快跟进当前工单，并同步处理进度'
+}
+
+async function handleWorkorderQuickAction(item: OperatorWorkorderMessageItem, action: WorkorderQuickAction) {
+  if (action === 'suggest_reassign' && item.category === 'takeover_recommendation') {
+    const query = item.hallEntryId
+      ? `?active_tab=shared_hall&hall_entry_id=${encodeURIComponent(item.hallEntryId)}`
+      : '?active_tab=shared_hall'
+    uni.navigateTo({ url: `/pages/operator/workorders/index${query}` })
+    return
+  }
+
+  const target = incidentForMessage(item)
+  if (!target) return
+
+  if (action === 'contact') {
+    const phone = target.current_dispatch?.assigned_phone || target.current_work_order?.assigned_phone
+    if (!phone) {
+      uni.showToast({ title: '暂无责任人联系方式', icon: 'none' })
+      return
+    }
+    uni.makePhoneCall({ phoneNumber: phone })
+    return
+  }
+
+  if (action === 'nudge') {
+    if (!target.current_dispatch?.id) {
+      uni.showToast({ title: '当前派工任务不存在', icon: 'none' })
+      return
+    }
+    try {
+      await workOrderApi.nudgeDispatchTask(target.current_dispatch.id, buildNudgeMessage(item))
+      await loadWorkorders()
+      const assignee = target.current_dispatch?.assigned_to_name || target.current_work_order?.assigned_to_name || '责任人'
+      uni.showToast({ title: `已催办${assignee}`, icon: 'success' })
+    } catch {
+      uni.showToast({ title: '催办失败', icon: 'none' })
+    }
+    return
+  }
+
+  if (!item.ticketId) {
+    uni.showToast({ title: '当前工单不存在', icon: 'none' })
+    return
+  }
+  uni.navigateTo({
+    url: `/pages/operator/workorders/index?active_tab=dispatched&ticket_id=${encodeURIComponent(item.ticketId)}&focus_action=reassign`,
   })
 }
 
@@ -539,7 +759,7 @@ function predictionSummary(item: PredictionItem) {
 
 onMounted(() => {
   restoreViewState()
-  loadPending()
+  loadWorkorders()
   if (msgTab.value === 'anomaly') loadAnomalies()
   loadPredictions()
 })
@@ -756,11 +976,18 @@ onMounted(() => {
   gap: 12rpx;
   margin-bottom: 20rpx;
 }
+.group-row {
+  margin-top: 16rpx;
+  margin-bottom: 12rpx;
+}
 .block-label {
   font-size: 22rpx;
   font-weight: 600;
   color: #9ca3af;
   letter-spacing: 0.04em;
+}
+.message-group + .message-group {
+  margin-top: 8rpx;
 }
 .count-badge {
   background: #50c878;
@@ -828,6 +1055,9 @@ onMounted(() => {
   font-size: 30rpx;
 }
 .msg-icon.workorder { background: rgba(80, 200, 120, 0.1); }
+.msg-icon.workorder.tone-warning { background: rgba(245, 158, 11, 0.12); }
+.msg-icon.workorder.tone-danger { background: rgba(239, 68, 68, 0.12); }
+.msg-icon.workorder.tone-success { background: rgba(34, 197, 94, 0.12); }
 .msg-icon.anom { background: rgba(239, 68, 68, 0.08); }
 .msg-icon.anom.high { background: rgba(239, 68, 68, 0.1); }
 .msg-icon.anom.medium { background: rgba(251, 191, 36, 0.08); }
@@ -861,6 +1091,32 @@ onMounted(() => {
   color: #c4c9d4;
   margin-top: 4rpx;
 }
+.msg-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10rpx;
+  margin-top: 12rpx;
+}
+.msg-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 96rpx;
+  padding: 8rpx 16rpx;
+  border-radius: 999rpx;
+  background: rgba(15, 23, 42, 0.05);
+  color: #526071;
+  font-size: 20rpx;
+  font-weight: 600;
+}
+.msg-action-btn.accent {
+  background: rgba(59, 130, 246, 0.12);
+  color: #2563eb;
+}
+.msg-action-btn.warn {
+  background: rgba(245, 158, 11, 0.14);
+  color: #d97706;
+}
 .msg-detail {
   display: block;
   font-size: 22rpx;
@@ -884,6 +1140,10 @@ onMounted(() => {
   white-space: nowrap;
 }
 .msg-tag.pending { background: rgba(80, 200, 120, 0.1); color: #16a34a; }
+.msg-tag.tag-pending { background: rgba(80, 200, 120, 0.1); color: #16a34a; }
+.msg-tag.tag-warning { background: rgba(245, 158, 11, 0.12); color: #d97706; }
+.msg-tag.tag-danger { background: rgba(239, 68, 68, 0.12); color: #dc2626; }
+.msg-tag.tag-success { background: rgba(34, 197, 94, 0.12); color: #15803d; }
 .msg-tag.tag-high { background: rgba(239, 68, 68, 0.1); color: #dc2626; }
 .msg-tag.tag-medium { background: rgba(251, 191, 36, 0.1); color: #d97706; }
 .msg-tag.tag-low { background: rgba(80, 200, 120, 0.1); color: #16a34a; }

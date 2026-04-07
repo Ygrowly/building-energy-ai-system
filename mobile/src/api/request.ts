@@ -45,22 +45,31 @@ function clearAuth() {
   uni.removeStorageSync('user_info')
 }
 
+let isRedirectingToLogin = false
+
 function redirectToLogin() {
   clearAuth()
+  if (isRedirectingToLogin) return
+  isRedirectingToLogin = true
   uni.showToast({ title: '登录已过期，请重新登录', icon: 'none', duration: 2000 })
-  uni.reLaunch({ url: '/pages/login/index' })
+  setTimeout(() => {
+    uni.reLaunch({ url: '/pages/login/index' })
+    setTimeout(() => {
+      isRedirectingToLogin = false
+    }, 600)
+  }, 0)
 }
 
 // ---- refresh token 锁 ----
 let isRefreshing = false
-let refreshSubscribers: Array<(token: string) => void> = []
+let refreshSubscribers: Array<(token: string | null) => void> = []
 
-function onTokenRefreshed(newToken: string) {
+function onTokenRefreshed(newToken: string | null) {
   refreshSubscribers.forEach(cb => cb(newToken))
   refreshSubscribers = []
 }
 
-function subscribeTokenRefresh(): Promise<string> {
+function subscribeTokenRefresh(): Promise<string | null> {
   return new Promise(resolve => {
     refreshSubscribers.push(resolve)
   })
@@ -92,6 +101,10 @@ async function doRefresh(): Promise<string | null> {
   }
 }
 
+export async function refreshAccessToken(): Promise<string | null> {
+  return doRefresh()
+}
+
 // ---- 核心请求函数 ----
 
 export interface RequestOptions {
@@ -104,6 +117,10 @@ export interface RequestOptions {
 
 async function doRequest<T>(options: RequestOptions, retried = false): Promise<T> {
   const token = getToken()
+  if (!options.skipAuth && !token) {
+    redirectToLogin()
+    throw new Error('未登录或登录已过期')
+  }
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     ...(options.header || {}),
@@ -135,6 +152,7 @@ async function doRequest<T>(options: RequestOptions, retried = false): Promise<T
               } catch (e) { reject(e) }
               return
             } else {
+              onTokenRefreshed(null)
               redirectToLogin()
               reject(new Error('登录已过期'))
               return

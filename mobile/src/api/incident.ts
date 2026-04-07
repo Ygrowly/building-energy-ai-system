@@ -16,6 +16,7 @@ export interface IncidentCurrentWorkOrder {
   assigned_phone?: string | null
   assigned_team_name?: string | null
   suggested_action?: string | null
+  dispatch_blocked_reason?: string | null
   dispatch_at?: string | null
   accepted_at?: string | null
   arrived_at?: string | null
@@ -53,8 +54,10 @@ export interface Incident {
   resolved_at: string | null
   created_at: string | null
   updated_at: string | null
+  dispatch_blocked_reason?: string | null
+  latest_dispatch_note?: string | null
   current_work_order: IncidentCurrentWorkOrder | null
-  current_dispatch?: Pick<DispatchTask, 'id' | 'dispatch_status' | 'attempt_no' | 'execution_status' | 'sla_due_at' | 'sla_status' | 'sla_minutes_left'> | null
+  current_dispatch?: (Partial<DispatchTask> & Pick<DispatchTask, 'id' | 'dispatch_status' | 'attempt_no'>) | null
 }
 
 export interface IncidentListResponse {

@@ -19,6 +19,7 @@ from app.services.incident_service import (
     list_incident_prediction_links,
     list_incident_work_orders,
     list_incidents,
+    resolve_incident_assigned_user_id,
     serialize_incident,
     serialize_incident_detail,
 )
@@ -30,6 +31,31 @@ settings = get_settings()
 def _require_role(user: User, *roles: str) -> None:
     if user.role not in roles:
         raise HTTPException(status_code=403, detail="权限不足")
+
+
+def _collect_incident_assigned_user_ids(
+    *,
+    incidents: list[Any],
+    work_orders_by_id: dict[str, WorkOrder],
+    current_dispatches_by_work_order_id: dict[str, Any],
+) -> list[str]:
+    assigned_user_ids: list[str] = []
+    seen: set[str] = set()
+    for incident in incidents:
+        current_work_order = work_orders_by_id.get(getattr(incident, "current_work_order_id", "") or "")
+        current_dispatch = (
+            current_dispatches_by_work_order_id.get(current_work_order.id)
+            if current_work_order else None
+        )
+        assigned_user_id = resolve_incident_assigned_user_id(
+            incident=incident,
+            work_order=current_work_order,
+            current_dispatch=current_dispatch,
+        )
+        if assigned_user_id and assigned_user_id not in seen:
+            seen.add(assigned_user_id)
+            assigned_user_ids.append(assigned_user_id)
+    return assigned_user_ids
 
 
 @router.get("", summary="获取 incident 列表")
@@ -76,7 +102,11 @@ async def list_incidents_endpoint(
                 work_order_ids=work_order_ids,
             )
 
-            assigned_user_ids = [wo.assigned_to for wo in work_orders if wo.assigned_to]
+            assigned_user_ids = _collect_incident_assigned_user_ids(
+                incidents=items,
+                work_orders_by_id=work_orders_by_id,
+                current_dispatches_by_work_order_id=current_dispatches_by_work_order_id,
+            )
             if assigned_user_ids:
                 user_result = await db.execute(
                     select(User)
@@ -103,12 +133,24 @@ async def list_incidents_endpoint(
         serialized_incidents: list[dict[str, Any]] = []
         for incident in items:
             current_work_order = work_orders_by_id.get(incident.current_work_order_id or "")
-            assigned_user = assigned_users_by_id.get(current_work_order.assigned_to or "") if current_work_order else None
+            current_dispatch = (
+                current_dispatches_by_work_order_id.get(current_work_order.id)
+                if current_work_order else None
+            )
+            assigned_user_id = (
+                resolve_incident_assigned_user_id(
+                    incident=incident,
+                    work_order=current_work_order,
+                    current_dispatch=current_dispatch,
+                )
+                or ""
+            )
+            assigned_user = assigned_users_by_id.get(assigned_user_id)
             serialized_incidents.append(
                 serialize_incident(
                     incident,
                     current_work_order=current_work_order,
-                    current_dispatch=current_dispatches_by_work_order_id.get(current_work_order.id) if current_work_order else None,
+                    current_dispatch=current_dispatch,
                     assigned_user=assigned_user,
                     audit_logs=audit_logs_by_work_order_id.get(incident.current_work_order_id or "", []),
                 )
@@ -141,10 +183,12 @@ async def get_incident_detail_endpoint(
             raise HTTPException(status_code=404, detail="incident 不存在")
 
         work_orders = await list_incident_work_orders(db, incident_id=incident.id)
-        if user.role == "ops":
-            if not any((wo.assigned_to == user.id) for wo in work_orders):
-                raise HTTPException(status_code=403, detail="只能查看派发给自己的 incident")
-
+        current_dispatches_by_work_order_id: dict[str, Any] = {}
+        if work_orders:
+            current_dispatches_by_work_order_id = await load_current_dispatches_by_work_order_ids(
+                db,
+                work_order_ids=[wo.id for wo in work_orders],
+            )
         current_work_order = None
         if incident.current_work_order_id:
             current_work_order = next(
@@ -153,16 +197,37 @@ async def get_incident_detail_endpoint(
             )
             if current_work_order is None:
                 current_work_order = await db.get(WorkOrder, incident.current_work_order_id)
+        current_dispatch = (
+            current_dispatches_by_work_order_id.get(current_work_order.id)
+            if current_work_order else None
+        )
+        if user.role == "ops":
+            current_assigned_user_id = resolve_incident_assigned_user_id(
+                incident=incident,
+                work_order=current_work_order,
+                current_dispatch=current_dispatch,
+            )
+            if current_assigned_user_id != user.id:
+                raise HTTPException(status_code=403, detail="只能查看派发给自己的 incident")
 
         assigned_users_by_id: dict[str, User] = {}
         audit_logs_by_work_order_id: dict[str, list[WorkOrderAuditLog]] = {}
-        current_dispatches_by_work_order_id: dict[str, Any] = {}
-        if work_orders:
-            assigned_user_ids = [wo.assigned_to for wo in work_orders if wo.assigned_to]
-            current_dispatches_by_work_order_id = await load_current_dispatches_by_work_order_ids(
-                db,
-                work_order_ids=[wo.id for wo in work_orders],
+        if work_orders or current_work_order:
+            work_orders_by_id = {wo.id: wo for wo in work_orders}
+            if current_work_order and current_work_order.id not in work_orders_by_id:
+                work_orders_by_id[current_work_order.id] = current_work_order
+            assigned_user_ids = _collect_incident_assigned_user_ids(
+                incidents=[incident],
+                work_orders_by_id=work_orders_by_id,
+                current_dispatches_by_work_order_id=current_dispatches_by_work_order_id,
             )
+            for wo in work_orders:
+                assigned_user_id = resolve_incident_assigned_user_id(
+                    work_order=wo,
+                    current_dispatch=current_dispatches_by_work_order_id.get(wo.id),
+                )
+                if assigned_user_id and assigned_user_id not in assigned_user_ids:
+                    assigned_user_ids.append(assigned_user_id)
             if assigned_user_ids:
                 user_result = await db.execute(
                     select(User)
@@ -192,7 +257,7 @@ async def get_incident_detail_endpoint(
         return serialize_incident_detail(
             incident,
             current_work_order=current_work_order,
-            current_dispatch=current_dispatches_by_work_order_id.get(current_work_order.id) if current_work_order else None,
+            current_dispatch=current_dispatch,
             work_orders=work_orders,
             current_dispatches_by_work_order_id=current_dispatches_by_work_order_id,
             event_links=event_links,

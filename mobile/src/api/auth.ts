@@ -1,4 +1,4 @@
-import { post, get, patch } from './request'
+import { post, get, patch, request } from './request'
 import type { UserRole } from '../constants/roles'
 
 /** 对齐后端 UserResponse */
@@ -49,12 +49,24 @@ export interface AuthResponse {
   user: UserInfo
 }
 
+export interface RefreshResponse {
+  access_token: string
+  refresh_token: string
+  token_type: 'bearer'
+  expires_in: number
+}
+
 /** @deprecated 保持向后兼容 */
 export type LoginResponse = AuthResponse
 
 export const authApi = {
   login(username: string, password: string): Promise<AuthResponse> {
-    return post<AuthResponse>('/api/auth/login', { username, password })
+    return request<AuthResponse>({
+      url: '/api/auth/login',
+      method: 'POST',
+      data: { username, password },
+      skipAuth: true,
+    })
   },
 
   register(
@@ -63,16 +75,35 @@ export const authApi = {
     email?: string,
     phone?: string,
   ): Promise<AuthResponse> {
-    return post<AuthResponse>('/api/auth/register', {
-      username,
-      password,
-      ...(email ? { email } : {}),
-      ...(phone ? { phone } : {}),
+    return request<AuthResponse>({
+      url: '/api/auth/register',
+      method: 'POST',
+      skipAuth: true,
+      data: {
+        username,
+        password,
+        ...(email ? { email } : {}),
+        ...(phone ? { phone } : {}),
+      },
     })
   },
 
   logout(refreshToken: string): Promise<void> {
-    return post<void>('/api/auth/logout', { refresh_token: refreshToken })
+    return request<void>({
+      url: '/api/auth/logout',
+      method: 'POST',
+      skipAuth: true,
+      data: { refresh_token: refreshToken },
+    })
+  },
+
+  refresh(refreshToken: string): Promise<RefreshResponse> {
+    return request<RefreshResponse>({
+      url: '/api/auth/refresh',
+      method: 'POST',
+      skipAuth: true,
+      data: { refresh_token: refreshToken },
+    })
   },
 
   me(): Promise<UserInfo> {

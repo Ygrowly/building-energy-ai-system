@@ -104,7 +104,16 @@
     {
       "path": "pages/worker/active/index",
       "style": {
-        "navigationBarTitleText": "工单",
+        "navigationBarTitleText": "我的工单",
+        "navigationBarBackgroundColor": "#E4EDB8",
+        "navigationBarTextStyle": "white",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/worker/hall/index",
+      "style": {
+        "navigationBarTitleText": "工单大厅",
         "navigationBarBackgroundColor": "#E4EDB8",
         "navigationBarTextStyle": "white",
         "navigationStyle": "custom"

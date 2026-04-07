@@ -47,10 +47,39 @@
             </view>
           </view>
 
-          <view v-if="activeTab === 'order'" class="section-card">
-            <view v-for="row in orderRows" :key="row.label" class="info-row">
-              <text class="row-label">{{ row.label }}</text>
-              <text class="row-value" :class="{ wrap: row.wrap }">{{ row.value }}</text>
+          <view v-if="activeTab === 'order'" class="detail-stack">
+            <view class="section-card">
+              <view v-for="row in orderRows" :key="row.label" class="info-row">
+                <text class="row-label">{{ row.label }}</text>
+                <text class="row-value" :class="{ wrap: row.wrap }">{{ row.value }}</text>
+              </view>
+            </view>
+
+            <view v-if="dispatchInsightRows.length || dispatchHistoryCards.length" class="section-card">
+              <text class="section-title">{{ dispatchSectionTitle }}</text>
+              <view v-for="row in dispatchInsightRows" :key="row.label" class="info-row">
+                <text class="row-label">{{ row.label }}</text>
+                <text class="row-value" :class="{ wrap: row.wrap }">{{ row.value }}</text>
+              </view>
+
+              <view v-if="dispatchHistoryCards.length" class="dispatch-history-list">
+                <view
+                  v-for="card in dispatchHistoryCards"
+                  :key="card.id"
+                  class="dispatch-history-card"
+                >
+                  <view class="dispatch-history-head">
+                    <text class="dispatch-history-title">{{ card.title }}</text>
+                    <text class="dispatch-history-status">{{ card.status }}</text>
+                  </view>
+                  <text class="dispatch-history-meta">{{ card.meta }}</text>
+                  <text
+                    v-for="note in card.notes"
+                    :key="card.id + note"
+                    class="dispatch-history-note"
+                  >{{ note }}</text>
+                </view>
+              </view>
             </view>
           </view>
 
@@ -139,10 +168,17 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { onHide, onShow, onUnload } from '@dcloudio/uni-app'
 import NavBar from '../../../components/NavBar.vue'
 import AiChat from '../../../components/AiChat.vue'
-import { workOrderApi, type DispatchEvent, type WorkOrder } from '../../../api/workorder'
+import {
+  workOrderApi,
+  type DispatchEvent,
+  type DispatchHallEntry,
+  type WorkOrder,
+  type WorkOrderTimelineResponse,
+} from '../../../api/workorder'
 import { incidentApi, type IncidentDetail } from '../../../api/incident'
 import { useRouteGuard } from '../../../utils/route-guard'
 import {
@@ -162,11 +198,13 @@ import {
   sanitizeDisplayText,
 } from '../../../utils/display'
 import { OPERATOR_ROLES, WORKER_ROLES } from '../../../constants/roles'
+import { emitWorkerOrdersUpdated, invalidateWorkerOrderCaches } from '../../../utils/worker-sync'
 
 const pages = getCurrentPages()
 const currentPage = pages[pages.length - 1] as any
 const ticketId = currentPage?.options?.ticket_id ?? ''
 const incidentId = currentPage?.options?.incident_id ?? ''
+const hallEntryId = currentPage?.options?.hall_entry_id ?? ''
 const readonly = currentPage?.options?.readonly === '1'
 const detailAllowedRoles = readonly ? [...OPERATOR_ROLES, ...WORKER_ROLES] : WORKER_ROLES
 
@@ -174,15 +212,48 @@ useRouteGuard(detailAllowedRoles)
 
 const incident = ref<IncidentDetail | null>(null)
 const order = ref<WorkOrder | null>(null)
+const orderTimeline = ref<WorkOrderTimelineResponse | null>(null)
+const hallEntry = ref<DispatchHallEntry | null>(null)
 const loading = ref(false)
-const actionLoading = ref<'accept' | 'arrive' | 'start' | 'request_support' | 'reject' | null>(null)
+const actionLoading = ref<
+  'accept'
+  | 'arrive'
+  | 'start'
+  | 'request_support'
+  | 'support_resolved'
+  | 'reject'
+  | 'accept_support'
+  | 'reject_support'
+  | null
+>(null)
 const feedbackLoading = ref<string | null>(null)
 const workerNote = ref('')
 const activeTab = ref<'order' | 'customer' | 'service'>('order')
+const hasLoadedOnce = ref(false)
+const detailVisible = ref(true)
+let detailSyncTimer: ReturnType<typeof setTimeout> | null = null
 
-type WorkerDispatchAction = 'accept' | 'arrive' | 'start' | 'request_support' | 'reject'
+const ACTIVE_SYNC_EXECUTION_STATUSES = new Set([
+  'pending_accept',
+  'accepted',
+  'arrived',
+  'processing',
+  'waiting_support',
+  'overdue',
+])
+
+type WorkerDispatchAction =
+  | 'accept'
+  | 'arrive'
+  | 'start'
+  | 'request_support'
+  | 'support_resolved'
+  | 'reject'
+  | 'accept_support'
+  | 'reject_support'
 type TimelineItem = { time: string; label: string; note?: string; sortValue: number }
 type ProgressAction = { action: WorkerDispatchAction; label: string }
+type DispatchHistoryCard = { id: string; title: string; status: string; meta: string; notes: string[] }
 
 const detailTabs = [
   { key: 'order', label: '工单信息' },
@@ -190,31 +261,245 @@ const detailTabs = [
   { key: 'service', label: '服务记录' },
 ] as const
 
-const buildingLabel = computed(() => formatBuildingLabel(incident.value?.building_id || order.value?.building_id))
+const DISPATCH_TASK_STATUS_LABEL: Record<string, string> = {
+  assigned: '待接单',
+  accepted: '已接单',
+  arrived: '已到场',
+  processing: '处理中',
+  waiting_support: '待协同',
+  rejected: '已拒单',
+  transferred: '已转派',
+  completed: '已完成',
+  escalated: '已升级',
+  cancelled: '已取消',
+}
+
+const DISPATCH_MODE_LABEL: Record<string, string> = {
+  manual: '人工派工',
+  assisted: '辅助派工',
+  auto: '自动派工',
+  reassigned: '改派',
+  escalation: '升级派工',
+  hall_takeover: '大厅接管',
+}
+
+const buildingLabel = computed(() => formatBuildingLabel(
+  hallEntry.value?.work_order?.building_id
+  || incident.value?.building_id
+  || order.value?.building_id,
+))
 const locationLabel = computed(() => (
-  formatDeviceLabel(incident.value?.device_id || order.value?.device_id, incident.value?.building_id || order.value?.building_id)
+  formatDeviceLabel(
+    hallEntry.value?.work_order?.device_id
+      || incident.value?.device_id
+      || order.value?.device_id,
+    hallEntry.value?.work_order?.building_id
+      || incident.value?.building_id
+      || order.value?.building_id,
+  )
   || formatSystemLabel(incident.value?.rule_triggered)
   || '现场待确认'
 ))
 const summaryText = computed(() => (
-  sanitizeDisplayText(incident.value?.summary_text)
+  sanitizeDisplayText(hallEntry.value?.support_reason)
+  || sanitizeDisplayText(hallEntry.value?.reason)
+  || sanitizeDisplayText(hallEntry.value?.work_order?.issue_description)
+  || sanitizeDisplayText(incident.value?.summary_text)
   || sanitizeDisplayText(order.value?.issue_description)
   || '工单待处理'
 ))
-const priorityText = computed(() => PRIORITY_LABEL[incident.value?.priority || order.value?.priority || ''] || '普通工单')
-const statusText = computed(() => STATUS_LABEL[order.value?.status || ''] || '处理中')
-const executionText = computed(() => {
-  const status = incident.value?.current_work_order?.execution_status || order.value?.execution_status || ''
-  return DISPATCH_EXECUTION_STATUS_LABEL[status] || ''
+const priorityText = computed(() => PRIORITY_LABEL[
+  hallEntry.value?.work_order?.priority
+  || incident.value?.priority
+  || order.value?.priority
+  || ''
+] || '普通工单')
+const statusText = computed(() => {
+  if (hallEntry.value) return '协同任务'
+  return STATUS_LABEL[order.value?.status || ''] || '处理中'
 })
-const currentExecutionStatus = computed(() => incident.value?.current_work_order?.execution_status || order.value?.execution_status || '')
+const currentExecutionStatus = computed(() => {
+  if (hallEntry.value) {
+    return hallEntry.value.status === 'assigned' ? 'pending_accept' : 'processing'
+  }
+  return (
+    order.value?.current_dispatch?.execution_status
+    || incident.value?.current_dispatch?.execution_status
+    || incident.value?.current_work_order?.execution_status
+    || order.value?.execution_status
+    || ''
+  )
+})
+const executionText = computed(() => {
+  if (hallEntry.value) {
+    return hallEntry.value.status === 'assigned' ? '待确认协同' : '协同处理中'
+  }
+  return DISPATCH_EXECUTION_STATUS_LABEL[currentExecutionStatus.value] || ''
+})
 const slaText = computed(() => {
+  if (hallEntry.value) return hallEntry.value.status === 'assigned' ? '待确认' : '协同中'
   const status = order.value?.current_dispatch?.sla_status || incident.value?.current_dispatch?.sla_status || incident.value?.current_work_order?.sla_status || order.value?.sla_status || ''
   return SLA_STATUS_LABEL[status] || '正常'
 })
 const aiReasonText = computed(() => sanitizeDisplayText(order.value?.ai_reason))
 const workerResultText = computed(() => WORKER_RESULT_LABEL[order.value?.worker_result || ''] || '已提交')
+const dispatchAttemptCount = computed(() => {
+  return orderTimeline.value?.dispatch_tasks?.length || (order.value?.current_dispatch ? 1 : 0)
+})
+const dispatchTasks = computed(() => {
+  const tasks = orderTimeline.value?.dispatch_tasks || []
+  if (tasks.length) return [...tasks].sort((a, b) => (a.attempt_no || 0) - (b.attempt_no || 0))
+  return order.value?.current_dispatch ? [order.value.current_dispatch] : []
+})
+const currentDispatchTask = computed(() => {
+  if (hallEntry.value) return null
+  const currentDispatchId = order.value?.current_dispatch?.id
+  if (currentDispatchId) {
+    return dispatchTasks.value.find(item => item.id === currentDispatchId) || order.value?.current_dispatch || null
+  }
+  return dispatchTasks.value[dispatchTasks.value.length - 1] || null
+})
+const currentBlockReason = computed(() => sanitizeDisplayText(
+  hallEntry.value?.support_reason
+  || hallEntry.value?.reason
+  || ''
+))
+const currentDispatchBlockReason = computed(() => sanitizeDisplayText(
+  order.value?.current_dispatch?.support_reason
+  || order.value?.current_dispatch?.reject_reason
+  || order.value?.dispatch_blocked_reason
+  || '',
+))
+const latestRejectedTask = computed(() => (
+  [...dispatchTasks.value].reverse().find(item => Boolean(sanitizeDisplayText(item.reject_reason))) || null
+))
+const latestSupportTask = computed(() => (
+  [...dispatchTasks.value].reverse().find(item => Boolean(sanitizeDisplayText(item.support_reason))) || null
+))
+const latestTransferredTask = computed(() => {
+  const currentTask = currentDispatchTask.value
+  if (currentTask?.transfer_from_dispatch_id) return currentTask
+  return [...dispatchTasks.value].reverse().find(item => Boolean(item.transfer_from_dispatch_id)) || null
+})
+const latestTransferredFromTask = computed(() => {
+  const target = latestTransferredTask.value
+  if (!target?.transfer_from_dispatch_id) return null
+  return dispatchTasks.value.find(item => item.id === target.transfer_from_dispatch_id) || null
+})
+const dispatchSectionTitle = computed(() => hallEntry.value ? '协同任务信息' : '派工信息')
+const dispatchModeText = computed(() => {
+  if (hallEntry.value) return '工单大厅协同'
+  return DISPATCH_MODE_LABEL[currentDispatchTask.value?.dispatch_mode || ''] || sanitizeDisplayText(currentDispatchTask.value?.dispatch_mode || '') || ''
+})
+const transferDescription = computed(() => {
+  if (hallEntry.value) {
+    const intro = [
+      hallEntry.value.assigned_by_name ? `${hallEntry.value.assigned_by_name}已将协同任务指派给你` : '管理员已将协同任务指派给你',
+      hallEntry.value.source_dispatch?.assigned_to_name ? `主责任人：${hallEntry.value.source_dispatch.assigned_to_name}` : '',
+    ].filter(Boolean)
+    return intro.join('；')
+  }
+
+  const currentTask = currentDispatchTask.value
+  if (!currentTask) return ''
+
+  const selectionReason = sanitizeDisplayText(currentTask.selection_reason || currentTask.latest_note || '')
+  const sourceTask = latestTransferredFromTask.value
+  if (currentTask.transfer_from_dispatch_id && sourceTask) {
+    const sourceLabel = [
+      `由第 ${sourceTask.attempt_no} 次派工`,
+      sourceTask.assigned_to_name ? `（${sourceTask.assigned_to_name}）` : '',
+      '转入当前责任人',
+    ].join('')
+    return [sourceLabel, selectionReason].filter(Boolean).join('；')
+  }
+  if ((currentTask.attempt_no || 0) > 1 && selectionReason) {
+    return `进入第 ${currentTask.attempt_no} 次派工；${selectionReason}`
+  }
+  return selectionReason
+})
+const supportReasonText = computed(() => (
+  sanitizeDisplayText(
+    hallEntry.value?.support_reason
+    || currentDispatchTask.value?.support_reason
+    || latestSupportTask.value?.support_reason
+    || '',
+  )
+))
+const latestRejectText = computed(() => {
+  const rejectedTask = latestRejectedTask.value
+  if (!rejectedTask?.reject_reason) return ''
+  const reason = sanitizeDisplayText(rejectedTask.reject_reason)
+  if (!reason) return ''
+  return rejectedTask.attempt_no ? `第 ${rejectedTask.attempt_no} 次：${reason}` : reason
+})
+const dispatchInsightRows = computed(() => {
+  if (hallEntry.value) {
+    return [
+      { label: '协同状态', value: hallEntry.value.status === 'assigned' ? '待确认协同' : '协同处理中' },
+      { label: '主责任人', value: hallEntry.value.source_dispatch?.assigned_to_name || '待确认' },
+      { label: '协同方式', value: dispatchModeText.value },
+      supportReasonText.value ? { label: '协同原因', value: supportReasonText.value, wrap: true } : null,
+      transferDescription.value ? { label: '指派说明', value: transferDescription.value, wrap: true } : null,
+      currentBlockReason.value ? { label: '当前说明', value: currentBlockReason.value, wrap: true } : null,
+    ].filter(Boolean) as Array<{ label: string; value: string; wrap?: boolean }>
+  }
+
+  const currentTask = currentDispatchTask.value
+  return [
+    { label: '派工批次', value: currentTask?.attempt_no ? `第 ${currentTask.attempt_no} 次 / 累计 ${dispatchAttemptCount.value} 次` : `累计 ${dispatchAttemptCount.value} 次` },
+    dispatchModeText.value ? { label: '派工方式', value: dispatchModeText.value } : null,
+    currentTask?.assigned_team_name ? { label: '责任班组', value: currentTask.assigned_team_name } : null,
+    supportReasonText.value ? { label: '协同原因', value: supportReasonText.value, wrap: true } : null,
+    latestRejectText.value ? { label: '最近拒单', value: latestRejectText.value, wrap: true } : null,
+    transferDescription.value ? { label: '转派说明', value: transferDescription.value, wrap: true } : null,
+    currentDispatchBlockReason.value ? { label: '当前阻塞', value: currentDispatchBlockReason.value, wrap: true } : null,
+  ].filter(Boolean) as Array<{ label: string; value: string; wrap?: boolean }>
+})
+const dispatchHistoryCards = computed<DispatchHistoryCard[]>(() => {
+  if (hallEntry.value) return []
+  return [...dispatchTasks.value]
+    .sort((a, b) => (b.attempt_no || 0) - (a.attempt_no || 0))
+    .slice(0, 3)
+    .map(item => {
+      const notes = [
+        item.selection_reason
+          ? `${item.transfer_from_dispatch_id || (item.attempt_no || 0) > 1 ? '转派说明' : '派工说明'}：${sanitizeDisplayText(item.selection_reason)}`
+          : '',
+        item.support_reason ? `协同原因：${sanitizeDisplayText(item.support_reason)}` : '',
+        item.reject_reason ? `拒单原因：${sanitizeDisplayText(item.reject_reason)}` : '',
+        item.cancel_reason ? `取消原因：${sanitizeDisplayText(item.cancel_reason)}` : '',
+      ].filter(Boolean)
+
+      if (!notes.length) {
+        const latestNote = sanitizeDisplayText(item.latest_note || '')
+        if (latestNote) notes.push(`执行说明：${latestNote}`)
+      }
+
+      const meta = [
+        item.assigned_to_name || '待分配责任人',
+        formatDateTime(item.assigned_at || item.accepted_at || item.arrived_at || item.completed_at),
+      ].filter(Boolean).join(' · ')
+
+      return {
+        id: item.id,
+        title: item.attempt_no ? `第 ${item.attempt_no} 次派工` : '派工记录',
+        status: DISPATCH_TASK_STATUS_LABEL[item.dispatch_status] || sanitizeDisplayText(item.dispatch_status) || '状态更新',
+        meta,
+        notes,
+      }
+    })
+})
 const progressActions = computed<ProgressAction[]>(() => {
+  if (hallEntry.value) {
+    if (hallEntry.value.status === 'assigned') {
+      return [
+        { action: 'accept_support', label: '确认协同' },
+        { action: 'reject_support', label: '无法支援' },
+      ]
+    }
+    return []
+  }
   switch (currentExecutionStatus.value) {
     case 'pending_accept':
       return [
@@ -234,7 +519,10 @@ const progressActions = computed<ProgressAction[]>(() => {
     case 'processing':
       return [{ action: 'request_support' as const, label: '申请协同' }]
     case 'waiting_support':
-      return [{ action: 'request_support' as const, label: '更新协同' }]
+      return [
+        { action: 'support_resolved' as const, label: '恢复处理' },
+        { action: 'request_support' as const, label: '更新协同' },
+      ]
     case 'overdue':
       if (!order.value?.accepted_at) return [
         { action: 'accept' as const, label: '立即接单' },
@@ -250,7 +538,7 @@ const progressActions = computed<ProgressAction[]>(() => {
       return []
   }
 })
-const canSubmitFeedback = computed(() => ['processing', 'waiting_support'].includes(currentExecutionStatus.value) || !!order.value?.processing_started_at)
+const canSubmitFeedback = computed(() => !hallEntry.value && (['processing', 'waiting_support'].includes(currentExecutionStatus.value) || !!order.value?.processing_started_at))
 
 const orderRows = computed(() => [
   { label: '工单编号', value: order.value?.ticket_id || '--' },
@@ -258,9 +546,8 @@ const orderRows = computed(() => [
   { label: '工单类型', value: incident.value ? formatRuleLabel(incident.value.rule_triggered) : '现场维修' },
   { label: '工单内容', value: summaryText.value, wrap: true },
   { label: '建议措施', value: sanitizeDisplayText(order.value?.suggested_action) || '按标准维修流程现场排查', wrap: true },
-  { label: '派工批次', value: order.value?.current_dispatch?.attempt_no ? `第 ${order.value.current_dispatch.attempt_no} 次` : '当前派工' },
-  { label: '受理人员', value: order.value?.assigned_to_name || '当前维修人员' },
-])
+  { label: '受理人员', value: hallEntry.value?.assigned_to_name || order.value?.assigned_to_name || '当前维修人员' },
+].filter(Boolean) as Array<{ label: string; value: string; wrap?: boolean }>)
 
 const customerRows = computed(() => [
   { label: '服务建筑', value: buildingLabel.value },
@@ -280,8 +567,12 @@ function getDispatchEventLabel(event: DispatchEvent) {
     arrived: '已到场',
     started: '开始处理',
     support_requested: '已申请协同',
+    support_resolved: '协同已解决',
     rejected: '已拒单',
     transferred: '已转派',
+    cancelled: '已取消派工',
+    timeout_warning: '临近超时',
+    timeout_overdue: '已超时',
     completed: '执行完成',
     escalated: '升级处理',
   }
@@ -295,11 +586,24 @@ function getDispatchEventNote(event: DispatchEvent) {
     || payload.reason
     || payload.selection_reason
     || payload.result
+    || payload.message
     || payload.dispatch_mode
   )
 }
 
 const serviceTimeline = computed<TimelineItem[]>(() => {
+  const timelineItems = orderTimeline.value?.timeline || []
+  if (timelineItems.length) {
+    return timelineItems
+      .map(item => ({
+        time: formatDateTime(item.occurred_at),
+        label: item.attempt_no ? `第 ${item.attempt_no} 次 · ${item.label}` : item.label,
+        note: sanitizeDisplayText(item.note || '') || undefined,
+        sortValue: new Date(item.occurred_at || '').getTime() || 0,
+      }))
+      .sort((a, b) => a.sortValue - b.sortValue)
+  }
+
   const dispatchEvents = order.value?.current_dispatch?.events || []
   if (dispatchEvents.length) {
     return dispatchEvents
@@ -340,14 +644,85 @@ const evidenceTimeline = computed(() => {
   return [...events, ...predictions].sort((a, b) => a.sortValue - b.sortValue)
 })
 
-async function loadOrder() {
-  loading.value = true
+function notifyWorkerSurfaces(reason: string) {
+  emitWorkerOrdersUpdated({
+    reason,
+    ticketId: order.value?.ticket_id || ticketId || undefined,
+    incidentId: incident.value?.incident_id || incidentId || undefined,
+  })
+}
+
+function stopDetailSync() {
+  if (detailSyncTimer) {
+    clearTimeout(detailSyncTimer)
+    detailSyncTimer = null
+  }
+}
+
+function shouldKeepDetailSync() {
+  if (readonly || !detailVisible.value || !order.value) return false
+  return ACTIVE_SYNC_EXECUTION_STATUSES.has(currentExecutionStatus.value)
+}
+
+function scheduleDetailSyncTick(remainingMs: number) {
+  stopDetailSync()
+  if (remainingMs <= 0 || !shouldKeepDetailSync()) return
+
+  const nextDelay = Math.min(4000, remainingMs)
+  detailSyncTimer = setTimeout(async () => {
+    if (!shouldKeepDetailSync()) {
+      stopDetailSync()
+      return
+    }
+
+    try {
+      await loadOrder({ silent: true })
+    } finally {
+      scheduleDetailSyncTick(remainingMs - nextDelay)
+    }
+  }, nextDelay)
+}
+
+function startDetailSync(durationMs = 15000) {
+  if (!shouldKeepDetailSync()) {
+    stopDetailSync()
+    return
+  }
+  scheduleDetailSyncTick(durationMs)
+}
+
+async function loadWorkOrderTimeline(targetTicketId: string) {
+  try {
+    orderTimeline.value = await workOrderApi.timeline(targetTicketId)
+  } catch {
+    orderTimeline.value = null
+  }
+}
+
+async function loadOrder(options: { silent?: boolean } = {}) {
+  const silent = options.silent ?? false
+  if (!silent) {
+    loading.value = true
+  }
   try {
     incident.value = null
+    orderTimeline.value = null
+    hallEntry.value = null
+    let effectiveTicketId = ticketId
 
     // 详情页优先读取工单接口，避免 incident 详情偶发超时影响主流程打开。
-    if (ticketId) {
-      order.value = await workOrderApi.detail(ticketId)
+    if (hallEntryId) {
+      hallEntry.value = await workOrderApi.dispatchHallDetail(hallEntryId)
+      effectiveTicketId = hallEntry.value.work_order?.ticket_id || effectiveTicketId
+    }
+
+    if (effectiveTicketId) {
+      const [orderDetail, timelineData] = await Promise.all([
+        workOrderApi.detail(effectiveTicketId),
+        workOrderApi.timeline(effectiveTicketId).catch(() => null),
+      ])
+      order.value = orderDetail
+      orderTimeline.value = timelineData
     }
 
     if (incidentId && !readonly) {
@@ -356,6 +731,7 @@ async function loadOrder() {
         const currentTicketId = incident.value.current_work_order?.ticket_id
         if (currentTicketId && currentTicketId !== order.value?.ticket_id) {
           order.value = await workOrderApi.detail(currentTicketId)
+          await loadWorkOrderTimeline(currentTicketId)
         }
       } catch {
         incident.value = null
@@ -365,25 +741,51 @@ async function loadOrder() {
       const currentTicketId = incident.value.current_work_order?.ticket_id
       if (currentTicketId) {
         order.value = await workOrderApi.detail(currentTicketId)
+        await loadWorkOrderTimeline(currentTicketId)
       }
     }
+    hasLoadedOnce.value = true
   } catch {
-    uni.showToast({ title: '详情加载失败', icon: 'none' })
-    uni.navigateBack()
+    if (!silent) {
+      if (hallEntryId) {
+        invalidateWorkerOrderCaches()
+      }
+      uni.showToast({ title: '详情加载失败', icon: 'none' })
+      uni.navigateBack()
+    }
   } finally {
-    loading.value = false
+    if (!silent) {
+      loading.value = false
+    }
   }
 }
 
 async function submitWorkerAction(action: WorkerDispatchAction) {
-  if (!order.value?.ticket_id) return
-  if ((action === 'request_support' || action === 'reject') && !sanitizeDisplayText(workerNote.value)) {
+  if (!order.value?.ticket_id && !hallEntry.value?.id) return
+  if ((action === 'request_support' || action === 'reject' || action === 'reject_support') && !sanitizeDisplayText(workerNote.value)) {
     uni.showToast({ title: action === 'reject' ? '请先填写拒单原因' : '请先填写协同原因', icon: 'none' })
+    return
+  }
+  if (action === 'support_resolved' && currentExecutionStatus.value !== 'waiting_support') {
+    uni.showToast({ title: '协同状态已变化，正在刷新工单', icon: 'none' })
+    await loadOrder({ silent: true })
     return
   }
   actionLoading.value = action
   try {
-    if (action === 'reject') {
+    if (action === 'accept_support') {
+      if (!hallEntry.value?.id) {
+        uni.showToast({ title: '当前协同任务不存在', icon: 'none' })
+        return
+      }
+      await workOrderApi.acceptAssignedSupportTask(hallEntry.value.id, workerNote.value || undefined)
+    } else if (action === 'reject_support') {
+      if (!hallEntry.value?.id) {
+        uni.showToast({ title: '当前协同任务不存在', icon: 'none' })
+        return
+      }
+      await workOrderApi.rejectAssignedSupportTask(hallEntry.value.id, workerNote.value || '当前无法支援')
+    } else if (action === 'reject') {
       const dispatchId = order.value.current_dispatch?.id
       if (!dispatchId) {
         uni.showToast({ title: '当前派工任务不存在', icon: 'none' })
@@ -397,20 +799,30 @@ async function submitWorkerAction(action: WorkerDispatchAction) {
       } else {
         await workOrderApi.workerAction(order.value.ticket_id, action, workerNote.value || undefined)
       }
+    } else if (action === 'support_resolved') {
+      const dispatchId = order.value.current_dispatch?.id
+      if (dispatchId) {
+        await workOrderApi.resolveDispatchSupport(dispatchId, workerNote.value || undefined)
+      } else {
+        await workOrderApi.workerAction(order.value.ticket_id, action, workerNote.value || undefined)
+      }
     } else if (order.value.current_dispatch?.id) {
       await workOrderApi.dispatchTaskAction(order.value.current_dispatch.id, action)
     } else {
       await workOrderApi.workerAction(order.value.ticket_id, action, workerNote.value || undefined)
     }
+    notifyWorkerSurfaces(`worker_action:${action}`)
     uni.showToast({ title: '状态已更新', icon: 'success' })
-    if (action === 'reject') {
+    if (action === 'reject' || action === 'reject_support') {
+      stopDetailSync()
       setTimeout(() => uni.navigateBack(), 900)
       return
     }
     if (action !== 'request_support') {
       workerNote.value = ''
     }
-    await loadOrder()
+    await loadOrder({ silent: true })
+    startDetailSync()
   } catch {
     uni.showToast({ title: '操作失败，请稍后再试', icon: 'none' })
   } finally {
@@ -450,7 +862,17 @@ async function submitFeedback(result: WorkerResult) {
 
 async function doSubmit(result: WorkerResult) {
   try {
-    await workOrderApi.workerFeedback(order.value!.ticket_id, result, workerNote.value || undefined)
+    if (order.value?.current_dispatch?.id) {
+      await workOrderApi.completeDispatchTask(
+        order.value.current_dispatch.id,
+        result,
+        workerNote.value || undefined,
+      )
+    } else {
+      await workOrderApi.workerFeedback(order.value!.ticket_id, result, workerNote.value || undefined)
+    }
+    notifyWorkerSurfaces(`worker_feedback:${result}`)
+    stopDetailSync()
     uni.showToast({ title: '结果已提交', icon: 'success' })
     setTimeout(() => uni.navigateBack(), 1200)
   } catch {
@@ -460,7 +882,33 @@ async function doSubmit(result: WorkerResult) {
   }
 }
 
-onMounted(loadOrder)
+onMounted(async () => {
+  await loadOrder()
+  startDetailSync()
+})
+
+onShow(() => {
+  detailVisible.value = true
+  if (!hasLoadedOnce.value) return
+  void loadOrder({ silent: true }).then(() => {
+    startDetailSync(12000)
+  })
+})
+
+onHide(() => {
+  detailVisible.value = false
+  stopDetailSync()
+})
+
+onUnload(() => {
+  detailVisible.value = false
+  stopDetailSync()
+})
+
+onUnmounted(() => {
+  detailVisible.value = false
+  stopDetailSync()
+})
 </script>
 
 <style lang="scss" scoped>
@@ -577,6 +1025,11 @@ onMounted(loadOrder)
   box-shadow: 0 18rpx 44rpx rgba(181, 196, 118, 0.12);
 }
 
+.detail-stack {
+  display: grid;
+  gap: 2rpx;
+}
+
 .segment-row {
   display: flex;
   padding: 10rpx;
@@ -656,6 +1109,61 @@ onMounted(loadOrder)
 .service-stack {
   display: grid;
   gap: 2rpx;
+}
+
+.dispatch-history-list {
+  margin-top: 16rpx;
+  display: grid;
+  gap: 14rpx;
+}
+
+.dispatch-history-card {
+  padding: 18rpx 18rpx 16rpx;
+  border-radius: 22rpx;
+  background: rgba(248, 250, 240, 0.92);
+  box-shadow: inset 0 0 0 1rpx rgba(228, 237, 184, 0.9);
+}
+
+.dispatch-history-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12rpx;
+}
+
+.dispatch-history-title,
+.dispatch-history-status,
+.dispatch-history-meta,
+.dispatch-history-note {
+  display: block;
+}
+
+.dispatch-history-title {
+  font-size: 26rpx;
+  color: #3a312d;
+  font-weight: 700;
+}
+
+.dispatch-history-status {
+  padding: 6rpx 14rpx;
+  border-radius: 999rpx;
+  background: rgba(183, 204, 118, 0.16);
+  color: #6f8442;
+  font-size: 22rpx;
+  font-weight: 600;
+}
+
+.dispatch-history-meta {
+  margin-top: 10rpx;
+  font-size: 23rpx;
+  color: #968680;
+}
+
+.dispatch-history-note {
+  margin-top: 8rpx;
+  font-size: 24rpx;
+  line-height: 1.6;
+  color: #6d5f59;
 }
 
 .timeline-item {

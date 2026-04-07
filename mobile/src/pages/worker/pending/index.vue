@@ -16,14 +16,28 @@
 
         <view class="hero-card">
           <view class="portal-grid">
-            <view class="portal-main" @click="goTo('/pages/worker/active/index')">
+            <view class="portal-main" @click="goToHall">
               <view class="portal-header">
                 <text class="portal-title">工单大厅</text>
                 <view class="portal-arrow orange">
                   <view class="arrow-icon"></view>
                 </view>
               </view>
-              <text class="portal-subtitle">专业维保，安全至上</text>
+              <text class="portal-subtitle">待协同、待接管和我的大厅申请都在这里集中处理</text>
+              <view class="portal-metrics">
+                <view class="portal-metric">
+                  <text class="portal-metric-num">{{ hallStats.supportCount }}</text>
+                  <text class="portal-metric-label">待协同</text>
+                </view>
+                <view class="portal-metric">
+                  <text class="portal-metric-num">{{ hallStats.takeoverCount }}</text>
+                  <text class="portal-metric-label">待接管</text>
+                </view>
+                <view class="portal-metric">
+                  <text class="portal-metric-num">{{ hallStats.appliedCount }}</text>
+                  <text class="portal-metric-label">我的申请</text>
+                </view>
+              </view>
               <image
                 class="portal-figure-img"
                 src="/static/images/worker-hero.png"
@@ -35,12 +49,12 @@
               <view class="portal-mini portal-blue" @click="goTo('/pages/worker/active/index')">
                 <view class="portal-mini-copy">
                   <view class="portal-header">
-                    <text class="portal-title small">我的工单</text>
+                    <text class="portal-title small">执行列表</text>
                     <view class="portal-arrow blue">
                       <view class="arrow-icon"></view>
                     </view>
                   </view>
-                  <text class="portal-subtitle">共计{{ todoCount }}项待完成</text>
+                  <text class="portal-subtitle">共计{{ todoCount }}项正式任务待推进</text>
                 </view>
                 <image
                   class="portal-mini-figure portal-mini-figure-order"
@@ -93,7 +107,7 @@
           <view class="focus-panel">
             <view class="section-head section-head-compact">
               <text class="section-title">优先处理</text>
-              <text class="section-link" @click="goTo('/pages/worker/active/index')">查看全部</text>
+              <text class="section-link" @click="goTo('/pages/worker/active/index')">查看我的工单</text>
             </view>
 
             <view v-if="featuredOrder" class="feature-card" @click="openFeatureOrder">
@@ -138,28 +152,76 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { onShow } from '@dcloudio/uni-app'
 import TabBar from '../../../components/TabBar.vue'
 import { incidentApi, type Incident } from '../../../api/incident'
+import { workOrderApi, type DispatchHallEntry } from '../../../api/workorder'
 import { useRouteGuard } from '../../../utils/route-guard'
 import { WORKER_ROLES } from '../../../constants/roles'
 import { WORKER_TABS } from '../../../constants/tabs'
 import { getCache, setCache } from '../../../utils/cache'
 import { useAuthStore } from '../../../stores/auth'
 import { getWorkerDashboardStats, getWorkerFeatureOrder, getWorkerMessageCards } from '../../../utils/worker-ui'
+import { subscribeWorkerOrdersUpdated } from '../../../utils/worker-sync'
+import { sanitizeDisplayText, formatBuildingLabel, formatDeviceLabel } from '../../../utils/display'
+import { formatDateTime } from '../../../utils/format'
 
 useRouteGuard(WORKER_ROLES)
 
 const authStore = useAuthStore()
 const incidents = ref<Incident[]>([])
+const supportEntries = ref<DispatchHallEntry[]>([])
+const hallEntries = ref<DispatchHallEntry[]>([])
 const loading = ref(false)
 const statusBarHeight = ref(20)
+const hasLoadedOnce = ref(false)
+let unsubscribeWorkerSync: (() => void) | null = null
 
 const userName = computed(() => authStore.user?.username || '维修师傅')
 const avatarChar = computed(() => userName.value.slice(0, 1).toUpperCase())
-const stats = computed(() => getWorkerDashboardStats(incidents.value))
+const currentUserId = computed(() => authStore.user?.id || '')
+const stats = computed(() => {
+  const incidentStats = getWorkerDashboardStats(incidents.value)
+  const pendingSupport = supportEntries.value.filter(entry => entry.status === 'assigned').length
+  const activeSupport = supportEntries.value.filter(entry => entry.status === 'accepted').length
+  return {
+    ...incidentStats,
+    pendingStart: incidentStats.pendingStart + pendingSupport,
+    inProgress: incidentStats.inProgress + activeSupport,
+    todayCount: incidentStats.todayCount + supportEntries.value.length,
+  }
+})
 const todoCount = computed(() => stats.value.inProgress + stats.value.pendingStart)
-const featuredOrder = computed(() => getWorkerFeatureOrder(incidents.value))
+const hallStats = computed(() => {
+  const entries = hallEntries.value
+  const appliedCount = entries.filter(entry => hasPendingApplication(entry)).length
+  return {
+    supportCount: entries.filter(entry => entry.entry_type === 'support_request').length,
+    takeoverCount: entries.filter(entry => entry.entry_type === 'takeover_candidate').length,
+    appliedCount,
+  }
+})
+const featuredOrder = computed(() => {
+  const supportTarget = supportEntries.value[0]
+  if (supportTarget) {
+    return {
+      ticketId: supportTarget.work_order?.ticket_id || supportTarget.id,
+      hallEntryId: supportTarget.id,
+      incidentId: supportTarget.incident_id || undefined,
+      title: sanitizeDisplayText(supportTarget.support_reason || supportTarget.reason || supportTarget.work_order?.issue_description) || '协同任务待处理',
+      building: formatBuildingLabel(supportTarget.work_order?.building_id),
+      location: formatDeviceLabel(supportTarget.work_order?.device_id, supportTarget.work_order?.building_id) || '协同现场待确认',
+      time: formatDateTime(supportTarget.assigned_at || supportTarget.created_at),
+      timeTag: supportTarget.status === 'assigned' ? '待确认协同' : '协同处理中',
+      priorityLabel: '协同任务',
+      actionLabel: supportTarget.status === 'assigned' ? '响应协同' : '查看协同',
+      kind: 'support' as const,
+    }
+  }
+  const incidentTarget = getWorkerFeatureOrder(incidents.value)
+  return incidentTarget ? { ...incidentTarget, kind: 'incident' as const } : null
+})
 const messageCards = computed(() => getWorkerMessageCards(incidents.value))
 const unreadCount = computed(() => messageCards.value
   .filter(card => card.key !== 'bulletin')
@@ -173,24 +235,65 @@ const tips = [
 
 async function loadData() {
   const cached = getCache<Incident[]>('worker_workspace')
+  const supportCached = getCache<DispatchHallEntry[]>('worker_workspace_support')
+  const hallCached = getCache<DispatchHallEntry[]>('worker_shared_hall')
   if (cached) incidents.value = cached
-  loading.value = !cached
+  if (supportCached) supportEntries.value = supportCached
+  if (hallCached) hallEntries.value = hallCached
+  loading.value = !cached && !supportCached && !hallCached
 
   try {
-    const res = await incidentApi.list({
-      workflow_status: 'dispatched,completed,closed,false_alarm,escalated',
-      page: 1,
-      page_size: 40,
-    })
-    incidents.value = res.incidents
-    setCache('worker_workspace', res.incidents)
+    const [incidentResult, supportResult, hallResult] = await Promise.allSettled([
+      incidentApi.list({
+        workflow_status: 'dispatched,completed,closed,false_alarm,escalated',
+        page: 1,
+        page_size: 40,
+      }),
+      workOrderApi.listDispatchHallEntries({
+        status: 'assigned,accepted',
+        entry_type: 'support_request',
+        include_applications: true,
+        page: 1,
+        page_size: 20,
+      }),
+      workOrderApi.listDispatchHallEntries({
+        status: 'open',
+        entry_type: 'support_request,takeover_candidate',
+        include_applications: true,
+        page: 1,
+        page_size: 20,
+      }),
+    ])
+    if (incidentResult.status === 'fulfilled') {
+      incidents.value = incidentResult.value.incidents
+      setCache('worker_workspace', incidentResult.value.incidents)
+      hasLoadedOnce.value = true
+    }
+    if (supportResult.status === 'fulfilled') {
+      supportEntries.value = supportResult.value.hall_entries
+      setCache('worker_workspace_support', supportResult.value.hall_entries)
+      hasLoadedOnce.value = true
+    }
+    if (hallResult.status === 'fulfilled') {
+      hallEntries.value = hallResult.value.hall_entries
+      setCache('worker_shared_hall', hallResult.value.hall_entries)
+      hasLoadedOnce.value = true
+    }
+    if (incidentResult.status === 'rejected' && supportResult.status === 'rejected' && hallResult.status === 'rejected') {
+      throw new Error('load failed')
+    }
   } catch {
-    if (!incidents.value.length) {
+    if (!incidents.value.length && !supportEntries.value.length && !hallEntries.value.length) {
       uni.showToast({ title: '工单数据加载失败', icon: 'none' })
     }
   } finally {
     loading.value = false
   }
+}
+
+function hasPendingApplication(entry: DispatchHallEntry) {
+  if (!currentUserId.value) return false
+  return entry.applications.some(item => item.applicant_user_id === currentUserId.value && item.status === 'pending')
 }
 
 function shortTicket(ticketId: string) {
@@ -199,6 +302,12 @@ function shortTicket(ticketId: string) {
 
 function openFeatureOrder() {
   if (!featuredOrder.value) return
+  if (featuredOrder.value.kind === 'support') {
+    uni.navigateTo({
+      url: `/pages/worker/workorder-detail/index?hall_entry_id=${featuredOrder.value.hallEntryId}&incident_id=${featuredOrder.value.incidentId || ''}&ticket_id=${featuredOrder.value.ticketId}`,
+    })
+    return
+  }
   const target = incidents.value.find(item => (item.current_work_order?.ticket_id || item.incident_id) === featuredOrder.value?.ticketId)
   if (!target?.current_work_order?.ticket_id) return
   uni.navigateTo({
@@ -214,6 +323,10 @@ function goTo(url: string) {
   uni.reLaunch({ url })
 }
 
+function goToHall() {
+  uni.navigateTo({ url: '/pages/worker/hall/index' })
+}
+
 onMounted(() => {
   try {
     const info = uni.getSystemInfoSync()
@@ -221,7 +334,20 @@ onMounted(() => {
   } catch {
     statusBarHeight.value = 20
   }
-  loadData()
+  unsubscribeWorkerSync = subscribeWorkerOrdersUpdated(async () => {
+    await loadData()
+  })
+  void loadData()
+})
+
+onShow(() => {
+  if (!hasLoadedOnce.value) return
+  void loadData()
+})
+
+onUnmounted(() => {
+  unsubscribeWorkerSync?.()
+  unsubscribeWorkerSync = null
 })
 </script>
 
@@ -455,6 +581,39 @@ onMounted(() => {
   color: #6d7c49;
   font-size: 24rpx;
   line-height: 1.45;
+}
+
+.portal-metrics {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12rpx;
+  margin-top: 22rpx;
+  padding-right: 20rpx;
+}
+
+.portal-metric {
+  padding: 16rpx 10rpx;
+  border-radius: 22rpx;
+  background: rgba(255, 255, 255, 0.82);
+  box-shadow: inset 0 0 0 2rpx rgba(228, 237, 184, 0.6);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8rpx;
+}
+
+.portal-metric-num {
+  font-size: 34rpx;
+  line-height: 1;
+  color: #31411f;
+  font-weight: 800;
+}
+
+.portal-metric-label {
+  font-size: 20rpx;
+  color: #73814f;
 }
 
 .portal-figure-img {

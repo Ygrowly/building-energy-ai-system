@@ -31,7 +31,7 @@
           <RouterLink
             :to="item.path"
             class="nav-item"
-            :class="{ active: $route.path === item.path }"
+            :class="{ active: isNavActive(item.path) }"
             :title="!sidebarExpanded ? item.label : ''"
           >
             <span class="nav-icon"><Icon :icon="item.icon" width="16" /></span>
@@ -352,6 +352,11 @@ const navItems = [
   { path: '/operations', icon: 'mdi:wrench',           label: '智慧运维' },
   { path: '/workorders', icon: 'mdi:clipboard-list',   label: '工单管理' },
 ]
+
+function isNavActive(path: string) {
+  if (path === '/workorders') return route.path.startsWith('/workorders')
+  return route.path === path
+}
 
 const BUILDING_ICONS: Record<string, string> = {
   Office:    'mdi:office-building',
@@ -757,6 +762,7 @@ function getBuildingIcon(type: string): string {
 .agent-panel {
   flex-shrink: 0;
   width: v-bind(agentPanelWidth);
+  min-width: 0;
   border-left: none;
   overflow: hidden;
 }

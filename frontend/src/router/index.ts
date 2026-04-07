@@ -39,6 +39,24 @@ const router = createRouter({
       meta: { title: '工单管理', requiresAuth: true },
     },
     {
+      path: '/workorders/review',
+      name: 'WorkOrderReview',
+      component: () => import('@/views/WorkOrders.vue'),
+      meta: { title: '工单审阅', requiresAuth: true, workOrderMode: 'review' },
+    },
+    {
+      path: '/workorders/dispatch',
+      name: 'WorkOrderDispatchCenter',
+      component: () => import('@/views/WorkOrders.vue'),
+      meta: { title: '派工中心', requiresAuth: true, workOrderMode: 'dispatch' },
+    },
+    {
+      path: '/workorders/tracking',
+      name: 'WorkOrderTracking',
+      component: () => import('@/views/WorkOrders.vue'),
+      meta: { title: '执行跟踪', requiresAuth: true, workOrderMode: 'tracking' },
+    },
+    {
       path: '/datacenter',
       name: 'DataCenter',
       component: () => import('@/views/DataCenter.vue'),

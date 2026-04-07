@@ -15,6 +15,11 @@ from app.db.models import (
     User,
     WorkOrder,
 )
+from app.services.dispatch_hall_service import (
+    close_open_hall_entries_for_dispatch,
+    create_or_reopen_support_hall_entry,
+    create_or_reopen_takeover_hall_entry,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +27,14 @@ _DISPATCH_STAGE_SLA_MINUTES: dict[str, dict[str, int]] = {
     "high": {"accept": 5, "arrive": 20, "start": 30, "finish": 90},
     "medium": {"accept": 10, "arrive": 30, "start": 45, "finish": 180},
     "low": {"accept": 15, "arrive": 60, "start": 90, "finish": 360},
+}
+
+_ACTIVE_SLA_DISPATCH_STATUSES = {
+    "assigned",
+    "accepted",
+    "arrived",
+    "processing",
+    "waiting_support",
 }
 
 
@@ -47,6 +60,36 @@ def _json_loads(payload: str | None) -> dict[str, Any] | None:
 
 def _get_dispatch_sla(priority: str | None) -> dict[str, int]:
     return _DISPATCH_STAGE_SLA_MINUTES.get(priority or "", _DISPATCH_STAGE_SLA_MINUTES["medium"])
+
+
+def _dispatch_stage_label(dispatch_status: str) -> str:
+    mapping = {
+        "assigned": "接单",
+        "accepted": "到场",
+        "arrived": "开始处理",
+        "processing": "处理完成",
+        "waiting_support": "协同完成",
+    }
+    return mapping.get(dispatch_status, "处理")
+
+
+def _dispatch_timeout_note(
+    dispatch_task: DispatchTask,
+    *,
+    timeout_level: str,
+    due_at: datetime | None,
+    now: datetime,
+) -> str:
+    stage_label = _dispatch_stage_label(dispatch_task.dispatch_status)
+    if due_at is None:
+        return f"{stage_label}阶段 SLA 状态已更新"
+
+    minutes_left = int((due_at - now).total_seconds() // 60)
+    if timeout_level == "warning":
+        return f"{stage_label}阶段即将超时，剩余 {max(minutes_left, 0)} 分钟，系统已提醒责任人尽快处理"
+    if timeout_level == "overdue":
+        return f"{stage_label}阶段已超时 {abs(minutes_left)} 分钟，系统已自动提醒责任人并建议管理员评估接管"
+    return f"{stage_label}阶段已恢复正常"
 
 
 def _team_from_user(user: User | None) -> tuple[str | None, str | None]:
@@ -249,6 +292,167 @@ async def load_current_dispatches_by_work_order_ids(
     return grouped
 
 
+async def list_dispatch_tasks(
+    db: AsyncSession,
+    *,
+    assigned_to: str | None = None,
+    work_order_id: str | None = None,
+    incident_id: str | None = None,
+    status_filter: list[str] | None = None,
+    current_only: bool | None = None,
+    page: int = 1,
+    page_size: int = 20,
+) -> tuple[list[DispatchTask], int]:
+    query = select(DispatchTask)
+    count_query = select(sa_func.count(DispatchTask.id))
+
+    if assigned_to:
+        query = query.where(DispatchTask.assigned_to == assigned_to)
+        count_query = count_query.where(DispatchTask.assigned_to == assigned_to)
+    if work_order_id:
+        query = query.where(DispatchTask.work_order_id == work_order_id)
+        count_query = count_query.where(DispatchTask.work_order_id == work_order_id)
+    if incident_id:
+        query = query.where(DispatchTask.incident_id == incident_id)
+        count_query = count_query.where(DispatchTask.incident_id == incident_id)
+    if status_filter:
+        query = query.where(DispatchTask.dispatch_status.in_(status_filter))
+        count_query = count_query.where(DispatchTask.dispatch_status.in_(status_filter))
+    if current_only is not None:
+        query = query.where(DispatchTask.is_current == current_only)  # noqa: E712
+        count_query = count_query.where(DispatchTask.is_current == current_only)  # noqa: E712
+
+    total = (await db.execute(count_query)).scalar() or 0
+    offset = (page - 1) * page_size
+    query = (
+        query.order_by(DispatchTask.assigned_at.desc(), DispatchTask.attempt_no.desc())
+        .offset(offset)
+        .limit(page_size)
+    )
+    items = list((await db.execute(query)).scalars().all())
+    return items, total
+
+
+async def list_dispatch_tasks_for_work_order(
+    db: AsyncSession,
+    *,
+    work_order_id: str,
+) -> list[DispatchTask]:
+    result = await db.execute(
+        select(DispatchTask)
+        .where(DispatchTask.work_order_id == work_order_id)
+        .order_by(DispatchTask.attempt_no.asc(), DispatchTask.assigned_at.asc())
+    )
+    return list(result.scalars().all())
+
+
+async def scan_dispatch_sla_states(
+    db: AsyncSession,
+    *,
+    now: datetime | None = None,
+) -> dict[str, int]:
+    current_time = now or datetime.now(timezone.utc)
+    result = await db.execute(
+        select(DispatchTask)
+        .where(
+            DispatchTask.is_current == True,  # noqa: E712
+            DispatchTask.dispatch_status.in_(_ACTIVE_SLA_DISPATCH_STATUSES),
+        )
+        .order_by(DispatchTask.assigned_at.asc())
+    )
+    dispatch_tasks = list(result.scalars().all())
+    if not dispatch_tasks:
+        return {
+            "scanned": 0,
+            "updated": 0,
+            "warning_events": 0,
+            "overdue_events": 0,
+        }
+
+    work_order_ids = [item.work_order_id for item in dispatch_tasks if item.work_order_id]
+    work_order_result = await db.execute(
+        select(WorkOrder).where(WorkOrder.id.in_(work_order_ids))
+    )
+    work_orders_by_id = {item.id: item for item in work_order_result.scalars().all()}
+
+    updated = 0
+    warning_events = 0
+    overdue_events = 0
+    for dispatch_task in dispatch_tasks:
+        previous_timeout = dispatch_task.timeout_level or "normal"
+        next_timeout, due_at = derive_dispatch_timeout_level(dispatch_task)
+        if next_timeout == previous_timeout:
+            continue
+
+        dispatch_task.timeout_level = next_timeout
+        dispatch_task.updated_at = current_time
+        work_order = work_orders_by_id.get(dispatch_task.work_order_id)
+
+        if next_timeout in {"warning", "overdue"}:
+            message = _dispatch_timeout_note(
+                dispatch_task,
+                timeout_level=next_timeout,
+                due_at=due_at,
+                now=current_time,
+            )
+            dispatch_task.latest_note = message
+            dispatch_task.reminder_count = int(dispatch_task.reminder_count or 0) + 1
+            dispatch_task.last_reminded_at = current_time
+            await record_dispatch_event(
+                db,
+                dispatch_task=dispatch_task,
+                event_type="timeout_warning" if next_timeout == "warning" else "timeout_overdue",
+                actor_type="scheduler",
+                payload={
+                    "timeout_level": next_timeout,
+                    "previous_timeout_level": previous_timeout,
+                    "deadline_at": _dt_to_iso(due_at),
+                    "message": message,
+                    "stage": dispatch_task.dispatch_status,
+                },
+            )
+            if next_timeout == "warning":
+                warning_events += 1
+            else:
+                overdue_events += 1
+                if work_order is not None:
+                    await create_or_reopen_takeover_hall_entry(
+                        db,
+                        work_order=work_order,
+                        source_dispatch_id=dispatch_task.id,
+                        source_assignee_id=dispatch_task.assigned_to,
+                        created_by=None,
+                        reason=message,
+                        sla_stage=dispatch_task.dispatch_status,
+                        overdue_level=next_timeout,
+                    )
+        elif previous_timeout == "overdue":
+            await close_open_hall_entries_for_dispatch(
+                db,
+                source_dispatch_id=dispatch_task.id,
+                entry_types=["takeover_candidate"],
+                handle_note="派工时限已恢复，无需继续接管",
+            )
+
+        if work_order is not None:
+            _sync_work_order_dispatch_projection(work_order, dispatch_task)
+            await _sync_incident_dispatch_projection(
+                db,
+                work_order=work_order,
+                dispatch_task=dispatch_task,
+                blocked_reason=getattr(work_order, "dispatch_blocked_reason", None),
+            )
+
+        updated += 1
+
+    return {
+        "scanned": len(dispatch_tasks),
+        "updated": updated,
+        "warning_events": warning_events,
+        "overdue_events": overdue_events,
+    }
+
+
 async def _next_attempt_no(
     db: AsyncSession,
     *,
@@ -361,6 +565,7 @@ async def update_dispatch_task_action(
 ) -> DispatchTask:
     now = datetime.now(timezone.utc)
     payload: dict[str, Any] = {"action": action, "notes": notes}
+    blocked_reason: str | None = None
 
     if action == "accept":
         if dispatch_task.dispatch_status not in {"assigned"}:
@@ -387,10 +592,31 @@ async def update_dispatch_task_action(
         dispatch_task.support_reason = notes
         dispatch_task.support_team_id = support_team_id
         payload["support_team_id"] = support_team_id
+        payload["support_reason"] = dispatch_task.support_reason
+        blocked_reason = notes or "等待配件或协同支持"
+        work_order.dispatch_blocked_reason = blocked_reason
+    elif action == "support_resolved":
+        if dispatch_task.dispatch_status != "waiting_support":
+            raise ValueError("当前派工任务不处于待协同状态")
+        payload["previous_support_reason"] = dispatch_task.support_reason
+        payload["support_team_id"] = dispatch_task.support_team_id
+        dispatch_task.processing_started_at = dispatch_task.processing_started_at or now
+        dispatch_task.dispatch_status = "processing"
+        if dispatch_task.worker_result == "needs_parts":
+            dispatch_task.worker_result = None
+        dispatch_task.support_reason = None
+        dispatch_task.support_team_id = None
+        work_order.dispatch_blocked_reason = None
+        if work_order.worker_result == "needs_parts":
+            work_order.worker_result = None
+            work_order.worker_feedback_at = None
     else:
         raise ValueError(f"未知执行动作: {action}")
 
-    dispatch_task.latest_note = notes or dispatch_task.latest_note
+    if action == "support_resolved":
+        dispatch_task.latest_note = notes or "协同事项已解决，恢复现场处理"
+    else:
+        dispatch_task.latest_note = notes or dispatch_task.latest_note
     dispatch_task.updated_at = now
     _mark_dispatch_projection_status(dispatch_task)
     _sync_work_order_dispatch_projection(work_order, dispatch_task)
@@ -398,13 +624,14 @@ async def update_dispatch_task_action(
         db,
         work_order=work_order,
         dispatch_task=dispatch_task,
-        blocked_reason=notes if action == "request_support" else None,
+        blocked_reason=blocked_reason,
     )
     event_type_map = {
         "accept": "accepted",
         "arrive": "arrived",
         "start": "started",
         "request_support": "support_requested",
+        "support_resolved": "support_resolved",
     }
     await record_dispatch_event(
         db,
@@ -413,6 +640,109 @@ async def update_dispatch_task_action(
         actor_type=actor_type,
         actor_id=actor_id,
         payload=payload,
+    )
+    if action == "request_support":
+        await create_or_reopen_support_hall_entry(
+            db,
+            work_order=work_order,
+            source_dispatch_id=dispatch_task.id,
+            source_assignee_id=dispatch_task.assigned_to,
+            created_by=actor_id,
+            target_team_ids=[support_team_id] if support_team_id else None,
+            reason=blocked_reason,
+            support_reason=dispatch_task.support_reason,
+        )
+    elif action == "support_resolved":
+        await close_open_hall_entries_for_dispatch(
+            db,
+            source_dispatch_id=dispatch_task.id,
+            entry_types=["support_request"],
+            actor_id=actor_id,
+            handle_note="协同事项已解决，共享协同入口关闭",
+        )
+    return dispatch_task
+
+
+async def nudge_dispatch_task(
+    db: AsyncSession,
+    *,
+    work_order: WorkOrder,
+    dispatch_task: DispatchTask,
+    actor_type: str,
+    actor_id: str | None = None,
+    message: str | None = None,
+) -> DispatchTask:
+    now = datetime.now(timezone.utc)
+    if dispatch_task.dispatch_status in {"completed", "cancelled", "transferred", "rejected", "escalated"}:
+        raise ValueError("当前派工任务已结束，无法催办")
+
+    dispatch_task.reminder_count = int(dispatch_task.reminder_count or 0) + 1
+    dispatch_task.last_reminded_at = now
+    dispatch_task.updated_at = now
+    dispatch_task.latest_note = message or dispatch_task.latest_note or "调度已催办，请尽快处理"
+    _mark_dispatch_projection_status(dispatch_task)
+    _sync_work_order_dispatch_projection(work_order, dispatch_task)
+    await _sync_incident_dispatch_projection(
+        db,
+        work_order=work_order,
+        dispatch_task=dispatch_task,
+        blocked_reason=getattr(work_order, "dispatch_blocked_reason", None),
+    )
+    await record_dispatch_event(
+        db,
+        dispatch_task=dispatch_task,
+        event_type="reminded",
+        actor_type=actor_type,
+        actor_id=actor_id,
+        payload={
+            "message": message,
+            "reminder_count": dispatch_task.reminder_count,
+            "dispatch_status": dispatch_task.dispatch_status,
+        },
+    )
+    return dispatch_task
+
+
+async def cancel_dispatch_task(
+    db: AsyncSession,
+    *,
+    work_order: WorkOrder,
+    dispatch_task: DispatchTask,
+    actor_type: str,
+    actor_id: str | None = None,
+    reason: str | None = None,
+) -> DispatchTask:
+    now = datetime.now(timezone.utc)
+    if dispatch_task.dispatch_status not in {"assigned", "accepted"}:
+        raise ValueError("当前状态不支持取消派工")
+
+    dispatch_task.dispatch_status = "cancelled"
+    dispatch_task.cancel_reason = reason
+    dispatch_task.latest_note = reason or "当前派工已取消"
+    dispatch_task.is_current = False
+    dispatch_task.closed_at = now
+    dispatch_task.updated_at = now
+    _mark_dispatch_projection_status(dispatch_task)
+    _sync_work_order_dispatch_projection(work_order, None)
+    await _sync_incident_dispatch_projection(
+        db,
+        work_order=work_order,
+        dispatch_task=None,
+        blocked_reason=reason or "当前派工已取消，等待重新派工",
+    )
+    await record_dispatch_event(
+        db,
+        dispatch_task=dispatch_task,
+        event_type="cancelled",
+        actor_type=actor_type,
+        actor_id=actor_id,
+        payload={"reason": reason},
+    )
+    await close_open_hall_entries_for_dispatch(
+        db,
+        source_dispatch_id=dispatch_task.id,
+        actor_id=actor_id,
+        handle_note=reason or "当前派工已取消，共享工单同步关闭",
     )
     return dispatch_task
 
@@ -452,6 +782,12 @@ async def reject_dispatch_task(
         actor_id=actor_id,
         payload={"reason": reason},
     )
+    await close_open_hall_entries_for_dispatch(
+        db,
+        source_dispatch_id=dispatch_task.id,
+        actor_id=actor_id,
+        handle_note=reason or "当前派工已拒单，共享工单同步关闭",
+    )
     return dispatch_task
 
 
@@ -481,6 +817,15 @@ async def complete_dispatch_task(
             blocked_reason=notes or "等待配件或协同支持",
         )
         event_type = "support_requested"
+        await create_or_reopen_support_hall_entry(
+            db,
+            work_order=work_order,
+            source_dispatch_id=dispatch_task.id,
+            source_assignee_id=dispatch_task.assigned_to,
+            created_by=actor_id,
+            reason=notes or "等待配件或协同支持",
+            support_reason=notes,
+        )
     else:
         dispatch_task.dispatch_status = "completed" if result != "escalated" else "escalated"
         dispatch_task.completed_at = now
@@ -492,6 +837,12 @@ async def complete_dispatch_task(
             dispatch_task=dispatch_task,
         )
         event_type = "completed" if result != "escalated" else "escalated"
+        await close_open_hall_entries_for_dispatch(
+            db,
+            source_dispatch_id=dispatch_task.id,
+            actor_id=actor_id,
+            handle_note="本次派工已完成，共享工单同步关闭",
+        )
 
     _mark_dispatch_projection_status(dispatch_task)
     await record_dispatch_event(
@@ -515,6 +866,7 @@ async def reassign_dispatch_task(
     actor_id: str | None = None,
     reason: str | None = None,
     dispatch_mode: str = "reassigned",
+    close_related_hall_entries: bool = True,
 ) -> DispatchTask:
     now = datetime.now(timezone.utc)
     if dispatch_task.dispatch_status in {"completed", "cancelled"}:
@@ -537,6 +889,13 @@ async def reassign_dispatch_task(
             "new_assigned_to_name": assigned_user.username,
         },
     )
+    if close_related_hall_entries:
+        await close_open_hall_entries_for_dispatch(
+            db,
+            source_dispatch_id=dispatch_task.id,
+            actor_id=actor_id,
+            handle_note=reason or "当前派工已改派，共享工单同步关闭",
+        )
 
     new_dispatch = await create_dispatch_task(
         db,

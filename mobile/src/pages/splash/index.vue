@@ -83,7 +83,8 @@ onMounted(() => {
       clearInterval(timer!)
       timer = null
       // 已登录 → 跳首页；未登录 → 跳登录页
-      authStore.redirectAfterSplash()
+      hint.value = '校验登录状态...'
+      void authStore.redirectAfterSplash()
     }
   }, INTERVAL)
 })

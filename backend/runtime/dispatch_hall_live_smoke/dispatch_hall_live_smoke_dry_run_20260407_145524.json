@@ -1,0 +1,69 @@
+{
+  "generated_at": "2026-04-07T06:55:24.465629+00:00",
+  "apply": false,
+  "actors": {
+    "manager": {
+      "id": "d36df059-752a-4a12-b160-ee6a9da2745d",
+      "username": "test1",
+      "role": "manager",
+      "team_id": null,
+      "team_name": null
+    },
+    "support_owner": {
+      "id": "92a81828-b57f-4b23-980b-331b589d33ef",
+      "username": "ops_hvac_01",
+      "role": "ops",
+      "team_id": "team_hvac",
+      "team_name": "暖通班"
+    },
+    "support_applicant": {
+      "id": "43c2c2fd-c58a-4c4c-bb06-6f47a3cb7469",
+      "username": "ops_controls_01",
+      "role": "ops",
+      "team_id": "team_controls",
+      "team_name": "自控班"
+    },
+    "takeover_owner": {
+      "id": "a8a06cf4-6a36-458a-a489-a027db2db2e2",
+      "username": "ops_electrical_01",
+      "role": "ops",
+      "team_id": "team_electrical",
+      "team_name": "电气班"
+    },
+    "takeover_applicant": {
+      "id": "fc168e5d-218d-45c2-8bc0-1e581d2dcf0f",
+      "username": "ops_plumbing_01",
+      "role": "ops",
+      "team_id": "team_plumbing",
+      "team_name": "给排水班"
+    }
+  },
+  "selected_work_orders": [
+    {
+      "id": "d3a66ed2-bbb2-4691-a5ce-6563d23f343d",
+      "ticket_id": "WO-20260328-009",
+      "status": "pending_dispatch",
+      "priority": "high",
+      "building_id": "Fox_education_Louie",
+      "device_id": "Fox_education_Louie",
+      "issue_description": "[Louie 教学楼] 2026-01-03 04:00 检测到电耗异常偏高，偏离 +546.5%（实际=28.7，预期=4.4）"
+    },
+    {
+      "id": "169336cf-a5a8-4600-bd02-dd76dabc01a9",
+      "ticket_id": "WO-20260328-010",
+      "status": "pending_dispatch",
+      "priority": "high",
+      "building_id": "Fox_education_Louie",
+      "device_id": "Fox_education_Louie",
+      "issue_description": "[Louie 教学楼] 2026-01-03 04:00 检测到暖通能耗异常偏高，偏离 +1719.3%（实际=22.7，预期=1.2），根因分析：非营业时段空调异常运行"
+    }
+  ],
+  "before_counts": {
+    "entries_total": 0,
+    "applications_total": 0,
+    "entry_counts": {},
+    "application_counts": {}
+  },
+  "samples": {},
+  "message": "dry-run only; rerun with --apply to create the two hall samples"
+}

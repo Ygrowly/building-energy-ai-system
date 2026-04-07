@@ -1,0 +1,1791 @@
+{
+  "mode": "apply",
+  "generated_at": "2026-04-05T13:00:59.426352+00:00",
+  "sample_size": 10,
+  "scan_limit": 40,
+  "min_score": 100,
+  "min_gap": 10,
+  "pending_scanned": 40,
+  "selected": [
+    {
+      "ticket_id": "WO-20260328-001",
+      "work_order_id": "24896c15-8069-4dee-86d7-71bf0eddbe36",
+      "building_id": "Fox_education_Louie",
+      "priority": "high",
+      "requirement": {
+        "building_id": "Fox_education_Louie",
+        "priority": "high",
+        "required_skills": [
+          "electrical"
+        ],
+        "preferred_team_name": "电气班",
+        "summary": "Fox_education_Louie 现场工单；优先技能：electrical；高优先级，优先派值班且可处理紧急任务人员"
+      },
+      "candidate_count": 6,
+      "chosen_candidate": {
+        "user_id": "a8a06cf4-6a36-458a-a489-a027db2db2e2",
+        "username": "ops_electrical_01",
+        "phone": "13800000012",
+        "team_name": "电气班",
+        "job_title": "电气工程师",
+        "shift_status": "on_duty",
+        "dispatch_enabled": true,
+        "max_active_orders": 4,
+        "current_active_orders": 0,
+        "load_ratio": 0.0,
+        "service_buildings": [
+          "Fox_education_Louie",
+          "Fox_office_Alice",
+          "Fox_public_Henry"
+        ],
+        "skill_names": [
+          "电气维修",
+          "基础巡检"
+        ],
+        "matched_skill_names": [
+          "电气维修"
+        ],
+        "score": 123,
+        "badges": [
+          "电气班",
+          "在手0/4单",
+          "值班中",
+          "技能匹配",
+          "负责该楼栋",
+          "可处理紧急任务"
+        ],
+        "recommend_reason": "技能贴合：电气维修，负责该楼栋，当前值班中，当前负载较低"
+      },
+      "top_candidate": {
+        "user_id": "a8a06cf4-6a36-458a-a489-a027db2db2e2",
+        "username": "ops_electrical_01",
+        "phone": "13800000012",
+        "team_name": "电气班",
+        "job_title": "电气工程师",
+        "shift_status": "on_duty",
+        "dispatch_enabled": true,
+        "max_active_orders": 4,
+        "current_active_orders": 0,
+        "load_ratio": 0.0,
+        "service_buildings": [
+          "Fox_education_Louie",
+          "Fox_office_Alice",
+          "Fox_public_Henry"
+        ],
+        "skill_names": [
+          "电气维修",
+          "基础巡检"
+        ],
+        "matched_skill_names": [
+          "电气维修"
+        ],
+        "score": 123,
+        "badges": [
+          "电气班",
+          "在手0/4单",
+          "值班中",
+          "技能匹配",
+          "负责该楼栋",
+          "可处理紧急任务"
+        ],
+        "recommend_reason": "技能贴合：电气维修，负责该楼栋，当前值班中，当前负载较低"
+      },
+      "second_candidate": {
+        "user_id": "4b9293c5-dce2-4970-a9cd-3ec46ebb6d93",
+        "username": "ops_general_02",
+        "phone": "13800000015",
+        "team_name": "综合运维班",
+        "job_title": "综合运维工程师",
+        "shift_status": "standby",
+        "dispatch_enabled": true,
+        "max_active_orders": 3,
+        "current_active_orders": 0,
+        "load_ratio": 0.0,
+        "service_buildings": [
+          "Fox_education_Louie",
+          "Fox_office_Alice",
+          "Fox_public_Henry"
+        ],
+        "skill_names": [
+          "基础巡检",
+          "电气维修"
+        ],
+        "matched_skill_names": [
+          "电气维修"
+        ],
+        "score": 99,
+        "badges": [
+          "综合运维班",
+          "在手0/3单",
+          "待命",
+          "技能匹配",
+          "负责该楼栋"
+        ],
+        "recommend_reason": "技能贴合：电气维修，负责该楼栋，当前待命，当前负载较低"
+      },
+      "score_gap": 24,
+      "skip_reason": null
+    },
+    {
+      "ticket_id": "WO-20260328-002",
+      "work_order_id": "ac02a14d-ee7c-4777-8ee1-b74a61820aa1",
+      "building_id": "Fox_education_Louie",
+      "priority": "high",
+      "requirement": {
+        "building_id": "Fox_education_Louie",
+        "priority": "high",
+        "required_skills": [
+          "hvac",
+          "controls"
+        ],
+        "preferred_team_name": "自控班",
+        "summary": "Fox_education_Louie 现场工单；优先技能：hvac / controls；高优先级，优先派值班且可处理紧急任务人员"
+      },
+      "candidate_count": 6,
+      "chosen_candidate": {
+        "user_id": "43c2c2fd-c58a-4c4c-bb06-6f47a3cb7469",
+        "username": "ops_controls_01",
+        "phone": "13800000014",
+        "team_name": "自控班",
+        "job_title": "自控工程师",
+        "shift_status": "on_duty",
+        "dispatch_enabled": true,
+        "max_active_orders": 4,
+        "current_active_orders": 0,
+        "load_ratio": 0.0,
+        "service_buildings": [
+          "Fox_education_Louie",
+          "Fox_office_Alice",
+          "Fox_public_Henry"
+        ],
+        "skill_names": [
+          "自控运维",
+          "基础巡检"
+        ],
+        "matched_skill_names": [
+          "自控运维"
+        ],
+        "score": 123,
+        "badges": [
+          "自控班",
+          "在手0/4单",
+          "值班中",
+          "技能匹配",
+          "负责该楼栋",
+          "可处理紧急任务"
+        ],
+        "recommend_reason": "技能贴合：自控运维，负责该楼栋，当前值班中，当前负载较低"
+      },
+      "top_candidate": {
+        "user_id": "43c2c2fd-c58a-4c4c-bb06-6f47a3cb7469",
+        "username": "ops_controls_01",
+        "phone": "13800000014",
+        "team_name": "自控班",
+        "job_title": "自控工程师",
+        "shift_status": "on_duty",
+        "dispatch_enabled": true,
+        "max_active_orders": 4,
+        "current_active_orders": 0,
+        "load_ratio": 0.0,
+        "service_buildings": [
+          "Fox_education_Louie",
+          "Fox_office_Alice",
+          "Fox_public_Henry"
+        ],
+        "skill_names": [
+          "自控运维",
+          "基础巡检"
+        ],
+        "matched_skill_names": [
+          "自控运维"
+        ],
+        "score": 123,
+        "badges": [
+          "自控班",
+          "在手0/4单",
+          "值班中",
+          "技能匹配",
+          "负责该楼栋",
+          "可处理紧急任务"
+        ],
+        "recommend_reason": "技能贴合：自控运维，负责该楼栋，当前值班中，当前负载较低"
+      },
+      "second_candidate": {
+        "user_id": "92a81828-b57f-4b23-980b-331b589d33ef",
+        "username": "ops_hvac_01",
+        "phone": "13800000011",
+        "team_name": "暖通班",
+        "job_title": "暖通工程师",
+        "shift_status": "on_duty",
+        "dispatch_enabled": true,
+        "max_active_orders": 4,
+        "current_active_orders": 0,
+        "load_ratio": 0.0,
+        "service_buildings": [
+          "Fox_education_Louie",
+          "Fox_office_Alice",
+          "Fox_public_Henry"
+        ],
+        "skill_names": [
+          "暖通维修",
+          "基础巡检"
+        ],
+        "matched_skill_names": [
+          "暖通维修"
+        ],
+        "score": 113,
+        "badges": [
+          "暖通班",
+          "在手0/4单",
+          "值班中",
+          "技能匹配",
+          "负责该楼栋",
+          "可处理紧急任务"
+        ],
+        "recommend_reason": "技能贴合：暖通维修，负责该楼栋，当前值班中，当前负载较低"
+      },
+      "score_gap": 10,
+      "skip_reason": null
+    },
+    {
+      "ticket_id": "WO-20260328-003",
+      "work_order_id": "66358094-d5eb-4727-8126-faeb08b2ff8f",
+      "building_id": "Fox_education_Louie",
+      "priority": "high",
+      "requirement": {
+        "building_id": "Fox_education_Louie",
+        "priority": "high",
+        "required_skills": [
+          "electrical"
+        ],
+        "preferred_team_name": "电气班",
+        "summary": "Fox_education_Louie 现场工单；优先技能：electrical；高优先级，优先派值班且可处理紧急任务人员"
+      },
+      "candidate_count": 6,
+      "chosen_candidate": {
+        "user_id": "a8a06cf4-6a36-458a-a489-a027db2db2e2",
+        "username": "ops_electrical_01",
+        "phone": "13800000012",
+        "team_name": "电气班",
+        "job_title": "电气工程师",
+        "shift_status": "on_duty",
+        "dispatch_enabled": true,
+        "max_active_orders": 4,
+        "current_active_orders": 0,
+        "load_ratio": 0.0,
+        "service_buildings": [
+          "Fox_education_Louie",
+          "Fox_office_Alice",
+          "Fox_public_Henry"
+        ],
+        "skill_names": [
+          "电气维修",
+          "基础巡检"
+        ],
+        "matched_skill_names": [
+          "电气维修"
+        ],
+        "score": 123,
+        "badges": [
+          "电气班",
+          "在手0/4单",
+          "值班中",
+          "技能匹配",
+          "负责该楼栋",
+          "可处理紧急任务"
+        ],
+        "recommend_reason": "技能贴合：电气维修，负责该楼栋，当前值班中，当前负载较低"
+      },
+      "top_candidate": {
+        "user_id": "a8a06cf4-6a36-458a-a489-a027db2db2e2",
+        "username": "ops_electrical_01",
+        "phone": "13800000012",
+        "team_name": "电气班",
+        "job_title": "电气工程师",
+        "shift_status": "on_duty",
+        "dispatch_enabled": true,
+        "max_active_orders": 4,
+        "current_active_orders": 0,
+        "load_ratio": 0.0,
+        "service_buildings": [
+          "Fox_education_Louie",
+          "Fox_office_Alice",
+          "Fox_public_Henry"
+        ],
+        "skill_names": [
+          "电气维修",
+          "基础巡检"
+        ],
+        "matched_skill_names": [
+          "电气维修"
+        ],
+        "score": 123,
+        "badges": [
+          "电气班",
+          "在手0/4单",
+          "值班中",
+          "技能匹配",
+          "负责该楼栋",
+          "可处理紧急任务"
+        ],
+        "recommend_reason": "技能贴合：电气维修，负责该楼栋，当前值班中，当前负载较低"
+      },
+      "second_candidate": {
+        "user_id": "4b9293c5-dce2-4970-a9cd-3ec46ebb6d93",
+        "username": "ops_general_02",
+        "phone": "13800000015",
+        "team_name": "综合运维班",
+        "job_title": "综合运维工程师",
+        "shift_status": "standby",
+        "dispatch_enabled": true,
+        "max_active_orders": 3,
+        "current_active_orders": 0,
+        "load_ratio": 0.0,
+        "service_buildings": [
+          "Fox_education_Louie",
+          "Fox_office_Alice",
+          "Fox_public_Henry"
+        ],
+        "skill_names": [
+          "基础巡检",
+          "电气维修"
+        ],
+        "matched_skill_names": [
+          "电气维修"
+        ],
+        "score": 99,
+        "badges": [
+          "综合运维班",
+          "在手0/3单",
+          "待命",
+          "技能匹配",
+          "负责该楼栋"
+        ],
+        "recommend_reason": "技能贴合：电气维修，负责该楼栋，当前待命，当前负载较低"
+      },
+      "score_gap": 24,
+      "skip_reason": null
+    },
+    {
+      "ticket_id": "WO-20260328-004",
+      "work_order_id": "38ade215-8d70-472a-bff0-2cb9ffcd6e98",
+      "building_id": "Fox_education_Louie",
+      "priority": "high",
+      "requirement": {
+        "building_id": "Fox_education_Louie",
+        "priority": "high",
+        "required_skills": [
+          "hvac",
+          "controls"
+        ],
+        "preferred_team_name": "自控班",
+        "summary": "Fox_education_Louie 现场工单；优先技能：hvac / controls；高优先级，优先派值班且可处理紧急任务人员"
+      },
+      "candidate_count": 6,
+      "chosen_candidate": {
+        "user_id": "43c2c2fd-c58a-4c4c-bb06-6f47a3cb7469",
+        "username": "ops_controls_01",
+        "phone": "13800000014",
+        "team_name": "自控班",
+        "job_title": "自控工程师",
+        "shift_status": "on_duty",
+        "dispatch_enabled": true,
+        "max_active_orders": 4,
+        "current_active_orders": 0,
+        "load_ratio": 0.0,
+        "service_buildings": [
+          "Fox_education_Louie",
+          "Fox_office_Alice",
+          "Fox_public_Henry"
+        ],
+        "skill_names": [
+          "自控运维",
+          "基础巡检"
+        ],
+        "matched_skill_names": [
+          "自控运维"
+        ],
+        "score": 123,
+        "badges": [
+          "自控班",
+          "在手0/4单",
+          "值班中",
+          "技能匹配",
+          "负责该楼栋",
+          "可处理紧急任务"
+        ],
+        "recommend_reason": "技能贴合：自控运维，负责该楼栋，当前值班中，当前负载较低"
+      },
+      "top_candidate": {
+        "user_id": "43c2c2fd-c58a-4c4c-bb06-6f47a3cb7469",
+        "username": "ops_controls_01",
+        "phone": "13800000014",
+        "team_name": "自控班",
+        "job_title": "自控工程师",
+        "shift_status": "on_duty",
+        "dispatch_enabled": true,
+        "max_active_orders": 4,
+        "current_active_orders": 0,
+        "load_ratio": 0.0,
+        "service_buildings": [
+          "Fox_education_Louie",
+          "Fox_office_Alice",
+          "Fox_public_Henry"
+        ],
+        "skill_names": [
+          "自控运维",
+          "基础巡检"
+        ],
+        "matched_skill_names": [
+          "自控运维"
+        ],
+        "score": 123,
+        "badges": [
+          "自控班",
+          "在手0/4单",
+          "值班中",
+          "技能匹配",
+          "负责该楼栋",
+          "可处理紧急任务"
+        ],
+        "recommend_reason": "技能贴合：自控运维，负责该楼栋，当前值班中，当前负载较低"
+      },
+      "second_candidate": {
+        "user_id": "92a81828-b57f-4b23-980b-331b589d33ef",
+        "username": "ops_hvac_01",
+        "phone": "13800000011",
+        "team_name": "暖通班",
+        "job_title": "暖通工程师",
+        "shift_status": "on_duty",
+        "dispatch_enabled": true,
+        "max_active_orders": 4,
+        "current_active_orders": 0,
+        "load_ratio": 0.0,
+        "service_buildings": [
+          "Fox_education_Louie",
+          "Fox_office_Alice",
+          "Fox_public_Henry"
+        ],
+        "skill_names": [
+          "暖通维修",
+          "基础巡检"
+        ],
+        "matched_skill_names": [
+          "暖通维修"
+        ],
+        "score": 113,
+        "badges": [
+          "暖通班",
+          "在手0/4单",
+          "值班中",
+          "技能匹配",
+          "负责该楼栋",
+          "可处理紧急任务"
+        ],
+        "recommend_reason": "技能贴合：暖通维修，负责该楼栋，当前值班中，当前负载较低"
+      },
+      "score_gap": 10,
+      "skip_reason": null
+    },
+    {
+      "ticket_id": "WO-20260328-005",
+      "work_order_id": "760f4157-369b-49f7-95ed-6407c0aa7633",
+      "building_id": "Fox_education_Louie",
+      "priority": "high",
+      "requirement": {
+        "building_id": "Fox_education_Louie",
+        "priority": "high",
+        "required_skills": [
+          "electrical"
+        ],
+        "preferred_team_name": "电气班",
+        "summary": "Fox_education_Louie 现场工单；优先技能：electrical；高优先级，优先派值班且可处理紧急任务人员"
+      },
+      "candidate_count": 6,
+      "chosen_candidate": {
+        "user_id": "a8a06cf4-6a36-458a-a489-a027db2db2e2",
+        "username": "ops_electrical_01",
+        "phone": "13800000012",
+        "team_name": "电气班",
+        "job_title": "电气工程师",
+        "shift_status": "on_duty",
+        "dispatch_enabled": true,
+        "max_active_orders": 4,
+        "current_active_orders": 0,
+        "load_ratio": 0.0,
+        "service_buildings": [
+          "Fox_education_Louie",
+          "Fox_office_Alice",
+          "Fox_public_Henry"
+        ],
+        "skill_names": [
+          "电气维修",
+          "基础巡检"
+        ],
+        "matched_skill_names": [
+          "电气维修"
+        ],
+        "score": 123,
+        "badges": [
+          "电气班",
+          "在手0/4单",
+          "值班中",
+          "技能匹配",
+          "负责该楼栋",
+          "可处理紧急任务"
+        ],
+        "recommend_reason": "技能贴合：电气维修，负责该楼栋，当前值班中，当前负载较低"
+      },
+      "top_candidate": {
+        "user_id": "a8a06cf4-6a36-458a-a489-a027db2db2e2",
+        "username": "ops_electrical_01",
+        "phone": "13800000012",
+        "team_name": "电气班",
+        "job_title": "电气工程师",
+        "shift_status": "on_duty",
+        "dispatch_enabled": true,
+        "max_active_orders": 4,
+        "current_active_orders": 0,
+        "load_ratio": 0.0,
+        "service_buildings": [
+          "Fox_education_Louie",
+          "Fox_office_Alice",
+          "Fox_public_Henry"
+        ],
+        "skill_names": [
+          "电气维修",
+          "基础巡检"
+        ],
+        "matched_skill_names": [
+          "电气维修"
+        ],
+        "score": 123,
+        "badges": [
+          "电气班",
+          "在手0/4单",
+          "值班中",
+          "技能匹配",
+          "负责该楼栋",
+          "可处理紧急任务"
+        ],
+        "recommend_reason": "技能贴合：电气维修，负责该楼栋，当前值班中，当前负载较低"
+      },
+      "second_candidate": {
+        "user_id": "4b9293c5-dce2-4970-a9cd-3ec46ebb6d93",
+        "username": "ops_general_02",
+        "phone": "13800000015",
+        "team_name": "综合运维班",
+        "job_title": "综合运维工程师",
+        "shift_status": "standby",
+        "dispatch_enabled": true,
+        "max_active_orders": 3,
+        "current_active_orders": 0,
+        "load_ratio": 0.0,
+        "service_buildings": [
+          "Fox_education_Louie",
+          "Fox_office_Alice",
+          "Fox_public_Henry"
+        ],
+        "skill_names": [
+          "基础巡检",
+          "电气维修"
+        ],
+        "matched_skill_names": [
+          "电气维修"
+        ],
+        "score": 99,
+        "badges": [
+          "综合运维班",
+          "在手0/3单",
+          "待命",
+          "技能匹配",
+          "负责该楼栋"
+        ],
+        "recommend_reason": "技能贴合：电气维修，负责该楼栋，当前待命，当前负载较低"
+      },
+      "score_gap": 24,
+      "skip_reason": null
+    },
+    {
+      "ticket_id": "WO-20260328-006",
+      "work_order_id": "8747bd48-991f-4425-898b-cd462950f557",
+      "building_id": "Fox_education_Louie",
+      "priority": "high",
+      "requirement": {
+        "building_id": "Fox_education_Louie",
+        "priority": "high",
+        "required_skills": [
+          "hvac",
+          "controls"
+        ],
+        "preferred_team_name": "自控班",
+        "summary": "Fox_education_Louie 现场工单；优先技能：hvac / controls；高优先级，优先派值班且可处理紧急任务人员"
+      },
+      "candidate_count": 6,
+      "chosen_candidate": {
+        "user_id": "43c2c2fd-c58a-4c4c-bb06-6f47a3cb7469",
+        "username": "ops_controls_01",
+        "phone": "13800000014",
+        "team_name": "自控班",
+        "job_title": "自控工程师",
+        "shift_status": "on_duty",
+        "dispatch_enabled": true,
+        "max_active_orders": 4,
+        "current_active_orders": 0,
+        "load_ratio": 0.0,
+        "service_buildings": [
+          "Fox_education_Louie",
+          "Fox_office_Alice",
+          "Fox_public_Henry"
+        ],
+        "skill_names": [
+          "自控运维",
+          "基础巡检"
+        ],
+        "matched_skill_names": [
+          "自控运维"
+        ],
+        "score": 123,
+        "badges": [
+          "自控班",
+          "在手0/4单",
+          "值班中",
+          "技能匹配",
+          "负责该楼栋",
+          "可处理紧急任务"
+        ],
+        "recommend_reason": "技能贴合：自控运维，负责该楼栋，当前值班中，当前负载较低"
+      },
+      "top_candidate": {
+        "user_id": "43c2c2fd-c58a-4c4c-bb06-6f47a3cb7469",
+        "username": "ops_controls_01",
+        "phone": "13800000014",
+        "team_name": "自控班",
+        "job_title": "自控工程师",
+        "shift_status": "on_duty",
+        "dispatch_enabled": true,
+        "max_active_orders": 4,
+        "current_active_orders": 0,
+        "load_ratio": 0.0,
+        "service_buildings": [
+          "Fox_education_Louie",
+          "Fox_office_Alice",
+          "Fox_public_Henry"
+        ],
+        "skill_names": [
+          "自控运维",
+          "基础巡检"
+        ],
+        "matched_skill_names": [
+          "自控运维"
+        ],
+        "score": 123,
+        "badges": [
+          "自控班",
+          "在手0/4单",
+          "值班中",
+          "技能匹配",
+          "负责该楼栋",
+          "可处理紧急任务"
+        ],
+        "recommend_reason": "技能贴合：自控运维，负责该楼栋，当前值班中，当前负载较低"
+      },
+      "second_candidate": {
+        "user_id": "92a81828-b57f-4b23-980b-331b589d33ef",
+        "username": "ops_hvac_01",
+        "phone": "13800000011",
+        "team_name": "暖通班",
+        "job_title": "暖通工程师",
+        "shift_status": "on_duty",
+        "dispatch_enabled": true,
+        "max_active_orders": 4,
+        "current_active_orders": 0,
+        "load_ratio": 0.0,
+        "service_buildings": [
+          "Fox_education_Louie",
+          "Fox_office_Alice",
+          "Fox_public_Henry"
+        ],
+        "skill_names": [
+          "暖通维修",
+          "基础巡检"
+        ],
+        "matched_skill_names": [
+          "暖通维修"
+        ],
+        "score": 113,
+        "badges": [
+          "暖通班",
+          "在手0/4单",
+          "值班中",
+          "技能匹配",
+          "负责该楼栋",
+          "可处理紧急任务"
+        ],
+        "recommend_reason": "技能贴合：暖通维修，负责该楼栋，当前值班中，当前负载较低"
+      },
+      "score_gap": 10,
+      "skip_reason": null
+    },
+    {
+      "ticket_id": "WO-20260328-007",
+      "work_order_id": "9fe7564e-41bc-4250-91ad-e916dd5f46b2",
+      "building_id": "Fox_education_Louie",
+      "priority": "high",
+      "requirement": {
+        "building_id": "Fox_education_Louie",
+        "priority": "high",
+        "required_skills": [
+          "electrical"
+        ],
+        "preferred_team_name": "电气班",
+        "summary": "Fox_education_Louie 现场工单；优先技能：electrical；高优先级，优先派值班且可处理紧急任务人员"
+      },
+      "candidate_count": 6,
+      "chosen_candidate": {
+        "user_id": "a8a06cf4-6a36-458a-a489-a027db2db2e2",
+        "username": "ops_electrical_01",
+        "phone": "13800000012",
+        "team_name": "电气班",
+        "job_title": "电气工程师",
+        "shift_status": "on_duty",
+        "dispatch_enabled": true,
+        "max_active_orders": 4,
+        "current_active_orders": 0,
+        "load_ratio": 0.0,
+        "service_buildings": [
+          "Fox_education_Louie",
+          "Fox_office_Alice",
+          "Fox_public_Henry"
+        ],
+        "skill_names": [
+          "电气维修",
+          "基础巡检"
+        ],
+        "matched_skill_names": [
+          "电气维修"
+        ],
+        "score": 123,
+        "badges": [
+          "电气班",
+          "在手0/4单",
+          "值班中",
+          "技能匹配",
+          "负责该楼栋",
+          "可处理紧急任务"
+        ],
+        "recommend_reason": "技能贴合：电气维修，负责该楼栋，当前值班中，当前负载较低"
+      },
+      "top_candidate": {
+        "user_id": "a8a06cf4-6a36-458a-a489-a027db2db2e2",
+        "username": "ops_electrical_01",
+        "phone": "13800000012",
+        "team_name": "电气班",
+        "job_title": "电气工程师",
+        "shift_status": "on_duty",
+        "dispatch_enabled": true,
+        "max_active_orders": 4,
+        "current_active_orders": 0,
+        "load_ratio": 0.0,
+        "service_buildings": [
+          "Fox_education_Louie",
+          "Fox_office_Alice",
+          "Fox_public_Henry"
+        ],
+        "skill_names": [
+          "电气维修",
+          "基础巡检"
+        ],
+        "matched_skill_names": [
+          "电气维修"
+        ],
+        "score": 123,
+        "badges": [
+          "电气班",
+          "在手0/4单",
+          "值班中",
+          "技能匹配",
+          "负责该楼栋",
+          "可处理紧急任务"
+        ],
+        "recommend_reason": "技能贴合：电气维修，负责该楼栋，当前值班中，当前负载较低"
+      },
+      "second_candidate": {
+        "user_id": "4b9293c5-dce2-4970-a9cd-3ec46ebb6d93",
+        "username": "ops_general_02",
+        "phone": "13800000015",
+        "team_name": "综合运维班",
+        "job_title": "综合运维工程师",
+        "shift_status": "standby",
+        "dispatch_enabled": true,
+        "max_active_orders": 3,
+        "current_active_orders": 0,
+        "load_ratio": 0.0,
+        "service_buildings": [
+          "Fox_education_Louie",
+          "Fox_office_Alice",
+          "Fox_public_Henry"
+        ],
+        "skill_names": [
+          "基础巡检",
+          "电气维修"
+        ],
+        "matched_skill_names": [
+          "电气维修"
+        ],
+        "score": 99,
+        "badges": [
+          "综合运维班",
+          "在手0/3单",
+          "待命",
+          "技能匹配",
+          "负责该楼栋"
+        ],
+        "recommend_reason": "技能贴合：电气维修，负责该楼栋，当前待命，当前负载较低"
+      },
+      "score_gap": 24,
+      "skip_reason": null
+    },
+    {
+      "ticket_id": "WO-20260328-008",
+      "work_order_id": "db89f4ad-cf21-4d14-971f-87864658254f",
+      "building_id": "Fox_education_Louie",
+      "priority": "high",
+      "requirement": {
+        "building_id": "Fox_education_Louie",
+        "priority": "high",
+        "required_skills": [
+          "hvac",
+          "controls"
+        ],
+        "preferred_team_name": "自控班",
+        "summary": "Fox_education_Louie 现场工单；优先技能：hvac / controls；高优先级，优先派值班且可处理紧急任务人员"
+      },
+      "candidate_count": 6,
+      "chosen_candidate": {
+        "user_id": "43c2c2fd-c58a-4c4c-bb06-6f47a3cb7469",
+        "username": "ops_controls_01",
+        "phone": "13800000014",
+        "team_name": "自控班",
+        "job_title": "自控工程师",
+        "shift_status": "on_duty",
+        "dispatch_enabled": true,
+        "max_active_orders": 4,
+        "current_active_orders": 0,
+        "load_ratio": 0.0,
+        "service_buildings": [
+          "Fox_education_Louie",
+          "Fox_office_Alice",
+          "Fox_public_Henry"
+        ],
+        "skill_names": [
+          "自控运维",
+          "基础巡检"
+        ],
+        "matched_skill_names": [
+          "自控运维"
+        ],
+        "score": 123,
+        "badges": [
+          "自控班",
+          "在手0/4单",
+          "值班中",
+          "技能匹配",
+          "负责该楼栋",
+          "可处理紧急任务"
+        ],
+        "recommend_reason": "技能贴合：自控运维，负责该楼栋，当前值班中，当前负载较低"
+      },
+      "top_candidate": {
+        "user_id": "43c2c2fd-c58a-4c4c-bb06-6f47a3cb7469",
+        "username": "ops_controls_01",
+        "phone": "13800000014",
+        "team_name": "自控班",
+        "job_title": "自控工程师",
+        "shift_status": "on_duty",
+        "dispatch_enabled": true,
+        "max_active_orders": 4,
+        "current_active_orders": 0,
+        "load_ratio": 0.0,
+        "service_buildings": [
+          "Fox_education_Louie",
+          "Fox_office_Alice",
+          "Fox_public_Henry"
+        ],
+        "skill_names": [
+          "自控运维",
+          "基础巡检"
+        ],
+        "matched_skill_names": [
+          "自控运维"
+        ],
+        "score": 123,
+        "badges": [
+          "自控班",
+          "在手0/4单",
+          "值班中",
+          "技能匹配",
+          "负责该楼栋",
+          "可处理紧急任务"
+        ],
+        "recommend_reason": "技能贴合：自控运维，负责该楼栋，当前值班中，当前负载较低"
+      },
+      "second_candidate": {
+        "user_id": "92a81828-b57f-4b23-980b-331b589d33ef",
+        "username": "ops_hvac_01",
+        "phone": "13800000011",
+        "team_name": "暖通班",
+        "job_title": "暖通工程师",
+        "shift_status": "on_duty",
+        "dispatch_enabled": true,
+        "max_active_orders": 4,
+        "current_active_orders": 0,
+        "load_ratio": 0.0,
+        "service_buildings": [
+          "Fox_education_Louie",
+          "Fox_office_Alice",
+          "Fox_public_Henry"
+        ],
+        "skill_names": [
+          "暖通维修",
+          "基础巡检"
+        ],
+        "matched_skill_names": [
+          "暖通维修"
+        ],
+        "score": 113,
+        "badges": [
+          "暖通班",
+          "在手0/4单",
+          "值班中",
+          "技能匹配",
+          "负责该楼栋",
+          "可处理紧急任务"
+        ],
+        "recommend_reason": "技能贴合：暖通维修，负责该楼栋，当前值班中，当前负载较低"
+      },
+      "score_gap": 10,
+      "skip_reason": null
+    },
+    {
+      "ticket_id": "WO-20260328-016",
+      "work_order_id": "7f9fbdae-eb93-4b94-be35-e0d3df27954b",
+      "building_id": "Fox_education_Louie",
+      "priority": "high",
+      "requirement": {
+        "building_id": "Fox_education_Louie",
+        "priority": "high",
+        "required_skills": [
+          "hvac",
+          "plumbing"
+        ],
+        "preferred_team_name": "给排水班",
+        "summary": "Fox_education_Louie 现场工单；优先技能：hvac / plumbing；高优先级，优先派值班且可处理紧急任务人员"
+      },
+      "candidate_count": 6,
+      "chosen_candidate": {
+        "user_id": "fc168e5d-218d-45c2-8bc0-1e581d2dcf0f",
+        "username": "ops_plumbing_01",
+        "phone": "13800000013",
+        "team_name": "给排水班",
+        "job_title": "给排水工程师",
+        "shift_status": "on_duty",
+        "dispatch_enabled": true,
+        "max_active_orders": 4,
+        "current_active_orders": 0,
+        "load_ratio": 0.0,
+        "service_buildings": [
+          "Fox_education_Louie",
+          "Fox_office_Alice",
+          "Fox_public_Henry"
+        ],
+        "skill_names": [
+          "给排水维修",
+          "基础巡检"
+        ],
+        "matched_skill_names": [
+          "给排水维修"
+        ],
+        "score": 123,
+        "badges": [
+          "给排水班",
+          "在手0/4单",
+          "值班中",
+          "技能匹配",
+          "负责该楼栋",
+          "可处理紧急任务"
+        ],
+        "recommend_reason": "技能贴合：给排水维修，负责该楼栋，当前值班中，当前负载较低"
+      },
+      "top_candidate": {
+        "user_id": "fc168e5d-218d-45c2-8bc0-1e581d2dcf0f",
+        "username": "ops_plumbing_01",
+        "phone": "13800000013",
+        "team_name": "给排水班",
+        "job_title": "给排水工程师",
+        "shift_status": "on_duty",
+        "dispatch_enabled": true,
+        "max_active_orders": 4,
+        "current_active_orders": 0,
+        "load_ratio": 0.0,
+        "service_buildings": [
+          "Fox_education_Louie",
+          "Fox_office_Alice",
+          "Fox_public_Henry"
+        ],
+        "skill_names": [
+          "给排水维修",
+          "基础巡检"
+        ],
+        "matched_skill_names": [
+          "给排水维修"
+        ],
+        "score": 123,
+        "badges": [
+          "给排水班",
+          "在手0/4单",
+          "值班中",
+          "技能匹配",
+          "负责该楼栋",
+          "可处理紧急任务"
+        ],
+        "recommend_reason": "技能贴合：给排水维修，负责该楼栋，当前值班中，当前负载较低"
+      },
+      "second_candidate": {
+        "user_id": "92a81828-b57f-4b23-980b-331b589d33ef",
+        "username": "ops_hvac_01",
+        "phone": "13800000011",
+        "team_name": "暖通班",
+        "job_title": "暖通工程师",
+        "shift_status": "on_duty",
+        "dispatch_enabled": true,
+        "max_active_orders": 4,
+        "current_active_orders": 0,
+        "load_ratio": 0.0,
+        "service_buildings": [
+          "Fox_education_Louie",
+          "Fox_office_Alice",
+          "Fox_public_Henry"
+        ],
+        "skill_names": [
+          "暖通维修",
+          "基础巡检"
+        ],
+        "matched_skill_names": [
+          "暖通维修"
+        ],
+        "score": 113,
+        "badges": [
+          "暖通班",
+          "在手0/4单",
+          "值班中",
+          "技能匹配",
+          "负责该楼栋",
+          "可处理紧急任务"
+        ],
+        "recommend_reason": "技能贴合：暖通维修，负责该楼栋，当前值班中，当前负载较低"
+      },
+      "score_gap": 10,
+      "skip_reason": null
+    },
+    {
+      "ticket_id": "WO-20260328-017",
+      "work_order_id": "510f669d-617e-4d9e-9d71-b367604b2737",
+      "building_id": "Fox_education_Louie",
+      "priority": "high",
+      "requirement": {
+        "building_id": "Fox_education_Louie",
+        "priority": "high",
+        "required_skills": [
+          "hvac",
+          "plumbing"
+        ],
+        "preferred_team_name": "给排水班",
+        "summary": "Fox_education_Louie 现场工单；优先技能：hvac / plumbing；高优先级，优先派值班且可处理紧急任务人员"
+      },
+      "candidate_count": 6,
+      "chosen_candidate": {
+        "user_id": "fc168e5d-218d-45c2-8bc0-1e581d2dcf0f",
+        "username": "ops_plumbing_01",
+        "phone": "13800000013",
+        "team_name": "给排水班",
+        "job_title": "给排水工程师",
+        "shift_status": "on_duty",
+        "dispatch_enabled": true,
+        "max_active_orders": 4,
+        "current_active_orders": 0,
+        "load_ratio": 0.0,
+        "service_buildings": [
+          "Fox_education_Louie",
+          "Fox_office_Alice",
+          "Fox_public_Henry"
+        ],
+        "skill_names": [
+          "给排水维修",
+          "基础巡检"
+        ],
+        "matched_skill_names": [
+          "给排水维修"
+        ],
+        "score": 123,
+        "badges": [
+          "给排水班",
+          "在手0/4单",
+          "值班中",
+          "技能匹配",
+          "负责该楼栋",
+          "可处理紧急任务"
+        ],
+        "recommend_reason": "技能贴合：给排水维修，负责该楼栋，当前值班中，当前负载较低"
+      },
+      "top_candidate": {
+        "user_id": "fc168e5d-218d-45c2-8bc0-1e581d2dcf0f",
+        "username": "ops_plumbing_01",
+        "phone": "13800000013",
+        "team_name": "给排水班",
+        "job_title": "给排水工程师",
+        "shift_status": "on_duty",
+        "dispatch_enabled": true,
+        "max_active_orders": 4,
+        "current_active_orders": 0,
+        "load_ratio": 0.0,
+        "service_buildings": [
+          "Fox_education_Louie",
+          "Fox_office_Alice",
+          "Fox_public_Henry"
+        ],
+        "skill_names": [
+          "给排水维修",
+          "基础巡检"
+        ],
+        "matched_skill_names": [
+          "给排水维修"
+        ],
+        "score": 123,
+        "badges": [
+          "给排水班",
+          "在手0/4单",
+          "值班中",
+          "技能匹配",
+          "负责该楼栋",
+          "可处理紧急任务"
+        ],
+        "recommend_reason": "技能贴合：给排水维修，负责该楼栋，当前值班中，当前负载较低"
+      },
+      "second_candidate": {
+        "user_id": "92a81828-b57f-4b23-980b-331b589d33ef",
+        "username": "ops_hvac_01",
+        "phone": "13800000011",
+        "team_name": "暖通班",
+        "job_title": "暖通工程师",
+        "shift_status": "on_duty",
+        "dispatch_enabled": true,
+        "max_active_orders": 4,
+        "current_active_orders": 0,
+        "load_ratio": 0.0,
+        "service_buildings": [
+          "Fox_education_Louie",
+          "Fox_office_Alice",
+          "Fox_public_Henry"
+        ],
+        "skill_names": [
+          "暖通维修",
+          "基础巡检"
+        ],
+        "matched_skill_names": [
+          "暖通维修"
+        ],
+        "score": 113,
+        "badges": [
+          "暖通班",
+          "在手0/4单",
+          "值班中",
+          "技能匹配",
+          "负责该楼栋",
+          "可处理紧急任务"
+        ],
+        "recommend_reason": "技能贴合：暖通维修，负责该楼栋，当前值班中，当前负载较低"
+      },
+      "score_gap": 10,
+      "skip_reason": null
+    }
+  ],
+  "skipped": [
+    {
+      "ticket_id": "WO-20260328-009",
+      "work_order_id": "d3a66ed2-bbb2-4691-a5ce-6563d23f343d",
+      "building_id": "Fox_education_Louie",
+      "priority": "high",
+      "requirement": {
+        "building_id": "Fox_education_Louie",
+        "priority": "high",
+        "required_skills": [
+          "electrical"
+        ],
+        "preferred_team_name": "电气班",
+        "summary": "Fox_education_Louie 现场工单；优先技能：electrical；高优先级，优先派值班且可处理紧急任务人员"
+      },
+      "candidate_count": 6,
+      "chosen_candidate": null,
+      "top_candidate": {
+        "user_id": "a8a06cf4-6a36-458a-a489-a027db2db2e2",
+        "username": "ops_electrical_01",
+        "phone": "13800000012",
+        "team_name": "电气班",
+        "job_title": "电气工程师",
+        "shift_status": "on_duty",
+        "dispatch_enabled": true,
+        "max_active_orders": 4,
+        "current_active_orders": 0,
+        "load_ratio": 0.0,
+        "service_buildings": [
+          "Fox_education_Louie",
+          "Fox_office_Alice",
+          "Fox_public_Henry"
+        ],
+        "skill_names": [
+          "电气维修",
+          "基础巡检"
+        ],
+        "matched_skill_names": [
+          "电气维修"
+        ],
+        "score": 123,
+        "badges": [
+          "电气班",
+          "在手0/4单",
+          "值班中",
+          "技能匹配",
+          "负责该楼栋",
+          "可处理紧急任务"
+        ],
+        "recommend_reason": "技能贴合：电气维修，负责该楼栋，当前值班中，当前负载较低"
+      },
+      "second_candidate": {
+        "user_id": "4b9293c5-dce2-4970-a9cd-3ec46ebb6d93",
+        "username": "ops_general_02",
+        "phone": "13800000015",
+        "team_name": "综合运维班",
+        "job_title": "综合运维工程师",
+        "shift_status": "standby",
+        "dispatch_enabled": true,
+        "max_active_orders": 3,
+        "current_active_orders": 0,
+        "load_ratio": 0.0,
+        "service_buildings": [
+          "Fox_education_Louie",
+          "Fox_office_Alice",
+          "Fox_public_Henry"
+        ],
+        "skill_names": [
+          "基础巡检",
+          "电气维修"
+        ],
+        "matched_skill_names": [
+          "电气维修"
+        ],
+        "score": 99,
+        "badges": [
+          "综合运维班",
+          "在手0/3单",
+          "待命",
+          "技能匹配",
+          "负责该楼栋"
+        ],
+        "recommend_reason": "技能贴合：电气维修，负责该楼栋，当前待命，当前负载较低"
+      },
+      "score_gap": 24,
+      "skip_reason": "top_candidate_over_capacity"
+    },
+    {
+      "ticket_id": "WO-20260328-010",
+      "work_order_id": "169336cf-a5a8-4600-bd02-dd76dabc01a9",
+      "building_id": "Fox_education_Louie",
+      "priority": "high",
+      "requirement": {
+        "building_id": "Fox_education_Louie",
+        "priority": "high",
+        "required_skills": [
+          "hvac",
+          "controls"
+        ],
+        "preferred_team_name": "自控班",
+        "summary": "Fox_education_Louie 现场工单；优先技能：hvac / controls；高优先级，优先派值班且可处理紧急任务人员"
+      },
+      "candidate_count": 6,
+      "chosen_candidate": null,
+      "top_candidate": {
+        "user_id": "43c2c2fd-c58a-4c4c-bb06-6f47a3cb7469",
+        "username": "ops_controls_01",
+        "phone": "13800000014",
+        "team_name": "自控班",
+        "job_title": "自控工程师",
+        "shift_status": "on_duty",
+        "dispatch_enabled": true,
+        "max_active_orders": 4,
+        "current_active_orders": 0,
+        "load_ratio": 0.0,
+        "service_buildings": [
+          "Fox_education_Louie",
+          "Fox_office_Alice",
+          "Fox_public_Henry"
+        ],
+        "skill_names": [
+          "自控运维",
+          "基础巡检"
+        ],
+        "matched_skill_names": [
+          "自控运维"
+        ],
+        "score": 123,
+        "badges": [
+          "自控班",
+          "在手0/4单",
+          "值班中",
+          "技能匹配",
+          "负责该楼栋",
+          "可处理紧急任务"
+        ],
+        "recommend_reason": "技能贴合：自控运维，负责该楼栋，当前值班中，当前负载较低"
+      },
+      "second_candidate": {
+        "user_id": "92a81828-b57f-4b23-980b-331b589d33ef",
+        "username": "ops_hvac_01",
+        "phone": "13800000011",
+        "team_name": "暖通班",
+        "job_title": "暖通工程师",
+        "shift_status": "on_duty",
+        "dispatch_enabled": true,
+        "max_active_orders": 4,
+        "current_active_orders": 0,
+        "load_ratio": 0.0,
+        "service_buildings": [
+          "Fox_education_Louie",
+          "Fox_office_Alice",
+          "Fox_public_Henry"
+        ],
+        "skill_names": [
+          "暖通维修",
+          "基础巡检"
+        ],
+        "matched_skill_names": [
+          "暖通维修"
+        ],
+        "score": 113,
+        "badges": [
+          "暖通班",
+          "在手0/4单",
+          "值班中",
+          "技能匹配",
+          "负责该楼栋",
+          "可处理紧急任务"
+        ],
+        "recommend_reason": "技能贴合：暖通维修，负责该楼栋，当前值班中，当前负载较低"
+      },
+      "score_gap": 10,
+      "skip_reason": "top_candidate_over_capacity"
+    },
+    {
+      "ticket_id": "WO-20260328-011",
+      "work_order_id": "f747f62d-2eb9-429d-9a85-b1a6ea6fd856",
+      "building_id": "Fox_education_Louie",
+      "priority": "high",
+      "requirement": {
+        "building_id": "Fox_education_Louie",
+        "priority": "high",
+        "required_skills": [
+          "electrical"
+        ],
+        "preferred_team_name": "电气班",
+        "summary": "Fox_education_Louie 现场工单；优先技能：electrical；高优先级，优先派值班且可处理紧急任务人员"
+      },
+      "candidate_count": 6,
+      "chosen_candidate": null,
+      "top_candidate": {
+        "user_id": "a8a06cf4-6a36-458a-a489-a027db2db2e2",
+        "username": "ops_electrical_01",
+        "phone": "13800000012",
+        "team_name": "电气班",
+        "job_title": "电气工程师",
+        "shift_status": "on_duty",
+        "dispatch_enabled": true,
+        "max_active_orders": 4,
+        "current_active_orders": 0,
+        "load_ratio": 0.0,
+        "service_buildings": [
+          "Fox_education_Louie",
+          "Fox_office_Alice",
+          "Fox_public_Henry"
+        ],
+        "skill_names": [
+          "电气维修",
+          "基础巡检"
+        ],
+        "matched_skill_names": [
+          "电气维修"
+        ],
+        "score": 123,
+        "badges": [
+          "电气班",
+          "在手0/4单",
+          "值班中",
+          "技能匹配",
+          "负责该楼栋",
+          "可处理紧急任务"
+        ],
+        "recommend_reason": "技能贴合：电气维修，负责该楼栋，当前值班中，当前负载较低"
+      },
+      "second_candidate": {
+        "user_id": "4b9293c5-dce2-4970-a9cd-3ec46ebb6d93",
+        "username": "ops_general_02",
+        "phone": "13800000015",
+        "team_name": "综合运维班",
+        "job_title": "综合运维工程师",
+        "shift_status": "standby",
+        "dispatch_enabled": true,
+        "max_active_orders": 3,
+        "current_active_orders": 0,
+        "load_ratio": 0.0,
+        "service_buildings": [
+          "Fox_education_Louie",
+          "Fox_office_Alice",
+          "Fox_public_Henry"
+        ],
+        "skill_names": [
+          "基础巡检",
+          "电气维修"
+        ],
+        "matched_skill_names": [
+          "电气维修"
+        ],
+        "score": 99,
+        "badges": [
+          "综合运维班",
+          "在手0/3单",
+          "待命",
+          "技能匹配",
+          "负责该楼栋"
+        ],
+        "recommend_reason": "技能贴合：电气维修，负责该楼栋，当前待命，当前负载较低"
+      },
+      "score_gap": 24,
+      "skip_reason": "top_candidate_over_capacity"
+    },
+    {
+      "ticket_id": "WO-20260328-012",
+      "work_order_id": "badb80ba-cd60-45d2-bc9b-02b244aba5a1",
+      "building_id": "Fox_education_Louie",
+      "priority": "high",
+      "requirement": {
+        "building_id": "Fox_education_Louie",
+        "priority": "high",
+        "required_skills": [
+          "hvac",
+          "controls"
+        ],
+        "preferred_team_name": "自控班",
+        "summary": "Fox_education_Louie 现场工单；优先技能：hvac / controls；高优先级，优先派值班且可处理紧急任务人员"
+      },
+      "candidate_count": 6,
+      "chosen_candidate": null,
+      "top_candidate": {
+        "user_id": "43c2c2fd-c58a-4c4c-bb06-6f47a3cb7469",
+        "username": "ops_controls_01",
+        "phone": "13800000014",
+        "team_name": "自控班",
+        "job_title": "自控工程师",
+        "shift_status": "on_duty",
+        "dispatch_enabled": true,
+        "max_active_orders": 4,
+        "current_active_orders": 0,
+        "load_ratio": 0.0,
+        "service_buildings": [
+          "Fox_education_Louie",
+          "Fox_office_Alice",
+          "Fox_public_Henry"
+        ],
+        "skill_names": [
+          "自控运维",
+          "基础巡检"
+        ],
+        "matched_skill_names": [
+          "自控运维"
+        ],
+        "score": 123,
+        "badges": [
+          "自控班",
+          "在手0/4单",
+          "值班中",
+          "技能匹配",
+          "负责该楼栋",
+          "可处理紧急任务"
+        ],
+        "recommend_reason": "技能贴合：自控运维，负责该楼栋，当前值班中，当前负载较低"
+      },
+      "second_candidate": {
+        "user_id": "92a81828-b57f-4b23-980b-331b589d33ef",
+        "username": "ops_hvac_01",
+        "phone": "13800000011",
+        "team_name": "暖通班",
+        "job_title": "暖通工程师",
+        "shift_status": "on_duty",
+        "dispatch_enabled": true,
+        "max_active_orders": 4,
+        "current_active_orders": 0,
+        "load_ratio": 0.0,
+        "service_buildings": [
+          "Fox_education_Louie",
+          "Fox_office_Alice",
+          "Fox_public_Henry"
+        ],
+        "skill_names": [
+          "暖通维修",
+          "基础巡检"
+        ],
+        "matched_skill_names": [
+          "暖通维修"
+        ],
+        "score": 113,
+        "badges": [
+          "暖通班",
+          "在手0/4单",
+          "值班中",
+          "技能匹配",
+          "负责该楼栋",
+          "可处理紧急任务"
+        ],
+        "recommend_reason": "技能贴合：暖通维修，负责该楼栋，当前值班中，当前负载较低"
+      },
+      "score_gap": 10,
+      "skip_reason": "top_candidate_over_capacity"
+    },
+    {
+      "ticket_id": "WO-20260328-013",
+      "work_order_id": "689713d1-a910-4a18-85cd-b79ce4b4a35c",
+      "building_id": "Fox_education_Louie",
+      "priority": "high",
+      "requirement": {
+        "building_id": "Fox_education_Louie",
+        "priority": "high",
+        "required_skills": [
+          "electrical"
+        ],
+        "preferred_team_name": "电气班",
+        "summary": "Fox_education_Louie 现场工单；优先技能：electrical；高优先级，优先派值班且可处理紧急任务人员"
+      },
+      "candidate_count": 6,
+      "chosen_candidate": null,
+      "top_candidate": {
+        "user_id": "a8a06cf4-6a36-458a-a489-a027db2db2e2",
+        "username": "ops_electrical_01",
+        "phone": "13800000012",
+        "team_name": "电气班",
+        "job_title": "电气工程师",
+        "shift_status": "on_duty",
+        "dispatch_enabled": true,
+        "max_active_orders": 4,
+        "current_active_orders": 0,
+        "load_ratio": 0.0,
+        "service_buildings": [
+          "Fox_education_Louie",
+          "Fox_office_Alice",
+          "Fox_public_Henry"
+        ],
+        "skill_names": [
+          "电气维修",
+          "基础巡检"
+        ],
+        "matched_skill_names": [
+          "电气维修"
+        ],
+        "score": 123,
+        "badges": [
+          "电气班",
+          "在手0/4单",
+          "值班中",
+          "技能匹配",
+          "负责该楼栋",
+          "可处理紧急任务"
+        ],
+        "recommend_reason": "技能贴合：电气维修，负责该楼栋，当前值班中，当前负载较低"
+      },
+      "second_candidate": {
+        "user_id": "4b9293c5-dce2-4970-a9cd-3ec46ebb6d93",
+        "username": "ops_general_02",
+        "phone": "13800000015",
+        "team_name": "综合运维班",
+        "job_title": "综合运维工程师",
+        "shift_status": "standby",
+        "dispatch_enabled": true,
+        "max_active_orders": 3,
+        "current_active_orders": 0,
+        "load_ratio": 0.0,
+        "service_buildings": [
+          "Fox_education_Louie",
+          "Fox_office_Alice",
+          "Fox_public_Henry"
+        ],
+        "skill_names": [
+          "基础巡检",
+          "电气维修"
+        ],
+        "matched_skill_names": [
+          "电气维修"
+        ],
+        "score": 99,
+        "badges": [
+          "综合运维班",
+          "在手0/3单",
+          "待命",
+          "技能匹配",
+          "负责该楼栋"
+        ],
+        "recommend_reason": "技能贴合：电气维修，负责该楼栋，当前待命，当前负载较低"
+      },
+      "score_gap": 24,
+      "skip_reason": "top_candidate_over_capacity"
+    },
+    {
+      "ticket_id": "WO-20260328-014",
+      "work_order_id": "1dcbbddc-c13d-45b0-add3-e2f2d816dd75",
+      "building_id": "Fox_education_Louie",
+      "priority": "high",
+      "requirement": {
+        "building_id": "Fox_education_Louie",
+        "priority": "high",
+        "required_skills": [
+          "hvac",
+          "controls"
+        ],
+        "preferred_team_name": "自控班",
+        "summary": "Fox_education_Louie 现场工单；优先技能：hvac / controls；高优先级，优先派值班且可处理紧急任务人员"
+      },
+      "candidate_count": 6,
+      "chosen_candidate": null,
+      "top_candidate": {
+        "user_id": "43c2c2fd-c58a-4c4c-bb06-6f47a3cb7469",
+        "username": "ops_controls_01",
+        "phone": "13800000014",
+        "team_name": "自控班",
+        "job_title": "自控工程师",
+        "shift_status": "on_duty",
+        "dispatch_enabled": true,
+        "max_active_orders": 4,
+        "current_active_orders": 0,
+        "load_ratio": 0.0,
+        "service_buildings": [
+          "Fox_education_Louie",
+          "Fox_office_Alice",
+          "Fox_public_Henry"
+        ],
+        "skill_names": [
+          "自控运维",
+          "基础巡检"
+        ],
+        "matched_skill_names": [
+          "自控运维"
+        ],
+        "score": 123,
+        "badges": [
+          "自控班",
+          "在手0/4单",
+          "值班中",
+          "技能匹配",
+          "负责该楼栋",
+          "可处理紧急任务"
+        ],
+        "recommend_reason": "技能贴合：自控运维，负责该楼栋，当前值班中，当前负载较低"
+      },
+      "second_candidate": {
+        "user_id": "92a81828-b57f-4b23-980b-331b589d33ef",
+        "username": "ops_hvac_01",
+        "phone": "13800000011",
+        "team_name": "暖通班",
+        "job_title": "暖通工程师",
+        "shift_status": "on_duty",
+        "dispatch_enabled": true,
+        "max_active_orders": 4,
+        "current_active_orders": 0,
+        "load_ratio": 0.0,
+        "service_buildings": [
+          "Fox_education_Louie",
+          "Fox_office_Alice",
+          "Fox_public_Henry"
+        ],
+        "skill_names": [
+          "暖通维修",
+          "基础巡检"
+        ],
+        "matched_skill_names": [
+          "暖通维修"
+        ],
+        "score": 113,
+        "badges": [
+          "暖通班",
+          "在手0/4单",
+          "值班中",
+          "技能匹配",
+          "负责该楼栋",
+          "可处理紧急任务"
+        ],
+        "recommend_reason": "技能贴合：暖通维修，负责该楼栋，当前值班中，当前负载较低"
+      },
+      "score_gap": 10,
+      "skip_reason": "top_candidate_over_capacity"
+    }
+  ],
+  "planned_assignment_count_by_user": {
+    "a8a06cf4-6a36-458a-a489-a027db2db2e2": 4,
+    "43c2c2fd-c58a-4c4c-bb06-6f47a3cb7469": 4,
+    "fc168e5d-218d-45c2-8bc0-1e581d2dcf0f": 2
+  },
+  "manager_username": "test1",
+  "applied": [],
+  "failed": [
+    {
+      "ticket_id": "WO-20260328-001",
+      "reason": "MissingGreenlet: greenlet_spawn has not been called; can't call await_only() here. Was IO attempted in an unexpected place? (Background on this error at: https://sqlalche.me/e/20/xd2s)"
+    },
+    {
+      "ticket_id": "WO-20260328-002",
+      "reason": "MissingGreenlet: greenlet_spawn has not been called; can't call await_only() here. Was IO attempted in an unexpected place? (Background on this error at: https://sqlalche.me/e/20/xd2s)"
+    },
+    {
+      "ticket_id": "WO-20260328-003",
+      "reason": "MissingGreenlet: greenlet_spawn has not been called; can't call await_only() here. Was IO attempted in an unexpected place? (Background on this error at: https://sqlalche.me/e/20/xd2s)"
+    },
+    {
+      "ticket_id": "WO-20260328-004",
+      "reason": "MissingGreenlet: greenlet_spawn has not been called; can't call await_only() here. Was IO attempted in an unexpected place? (Background on this error at: https://sqlalche.me/e/20/xd2s)"
+    },
+    {
+      "ticket_id": "WO-20260328-005",
+      "reason": "MissingGreenlet: greenlet_spawn has not been called; can't call await_only() here. Was IO attempted in an unexpected place? (Background on this error at: https://sqlalche.me/e/20/xd2s)"
+    },
+    {
+      "ticket_id": "WO-20260328-006",
+      "reason": "MissingGreenlet: greenlet_spawn has not been called; can't call await_only() here. Was IO attempted in an unexpected place? (Background on this error at: https://sqlalche.me/e/20/xd2s)"
+    },
+    {
+      "ticket_id": "WO-20260328-007",
+      "reason": "MissingGreenlet: greenlet_spawn has not been called; can't call await_only() here. Was IO attempted in an unexpected place? (Background on this error at: https://sqlalche.me/e/20/xd2s)"
+    },
+    {
+      "ticket_id": "WO-20260328-008",
+      "reason": "MissingGreenlet: greenlet_spawn has not been called; can't call await_only() here. Was IO attempted in an unexpected place? (Background on this error at: https://sqlalche.me/e/20/xd2s)"
+    },
+    {
+      "ticket_id": "WO-20260328-016",
+      "reason": "MissingGreenlet: greenlet_spawn has not been called; can't call await_only() here. Was IO attempted in an unexpected place? (Background on this error at: https://sqlalche.me/e/20/xd2s)"
+    },
+    {
+      "ticket_id": "WO-20260328-017",
+      "reason": "MissingGreenlet: greenlet_spawn has not been called; can't call await_only() here. Was IO attempted in an unexpected place? (Background on this error at: https://sqlalche.me/e/20/xd2s)"
+    }
+  ],
+  "post_check": {
+    "current_dispatch_total": 0,
+    "current_dispatch_by_user": {},
+    "current_dispatch_sample": []
+  }
+}

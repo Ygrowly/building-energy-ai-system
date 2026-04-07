@@ -8,9 +8,11 @@ from __future__ import annotations
 import json
 import logging
 import secrets
+from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from sqlalchemy import case as sa_case
 from sqlalchemy import select, func as sa_func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -59,12 +61,26 @@ _DISPATCH_STAGE_SLA_MINUTES: dict[str, dict[str, int]] = {
     "low": {"accept": 15, "arrive": 60, "finish": 360},
 }
 
+DISPATCHABLE_WORK_ORDER_STATUSES: tuple[str, ...] = (
+    "pending_dispatch",
+    "auto_approved",
+    "admin_override_approved",
+)
+
 _DISPATCH_SKILL_RULES: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("hvac", ("hvac", "暖通", "空调", "冷机", "供水", "回水", "风机", "温度"), "暖通班"),
     ("electrical", ("electric", "电气", "配电", "照明", "电力", "跳闸"), "电气班"),
     ("plumbing", ("water", "漏水", "给排水", "阀门", "管路"), "给排水班"),
     ("controls", ("bms", "control", "控制", "传感", "自控", "联动"), "自控班"),
 )
+
+_BATCH_DISPATCH_SKIP_REASON_LABELS: dict[str, str] = {
+    "no_candidates": "当前没有可用候选人",
+    "top_score_below_threshold": "第一候选人推荐分不足",
+    "score_gap_below_threshold": "第一候选人优势不够明显",
+    "top_candidate_over_capacity": "第一候选人当前负载已达上限",
+    "batch_worker_cap_reached": "本批次该责任人分配数已达上限",
+}
 
 def _generate_ticket_id(timestamp: datetime | None = None) -> str:
     """生成无状态且多实例安全的工单号。"""
@@ -373,6 +389,12 @@ def _candidate_team_name(worker: User) -> str | None:
     return getattr(team, "name", None) if team else None
 
 
+def _candidate_team_id(worker: User) -> str | None:
+    profile = getattr(worker, "worker_profile", None)
+    team = getattr(profile, "team", None) if profile else None
+    return getattr(profile, "team_id", None) or (getattr(team, "id", None) if team else None)
+
+
 def _build_dispatch_candidate(
     *,
     worker: User,
@@ -434,6 +456,7 @@ def _build_dispatch_candidate(
         "user_id": worker.id,
         "username": worker.username,
         "phone": worker.phone,
+        "team_id": _candidate_team_id(worker),
         "team_name": team_name,
         "job_title": getattr(profile, "job_title", None),
         "shift_status": shift_status,
@@ -726,7 +749,7 @@ async def list_work_orders(
 ) -> tuple[list[WorkOrder], int]:
     """分页查询工单，返回 (items, total_count)。"""
     query = select(WorkOrder).options(selectinload(WorkOrder.anomaly_links))
-    count_query = select(sa_func.count(WorkOrder.id))
+    count_query = select(sa_func.count(WorkOrder.id)).select_from(WorkOrder)
 
     if status_filter:
         query = query.where(WorkOrder.status.in_(status_filter))
@@ -741,8 +764,14 @@ async def list_work_orders(
         query = query.where(WorkOrder.ai_fallback == ai_fallback)
         count_query = count_query.where(WorkOrder.ai_fallback == ai_fallback)
     if assigned_to:
-        query = query.where(WorkOrder.assigned_to == assigned_to)
-        count_query = count_query.where(WorkOrder.assigned_to == assigned_to)
+        query = query.join(
+            DispatchTask,
+            WorkOrder.current_dispatch_id == DispatchTask.id,
+        ).where(DispatchTask.assigned_to == assigned_to)
+        count_query = count_query.join(
+            DispatchTask,
+            WorkOrder.current_dispatch_id == DispatchTask.id,
+        ).where(DispatchTask.assigned_to == assigned_to)
 
     # total
     total_result = await db.execute(count_query)
@@ -758,11 +787,9 @@ async def list_work_orders(
     return items, total
 
 
-async def list_dispatch_candidates(
+async def _load_dispatch_workers(
     db: AsyncSession,
-    *,
-    work_order: WorkOrder,
-) -> dict[str, Any]:
+) -> list[User]:
     user_result = await db.execute(
         select(User)
         .options(
@@ -774,28 +801,41 @@ async def list_dispatch_candidates(
         .where(User.role == "ops", User.is_active == True)  # noqa: E712
         .order_by(User.username.asc())
     )
-    workers = list(user_result.scalars().all())
-    if not workers:
-        return {
-            "requirement": derive_dispatch_requirement(work_order),
-            "candidates": [],
-        }
+    return list(user_result.scalars().all())
 
-    worker_ids = [worker.id for worker in workers]
+
+async def _load_dispatch_active_counts(
+    db: AsyncSession,
+    *,
+    worker_ids: list[str],
+) -> dict[str, int]:
+    if not worker_ids:
+        return {}
     load_result = await db.execute(
-        select(WorkOrder.assigned_to, sa_func.count(WorkOrder.id))
+        select(DispatchTask.assigned_to, sa_func.count(DispatchTask.id))
+        .select_from(DispatchTask)
+        .join(WorkOrder, WorkOrder.current_dispatch_id == DispatchTask.id)
         .where(
-            WorkOrder.assigned_to.in_(worker_ids),
+            DispatchTask.assigned_to.in_(worker_ids),
             WorkOrder.status == "dispatched",
         )
-        .group_by(WorkOrder.assigned_to)
+        .group_by(DispatchTask.assigned_to)
     )
-    active_counts = {row[0]: int(row[1]) for row in load_result.all()}
-    requirement = derive_dispatch_requirement(work_order)
+    return {row[0]: int(row[1]) for row in load_result.all()}
 
+
+def _rank_dispatch_candidates(
+    *,
+    workers: list[User],
+    work_order: WorkOrder,
+    requirement: dict[str, Any],
+    active_counts: dict[str, int],
+    planned_assignments: dict[str, int] | None = None,
+) -> list[dict[str, Any]]:
     ranked: list[dict[str, Any]] = []
+    planned = planned_assignments or {}
     for worker in workers:
-        current_active_orders = active_counts.get(worker.id, 0)
+        current_active_orders = active_counts.get(worker.id, 0) + planned.get(worker.id, 0)
         ranked.append(
             _build_dispatch_candidate(
                 worker=worker,
@@ -812,6 +852,369 @@ async def list_dispatch_candidates(
             item["shift_status"] != "on_duty",
             item["username"],
         )
+    )
+    return ranked
+
+
+def _pick_batch_dispatch_candidate(
+    *,
+    candidates: list[dict[str, Any]],
+    min_score: int,
+    min_gap: int,
+) -> tuple[dict[str, Any] | None, str | None, dict[str, Any] | None, dict[str, Any] | None, int | None]:
+    if not candidates:
+        return None, "no_candidates", None, None, None
+
+    top_candidate = candidates[0]
+    second_candidate = candidates[1] if len(candidates) > 1 else None
+    second_score = int(second_candidate.get("score") or 0) if second_candidate else None
+    score_gap = int(top_candidate.get("score") or 0) - second_score if second_score is not None else None
+
+    if int(top_candidate.get("score") or 0) < min_score:
+        return None, "top_score_below_threshold", top_candidate, second_candidate, score_gap
+
+    if score_gap is not None and score_gap < min_gap:
+        return None, "score_gap_below_threshold", top_candidate, second_candidate, score_gap
+
+    capacity_left = int(top_candidate.get("max_active_orders") or 4) - int(top_candidate.get("current_active_orders") or 0)
+    if capacity_left <= 0:
+        return None, "top_candidate_over_capacity", top_candidate, second_candidate, score_gap
+
+    return top_candidate, None, top_candidate, second_candidate, score_gap
+
+
+def build_batch_dispatch_selection_reason(
+    *,
+    chosen_candidate: dict[str, Any],
+    requirement: dict[str, Any],
+    score_gap: int | None = None,
+) -> str:
+    matched = chosen_candidate.get("matched_skill_names") or []
+    matched_text = " / ".join(matched[:3]) if matched else "基础巡检"
+    gap_text = f"，领先第二候选 {score_gap} 分" if score_gap is not None else ""
+    required_skills = requirement.get("required_skills") or []
+    return (
+        "批量派工推荐："
+        f"技能匹配={matched_text}，"
+        f"推荐分={chosen_candidate.get('score')}"
+        f"{gap_text}，"
+        f"工单需求={','.join(required_skills)}"
+    )
+
+
+def _summarize_batch_preview_candidate(candidate: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not candidate:
+        return None
+    return {
+        "user_id": candidate.get("user_id"),
+        "username": candidate.get("username"),
+        "team_name": candidate.get("team_name"),
+        "score": candidate.get("score"),
+        "current_active_orders": candidate.get("current_active_orders"),
+        "max_active_orders": candidate.get("max_active_orders"),
+    }
+
+
+def _build_batch_worker_load_summary(
+    *,
+    workers: list[User],
+    active_counts: dict[str, int],
+    planned_assignments: dict[str, int],
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for worker in workers:
+        profile = worker.worker_profile
+        max_active_orders = int(getattr(profile, "max_active_orders", 4) or 4)
+        current_active_orders = int(active_counts.get(worker.id, 0))
+        planned_count = int(planned_assignments.get(worker.id, 0))
+        projected_active_orders = current_active_orders + planned_count
+        rows.append(
+            {
+                "user_id": worker.id,
+                "username": worker.username,
+                "team_name": getattr(getattr(profile, "team", None), "name", None),
+                "shift_status": getattr(profile, "shift_status", None),
+                "current_active_orders": current_active_orders,
+                "planned_count": planned_count,
+                "projected_active_orders": projected_active_orders,
+                "max_active_orders": max_active_orders,
+                "capacity_left_now": max(max_active_orders - current_active_orders, 0),
+                "capacity_left_after_batch": max(max_active_orders - projected_active_orders, 0),
+            }
+        )
+
+    rows.sort(
+        key=lambda item: (
+            -int(item["planned_count"]),
+            -int(item["current_active_orders"]),
+            item["shift_status"] != "on_duty",
+            str(item["username"]),
+        )
+    )
+    return rows
+
+
+def _build_batch_skip_example(
+    *,
+    work_order: WorkOrder,
+    requirement: dict[str, Any],
+    reason: str,
+    top_candidate: dict[str, Any] | None,
+    second_candidate: dict[str, Any] | None,
+    score_gap: int | None,
+) -> dict[str, Any]:
+    return {
+        "ticket_id": work_order.ticket_id,
+        "work_order_id": work_order.id,
+        "building_id": work_order.building_id,
+        "priority": work_order.priority,
+        "issue_description": work_order.issue_description,
+        "requirement": requirement,
+        "reason": reason,
+        "label": _BATCH_DISPATCH_SKIP_REASON_LABELS.get(reason, reason),
+        "score_gap": score_gap,
+        "top_candidate": _summarize_batch_preview_candidate(top_candidate),
+        "second_candidate": _summarize_batch_preview_candidate(second_candidate),
+    }
+
+
+async def build_batch_dispatch_preview(
+    db: AsyncSession,
+    *,
+    sample_size: int = 10,
+    scan_limit: int = 40,
+    min_score: int = 100,
+    min_gap: int = 10,
+    building_id: str | None = None,
+    priority: str | None = None,
+    max_per_worker: int | None = None,
+    skip_detail_limit: int = 8,
+) -> dict[str, Any]:
+    statuses = list(DISPATCHABLE_WORK_ORDER_STATUSES)
+    priority_rank = sa_case(
+        (WorkOrder.priority == "high", 0),
+        (WorkOrder.priority == "medium", 1),
+        else_=2,
+    )
+
+    query = (
+        select(WorkOrder)
+        .options(selectinload(WorkOrder.anomaly_links))
+        .where(WorkOrder.status.in_(statuses))
+    )
+    count_query = select(sa_func.count(WorkOrder.id)).where(WorkOrder.status.in_(statuses))
+
+    if building_id:
+        query = query.where(WorkOrder.building_id == building_id)
+        count_query = count_query.where(WorkOrder.building_id == building_id)
+    if priority:
+        query = query.where(WorkOrder.priority == priority)
+        count_query = count_query.where(WorkOrder.priority == priority)
+
+    total = (await db.execute(count_query)).scalar() or 0
+    query = query.order_by(
+        priority_rank.asc(),
+        WorkOrder.pending_dispatch_at.asc().nullsfirst(),
+        WorkOrder.created_at.asc(),
+    ).limit(scan_limit)
+    work_orders = list((await db.execute(query)).scalars().all())
+
+    workers = await _load_dispatch_workers(db)
+    if not workers:
+        return {
+            "pending_dispatch_total": int(total),
+            "scanned_count": len(work_orders),
+            "selected_count": 0,
+            "sample_size": sample_size,
+            "scan_limit": scan_limit,
+            "selection_rules": {
+                "min_score": min_score,
+                "min_gap": min_gap,
+                "max_per_worker": max_per_worker,
+            },
+            "filters": {
+                "building_id": building_id,
+                "priority": priority,
+            },
+            "recommendations": [],
+            "skipped_summary": [
+                {
+                    "reason": "no_candidates",
+                    "label": _BATCH_DISPATCH_SKIP_REASON_LABELS["no_candidates"],
+                    "count": len(work_orders),
+                }
+            ],
+            "planned_assignments": [],
+            "worker_loads": [],
+            "skipped_examples": [
+                _build_batch_skip_example(
+                    work_order=work_order,
+                    requirement=derive_dispatch_requirement(work_order),
+                    reason="no_candidates",
+                    top_candidate=None,
+                    second_candidate=None,
+                    score_gap=None,
+                )
+                for work_order in work_orders[:skip_detail_limit]
+            ],
+        }
+
+    active_counts = await _load_dispatch_active_counts(
+        db,
+        worker_ids=[worker.id for worker in workers],
+    )
+    planned_assignments: dict[str, int] = defaultdict(int)
+    planned_usernames: dict[str, str] = {}
+    skipped_summary_counter: dict[str, int] = defaultdict(int)
+    recommendations: list[dict[str, Any]] = []
+    skipped_examples: list[dict[str, Any]] = []
+
+    for work_order in work_orders:
+        requirement = derive_dispatch_requirement(work_order)
+        ranked = _rank_dispatch_candidates(
+            workers=workers,
+            work_order=work_order,
+            requirement=requirement,
+            active_counts=active_counts,
+            planned_assignments=planned_assignments,
+        )
+        chosen_candidate, skip_reason, top_candidate, second_candidate, score_gap = _pick_batch_dispatch_candidate(
+            candidates=ranked,
+            min_score=min_score,
+            min_gap=min_gap,
+        )
+
+        if chosen_candidate is None:
+            if skip_reason:
+                skipped_summary_counter[skip_reason] += 1
+                if len(skipped_examples) < skip_detail_limit:
+                    skipped_examples.append(
+                        _build_batch_skip_example(
+                            work_order=work_order,
+                            requirement=requirement,
+                            reason=skip_reason,
+                            top_candidate=top_candidate,
+                            second_candidate=second_candidate,
+                            score_gap=score_gap,
+                        )
+                    )
+            continue
+
+        if max_per_worker is not None and planned_assignments[chosen_candidate["user_id"]] >= max_per_worker:
+            skip_reason = "batch_worker_cap_reached"
+            skipped_summary_counter[skip_reason] += 1
+            if len(skipped_examples) < skip_detail_limit:
+                skipped_examples.append(
+                    _build_batch_skip_example(
+                        work_order=work_order,
+                        requirement=requirement,
+                        reason=skip_reason,
+                        top_candidate=top_candidate,
+                        second_candidate=second_candidate,
+                        score_gap=score_gap,
+                    )
+                )
+            continue
+
+        planned_assignments[chosen_candidate["user_id"]] += 1
+        planned_usernames[chosen_candidate["user_id"]] = chosen_candidate["username"]
+        recommendations.append(
+            {
+                "ticket_id": work_order.ticket_id,
+                "work_order_id": work_order.id,
+                "building_id": work_order.building_id,
+                "priority": work_order.priority,
+                "issue_description": work_order.issue_description,
+                "suggested_action": work_order.suggested_action,
+                "requirement": requirement,
+                "candidate_count": len(ranked),
+                "chosen_candidate": chosen_candidate,
+                "top_candidate": top_candidate,
+                "second_candidate": second_candidate,
+                "score_gap": score_gap,
+                "selection_reason": build_batch_dispatch_selection_reason(
+                    chosen_candidate=chosen_candidate,
+                    requirement=requirement,
+                    score_gap=score_gap,
+                ),
+            }
+        )
+        if len(recommendations) >= sample_size:
+            break
+
+    skipped_summary = [
+        {
+            "reason": reason,
+            "label": _BATCH_DISPATCH_SKIP_REASON_LABELS.get(reason, reason),
+            "count": count,
+        }
+        for reason, count in sorted(
+            skipped_summary_counter.items(),
+            key=lambda item: (-item[1], item[0]),
+        )
+    ]
+    planned_assignment_summary = [
+        {
+            "user_id": user_id,
+            "username": planned_usernames.get(user_id, user_id),
+            "count": count,
+        }
+        for user_id, count in sorted(
+            planned_assignments.items(),
+            key=lambda item: (-item[1], planned_usernames.get(item[0], item[0])),
+        )
+    ]
+    worker_loads = _build_batch_worker_load_summary(
+        workers=workers,
+        active_counts=active_counts,
+        planned_assignments=planned_assignments,
+    )
+
+    return {
+        "pending_dispatch_total": int(total),
+        "scanned_count": len(work_orders),
+        "selected_count": len(recommendations),
+        "sample_size": sample_size,
+        "scan_limit": scan_limit,
+        "selection_rules": {
+            "min_score": min_score,
+            "min_gap": min_gap,
+            "max_per_worker": max_per_worker,
+        },
+        "filters": {
+            "building_id": building_id,
+            "priority": priority,
+        },
+        "recommendations": recommendations,
+        "skipped_summary": skipped_summary,
+        "planned_assignments": planned_assignment_summary,
+        "worker_loads": worker_loads,
+        "skipped_examples": skipped_examples,
+    }
+
+
+async def list_dispatch_candidates(
+    db: AsyncSession,
+    *,
+    work_order: WorkOrder,
+) -> dict[str, Any]:
+    workers = await _load_dispatch_workers(db)
+    if not workers:
+        return {
+            "requirement": derive_dispatch_requirement(work_order),
+            "candidates": [],
+        }
+
+    active_counts = await _load_dispatch_active_counts(
+        db,
+        worker_ids=[worker.id for worker in workers],
+    )
+    requirement = derive_dispatch_requirement(work_order)
+    ranked = _rank_dispatch_candidates(
+        workers=workers,
+        work_order=work_order,
+        requirement=requirement,
+        active_counts=active_counts,
     )
     return {
         "requirement": requirement,
@@ -830,7 +1233,7 @@ async def assign_work_order(
     dispatch_mode: str = "manual",
     candidate_snapshot: dict[str, Any] | None = None,
 ) -> WorkOrder:
-    if work_order.status not in {"pending_dispatch", "auto_approved", "admin_override_approved"}:
+    if work_order.status not in set(DISPATCHABLE_WORK_ORDER_STATUSES):
         raise ValueError(f"当前状态 {work_order.status} 不支持派工")
 
     now = datetime.now(timezone.utc)
@@ -901,6 +1304,11 @@ async def record_worker_dispatch_action(
 
     if notes:
         work_order.worker_notes = notes
+    if action == "support_resolved" and work_order.worker_result == "needs_parts":
+        work_order.worker_result = None
+        work_order.worker_feedback_at = None
+    if action == "support_resolved":
+        work_order.dispatch_blocked_reason = None
     work_order.updated_at = datetime.now(timezone.utc)
     await sync_incident_from_work_order(db, work_order=work_order)
     await _write_audit_log(
@@ -955,6 +1363,15 @@ def serialize_work_order(
         if current_dispatch is not None else
         derive_dispatch_ui_meta(wo, assigned_user=assigned_user)
     )
+    assigned_to = getattr(current_dispatch, "assigned_to", None) if current_dispatch is not None else wo.assigned_to
+    assigned_at = getattr(current_dispatch, "assigned_at", None) if current_dispatch is not None else wo.assigned_at
+    accepted_at = getattr(current_dispatch, "accepted_at", None) if current_dispatch is not None else wo.accepted_at
+    arrived_at = getattr(current_dispatch, "arrived_at", None) if current_dispatch is not None else wo.arrived_at
+    processing_started_at = (
+        getattr(current_dispatch, "processing_started_at", None)
+        if current_dispatch is not None else
+        wo.processing_started_at
+    )
     data: dict[str, Any] = {
         "id": wo.id,
         "ticket_id": wo.ticket_id,
@@ -973,12 +1390,12 @@ def serialize_work_order(
         "worker_feedback_at": (
             wo.worker_feedback_at.isoformat() if wo.worker_feedback_at else None
         ),
-        "assigned_to": wo.assigned_to,
-        "assigned_at": wo.assigned_at.isoformat() if wo.assigned_at else None,
-        "accepted_at": wo.accepted_at.isoformat() if wo.accepted_at else None,
-        "arrived_at": wo.arrived_at.isoformat() if wo.arrived_at else None,
+        "assigned_to": assigned_to,
+        "assigned_at": assigned_at.isoformat() if assigned_at else None,
+        "accepted_at": accepted_at.isoformat() if accepted_at else None,
+        "arrived_at": arrived_at.isoformat() if arrived_at else None,
         "processing_started_at": (
-            wo.processing_started_at.isoformat() if wo.processing_started_at else None
+            processing_started_at.isoformat() if processing_started_at else None
         ),
         "admin_action": wo.admin_action,
         "admin_notes": wo.admin_notes,

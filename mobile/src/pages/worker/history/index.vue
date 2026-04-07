@@ -52,7 +52,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { onShow } from '@dcloudio/uni-app'
 import NavBar from '../../../components/NavBar.vue'
 import TabBar from '../../../components/TabBar.vue'
 import { incidentApi, type Incident } from '../../../api/incident'
@@ -61,11 +62,14 @@ import { WORKER_ROLES } from '../../../constants/roles'
 import { WORKER_TABS } from '../../../constants/tabs'
 import { getCache, setCache } from '../../../utils/cache'
 import { getWorkerMessageCards, getWorkerMessageItems, type WorkerMessageItem } from '../../../utils/worker-ui'
+import { subscribeWorkerOrdersUpdated } from '../../../utils/worker-sync'
 
 useRouteGuard(WORKER_ROLES)
 
 const incidents = ref<Incident[]>([])
 const loading = ref(false)
+const hasLoadedOnce = ref(false)
+let unsubscribeWorkerSync: (() => void) | null = null
 
 const messageCards = computed(() => getWorkerMessageCards(incidents.value))
 const messageItems = computed(() => getWorkerMessageItems(incidents.value))
@@ -83,6 +87,7 @@ async function loadData() {
     })
     incidents.value = res.incidents
     setCache('worker_messages', res.incidents)
+    hasLoadedOnce.value = true
   } catch {
     if (!incidents.value.length) {
       uni.showToast({ title: '消息加载失败', icon: 'none' })
@@ -123,7 +128,22 @@ function openMessage(item: WorkerMessageItem) {
   uni.reLaunch({ url: '/pages/worker/active/index' })
 }
 
-onMounted(loadData)
+onMounted(() => {
+  unsubscribeWorkerSync = subscribeWorkerOrdersUpdated(async () => {
+    await loadData()
+  })
+  void loadData()
+})
+
+onShow(() => {
+  if (!hasLoadedOnce.value) return
+  void loadData()
+})
+
+onUnmounted(() => {
+  unsubscribeWorkerSync?.()
+  unsubscribeWorkerSync = null
+})
 </script>
 
 <style lang="scss" scoped>

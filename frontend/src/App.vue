@@ -103,13 +103,18 @@
     </aside>
 
     <!-- 元素选择器覆盖层 -->
-    <ElementPickerOverlay />
+    <ElementPickerOverlay v-if="elementPickerMounted" />
 
     <!-- 个人中心弹窗 -->
-    <PersonalModal :visible="showPersonalModal" :initial-section="modalSection" @close="showPersonalModal = false" />
+    <PersonalModal
+      v-if="personalModalMounted"
+      :visible="showPersonalModal"
+      :initial-section="modalSection"
+      @close="showPersonalModal = false"
+    />
 
     <!-- 报表预览弹窗（内部使用 Teleport 到 body） -->
-    <ReportPreviewModal />
+    <ReportPreviewModal v-if="reportPreviewMounted" />
 
     <!-- 用户菜单弹出 + 主题弹出面板（Teleport 到 body） -->
     <Teleport to="body">
@@ -163,18 +168,22 @@ import { ref, computed, onMounted, onUnmounted, watch, nextTick, KeepAlive, defi
 import { storeToRefs } from 'pinia'
 import { RouterView, RouterLink, useRouter, useRoute } from 'vue-router'
 import { Icon } from '@iconify/vue'
-import ElementPickerOverlay from '@/components/ElementPickerOverlay.vue'
-import PersonalModal from '@/components/PersonalModal.vue'
-import ReportPreviewModal from '@/components/report/ReportPreviewModal.vue'
 import { useBuildingStore } from '@/stores/buildingStore'
 import { useAuthStore } from '@/stores/authStore'
+import { useElementPickerStore } from '@/stores/elementPickerStore'
 import { useNotificationStore } from '@/stores/notificationStore'
+import { useReportStore } from '@/stores/reportStore'
 
 const AgentConsole = defineAsyncComponent(() => import('@/components/AgentConsole.vue'))
+const ElementPickerOverlay = defineAsyncComponent(() => import('@/components/ElementPickerOverlay.vue'))
+const PersonalModal = defineAsyncComponent(() => import('@/components/PersonalModal.vue'))
+const ReportPreviewModal = defineAsyncComponent(() => import('@/components/report/ReportPreviewModal.vue'))
 
 const buildingStore = useBuildingStore()
 const authStore     = useAuthStore()
+const elementPickerStore = useElementPickerStore()
 const notifStore    = useNotificationStore()
+const reportStore   = useReportStore()
 const router        = useRouter()
 const route         = useRoute()
 
@@ -196,6 +205,9 @@ watch(messagesRequested, (val) => {
 /** 认证页单独全屏，不套主布局（避免侧栏 + 对话面板） */
 const isStandaloneAuth = computed(() => route.meta.standaloneAuth === true)
 const agentConsoleVisible = ref(false)
+const elementPickerMounted = ref(false)
+const personalModalMounted = ref(false)
+const reportPreviewMounted = ref(false)
 const routeScrollTop = new Map<string, number>()
 
 type IdleWindow = Window & {
@@ -288,6 +300,36 @@ function toggleUserMenu() {
 // ── 个人中心弹窗 ──────────────────────────────────
 const showPersonalModal = ref(false)
 const modalSection = ref('settings')
+
+watch(
+  () => elementPickerStore.isPickerActive,
+  (active) => {
+    if (active) {
+      elementPickerMounted.value = true
+    }
+  },
+  { immediate: true },
+)
+
+watch(
+  showPersonalModal,
+  (visible) => {
+    if (visible) {
+      personalModalMounted.value = true
+    }
+  },
+  { immediate: true },
+)
+
+watch(
+  () => reportStore.previewVisible,
+  (visible) => {
+    if (visible) {
+      reportPreviewMounted.value = true
+    }
+  },
+  { immediate: true },
+)
 
 function handleUserMenuItem(id: string) {
   showUserMenu.value = false

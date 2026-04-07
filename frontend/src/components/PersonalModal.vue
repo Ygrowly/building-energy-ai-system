@@ -539,6 +539,7 @@ import { useRouter } from 'vue-router'
 import { Icon } from '@iconify/vue'
 import { useAuthStore } from '@/stores/authStore'
 import { useChatStore } from '@/stores/chatStore'
+import { useNotificationStore } from '@/stores/notificationStore'
 import { apiChangePassword, apiUpdateProfile } from '@/api/auth'
 import { apiFetch } from '@/api/http'
 
@@ -551,6 +552,7 @@ const emit = defineEmits<{ close: [] }>()
 const router = useRouter()
 const authStore = useAuthStore()
 const chatStore = useChatStore()
+const notificationStore = useNotificationStore()
 
 const user = computed(() => authStore.user)
 
@@ -620,8 +622,7 @@ function onAvatarChange(e: Event) {
   reader.onload = async (ev) => {
     const dataUrl = ev.target?.result as string
     avatarUrl.value = dataUrl
-    const { useNotificationStore } = await import('@/stores/notificationStore')
-    useNotificationStore().saveAvatar(user.value?.id ?? 'guest', dataUrl)
+    notificationStore.saveAvatar(user.value?.id ?? 'guest', dataUrl)
   }
   reader.readAsDataURL(file)
   if (avatarInputRef.value) avatarInputRef.value.value = ''
@@ -910,8 +911,7 @@ async function loadAnomalies() {
     const data = await apiFetch<{ anomalies: AnomalyItem[] }>('/api/anomalies/recent?hours=168')
     anomalies.value = data?.anomalies ?? []
     // 刷新后清除角标
-    const { useNotificationStore } = await import('@/stores/notificationStore')
-    useNotificationStore().clearBadge()
+    notificationStore.clearBadge()
   } catch (e: unknown) {
     anomalyError.value = (e as Error).message ?? '加载失败'
   } finally {

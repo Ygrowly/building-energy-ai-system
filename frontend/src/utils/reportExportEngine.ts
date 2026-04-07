@@ -5,7 +5,6 @@
  *  1. exportToPDF  — 使用 html2pdf.js 将报表 DOM 转为 PDF 文件下载
  *  2. exportToHTML — 将报表 DOM 序列化为独立 HTML 文件下载（含内联样式）
  */
-import html2pdf from 'html2pdf.js'
 
 /**
  * 导出为 PDF
@@ -13,6 +12,7 @@ import html2pdf from 'html2pdf.js'
  * @param filename - 文件名（不含扩展名）
  */
 export async function exportToPDF(element: HTMLElement, filename: string): Promise<void> {
+  const { default: html2pdf } = await import('html2pdf.js')
   const options = {
     margin: [8, 8, 8, 8],
     filename: `${filename}.pdf`,

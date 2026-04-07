@@ -288,6 +288,7 @@ function renderOverviewEnergy() {
   const labels = rows.map((row) => formatDayLabel(row.day))
   const actualVals = rows.map((row) => Number(row[meta.actualKey]))
   const expectedVals = rows.map((row) => row[meta.expectedKey] == null ? null : Number(row[meta.expectedKey]))
+  const hasExpected = expectedVals.some((value) => value != null)
   const inst = echarts.init(energyEl.value)
 
   inst.setOption({
@@ -355,12 +356,14 @@ function renderOverviewEnergy() {
         name: meta.expectedLabel,
         type: 'bar',
         data: expectedVals,
-        barWidth: 34,
+        barWidth: 30,
         barCategoryGap: '38%',
         itemStyle: {
           borderRadius: [12, 12, 0, 0],
           color: meta.expectedColor,
-          opacity: 0.76,
+          borderColor: meta.expectedColor,
+          borderWidth: 1,
+          opacity: 0.42,
         },
         emphasis: { disabled: true },
         z: 1,
@@ -369,8 +372,8 @@ function renderOverviewEnergy() {
         name: meta.actualLabel,
         type: 'bar',
         data: actualVals,
-        barWidth: 22,
-        barGap: '-82%',
+        barWidth: 18,
+        barGap: '-80%',
         itemStyle: {
           borderRadius: [10, 10, 0, 0],
           color: {
@@ -383,6 +386,29 @@ function renderOverviewEnergy() {
               { offset: 0, color: meta.actualColor },
               { offset: 1, color: `${meta.actualColor}b8` },
             ],
+          },
+          shadowColor: `${meta.actualColor}33`,
+          shadowBlur: 8,
+          shadowOffsetY: 2,
+        },
+        label: {
+          show: hasExpected,
+          position: 'top',
+          distance: 6,
+          fontSize: 10,
+          fontWeight: 600,
+          formatter: ({ dataIndex }: { dataIndex: number }) => {
+            const expected = expectedVals[dataIndex]
+            if (expected == null || Math.abs(expected) <= 1e-9) return ''
+            const actual = actualVals[dataIndex]
+            const pct = ((actual - expected) / expected) * 100
+            if (Math.abs(pct) < 0.1) return ''
+            return `${pct >= 0 ? '+' : ''}${formatNumber(pct)}%`
+          },
+          rich: {
+            pos: { color: '#f97316' },
+            neg: { color: '#10b981' },
+            neutral: { color: c.axis },
           },
         },
         emphasis: { focus: 'series' },

@@ -189,11 +189,11 @@ import { Icon } from '@iconify/vue'
 import WorkOrdersBatchSheet from '@/components/workorders/WorkOrdersBatchSheet.vue'
 import WorkOrdersDispatchSheet from '@/components/workorders/WorkOrdersDispatchSheet.vue'
 import WorkOrdersHallList from '@/components/workorders/WorkOrdersHallList.vue'
-import WorkOrdersOrderList from '@/components/workorders/WorkOrdersOrderList.vue'
+import WorkOrdersOrderList from '@/components/workorders/WorkOrdersOrderListEnhanced.vue'
 import { useBatchDispatch } from '@/composables/workorders/useBatchDispatch'
 import { useDispatchHallAdmin } from '@/composables/workorders/useDispatchHallAdmin'
 import { useWorkOrderActions } from '@/composables/workorders/useWorkOrderActions'
-import { useWorkOrderPresentation } from '@/composables/workorders/useWorkOrderPresentation'
+import { useWorkOrderPresentation } from '@/composables/workorders/useWorkOrderPresentationEnhanced'
 import { useWorkOrdersData } from '@/composables/workorders/useWorkOrdersData'
 import {
   EXECUTION_LABELS,
@@ -479,12 +479,12 @@ watch(workspaceMode, async () => {
   justify-content: space-between;
   gap: 18px;
   padding: 14px 16px;
-  border: 1px solid rgba(245, 158, 11, 0.24);
+  border: 1px solid rgba(62, 99, 84, 0.18);
   border-radius: 18px;
   background:
-    linear-gradient(135deg, rgba(255, 251, 235, 0.84), rgba(240, 253, 244, 0.7)),
+    linear-gradient(115deg, rgba(121, 213, 177, 0.16) 0%, rgba(134, 239, 172, 0.16) 42%, rgba(248, 252, 249, 0.96) 100%),
     var(--bg-panel);
-  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.06);
+  box-shadow: 0 12px 30px rgba(62, 99, 84, 0.08);
 }
 .header-copy { min-width: 0; }
 .page-header h1 {
@@ -503,10 +503,10 @@ watch(workspaceMode, async () => {
   gap: 4px;
   flex-shrink: 0;
   padding: 4px;
-  border: 1px solid rgba(245, 158, 11, 0.26);
+  border: 1px solid rgba(62, 99, 84, 0.18);
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.68);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+  background: rgba(255, 255, 255, 0.78);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.86);
 }
 .workspace-pill {
   display: inline-flex;
@@ -516,7 +516,7 @@ watch(workspaceMode, async () => {
   border-radius: 999px;
   padding: 8px 13px;
   background: transparent;
-  color: #7c6f4b;
+  color: #4b6358;
   font-size: 12px;
   font-weight: 700;
   white-space: nowrap;
@@ -525,12 +525,12 @@ watch(workspaceMode, async () => {
 }
 .workspace-pill:hover {
   color: #166534;
-  background: rgba(22, 163, 74, 0.08);
+  background: rgba(34, 197, 94, 0.08);
 }
 .workspace-pill.active {
   color: #065f46;
-  background: linear-gradient(135deg, rgba(34, 197, 94, 0.18), rgba(250, 204, 21, 0.16));
-  box-shadow: 0 6px 16px rgba(22, 163, 74, 0.12);
+  background: linear-gradient(135deg, rgba(34, 197, 94, 0.16), rgba(187, 247, 208, 0.68));
+  box-shadow: 0 6px 16px rgba(22, 163, 74, 0.1);
 }
 .toolbar { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 16px; }
 .toolbar-actions { display: flex; align-items: center; gap: 10px; }

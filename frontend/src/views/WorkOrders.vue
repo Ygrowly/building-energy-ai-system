@@ -487,7 +487,15 @@ watch(workspaceMode, async () => {
   box-shadow: 0 12px 30px rgba(15, 23, 42, 0.06);
 }
 .header-copy { min-width: 0; }
-.page-header h1 { font-size: 22px; font-weight: 700; margin-bottom: 4px; display: flex; align-items: center; gap: 8px; }
+.page-header h1 {
+  font-size: 22px;
+  font-weight: 700;
+  margin-bottom: 4px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #166534;
+}
 .subtitle { color: var(--text-secondary); font-size: 13px; }
 .workspace-pills {
   display: inline-flex;

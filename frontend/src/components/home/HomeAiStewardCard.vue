@@ -168,25 +168,19 @@ const refreshIcon = computed(() => (props.loading ? 'mdi:loading' : 'mdi:refresh
 
 <style scoped>
 .home-ai-steward {
-  background:
-    radial-gradient(circle at top right, rgba(34, 197, 94, 0.10), transparent 34%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 32%),
-    var(--bg-panel);
+  background: var(--bg-panel);
   border: 1px solid var(--border);
-  border-radius: 24px;
-  box-shadow: var(--card-shadow);
+  border-radius: 8px;
   padding: 20px;
   display: flex;
   flex-direction: column;
   gap: 18px;
   min-height: 100%;
-  transition: box-shadow 0.2s ease, border-color 0.2s ease, transform 0.2s ease;
+  transition: border-color 0.2s ease;
 }
 
 .home-ai-steward:hover {
   border-color: var(--border-accent);
-  box-shadow: var(--card-shadow-hover);
-  transform: translateY(-1px);
 }
 
 .home-ai-steward__header {
@@ -511,7 +505,7 @@ const refreshIcon = computed(() => (props.loading ? 'mdi:loading' : 'mdi:refresh
 @media (max-width: 640px) {
   .home-ai-steward {
     padding: 16px;
-    border-radius: 20px;
+    border-radius: 8px;
   }
 
   .brief-card {
@@ -537,10 +531,7 @@ const refreshIcon = computed(() => (props.loading ? 'mdi:loading' : 'mdi:refresh
 }
 
 html[data-theme='light'] .home-ai-steward {
-  background:
-    radial-gradient(circle at top right, rgba(34, 197, 94, 0.12), transparent 36%),
-    linear-gradient(180deg, rgba(248, 250, 252, 0.92), rgba(255, 255, 255, 0.96)),
-    var(--bg-panel);
+  background: #ffffff;
 }
 
 html[data-theme='light'] .toolbar-btn {

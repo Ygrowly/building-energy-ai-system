@@ -160,9 +160,9 @@ function segmentStyle(
 
     <div class="cpanel-body share-card-body">
       <div
-        v-for="row in rows"
+        v-for="(row, rowIndex) in rows"
         :key="row.key"
-        class="share-row"
+        :class="['share-row', { 'share-row--last': rowIndex === rows.length - 1 }]"
       >
         <div class="share-row-head">
           <div class="share-row-title">
@@ -235,23 +235,23 @@ function segmentStyle(
 .share-card-body {
   display: flex;
   flex-direction: column;
-  justify-content: space-between;
-  gap: 8px;
-  min-height: 340px;
-  padding: 0 16px 10px;
+  gap: 12px;
+  min-height: 0;
+  padding: 4px 16px 14px;
 }
 
 .share-row {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 8px;
+  padding: 6px 4px;
 }
 
 .share-row-head {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: 12px;
 }
 
 .share-row-title {
@@ -271,15 +271,15 @@ function segmentStyle(
 
 .share-row-total {
   flex-shrink: 0;
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-secondary);
 }
 
 .share-track {
   position: relative;
   display: flex;
-  width: min(100%, 232px);
-  min-height: 10px;
+  width: 100%;
+  min-height: 12px;
   overflow: visible;
   border-radius: 999px;
   background: rgba(148, 163, 184, 0.12);
@@ -299,8 +299,10 @@ function segmentStyle(
   display: flex;
   align-items: center;
   justify-content: center;
+  min-height: 12px;
   min-width: 0;
   outline: none;
+  cursor: pointer;
   transition: filter 0.18s ease;
 }
 
@@ -328,6 +330,12 @@ function segmentStyle(
   transition: opacity 0.16s ease, transform 0.16s ease;
   box-shadow: 0 8px 20px rgba(15, 23, 42, 0.18);
   z-index: 3;
+}
+
+.share-row--last .share-segment::after {
+  top: auto;
+  bottom: calc(100% + 8px);
+  transform: translateX(-50%) translateY(4px);
 }
 
 .share-segment:hover::after,
@@ -359,6 +367,10 @@ html[data-theme='light'] .share-segment::after {
   .share-card-body {
     min-height: auto;
     gap: 12px;
+  }
+
+  .share-row {
+    padding: 6px 0;
   }
 
   .share-track {

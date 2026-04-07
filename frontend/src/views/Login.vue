@@ -313,7 +313,7 @@ async function handleSubmit() {
   try {
     if (mode.value === 'login') {
       await authStore.login(username.value, password.value)
-      const redirect = (route.query.redirect as string) || '/dashboard'
+      const redirect = (route.query.redirect as string) || '/home'
       router.replace(redirect)
     } else {
       // 注册成功：保留用户名，跳回登录页让用户主动点击登录

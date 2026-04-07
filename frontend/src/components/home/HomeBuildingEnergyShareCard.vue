@@ -306,6 +306,16 @@ function segmentStyle(
   transition: filter 0.18s ease;
 }
 
+.share-segment:first-child {
+  border-top-left-radius: 999px;
+  border-bottom-left-radius: 999px;
+}
+
+.share-segment:last-child {
+  border-top-right-radius: 999px;
+  border-bottom-right-radius: 999px;
+}
+
 .share-segment:hover,
 .share-segment:focus-visible {
   filter: saturate(1.06) brightness(1.02);

@@ -12,7 +12,7 @@
             {{ priorityLabels[wo.priority] ?? wo.priority ?? '普通' }}
           </span>
           <div class="card-title-block">
-            <p class="card-title">{{ wo.issue_description || wo.ticket_id }}</p>
+            <p class="card-title">{{ displayTitleValue(wo) }}</p>
             <p class="card-meta">
               工单 {{ wo.ticket_id }} · {{ buildingNameValue(wo.building_id) }} · {{ formatTimeValue(wo.created_at) }}
             </p>
@@ -200,6 +200,19 @@ const timelineRowsValue = (wo: any) => props.timelineRows(wo)
 const isTimelineLoadingValue = (ticketId: string) => props.isTimelineLoading(ticketId)
 const timelineErrorValue = (ticketId: string) => props.timelineError(ticketId)
 const actionsForOrderValue = (wo: any) => props.actionsForOrder(wo)
+
+function displayTitleValue(wo: any) {
+  const rawTitle = String(wo.issue_description || wo.ticket_id || '').trim()
+  if (!rawTitle) return wo.ticket_id
+
+  return rawTitle
+    .replace(/Fox_public_Henry/g, '公共楼')
+    .replace(/Henry 公共服务楼/g, '公共楼')
+    .replace(/Fox_office_Alice/g, '办公楼')
+    .replace(/Alice 办公楼/g, '办公楼')
+    .replace(/Fox_education_Louie/g, '教学楼')
+    .replace(/Louie 教学楼/g, '教学楼')
+}
 </script>
 
 <style scoped>

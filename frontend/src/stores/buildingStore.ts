@@ -18,6 +18,21 @@ export interface BuildingInfo {
   meter_device_id: string
 }
 
+const BUILDING_NAME_ALIASES: Record<string, string> = {
+  Fox_education_Louie: '教学楼',
+  Education: '教学楼',
+  'Louie 教学楼': '教学楼',
+  Fox_office_Alice: '办公楼',
+  Office: '办公楼',
+  'Alice 办公楼': '办公楼',
+  Fox_public_Henry: '公共楼',
+  Public: '公共楼',
+  'Public services': '公共楼',
+  'Henry 公共服务楼': '公共楼',
+  公共服务楼: '公共楼',
+  公共楼: '公共楼',
+}
+
 export const useBuildingStore = defineStore('building', () => {
   const buildings = ref<BuildingInfo[]>([])
   const selectedType = ref<string>('Office')
@@ -51,12 +66,36 @@ export const useBuildingStore = defineStore('building', () => {
     selectedType.value = buildingType
   }
 
+  function normalizeBuildingName(raw?: string | null): string {
+    const value = String(raw || '').trim()
+    if (!value) return '—'
+
+    if (BUILDING_NAME_ALIASES[value]) {
+      return BUILDING_NAME_ALIASES[value]
+    }
+
+    const matched = buildings.value.find(b => (
+      b.building_id === value
+      || b.building_type === value
+      || b.display_name === value
+    ))
+
+    if (matched) {
+      return BUILDING_NAME_ALIASES[matched.display_name]
+        || BUILDING_NAME_ALIASES[matched.building_id]
+        || BUILDING_NAME_ALIASES[matched.building_type]
+        || matched.display_name
+    }
+
+    return value
+  }
+
   /**
    * 根据 building_type 返回中文显示名。
    * 优先用 API 返回的 display_name，未加载时降级到 building_type 本身。
    */
-  function getBuildingName(buildingType: string): string {
-    return buildings.value.find(b => b.building_type === buildingType)?.display_name ?? buildingType
+  function getBuildingName(buildingKey: string): string {
+    return normalizeBuildingName(buildingKey)
   }
 
   return {
@@ -67,6 +106,7 @@ export const useBuildingStore = defineStore('building', () => {
     error,
     fetchBuildings,
     select,
+    normalizeBuildingName,
     getBuildingName,
   }
 })

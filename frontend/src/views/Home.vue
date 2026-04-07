@@ -269,14 +269,6 @@ const kpis = computed(() => {
   }
   const carbon = elec * CARBON_FACTOR
 
-  let predCount = 0
-  if (sel === 'all') {
-    predCount = Number(ov.kpis?.prediction_warning_count ?? 0)
-  } else {
-    const b = buildings.find((x: any) => x.building_type === sel)
-    predCount = b ? Number(b.prediction_warning_count ?? 0) : 0
-  }
-
   return [
     {
       icon: 'mdi:lightning-bolt',
@@ -316,16 +308,6 @@ const kpis = computed(() => {
       tag: 'CO₂',
       bg: 'rgba(196,149,106,0.14)',
       color: MC.terra,
-      anim: 'anim-breathe',
-    },
-    {
-      icon: 'mdi:crystal-ball',
-      label: '预测预警',
-      value: String(predCount),
-      change: null,
-      tag: '预测',
-      bg: 'rgba(147,130,255,0.14)',
-      color: '#9382ff',
       anim: 'anim-breathe',
     },
   ]
@@ -1081,7 +1063,7 @@ watch(
 
 .kpi-strip {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
   flex-shrink: 0;
 }

@@ -193,7 +193,7 @@ import WorkOrdersOrderList from '@/components/workorders/WorkOrdersOrderListEnha
 import { useBatchDispatch } from '@/composables/workorders/useBatchDispatch'
 import { useDispatchHallAdmin } from '@/composables/workorders/useDispatchHallAdmin'
 import { useWorkOrderActions } from '@/composables/workorders/useWorkOrderActions'
-import { useWorkOrderPresentation } from '@/composables/workorders/useWorkOrderPresentationEnhanced'
+import { useWorkOrderPresentation } from '@/composables/workorders/useWorkOrderPresentationUi'
 import { useWorkOrdersData } from '@/composables/workorders/useWorkOrdersData'
 import {
   EXECUTION_LABELS,

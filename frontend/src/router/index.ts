@@ -1,4 +1,4 @@
-import { createRouter, createWebHistory } from 'vue-router'
+﻿import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from '@/stores/authStore'
 
 const router = createRouter({
@@ -19,12 +19,6 @@ const router = createRouter({
       name: 'Home',
       component: () => import('@/views/Home.vue'),
       meta: { title: '首页', requiresAuth: true },
-    },
-    {
-      path: '/dashboard',
-      name: 'Dashboard',
-      component: () => import('@/views/Dashboard.vue'),
-      meta: { title: '驾驶舱', requiresAuth: true },
     },
     {
       path: '/operations',
@@ -73,7 +67,6 @@ const router = createRouter({
 
 const KEEP_ALIVE_ROUTE_NAMES = new Set([
   'Home',
-  'Dashboard',
   'Operations',
   'WorkOrders',
   'DataCenter',
@@ -86,25 +79,22 @@ router.getRoutes().forEach((route) => {
   }
 })
 
-// ── 全局路由守卫 ──────────────────────────────────────────
 router.beforeEach(async (to) => {
   const authStore = useAuthStore()
   const requiresAuth = to.meta.requiresAuth !== false
 
   if (requiresAuth && !authStore.isLoggedIn) {
-    // 有 refreshToken 时尝试静默恢复（页面刷新场景）
     const ok = await authStore.initSession()
     if (!ok) return { name: 'Login', query: { redirect: to.fullPath } }
   }
 
-  // 已登录用户访问登录页，直接跳首页
   if (to.name === 'Login' && authStore.isLoggedIn) {
-    return { name: 'Dashboard' }
+    return { name: 'Home' }
   }
 })
 
 router.afterEach((to) => {
-  document.title = `${to.meta.title ?? ''} — 楼宇能耗智能管理系统`
+  document.title = `${to.meta.title ?? ''} - 楼宇能耗智能管理系统`
 })
 
 export default router

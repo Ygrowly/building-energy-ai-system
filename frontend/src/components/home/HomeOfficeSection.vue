@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import * as echarts from 'echarts'
-import { apiFetch } from '@/api/http'
+import { cachedApiFetch } from '@/api/cached'
 import { MC, gc, EUI_BASELINE, isoDate } from '@/utils/homeCharts'
 import HomeActionCards from './HomeActionCards.vue'
 import HomeEnergyHeatmap from './HomeEnergyHeatmap.vue'
@@ -392,10 +392,10 @@ async function loadAll() {
 
   try {
     const [lp, pv, en, ax] = await Promise.all([
-      apiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/load-profile?metric=electricity&days=14`),
-      apiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/peak-valley-stats?metric=electricity&days=7`),
-      apiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/energy?start_date=${sd}&end_date=${ed}&include_water=false`),
-      apiFetch<any>(`/api/anomalies/recent?hours=168&building_type=${encodeURIComponent(BT)}`),
+      cachedApiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/load-profile?metric=electricity&days=14`),
+      cachedApiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/peak-valley-stats?metric=electricity&days=7`),
+      cachedApiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/energy?start_date=${sd}&end_date=${ed}&include_water=false`),
+      cachedApiFetch<any>(`/api/anomalies/recent?hours=168&building_type=${encodeURIComponent(BT)}`),
     ])
 
     peakValley.value = pv

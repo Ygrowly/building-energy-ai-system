@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import * as echarts from 'echarts'
-import { apiFetch } from '@/api/http'
+import { cachedApiFetch } from '@/api/cached'
 import { MC, gc, buildHeatmapCells, isoDate } from '@/utils/homeCharts'
 import HomeActionCards from './HomeActionCards.vue'
 import HomeMiniMetricCards from './HomeMiniMetricCards.vue'
@@ -375,17 +375,17 @@ async function loadAll() {
 
   try {
     const [lp, rv, ax, lpAir, lpSupply, lpReturn] = await Promise.all([
-      apiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/load-profile?metric=electricity&days=14`),
-      apiFetch<any>(
+      cachedApiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/load-profile?metric=electricity&days=14`),
+      cachedApiFetch<any>(
         `/api/buildings/${encodeURIComponent(BT)}/rated-vs-actual?start_date=${isoDate(startD)}&end_date=${isoDate(endD)}&metric=electricity`,
       ),
-      apiFetch<any>(`/api/anomalies/recent?hours=168&building_type=${encodeURIComponent(BT)}`),
-      apiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/load-profile?metric=air_temp&days=14`).catch(() => noData),
-      apiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/load-profile?metric=supply_temp&days=14`).catch(() => noData),
-      apiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/load-profile?metric=return_temp&days=14`).catch(() => noData),
+      cachedApiFetch<any>(`/api/anomalies/recent?hours=168&building_type=${encodeURIComponent(BT)}`),
+      cachedApiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/load-profile?metric=air_temp&days=14`).catch(() => noData),
+      cachedApiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/load-profile?metric=supply_temp&days=14`).catch(() => noData),
+      cachedApiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/load-profile?metric=return_temp&days=14`).catch(() => noData),
     ])
 
-    const st = await apiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/status`).catch(() => null)
+    const st = await cachedApiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/status`).catch(() => null)
 
     statusSnap.value = st
     anomalies.value = ax?.anomalies ?? []

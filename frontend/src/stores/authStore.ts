@@ -7,6 +7,7 @@ import {
   apiLogout,
   type UserInfo,
 } from '@/api/auth'
+import { clearCachedApi } from '@/api/cached'
 
 const REFRESH_TOKEN_KEY = 'rt'
 
@@ -34,11 +35,13 @@ export const useAuthStore = defineStore('auth', () => {
     refreshToken.value = null
     user.value = null
     localStorage.removeItem(REFRESH_TOKEN_KEY)
+    clearCachedApi()
   }
 
   // ── 登录 ─────────────────────────────────────────────────
   async function login(username: string, password: string) {
     const data = await apiLogin(username, password)
+    clearCachedApi()
     accessToken.value = data.access_token
     _saveRT(data.refresh_token)
     user.value = data.user
@@ -47,6 +50,7 @@ export const useAuthStore = defineStore('auth', () => {
   // ── 注册 ─────────────────────────────────────────────────
   async function register(username: string, password: string, email?: string, phone?: string) {
     const data = await apiRegister(username, password, email, phone)
+    clearCachedApi()
     accessToken.value = data.access_token
     _saveRT(data.refresh_token)
     user.value = data.user
@@ -72,6 +76,9 @@ export const useAuthStore = defineStore('auth', () => {
     const data = await apiRefreshToken(refreshToken.value)
     accessToken.value = data.access_token
     _saveRT(data.refresh_token)
+    if (data.user) {
+      user.value = data.user
+    }
   }
 
   // ── 应用启动时静默恢复登录态 ─────────────────────────────
@@ -83,7 +90,9 @@ export const useAuthStore = defineStore('auth', () => {
     _initPromise = (async () => {
       try {
         await refresh()
-        await _fetchMe()
+        if (!user.value) {
+          await _fetchMe()
+        }
         return true
       } catch {
         _clearTokens()

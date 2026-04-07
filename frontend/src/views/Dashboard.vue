@@ -103,7 +103,7 @@
     <section class="section">
       <div class="section-header">
         <h2 class="section-title"><Icon icon="mdi:alert-circle" width="16" class="title-icon" /> 异常告警</h2>
-        <button class="refresh-btn" @click="fetchAnomalies" :disabled="anomalyLoading">
+        <button class="refresh-btn" @click="fetchAnomalies(true)" :disabled="anomalyLoading">
           <Icon :icon="anomalyLoading ? 'mdi:loading' : 'mdi:refresh'" width="14" class="btn-icon" />
           {{ anomalyLoading ? '刷新中...' : '刷新' }}
         </button>
@@ -383,6 +383,7 @@ import { ref, onMounted, computed, watch, nextTick } from 'vue'
 import { Icon } from '@iconify/vue'
 import * as echarts from 'echarts'
 import { apiFetch } from '@/api/http'
+import { cachedApiFetch, peekCachedApi } from '@/api/cached'
 import { useBuildingStore } from '@/stores/buildingStore'
 import { useDataRangeStore } from '@/stores/dataRangeStore'
 import RatedVsActualSection from '@/components/RatedVsActualSection.vue'
@@ -397,6 +398,7 @@ const loading = ref(true)
 const error = ref('')
 const overviewData = ref<any>(null)
 const dataDate = ref('')
+const DASHBOARD_CACHE_TTL = 60_000
 
 const anomalyLoading = ref(false)
 const anomalyError = ref('')
@@ -418,19 +420,58 @@ function selectBuilding(type: string) {
 }
 
 // ── 获取 Overview 数据 ───────────────────────────────
-async function fetchOverview() {
-  loading.value = true
-  error.value = ''
+function applyOverview(data: any) {
+  overviewData.value = data
+  dataDate.value = data?.data_date ?? ''
+
+  const buildings: any[] = data?.buildings ?? []
+  if (!buildings.length) return
+
+  const selectedExists = buildings.some((item: any) => item.building_type === selectedBuildingType.value)
+  if (!selectedExists) {
+    selectedBuildingType.value = buildings[0].building_type
+  }
+
+  if (!trendForm.value.buildingType || !buildings.some((item: any) => item.building_type === trendForm.value.buildingType)) {
+    trendForm.value.buildingType = selectedBuildingType.value
+  }
+}
+
+function applyRecentAnomalies(data: any) {
+  recentAnomalies.value = data?.anomalies ?? []
+}
+
+function hydrateDashboardCache() {
+  const overview = peekCachedApi<any>('/api/overview', { ttlMs: DASHBOARD_CACHE_TTL })
+  const anomalies = peekCachedApi<any>('/api/anomalies/recent?hours=168', { ttlMs: DASHBOARD_CACHE_TTL })
+
+  if (overview.data) {
+    applyOverview(overview.data)
+    loading.value = false
+  }
+  if (anomalies.data) {
+    applyRecentAnomalies(anomalies.data)
+    anomalyLoading.value = false
+  }
+
+  return {
+    overviewFresh: overview.isFresh,
+    anomaliesFresh: anomalies.isFresh,
+  }
+}
+
+async function fetchOverview(force = false, silent = false) {
+  if (!silent) {
+    loading.value = true
+    error.value = ''
+  }
   try {
-    const data = await apiFetch<any>('/api/overview')
-    overviewData.value = data
-    dataDate.value = data?.data_date ?? ''
+    const data = await cachedApiFetch<any>('/api/overview', undefined, {
+      force,
+      ttlMs: DASHBOARD_CACHE_TTL,
+    })
+    applyOverview(data)
     // 初始化选中第一个楼宇
-    const buildings: any[] = data?.buildings ?? []
-    if (buildings.length > 0) {
-      selectedBuildingType.value = buildings[0].building_type
-      trendForm.value.buildingType = buildings[0].building_type
-    }
   } catch (e: any) {
     error.value = `数据加载失败：${e.message}`
   } finally {
@@ -439,12 +480,15 @@ async function fetchOverview() {
 }
 
 // ── 获取近期规则告警 ─────────────────────────────────
-async function fetchAnomalies() {
+async function fetchAnomalies(force = false) {
   anomalyLoading.value = true
   anomalyError.value = ''
   try {
-    const data = await apiFetch<any>('/api/anomalies/recent?hours=168')
-    recentAnomalies.value = data?.anomalies ?? []
+    const data = await cachedApiFetch<any>('/api/anomalies/recent?hours=168', undefined, {
+      force,
+      ttlMs: DASHBOARD_CACHE_TTL,
+    })
+    applyRecentAnomalies(data)
   } catch (e: any) {
     anomalyError.value = e.message
   } finally {
@@ -453,9 +497,12 @@ async function fetchAnomalies() {
 }
 
 onMounted(async () => {
-  buildingStore.fetchBuildings()
-  fetchOverview()
-  fetchAnomalies()
+  const cache = hydrateDashboardCache()
+  void buildingStore.fetchBuildings()
+  void fetchOverview(!cache.overviewFresh, !!overviewData.value)
+  if (!cache.anomaliesFresh || recentAnomalies.value.length === 0) {
+    void fetchAnomalies(!cache.anomaliesFresh)
+  }
   await dataRangeStore.fetch()
   if (!trendForm.value.startDate) trendForm.value.startDate = dataRangeStore.defaultStart
   if (!trendForm.value.endDate) trendForm.value.endDate = dataRangeStore.defaultEnd

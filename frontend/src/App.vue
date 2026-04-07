@@ -64,7 +64,20 @@
 
     <!-- 中间主工作区 -->
     <main ref="canvasEl" class="canvas" :class="{ scrolling: canvasScrolling }">
-      <RouterView />
+      <RouterView v-slot="{ Component, route: currentRoute }">
+        <KeepAlive>
+          <component
+            :is="Component"
+            v-if="currentRoute.meta.keepAlive"
+            :key="String(currentRoute.name ?? currentRoute.path)"
+          />
+        </KeepAlive>
+        <component
+          :is="Component"
+          v-if="!currentRoute.meta.keepAlive"
+          :key="currentRoute.fullPath"
+        />
+      </RouterView>
     </main>
 
     <!-- 可拖拽分隔条 -->
@@ -76,8 +89,17 @@
     ></div>
 
     <!-- 右侧 Agent 控制台 -->
-    <aside class="agent-panel">
-      <AgentConsole />
+    <aside class="agent-panel" @mouseenter="bootstrapNonCriticalUi">
+      <AgentConsole v-if="agentConsoleVisible" />
+      <button
+        v-else
+        type="button"
+        class="agent-panel-placeholder"
+        @click="bootstrapNonCriticalUi"
+      >
+        <Icon icon="mdi:message-text-outline" width="18" />
+        <span>Load Console</span>
+      </button>
     </aside>
 
     <!-- 元素选择器覆盖层 -->
@@ -137,17 +159,18 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, nextTick, KeepAlive, defineAsyncComponent } from 'vue'
 import { storeToRefs } from 'pinia'
 import { RouterView, RouterLink, useRouter, useRoute } from 'vue-router'
 import { Icon } from '@iconify/vue'
-import AgentConsole from '@/components/AgentConsole.vue'
 import ElementPickerOverlay from '@/components/ElementPickerOverlay.vue'
 import PersonalModal from '@/components/PersonalModal.vue'
 import ReportPreviewModal from '@/components/report/ReportPreviewModal.vue'
 import { useBuildingStore } from '@/stores/buildingStore'
 import { useAuthStore } from '@/stores/authStore'
 import { useNotificationStore } from '@/stores/notificationStore'
+
+const AgentConsole = defineAsyncComponent(() => import('@/components/AgentConsole.vue'))
 
 const buildingStore = useBuildingStore()
 const authStore     = useAuthStore()
@@ -164,6 +187,7 @@ watch(() => authStore.user?.id, (id) => {
 const { messagesRequested } = storeToRefs(notifStore)
 watch(messagesRequested, (val) => {
   if (val) {
+    bootstrapNonCriticalUi()
     openMessages()
     notifStore.consumeMessagesRequest()
   }
@@ -171,6 +195,70 @@ watch(messagesRequested, (val) => {
 
 /** 认证页单独全屏，不套主布局（避免侧栏 + 对话面板） */
 const isStandaloneAuth = computed(() => route.meta.standaloneAuth === true)
+const agentConsoleVisible = ref(false)
+const routeScrollTop = new Map<string, number>()
+
+type IdleWindow = Window & {
+  requestIdleCallback?: (
+    callback: (deadline: { didTimeout: boolean; timeRemaining: () => number }) => void,
+    options?: { timeout?: number },
+  ) => number
+  cancelIdleCallback?: (handle: number) => void
+}
+
+let nonCriticalTimer = 0
+let nonCriticalIdleHandle: number | null = null
+let pollingStarted = false
+
+function clearNonCriticalSchedule() {
+  if (nonCriticalTimer) {
+    window.clearTimeout(nonCriticalTimer)
+    nonCriticalTimer = 0
+  }
+  const idleWindow = window as IdleWindow
+  if (nonCriticalIdleHandle != null && idleWindow.cancelIdleCallback) {
+    idleWindow.cancelIdleCallback(nonCriticalIdleHandle)
+    nonCriticalIdleHandle = null
+  }
+}
+
+function startNotificationPolling() {
+  if (pollingStarted) return
+  notifStore.startPolling()
+  pollingStarted = true
+}
+
+function stopNotificationPolling() {
+  if (!pollingStarted) return
+  notifStore.stopPolling()
+  pollingStarted = false
+}
+
+function bootstrapNonCriticalUi() {
+  clearNonCriticalSchedule()
+  if (isStandaloneAuth.value) return
+  agentConsoleVisible.value = true
+  startNotificationPolling()
+}
+
+function scheduleNonCriticalUi() {
+  clearNonCriticalSchedule()
+  if (isStandaloneAuth.value) return
+
+  const idleWindow = window as IdleWindow
+  if (idleWindow.requestIdleCallback) {
+    nonCriticalIdleHandle = idleWindow.requestIdleCallback(() => {
+      nonCriticalIdleHandle = null
+      bootstrapNonCriticalUi()
+    }, { timeout: 1200 })
+    return
+  }
+
+  nonCriticalTimer = window.setTimeout(() => {
+    nonCriticalTimer = 0
+    bootstrapNonCriticalUi()
+  }, 1200)
+}
 
 // ── 用户菜单弹出 ──────────────────────────────────
 const showUserMenu = ref(false)
@@ -275,7 +363,13 @@ function onSidebarLeave() {
 watch(
   () => route.meta.standaloneAuth,
   (standalone) => {
-    if (standalone !== true) buildingStore.fetchBuildings()
+    if (standalone !== true) {
+      buildingStore.fetchBuildings()
+      scheduleNonCriticalUi()
+      return
+    }
+    clearNonCriticalSchedule()
+    stopNotificationPolling()
   },
   { immediate: true },
 )
@@ -300,17 +394,29 @@ function openMessages() {
   notifStore.clearBadge()
 }
 
+watch(
+  () => route.fullPath,
+  async (to, from) => {
+    if (from && canvasEl.value) {
+      routeScrollTop.set(from, canvasEl.value.scrollTop)
+    }
+    await nextTick()
+    const top = routeScrollTop.get(to) ?? 0
+    canvasEl.value?.scrollTo({ top })
+  },
+)
+
 onMounted(() => {
   document.addEventListener('click', onDocClick)
   canvasEl.value?.addEventListener('scroll', onCanvasScroll, { passive: true })
-  notifStore.startPolling()
 })
 
 onUnmounted(() => {
   document.removeEventListener('click', onDocClick)
   canvasEl.value?.removeEventListener('scroll', onCanvasScroll)
   clearTimeout(canvasScrollTimer)
-  notifStore.stopPolling()
+  clearNonCriticalSchedule()
+  stopNotificationPolling()
 })
 
 // ── 右侧面板宽度拖拽调整 ──────────────────────────
@@ -759,6 +865,25 @@ function getBuildingIcon(type: string): string {
   width: v-bind(agentPanelWidth);
   border-left: none;
   overflow: hidden;
+}
+
+.agent-panel-placeholder {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 0;
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s;
+}
+
+.agent-panel-placeholder:hover {
+  background: var(--bg-card);
+  color: var(--text-primary);
 }
 </style>
 

@@ -114,6 +114,7 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
     expires_in: int = Field(description="access token 有效秒数")
 
+    user: UserResponse | None = None
 
 class UserResponse(BaseModel):
     id: str

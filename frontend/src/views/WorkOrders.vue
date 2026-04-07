@@ -28,7 +28,7 @@
           <span class="tab-count" v-if="tab.value === 'pending_approval'">{{ pendingCount }}</span>
         </button>
       </div>
-      <button class="refresh-btn" @click="fetchOrders" :disabled="loading">
+      <button class="refresh-btn" @click="fetchOrders(true)" :disabled="loading">
         <Icon :icon="loading ? 'mdi:loading' : 'mdi:refresh'" width="14" class="btn-icon" />
         {{ loading ? '刷新中...' : '刷新' }}
       </button>
@@ -143,6 +143,7 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { Icon } from '@iconify/vue'
 import { apiFetch } from '@/api/http'
+import { cachedApiFetch, peekCachedApi, invalidateCachedApi } from '@/api/cached'
 import { useChatStore } from '@/stores/chatStore'
 import { useBuildingStore } from '@/stores/buildingStore'
 import { useReportExport } from '@/composables/useReportExport'
@@ -155,6 +156,7 @@ const { registerSection, setReportMeta } = useReportExport('workorders')
 const loading = ref(false)
 const fetchError = ref('')
 const allOrders = ref<any[]>([])
+const WORK_ORDERS_CACHE_TTL = 30_000
 
 const activeTab = ref<string>('all')
 const expandedId = ref<string | null>(null)
@@ -197,12 +199,27 @@ const emptyMessage = computed(() => {
 })
 
 // ── 获取工单列表 ──────────────────────────────────
-async function fetchOrders() {
+function applyOrdersData(data: any) {
+  allOrders.value = data?.work_orders ?? []
+}
+
+function hydrateOrdersCache() {
+  const snapshot = peekCachedApi<any>('/api/work-orders', { ttlMs: WORK_ORDERS_CACHE_TTL })
+  if (snapshot.data) {
+    applyOrdersData(snapshot.data)
+  }
+  return snapshot.isFresh
+}
+
+async function fetchOrders(force = false) {
   loading.value = true
   fetchError.value = ''
   try {
-    const data = await apiFetch<any>('/api/work-orders')
-    allOrders.value = data?.work_orders ?? []
+    const data = await cachedApiFetch<any>('/api/work-orders', undefined, {
+      force,
+      ttlMs: WORK_ORDERS_CACHE_TTL,
+    })
+    applyOrdersData(data)
   } catch (e: any) {
     fetchError.value = e.message
   } finally {
@@ -210,7 +227,12 @@ async function fetchOrders() {
   }
 }
 
-onMounted(fetchOrders)
+onMounted(() => {
+  const cacheFresh = hydrateOrdersCache()
+  if (!cacheFresh) {
+    void fetchOrders(true)
+  }
+})
 
 // ── 报表集成 ──────────────────────────────────────
 const STATUS_LABELS_REPORT: Record<string, string> = {
@@ -309,6 +331,7 @@ async function approve(ticketId: string, approved: boolean) {
       order.status = approved ? 'approved' : 'rejected'
       if (!approved) order.reject_reason = rejectReason.value
     }
+    invalidateCachedApi('/api/work-orders')
 
     actionResult.value = {
       ...actionResult.value,

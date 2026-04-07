@@ -227,6 +227,7 @@ async def refresh_token(
         access_token=new_access_token,
         refresh_token=new_refresh_token_str,
         expires_in=expires_in,
+        user=UserResponse.model_validate(user),
     )
 
 

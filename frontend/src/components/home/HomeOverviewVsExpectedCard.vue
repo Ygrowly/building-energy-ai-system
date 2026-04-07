@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import * as echarts from 'echarts'
-import { apiFetch } from '@/api/http'
+import { cachedApiFetch } from '@/api/cached'
 import {
   MC,
   gc,
@@ -186,13 +186,13 @@ async function loadOverviewSeries() {
     const responses = await Promise.all(
       BUILDING_TYPES.map(async (buildingType) => {
         const [energy, ratedElectricity, ratedWater] = await Promise.all([
-          apiFetch<any>(
+          cachedApiFetch<any>(
             `/api/buildings/${encodeURIComponent(buildingType)}/energy?start_date=${startDate}&end_date=${endDate}&include_water=true`,
           ),
-          apiFetch<any>(
+          cachedApiFetch<any>(
             `/api/buildings/${encodeURIComponent(buildingType)}/rated-vs-actual?start_date=${startDate}&end_date=${endDate}&metric=electricity`,
           ).catch(() => ({ records: [], module_status: 'no_expected_data' })),
-          apiFetch<any>(
+          cachedApiFetch<any>(
             `/api/buildings/${encodeURIComponent(buildingType)}/rated-vs-actual?start_date=${startDate}&end_date=${endDate}&metric=water`,
           ).catch(() => ({ records: [], module_status: 'no_expected_data' })),
         ])

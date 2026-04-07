@@ -108,7 +108,7 @@
 import { ref, computed, watch, onMounted, nextTick } from 'vue'
 import { Icon } from '@iconify/vue'
 import { DotLottieVue } from '@lottiefiles/dotlottie-vue'
-import { apiFetch } from '@/api/http'
+import { cachedApiFetch, peekCachedApi } from '@/api/cached'
 import { useBuildingStore } from '@/stores/buildingStore'
 import { useAuthStore } from '@/stores/authStore'
 import { useNotificationStore } from '@/stores/notificationStore'
@@ -146,6 +146,7 @@ const sankeyData = ref<{
   nodes: { name: string }[]
   links: { source: string | number; target: string | number; value: number }[]
 } | null>(null)
+const HOME_CACHE_TTL = 60_000
 
 const buildingOptions = [
   { key: 'all', label: '全部' },
@@ -482,33 +483,68 @@ function registerHomeReportSections() {
   })
 }
 
-async function fetchOverview() {
+function applyOverview(data: any) {
+  overviewData.value = data
+  dataDate.value = data?.data_date ?? ''
+  weatherTemp.value = data?.weather?.temperature ?? null
+  weatherHumi.value = data?.weather?.humidity ?? null
+}
+
+function applyAnomalies(data: any) {
+  anomalyData.value = data?.anomalies ?? []
+}
+
+function applySankey(data: any) {
+  sankeyData.value = data?.nodes?.length && data?.links?.length ? data : null
+}
+
+function hydrateHomeCache() {
+  const overview = peekCachedApi<any>('/api/overview', { ttlMs: HOME_CACHE_TTL })
+  const anomalies = peekCachedApi<any>('/api/anomalies/recent?hours=168', { ttlMs: HOME_CACHE_TTL })
+  const sankey = peekCachedApi<any>('/api/anomalies/sankey', { ttlMs: HOME_CACHE_TTL })
+
+  if (overview.data) applyOverview(overview.data)
+  if (anomalies.data) applyAnomalies(anomalies.data)
+  if (sankey.data) applySankey(sankey.data)
+
+  return {
+    overviewFresh: overview.isFresh,
+    anomaliesFresh: anomalies.isFresh,
+    sankeyFresh: sankey.isFresh,
+  }
+}
+
+async function fetchOverview(force = false) {
   try {
-    const data = await apiFetch<any>('/api/overview')
-    overviewData.value = data
-    dataDate.value = data?.data_date ?? ''
-    weatherTemp.value = data?.weather?.temperature ?? null
-    weatherHumi.value = data?.weather?.humidity ?? null
+    const data = await cachedApiFetch<any>('/api/overview', undefined, {
+      force,
+      ttlMs: HOME_CACHE_TTL,
+    })
+    applyOverview(data)
   } catch {
     /* silent */
   }
 }
 
-async function fetchAnomalies() {
+async function fetchAnomalies(force = false) {
   try {
-    const data = await apiFetch<any>('/api/anomalies/recent?hours=168')
-    anomalyData.value = data?.anomalies ?? []
+    const data = await cachedApiFetch<any>('/api/anomalies/recent?hours=168', undefined, {
+      force,
+      ttlMs: HOME_CACHE_TTL,
+    })
+    applyAnomalies(data)
   } catch {
     /* silent */
   }
 }
 
-async function fetchSankeyData() {
+async function fetchSankeyData(force = false) {
   try {
-    const data = await apiFetch<any>('/api/anomalies/sankey')
-    if (data?.nodes?.length && data?.links?.length) {
-      sankeyData.value = data
-    }
+    const data = await cachedApiFetch<any>('/api/anomalies/sankey', undefined, {
+      force,
+      ttlMs: HOME_CACHE_TTL,
+    })
+    applySankey(data)
   } catch {
     /* silent */
   }
@@ -518,7 +554,7 @@ async function handleAiStewardRefresh() {
   if (aiStewardLoading.value) return
   aiStewardLoading.value = true
   try {
-    await Promise.all([fetchOverview(), fetchAnomalies(), fetchSankeyData()])
+    await Promise.all([fetchOverview(true), fetchAnomalies(true), fetchSankeyData(true)])
   } finally {
     aiStewardLoading.value = false
   }
@@ -537,8 +573,13 @@ function handleAiStewardApplyStrategy() {
 }
 
 onMounted(async () => {
-  await buildingStore.fetchBuildings()
-  await Promise.all([fetchOverview(), fetchAnomalies(), fetchSankeyData()])
+  const cache = hydrateHomeCache()
+  void buildingStore.fetchBuildings()
+  await Promise.all([
+    fetchOverview(!cache.overviewFresh),
+    fetchAnomalies(!cache.anomaliesFresh),
+    fetchSankeyData(!cache.sankeyFresh),
+  ])
 })
 
 // ── 报表集成 ─────────────────────────────────────────────────

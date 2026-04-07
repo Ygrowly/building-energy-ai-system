@@ -53,6 +53,21 @@ const router = createRouter({
   ],
 })
 
+const KEEP_ALIVE_ROUTE_NAMES = new Set([
+  'Home',
+  'Dashboard',
+  'Operations',
+  'WorkOrders',
+  'DataCenter',
+  'QueryStats',
+])
+
+router.getRoutes().forEach((route) => {
+  if (route.name && KEEP_ALIVE_ROUTE_NAMES.has(String(route.name))) {
+    route.meta.keepAlive = true
+  }
+})
+
 // ── 全局路由守卫 ──────────────────────────────────────────
 router.beforeEach(async (to) => {
   const authStore = useAuthStore()

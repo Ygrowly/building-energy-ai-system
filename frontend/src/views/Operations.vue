@@ -21,12 +21,12 @@
       <div class="section-header">
         <h2 class="section-title"><Icon icon="mdi:alert-circle" width="16" class="title-icon" /> 近期异常记录</h2>
         <div class="header-actions">
-          <select v-model="filterHours" @change="fetchAnomalies" class="hours-select">
+          <select v-model="filterHours" @change="fetchAnomalies(true)" class="hours-select">
             <option value="24">最近 24 小时</option>
             <option value="72">最近 3 天</option>
             <option value="168">最近 7 天</option>
           </select>
-          <button class="refresh-btn" @click="fetchAnomalies" :disabled="loading">
+          <button class="refresh-btn" @click="fetchAnomalies(true)" :disabled="loading">
             <Icon :icon="loading ? 'mdi:loading' : 'mdi:refresh'" width="14" class="btn-icon" />
             {{ loading ? '加载中...' : '刷新' }}
           </button>
@@ -99,12 +99,12 @@
       <div class="section-header">
         <h2 class="section-title"><Icon icon="mdi:crystal-ball" width="16" class="title-icon" /> 预测预警</h2>
         <div class="header-actions">
-          <select v-model="predFilterHours" @change="fetchPredictions" class="hours-select">
+          <select v-model="predFilterHours" @change="fetchPredictions(true)" class="hours-select">
             <option value="24">最近 24 小时</option>
             <option value="72">最近 3 天</option>
             <option value="168">最近 7 天</option>
           </select>
-          <button class="refresh-btn" @click="fetchPredictions" :disabled="predLoading">
+          <button class="refresh-btn" @click="fetchPredictions(true)" :disabled="predLoading">
             <Icon :icon="predLoading ? 'mdi:loading' : 'mdi:refresh'" width="14" class="btn-icon" />
             {{ predLoading ? '加载中...' : '刷新' }}
           </button>
@@ -204,7 +204,7 @@
 import { ref, watch, onMounted } from 'vue'
 import { Icon } from '@iconify/vue'
 import { RouterLink } from 'vue-router'
-import { apiFetch } from '@/api/http'
+import { cachedApiFetch, peekCachedApi } from '@/api/cached'
 import { useBuildingStore } from '@/stores/buildingStore'
 import { useDataRangeStore } from '@/stores/dataRangeStore'
 import { useReportExport } from '@/composables/useReportExport'
@@ -219,13 +219,30 @@ const loading = ref(false)
 const fetchError = ref('')
 const anomalies = ref<any[]>([])
 const filterHours = ref('168')
+const OPERATIONS_CACHE_TTL = 60_000
+const WORK_ORDER_PREVIEW_TTL = 30_000
 
-async function fetchAnomalies() {
+function getAnomalyPath() {
+  return `/api/anomalies/recent?hours=${filterHours.value}`
+}
+
+function getPredictionPath() {
+  return `/api/predictions/recent?hours=${predFilterHours.value}`
+}
+
+function applyAnomaliesData(data: any) {
+  anomalies.value = data?.anomalies ?? []
+}
+
+async function fetchAnomalies(force = false) {
   loading.value = true
   fetchError.value = ''
   try {
-    const data = await apiFetch<any>(`/api/anomalies/recent?hours=${filterHours.value}`)
-    anomalies.value = data?.anomalies ?? []
+    const data = await cachedApiFetch<any>(getAnomalyPath(), undefined, {
+      force,
+      ttlMs: OPERATIONS_CACHE_TTL,
+    })
+    applyAnomaliesData(data)
   } catch (e: any) {
     fetchError.value = e.message
   } finally {
@@ -239,12 +256,19 @@ const predError = ref('')
 const predictions = ref<any[]>([])
 const predFilterHours = ref('168')
 
-async function fetchPredictions() {
+function applyPredictionsData(data: any) {
+  predictions.value = data?.predictions ?? []
+}
+
+async function fetchPredictions(force = false) {
   predLoading.value = true
   predError.value = ''
   try {
-    const data = await apiFetch<any>(`/api/predictions/recent?hours=${predFilterHours.value}`)
-    predictions.value = data?.predictions ?? []
+    const data = await cachedApiFetch<any>(getPredictionPath(), undefined, {
+      force,
+      ttlMs: OPERATIONS_CACHE_TTL,
+    })
+    applyPredictionsData(data)
   } catch (e: any) {
     predError.value = e.message
   } finally {
@@ -272,11 +296,18 @@ function metricUnit(name: string): string {
 const workOrderLoading = ref(false)
 const pendingOrders = ref<any[]>([])
 
-async function fetchPendingOrders() {
+function applyPendingOrdersData(data: any) {
+  pendingOrders.value = data?.work_orders ?? []
+}
+
+async function fetchPendingOrders(force = false) {
   workOrderLoading.value = true
   try {
-    const data = await apiFetch<any>('/api/work-orders?status=pending_approval')
-    pendingOrders.value = data?.work_orders ?? []
+    const data = await cachedApiFetch<any>('/api/work-orders?status=pending_approval', undefined, {
+      force,
+      ttlMs: WORK_ORDER_PREVIEW_TTL,
+    })
+    applyPendingOrdersData(data)
   } catch {
     // 静默处理，不影响主界面
   } finally {
@@ -284,11 +315,28 @@ async function fetchPendingOrders() {
   }
 }
 
+function hydrateOperationsCache() {
+  const anomalySnapshot = peekCachedApi<any>(getAnomalyPath(), { ttlMs: OPERATIONS_CACHE_TTL })
+  const predictionSnapshot = peekCachedApi<any>(getPredictionPath(), { ttlMs: OPERATIONS_CACHE_TTL })
+  const orderSnapshot = peekCachedApi<any>('/api/work-orders?status=pending_approval', { ttlMs: WORK_ORDER_PREVIEW_TTL })
+
+  if (anomalySnapshot.data) applyAnomaliesData(anomalySnapshot.data)
+  if (predictionSnapshot.data) applyPredictionsData(predictionSnapshot.data)
+  if (orderSnapshot.data) applyPendingOrdersData(orderSnapshot.data)
+
+  return {
+    anomaliesFresh: anomalySnapshot.isFresh,
+    predictionsFresh: predictionSnapshot.isFresh,
+    ordersFresh: orderSnapshot.isFresh,
+  }
+}
+
 onMounted(() => {
-  dataRangeStore.fetch()
-  fetchAnomalies()
-  fetchPredictions()
-  fetchPendingOrders()
+  const cache = hydrateOperationsCache()
+  void dataRangeStore.fetch()
+  if (!cache.anomaliesFresh) void fetchAnomalies(true)
+  if (!cache.predictionsFresh) void fetchPredictions(true)
+  if (!cache.ordersFresh) void fetchPendingOrders(true)
 })
 
 // ── 报表集成 ───────────────────────────────────────

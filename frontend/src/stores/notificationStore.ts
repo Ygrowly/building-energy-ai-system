@@ -5,7 +5,7 @@
  */
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { apiFetch } from '@/api/http'
+import { cachedApiFetch } from '@/api/cached'
 
 export const useNotificationStore = defineStore('notification', () => {
   const unreadCount = ref(0)
@@ -26,7 +26,11 @@ export const useNotificationStore = defineStore('notification', () => {
 
   async function refresh() {
     try {
-      const data = await apiFetch<{ total?: number }>('/api/anomalies/recent?hours=8760')
+      const data = await cachedApiFetch<{ total?: number }>(
+        '/api/anomalies/recent?hours=8760',
+        undefined,
+        { ttlMs: 60_000 },
+      )
       unreadCount.value = data?.total ?? 0
     } catch {
       // 静默失败，不影响主业务

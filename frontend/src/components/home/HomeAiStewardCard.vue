@@ -12,15 +12,14 @@ interface StewardStatItem {
 interface HomeAiStewardCardProps {
   title?: string
   statusText?: string
+  statusTone?: 'success' | 'warning' | 'danger' | 'neutral'
   reportTitle?: string
   reportDesc?: string
   stats?: StewardStatItem[]
   forecastTitle?: string
   forecastText?: string
-  forecastActionText?: string
   optimizeTitle?: string
   optimizeText?: string
-  optimizeActionText?: string
   loading?: boolean
   showViewAll?: boolean
   showRefresh?: boolean
@@ -29,22 +28,21 @@ interface HomeAiStewardCardProps {
 }
 
 const DEFAULT_STATS: StewardStatItem[] = [
-  { label: '节省电费', value: '345.50', prefix: '￥' },
-  { label: '减少碳排放', value: '128.5', suffix: 'kg' },
-  { label: '避免无效电耗', value: '410.0', suffix: 'kWh' },
+  { label: '节省电费', value: '0.00', prefix: '￥' },
+  { label: '减少碳排放', value: '0.0', suffix: 'kg' },
+  { label: '避免无效电耗', value: '0.0', suffix: 'kWh' },
 ]
 
 const props = withDefaults(defineProps<HomeAiStewardCardProps>(), {
   title: 'AI 智能运行管家',
   statusText: '状态: 极佳',
+  statusTone: 'success',
   reportTitle: '昨日 AI 运行成效简报 (00:00 - 24:00)',
-  reportDesc: '昨日系统无异常偏离。夜间基载能耗管控策略执行完美，相较基准线：',
-  forecastTitle: '明日负荷前瞻',
-  forecastText: '根据气象数据，明日 14:00 将有 35℃ 高温。系统已自动生成【削峰填谷】预案。',
-  forecastActionText: '查看运行曲线',
+  reportDesc: '根据后端实际运行数据与额定基线复盘，昨日系统形成如下运行收益：',
+  forecastTitle: '近期负荷前瞻',
+  forecastText: '预测预警模型当前未发现新增高风险偏离，系统将持续监测未来 6-12 小时负荷变化。',
   optimizeTitle: '深度寻优潜力',
-  optimizeText: '教学楼当前供水温度 60℃。AI 测算发现，微调降至 58℃ 不影响体感，且每周可省￥120。',
-  optimizeActionText: '一键应用该策略',
+  optimizeText: '系统正在结合教学楼供回水温与近 14 日运行曲线，持续评估可落地的调优空间。',
   loading: false,
   showViewAll: true,
   showRefresh: true,
@@ -55,12 +53,11 @@ const props = withDefaults(defineProps<HomeAiStewardCardProps>(), {
 const emit = defineEmits<{
   (e: 'refresh'): void
   (e: 'view-all'): void
-  (e: 'view-curve'): void
-  (e: 'apply-strategy'): void
 }>()
 
 const displayStats = computed(() => (props.stats?.length ? props.stats : DEFAULT_STATS))
 const refreshIcon = computed(() => (props.loading ? 'mdi:loading' : 'mdi:refresh'))
+const statusClass = computed(() => `status-tag--${props.statusTone}`)
 </script>
 
 <template>
@@ -70,9 +67,7 @@ const refreshIcon = computed(() => (props.loading ? 'mdi:loading' : 'mdi:refresh
         <span class="home-ai-steward__title-icon">
           <Icon icon="mdi:head-cog-outline" width="18" />
         </span>
-        <div class="home-ai-steward__title-copy">
-          <h3 class="home-ai-steward__title">{{ title }}</h3>
-        </div>
+        <h3 class="home-ai-steward__title">{{ title }}</h3>
       </div>
 
       <div class="home-ai-steward__toolbar">
@@ -97,7 +92,7 @@ const refreshIcon = computed(() => (props.loading ? 'mdi:loading' : 'mdi:refresh
           <Icon icon="mdi:arrow-right" width="15" />
         </button>
 
-        <span class="status-tag">
+        <span class="status-tag" :class="statusClass">
           <Icon icon="mdi:check-circle" width="15" />
           <span>{{ statusText }}</span>
         </span>
@@ -133,33 +128,19 @@ const refreshIcon = computed(() => (props.loading ? 'mdi:loading' : 'mdi:refresh
 
       <div class="insight-grid">
         <article class="insight-card insight-card--forecast">
-          <div class="insight-card__content">
-            <div class="insight-card__title-row">
-              <Icon icon="mdi:weather-partly-cloudy" width="18" />
-              <h4 class="insight-card__title">{{ forecastTitle }}</h4>
-            </div>
-            <p class="insight-card__text">{{ forecastText }}</p>
+          <div class="insight-card__title-row">
+            <Icon icon="mdi:weather-partly-cloudy" width="18" />
+            <h4 class="insight-card__title">{{ forecastTitle }}</h4>
           </div>
-
-          <button class="text-action" type="button" @click="emit('view-curve')">
-            <span>{{ forecastActionText }}</span>
-            <Icon icon="mdi:chevron-right" width="15" />
-          </button>
+          <p class="insight-card__text">{{ forecastText }}</p>
         </article>
 
         <article class="insight-card insight-card--optimize">
-          <div class="insight-card__content">
-            <div class="insight-card__title-row">
-              <Icon icon="mdi:lightbulb-on-outline" width="18" />
-              <h4 class="insight-card__title">{{ optimizeTitle }}</h4>
-            </div>
-            <p class="insight-card__text">{{ optimizeText }}</p>
+          <div class="insight-card__title-row">
+            <Icon icon="mdi:lightbulb-on-outline" width="18" />
+            <h4 class="insight-card__title">{{ optimizeTitle }}</h4>
           </div>
-
-          <button class="primary-action" type="button" @click="emit('apply-strategy')">
-            <Icon icon="mdi:flash-outline" width="15" />
-            <span>{{ optimizeActionText }}</span>
-          </button>
+          <p class="insight-card__text">{{ optimizeText }}</p>
         </article>
       </div>
     </div>
@@ -209,10 +190,6 @@ const refreshIcon = computed(() => (props.loading ? 'mdi:loading' : 'mdi:refresh
   background: var(--accent-glow);
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
   flex-shrink: 0;
-}
-
-.home-ai-steward__title-copy {
-  min-width: 0;
 }
 
 .home-ai-steward__title {
@@ -270,10 +247,31 @@ const refreshIcon = computed(() => (props.loading ? 'mdi:loading' : 'mdi:refresh
   border-radius: 999px;
   font-size: 12px;
   font-weight: 700;
+  white-space: nowrap;
+}
+
+.status-tag--success {
   color: var(--success);
   background: rgba(74, 222, 128, 0.12);
   border: 1px solid rgba(74, 222, 128, 0.24);
-  white-space: nowrap;
+}
+
+.status-tag--warning {
+  color: var(--warning);
+  background: rgba(251, 191, 36, 0.14);
+  border: 1px solid rgba(251, 191, 36, 0.22);
+}
+
+.status-tag--danger {
+  color: var(--danger);
+  background: rgba(248, 113, 113, 0.14);
+  border: 1px solid rgba(248, 113, 113, 0.22);
+}
+
+.status-tag--neutral {
+  color: var(--text-secondary);
+  background: rgba(148, 163, 184, 0.12);
+  border: 1px solid rgba(148, 163, 184, 0.18);
 }
 
 .home-ai-steward__body {
@@ -390,8 +388,7 @@ const refreshIcon = computed(() => (props.loading ? 'mdi:loading' : 'mdi:refresh
   min-height: 178px;
   display: flex;
   flex-direction: column;
-  justify-content: space-between;
-  gap: 18px;
+  gap: 12px;
 }
 
 .insight-card--forecast {
@@ -404,12 +401,6 @@ const refreshIcon = computed(() => (props.loading ? 'mdi:loading' : 'mdi:refresh
   background:
     linear-gradient(180deg, rgba(34, 197, 94, 0.07), transparent),
     rgba(255, 255, 255, 0.03);
-}
-
-.insight-card__content {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
 }
 
 .insight-card__title-row {
@@ -427,50 +418,8 @@ const refreshIcon = computed(() => (props.loading ? 'mdi:loading' : 'mdi:refresh
 
 .insight-card__text {
   font-size: 12px;
-  line-height: 1.7;
+  line-height: 1.8;
   color: var(--text-secondary);
-}
-
-.text-action {
-  align-self: flex-start;
-  border: 0;
-  background: transparent;
-  padding: 0;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  color: var(--accent);
-  font-size: 12px;
-  font-weight: 700;
-  cursor: pointer;
-  transition: opacity 0.18s ease, transform 0.18s ease;
-}
-
-.text-action:hover {
-  opacity: 0.84;
-  transform: translateX(1px);
-}
-
-.primary-action {
-  align-self: flex-start;
-  border: 1px solid rgba(34, 197, 94, 0.28);
-  background: linear-gradient(135deg, var(--accent), #16a34a);
-  color: #ffffff;
-  border-radius: 14px;
-  padding: 10px 14px;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
-  font-weight: 700;
-  cursor: pointer;
-  box-shadow: 0 10px 22px rgba(34, 197, 94, 0.22);
-  transition: transform 0.18s ease, box-shadow 0.18s ease, opacity 0.18s ease;
-}
-
-.primary-action:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 14px 28px rgba(34, 197, 94, 0.28);
 }
 
 .is-spinning {

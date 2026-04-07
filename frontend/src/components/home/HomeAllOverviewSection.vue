@@ -8,6 +8,7 @@ defineProps<{
   overviewData: any
   anomalyData: any[]
   aiStewardLoading?: boolean
+  aiStewardProps?: Record<string, any> | null
   overviewSeriesBundle?: Record<string, any> | null
   useBundle?: boolean
   bundlePending?: boolean
@@ -20,8 +21,6 @@ defineProps<{
 const emit = defineEmits<{
   (e: 'refresh'): void
   (e: 'view-all'): void
-  (e: 'view-curve'): void
-  (e: 'apply-strategy'): void
 }>()
 
 function handleStewardRefresh() {
@@ -32,13 +31,6 @@ function handleStewardViewAll() {
   emit('view-all')
 }
 
-function handleStewardViewCurve() {
-  emit('view-curve')
-}
-
-function handleStewardApplyStrategy() {
-  emit('apply-strategy')
-}
 </script>
 
 <template>
@@ -58,10 +50,9 @@ function handleStewardApplyStrategy() {
       <HomeAiStewardCard
         class="home-actions-panel"
         :loading="aiStewardLoading"
+        v-bind="aiStewardProps ?? {}"
         @refresh="handleStewardRefresh"
         @view-all="handleStewardViewAll"
-        @view-curve="handleStewardViewCurve"
-        @apply-strategy="handleStewardApplyStrategy"
       />
     </div>
   </div>

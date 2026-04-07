@@ -86,6 +86,7 @@
     <HomeAllOverviewSection
       v-if="activeBuilding === 'all'"
       :ai-steward-loading="aiStewardLoading"
+      :ai-steward-props="aiStewardCardData"
       :overview-data="overviewData"
       :anomaly-data="anomalyData"
       :overview-series-bundle="homeBundle?.overview_series ?? null"
@@ -94,8 +95,6 @@
       :sankey-data="sankeyData"
       @refresh="handleAiStewardRefresh"
       @view-all="handleAiStewardViewAll"
-      @view-curve="handleAiStewardViewCurve"
-      @apply-strategy="handleAiStewardApplyStrategy"
     />
     <HomeTeachingSection
       v-else-if="activeBuilding === 'Education'"
@@ -160,6 +159,7 @@ const weatherTemp = ref<number | null>(null)
 const weatherHumi = ref<number | null>(null)
 const overviewData = ref<any>(null)
 const anomalyData = ref<any[]>([])
+const predictionData = ref<any>(null)
 const aiStewardLoading = ref(false)
 const homeBundle = ref<any>(null)
 const homeBundleLoading = ref(false)
@@ -168,7 +168,9 @@ const sankeyData = ref<{
   links: { source: string | number; target: string | number; value: number }[]
 } | null>(null)
 const HOME_BUNDLE_PATH = '/api/home/bundle'
+const HOME_PREDICTIONS_PATH = '/api/predictions/recent?hours=168'
 const HOME_CACHE_TTL = 60_000
+const AI_STEWARD_ELECTRICITY_PRICE = 0.85
 let homeLoadController: AbortController | null = null
 
 const buildingOptions = [
@@ -327,6 +329,175 @@ const kpis = computed(() => {
       anim: 'anim-breathe',
     },
   ]
+})
+
+function num(value: unknown): number | null {
+  const n = Number(value)
+  return Number.isFinite(n) ? n : null
+}
+
+function avg(values: Array<number | null | undefined>): number | null {
+  const valid = values.filter((value): value is number => value != null && Number.isFinite(value))
+  if (!valid.length) return null
+  return valid.reduce((sum, value) => sum + value, 0) / valid.length
+}
+
+function formatDateTimeLabel(value: string | null | undefined): string {
+  if (!value) return '--'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value.slice(0, 16).replace('T', ' ')
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  const hour = String(date.getHours()).padStart(2, '0')
+  const minute = String(date.getMinutes()).padStart(2, '0')
+  return `${month}-${day} ${hour}:${minute}`
+}
+
+function formatPredictionMetric(metric: string | null | undefined): string {
+  switch (metric) {
+    case 'electricity_kwh':
+      return '用电负荷'
+    case 'water_l':
+    case 'water_m3':
+      return '用水负荷'
+    case 'hac_energy':
+      return '空调能耗'
+    case 'sim_supply_temp_c':
+      return '供水温度'
+    case 'sim_return_temp_c':
+      return '回水温度'
+    default:
+      return '运行指标'
+  }
+}
+
+function formatPredictionValue(metric: string | null | undefined, value: unknown): string {
+  const n = num(value)
+  if (n == null) return '--'
+  switch (metric) {
+    case 'electricity_kwh':
+    case 'hac_energy':
+      return `${n.toFixed(1)} kWh`
+    case 'water_l':
+      return `${n.toFixed(1)} L`
+    case 'water_m3':
+      return `${n.toFixed(2)} m³`
+    case 'sim_supply_temp_c':
+    case 'sim_return_temp_c':
+      return `${n.toFixed(1)}℃`
+    default:
+      return n.toFixed(1)
+  }
+}
+
+const aiStewardCardData = computed(() => {
+  const targetDate = dataDate.value?.slice(0, 10) ?? ''
+  const overviewSeries = homeBundle.value?.overview_series ?? {}
+  const predictions: any[] = predictionData.value?.predictions ?? []
+  const predictionCount = Number(predictionData.value?.total ?? overviewData.value?.kpis?.prediction_warning_count ?? 0)
+  const anomalyCount = Array.isArray(anomalyData.value) ? anomalyData.value.length : 0
+
+  let avoidedKwh = 0
+  for (const buildingType of REPORT_BUILDING_ORDER) {
+    const records: any[] = overviewSeries?.[buildingType]?.rated_electricity?.records ?? []
+    for (const record of records) {
+      if ((record?.timestamp ?? '').slice(0, 10) !== targetDate) continue
+      const actual = num(record?.actual) ?? 0
+      const rated = num(record?.rated) ?? 0
+      avoidedKwh += Math.max(rated - actual, 0)
+    }
+  }
+  avoidedKwh = Number(avoidedKwh.toFixed(1))
+
+  const savedCost = Number((avoidedKwh * AI_STEWARD_ELECTRICITY_PRICE).toFixed(2))
+  const reducedCarbon = Number((avoidedKwh * CARBON_FACTOR).toFixed(1))
+
+  let statusText = '状态: 极佳'
+  let statusTone: 'success' | 'warning' | 'danger' | 'neutral' = 'success'
+  if (anomalyCount > 0) {
+    statusText = anomalyCount >= 5 ? '状态: 关注' : '状态: 稳定'
+    statusTone = anomalyCount >= 5 ? 'danger' : 'warning'
+  } else if (predictionCount > 0) {
+    statusText = '状态: 稳定'
+    statusTone = 'warning'
+  }
+
+  const futurePredictions = [...predictions]
+    .filter((item) => item?.forecast_for_timestamp)
+    .sort((a, b) => {
+      const aTime = new Date(a.forecast_for_timestamp).getTime()
+      const bTime = new Date(b.forecast_for_timestamp).getTime()
+      return aTime - bTime
+    })
+  const nextPrediction = futurePredictions[0] ?? null
+
+  const reportTitle = targetDate
+    ? `${targetDate} AI 运行成效简报 (00:00 - 24:00)`
+    : '昨日 AI 运行成效简报 (00:00 - 24:00)'
+  const reportDesc = avoidedKwh > 0
+    ? '根据后端额定基线与实际运行数据复盘，系统昨日保持平稳运行，并形成以下节能收益：'
+    : '根据后端额定基线与实际运行数据复盘，系统昨日整体贴近基准运行，当前未形成明显节能结余。'
+
+  let forecastTitle = '近期负荷前瞻'
+  let forecastText = '预测预警模型当前未发现新增高风险偏离，系统将持续监测未来 6-12 小时负荷变化。'
+  if (nextPrediction) {
+    const deviationPct = Math.abs(num(nextPrediction.deviation_pct) ?? 0)
+    const riskLabel = nextPrediction.risk_level === 'critical' ? '高风险' : '预警'
+    forecastTitle = '预测预警前瞻'
+    forecastText =
+      `${nextPrediction.building_name ?? nextPrediction.building_type ?? '目标楼宇'}将在 ${formatDateTimeLabel(nextPrediction.forecast_for_timestamp)} ` +
+      `出现${formatPredictionMetric(nextPrediction.metric_name)}偏离，预测值 ${formatPredictionValue(nextPrediction.metric_name, nextPrediction.predicted_value)}，` +
+      `较期望值偏离 ${deviationPct.toFixed(1)}%（${riskLabel}）。`
+  }
+
+  const educationSection = homeBundle.value?.sections?.Education ?? null
+  const educationDevices: any[] = educationSection?.status?.devices ?? []
+  const educationAcDevices = educationDevices.filter((device) => device?.device_type === 'ac')
+  const latestSupply = avg(educationAcDevices.map((device) => num(device?.latest_supply_temp_c)))
+  const latestReturn = avg(educationAcDevices.map((device) => num(device?.latest_return_temp_c)))
+  const hourlySupplyProfile: any[] = educationSection?.load_profile_supply_temp?.hourly_profile ?? []
+  const avgSupply = avg(hourlySupplyProfile.map((item) => num(item?.avg_value)))
+
+  let optimizeText = '系统正在结合教学楼供回水温与近 14 日运行曲线，持续评估可落地的调优空间。'
+  if (latestSupply != null) {
+    const parts = [`教学楼空调设备最新供水温度 ${latestSupply.toFixed(1)}℃`]
+    if (latestReturn != null) {
+      parts.push(`回水温度 ${latestReturn.toFixed(1)}℃`)
+    }
+    if (avgSupply != null) {
+      const delta = Number((latestSupply - avgSupply).toFixed(1))
+      if (Math.abs(delta) >= 0.5) {
+        parts.push(`较近 14 日小时均值 ${avgSupply.toFixed(1)}℃${delta > 0 ? '偏高' : '偏低'} ${Math.abs(delta).toFixed(1)}℃`)
+      } else {
+        parts.push(`与近 14 日小时均值 ${avgSupply.toFixed(1)}℃基本一致`)
+      }
+    }
+    optimizeText = `${parts.join('，')}。系统将持续评估供回水温差与节能优化空间。`
+  } else {
+    const hvacTopBuilding = [...(overviewData.value?.buildings ?? [])]
+      .sort((a, b) => Number(b?.total_hac_energy_kwh ?? 0) - Number(a?.total_hac_energy_kwh ?? 0))[0]
+    if (hvacTopBuilding) {
+      optimizeText =
+        `${hvacTopBuilding.display_name}当日空调能耗 ${Number(hvacTopBuilding.total_hac_energy_kwh ?? 0).toFixed(1)} kWh，` +
+        '当前为全局 HVAC 重点关注楼宇。系统将继续跟踪其运行优化空间。'
+    }
+  }
+
+  return {
+    statusText,
+    statusTone,
+    reportTitle,
+    reportDesc,
+    stats: [
+      { label: '节省电费', value: savedCost.toFixed(2), prefix: '￥' },
+      { label: '减少碳排放', value: reducedCarbon.toFixed(1), suffix: 'kg' },
+      { label: '避免无效电耗', value: avoidedKwh.toFixed(1), suffix: 'kWh' },
+    ],
+    forecastTitle,
+    forecastText,
+    optimizeTitle: '深度寻优潜力',
+    optimizeText,
+  }
 })
 
 function formatMetric(value: number | null | undefined, unit: string, digits = 1): string {
@@ -521,6 +692,10 @@ function applySankey(data: any) {
   sankeyData.value = data?.nodes?.length && data?.links?.length ? data : null
 }
 
+function applyPredictions(data: any) {
+  predictionData.value = data ?? { predictions: [], total: 0 }
+}
+
 function applyHomeBundle(data: any) {
   homeBundle.value = data ?? null
   if (data?.overview) applyOverview(data.overview)
@@ -537,16 +712,19 @@ function hydrateHomeCache() {
   const overview = peekCachedApi<any>('/api/overview', { ttlMs: HOME_CACHE_TTL })
   const anomalies = peekCachedApi<any>('/api/anomalies/recent?hours=168', { ttlMs: HOME_CACHE_TTL })
   const sankey = peekCachedApi<any>('/api/anomalies/sankey', { ttlMs: HOME_CACHE_TTL })
+  const predictions = peekCachedApi<any>(HOME_PREDICTIONS_PATH, { ttlMs: HOME_CACHE_TTL })
 
   if (!bundle.data && overview.data) applyOverview(overview.data)
   if (!bundle.data && anomalies.data) applyAnomalies(anomalies.data)
   if (!bundle.data && sankey.data) applySankey(sankey.data)
+  if (predictions.data) applyPredictions(predictions.data)
 
   return {
     bundleFresh: bundle.isFresh,
     overviewFresh: overview.isFresh,
     anomaliesFresh: anomalies.isFresh,
     sankeyFresh: sankey.isFresh,
+    predictionsFresh: predictions.isFresh,
   }
 }
 
@@ -592,6 +770,20 @@ async function fetchSankeyData(force = false, signal?: AbortSignal) {
   }
 }
 
+async function fetchPredictions(force = false, signal?: AbortSignal) {
+  try {
+    const data = await cachedApiFetch<any>(HOME_PREDICTIONS_PATH, undefined, {
+      force,
+      signal,
+      ttlMs: HOME_CACHE_TTL,
+    })
+    applyPredictions(data)
+  } catch (error) {
+    if (isAbortError(error)) return
+    /* silent */
+  }
+}
+
 async function fetchHomeBundle(force = false) {
   homeLoadController?.abort()
   const controller = new AbortController()
@@ -617,6 +809,7 @@ async function fetchHomeBundle(force = false) {
       fetchOverview(force, controller.signal),
       fetchAnomalies(force, controller.signal),
       fetchSankeyData(force, controller.signal),
+      fetchPredictions(force, controller.signal),
     ])
     if (homeLoadController !== controller || controller.signal.aborted) return
     finish('ok', { source: 'fallback' })
@@ -631,7 +824,7 @@ async function handleAiStewardRefresh() {
   if (aiStewardLoading.value) return
   aiStewardLoading.value = true
   try {
-    await fetchHomeBundle(true)
+    await Promise.all([fetchHomeBundle(true), fetchPredictions(true)])
   } finally {
     aiStewardLoading.value = false
   }
@@ -641,22 +834,15 @@ function handleAiStewardViewAll() {
   activeBuilding.value = 'all'
 }
 
-function handleAiStewardViewCurve() {
-  activeBuilding.value = 'all'
-}
-
-function handleAiStewardApplyStrategy() {
-  activeBuilding.value = 'all'
-}
-
 const initialHomeCache = hydrateHomeCache()
 homeBundleLoading.value = !initialHomeCache.bundleFresh
 
 onMounted(async () => {
   void buildingStore.fetchBuildings()
-  if (!initialHomeCache.bundleFresh) {
-    await fetchHomeBundle(true)
-  }
+  const tasks: Promise<void>[] = []
+  if (!initialHomeCache.bundleFresh) tasks.push(fetchHomeBundle(true))
+  if (!initialHomeCache.predictionsFresh) tasks.push(fetchPredictions(true))
+  if (tasks.length) await Promise.all(tasks)
 })
 
 onUnmounted(() => {

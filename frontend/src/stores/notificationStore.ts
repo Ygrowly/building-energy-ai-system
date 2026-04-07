@@ -5,7 +5,7 @@
  */
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { cachedApiFetch } from '@/api/cached'
+import { apiFetch } from '@/api/http'
 import {
   buildWorkorderNotificationItems,
   type WorkorderNotificationHallEntry,
@@ -49,7 +49,11 @@ export const useNotificationStore = defineStore('notification', () => {
         hallData?.hall_entries ?? [],
       ).length
       const anomalyCount = anomalyData?.total ?? anomalyData?.anomalies?.length ?? 0
-      const predictionList = predictionData?.predictions ?? []
+      const predictionList: Array<{
+        risk_level?: string | null
+        as_of_timestamp?: string | null
+        created_at?: string | null
+      }> = predictionData?.predictions ?? []
       const latestPredictionBatchAt = predictionList
         .map((item) => item.as_of_timestamp || item.created_at)
         .filter((value): value is string => Boolean(value))

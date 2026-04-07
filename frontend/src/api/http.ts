@@ -8,6 +8,8 @@
  * 避免与 authStore 产生循环依赖。
  */
 
+import { isAbortError, startPerfSpan } from '@/utils/perf'
+
 const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? ''
 
 // ── 注入接口（由 main.ts 在 Pinia 初始化后调用）──────────
@@ -34,38 +36,58 @@ export function setAuthProvider(provider: AuthProvider) {
 // 请求拿着已被吊销的旧 RT 去刷新，后端会判定为重放攻击并清除所有 token。
 let _refreshingPromise: Promise<void> | null = null
 
+function _getMethod(init?: RequestInit): string {
+  return (init?.method ?? 'GET').toUpperCase()
+}
+
 // ── 核心请求函数 ──────────────────────────────────────────
 export async function apiFetch<T = unknown>(
   path: string,
   init?: RequestInit,
 ): Promise<T> {
-  const res = await _doFetch(path, init)
+  const finish = startPerfSpan('api.fetch', {
+    path,
+    method: _getMethod(init),
+  })
 
-  if (res.status === 401) {
-    // 多个并发请求同时 401 时，复用同一个 refresh Promise
-    if (!_refreshingPromise) {
-      _refreshingPromise = _auth.refreshToken().finally(() => {
-        _refreshingPromise = null
-      })
+  try {
+    const res = await _doFetch(path, init)
+
+    if (res.status === 401) {
+      // 多个并发请求同时 401 时，复用同一个 refresh Promise
+      if (!_refreshingPromise) {
+        _refreshingPromise = _auth.refreshToken().finally(() => {
+          _refreshingPromise = null
+        })
+      }
+      try {
+        await _refreshingPromise
+      } catch {
+        finish('error', { reason: 'refresh_failed', status: 401 })
+        _auth.onUnauthorized()
+        throw new Error('登录已过期，请重新登录')
+      }
+      // 用刷新后的新 token 重试原请求
+      const retryRes = await _doFetch(path, init)
+      if (retryRes.status === 401) {
+        finish('error', { reason: 'retry_unauthorized', status: 401 })
+        _auth.onUnauthorized()
+        throw new Error('登录已过期，请重新登录')
+      }
+      if (!retryRes.ok) await _throwFromResponse(retryRes)
+      finish('ok', { status: retryRes.status, refreshed: true })
+      return retryRes.json() as Promise<T>
     }
-    try {
-      await _refreshingPromise
-    } catch {
-      _auth.onUnauthorized()
-      throw new Error('登录已过期，请重新登录')
-    }
-    // 用刷新后的新 token 重试原请求
-    const retryRes = await _doFetch(path, init)
-    if (retryRes.status === 401) {
-      _auth.onUnauthorized()
-      throw new Error('登录已过期，请重新登录')
-    }
-    if (!retryRes.ok) await _throwFromResponse(retryRes)
-    return retryRes.json() as Promise<T>
+
+    if (!res.ok) await _throwFromResponse(res)
+    finish('ok', { status: res.status, refreshed: false })
+    return res.json() as Promise<T>
+  } catch (error) {
+    finish(isAbortError(error) ? 'abort' : 'error', {
+      message: error instanceof Error ? error.message : String(error),
+    })
+    throw error
   }
-
-  if (!res.ok) await _throwFromResponse(res)
-  return res.json() as Promise<T>
 }
 
 function _doFetch(path: string, init?: RequestInit): Promise<Response> {

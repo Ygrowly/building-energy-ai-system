@@ -123,10 +123,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, nextTick } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { Icon } from '@iconify/vue'
 import { DotLottieVue } from '@lottiefiles/dotlottie-vue'
 import { cachedApiFetch, peekCachedApi } from '@/api/cached'
+import { isAbortError, startPerfSpan } from '@/utils/perf'
 import { useBuildingStore } from '@/stores/buildingStore'
 import { useAuthStore } from '@/stores/authStore'
 import { useNotificationStore } from '@/stores/notificationStore'
@@ -168,6 +169,7 @@ const sankeyData = ref<{
 } | null>(null)
 const HOME_BUNDLE_PATH = '/api/home/bundle'
 const HOME_CACHE_TTL = 60_000
+let homeLoadController: AbortController | null = null
 
 const buildingOptions = [
   { key: 'all', label: '全部' },
@@ -548,55 +550,80 @@ function hydrateHomeCache() {
   }
 }
 
-async function fetchOverview(force = false) {
+async function fetchOverview(force = false, signal?: AbortSignal) {
   try {
     const data = await cachedApiFetch<any>('/api/overview', undefined, {
       force,
+      signal,
       ttlMs: HOME_CACHE_TTL,
     })
     applyOverview(data)
-  } catch {
+  } catch (error) {
+    if (isAbortError(error)) return
     /* silent */
   }
 }
 
-async function fetchAnomalies(force = false) {
+async function fetchAnomalies(force = false, signal?: AbortSignal) {
   try {
     const data = await cachedApiFetch<any>('/api/anomalies/recent?hours=168', undefined, {
       force,
+      signal,
       ttlMs: HOME_CACHE_TTL,
     })
     applyAnomalies(data)
-  } catch {
+  } catch (error) {
+    if (isAbortError(error)) return
     /* silent */
   }
 }
 
-async function fetchSankeyData(force = false) {
+async function fetchSankeyData(force = false, signal?: AbortSignal) {
   try {
     const data = await cachedApiFetch<any>('/api/anomalies/sankey', undefined, {
       force,
+      signal,
       ttlMs: HOME_CACHE_TTL,
     })
     applySankey(data)
-  } catch {
+  } catch (error) {
+    if (isAbortError(error)) return
     /* silent */
   }
 }
 
 async function fetchHomeBundle(force = false) {
+  homeLoadController?.abort()
+  const controller = new AbortController()
+  homeLoadController = controller
+  const finish = startPerfSpan('home.bundle.load', { force })
   homeBundleLoading.value = true
   try {
     const data = await cachedApiFetch<any>(HOME_BUNDLE_PATH, undefined, {
       force,
+      signal: controller.signal,
       ttlMs: HOME_CACHE_TTL,
     })
+    if (homeLoadController !== controller || controller.signal.aborted) return
     applyHomeBundle(data)
-  } catch {
+    finish('ok', { source: 'bundle' })
+  } catch (error) {
+    if (isAbortError(error)) {
+      finish('abort')
+      return
+    }
     homeBundle.value = null
-    await Promise.all([fetchOverview(force), fetchAnomalies(force), fetchSankeyData(force)])
+    await Promise.all([
+      fetchOverview(force, controller.signal),
+      fetchAnomalies(force, controller.signal),
+      fetchSankeyData(force, controller.signal),
+    ])
+    if (homeLoadController !== controller || controller.signal.aborted) return
+    finish('ok', { source: 'fallback' })
   } finally {
-    homeBundleLoading.value = false
+    if (homeLoadController === controller) {
+      homeBundleLoading.value = false
+    }
   }
 }
 
@@ -632,79 +659,32 @@ onMounted(async () => {
   }
 })
 
+onUnmounted(() => {
+  homeLoadController?.abort()
+  homeLoadController = null
+})
+
 // ── 报表集成 ─────────────────────────────────────────────────
-watch(overviewData, (ov) => {
-  if (!ov) return
-  setReportMeta({ title: '首页总览报表' })
+watch(
+  () => [overviewData.value, anomalyData.value, sankeyData.value],
+  ([overview, anomalies]) => {
+    if (!overview) return
 
-  // KPI 段落
-  const kpisArr = kpis.value
-  if (kpisArr.length) {
+    registerHomeReportSections()
     registerSection({
-      id: 'home-kpi',
-      title: 'KPI 总览',
-      type: 'kpi',
-      order: 10,
-      kpis: kpisArr.map(k => ({
-        label: k.label,
-        value: k.value,
-        trend: k.change,
-      })),
-    })
-  }
-
-  // 楼宇汇总表格
-  const buildings: any[] = ov.buildings ?? []
-  if (buildings.length) {
-    registerSection({
-      id: 'home-buildings',
-      title: '各楼宇能耗汇总',
-      type: 'table',
-      order: 20,
-      columns: [
-        { key: 'name', label: '楼宇' },
-        { key: 'electricity', label: '日用电 (kWh)', align: 'right' },
-        { key: 'water', label: '日用水 (m³)', align: 'right' },
-        { key: 'hac', label: '空调能耗 (kWh)', align: 'right' },
+      id: 'home-anomalies',
+      title: '近期异常概况',
+      type: 'summary',
+      order: 30,
+      summaryItems: [
+        { label: '异常事件总数', value: String(anomalies.length) },
+        { label: '严重级别', value: `${anomalies.filter((a: any) => a.severity === 'critical').length} 条 CRITICAL` },
+        { label: '告警级别', value: `${anomalies.filter((a: any) => a.severity === 'warning').length} 条 WARNING` },
       ],
-      rows: buildings.map((b: any) => ({
-        name: buildingStore.getBuildingName(b.building_type),
-        electricity: Number(b.total_electricity_kwh ?? 0).toFixed(1),
-        water: Number(b.total_water_m3 ?? 0).toFixed(1),
-        hac: Number(b.total_hac_energy_kwh ?? 0).toFixed(1),
-      })),
     })
-  }
-})
-
-watch(anomalyData, (data) => {
-  if (!data?.length) return
-  registerSection({
-    id: 'home-anomalies',
-    title: '近期异常概况',
-    type: 'summary',
-    order: 30,
-    summaryItems: [
-      { label: '异常事件总数', value: String(data.length) },
-      { label: '严重级别', value: String(data.filter((a: any) => a.severity === 'critical').length) + ' 条 CRITICAL' },
-      { label: '告警级别', value: String(data.filter((a: any) => a.severity === 'warning').length) + ' 条 WARNING' },
-    ],
-  })
-})
-
-watch([overviewData, anomalyData, sankeyData], () => {
-  const overview = overviewData.value
-  if (!overview) return
-
-  registerHomeReportSections()
-  registerSection({
-    id: 'home-anomalies',
-    title: '近期异常概况',
-    type: 'text',
-    content: '',
-    order: 30,
-  })
-})
+  },
+  { deep: true, immediate: true },
+)
 
 </script>
 

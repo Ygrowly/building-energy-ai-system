@@ -3,6 +3,7 @@ import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import * as echarts from 'echarts'
 import { cachedApiFetch } from '@/api/cached'
 import { MC, gc, buildHeatmapCells, isoDate } from '@/utils/homeCharts'
+import { isAbortError, startPerfSpan } from '@/utils/perf'
 import HomeActionCards from './HomeActionCards.vue'
 import HomeMiniMetricCards from './HomeMiniMetricCards.vue'
 
@@ -59,6 +60,7 @@ const ratedEl = ref<HTMLElement | null>(null)
 const weekdayEl = ref<HTMLElement | null>(null)
 const hvacEl = ref<HTMLElement | null>(null)
 let instances: echarts.ECharts[] = []
+let loadController: AbortController | null = null
 
 const ratedSummary = ref<{ anomaly_hours?: number; anomaly_rate_pct?: number } | null>(null)
 const statusSnap = ref<any>(null)
@@ -370,6 +372,13 @@ function renderHvacTriplet(
 }
 
 async function loadAll() {
+  loadController?.abort()
+  const controller = new AbortController()
+  loadController = controller
+  const finish = startPerfSpan('home.teaching.section.load', {
+    hasBundle: Boolean(props.bundle),
+  })
+
   try {
     let lp: any
     let rv: any
@@ -388,6 +397,7 @@ async function loadAll() {
       lpReturn = props.bundle.load_profile_return_temp ?? { hourly_profile: [] }
       st = props.bundle.status ?? null
     } else if (props.useBundle && props.bundlePending) {
+      finish('ok', { state: 'pending' })
       return
     } else {
       const endD = props.dataDate ? new Date(props.dataDate + 'T12:00:00Z') : new Date()
@@ -396,18 +406,22 @@ async function loadAll() {
       const noData = { hourly_profile: [] }
 
       ;[lp, rv, ax, lpAir, lpSupply, lpReturn] = await Promise.all([
-        cachedApiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/load-profile?metric=electricity&days=14`),
+        cachedApiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/load-profile?metric=electricity&days=14`, undefined, { signal: controller.signal }),
         cachedApiFetch<any>(
           `/api/buildings/${encodeURIComponent(BT)}/rated-vs-actual?start_date=${isoDate(startD)}&end_date=${isoDate(endD)}&metric=electricity`,
+          undefined,
+          { signal: controller.signal },
         ),
-        cachedApiFetch<any>(`/api/anomalies/recent?hours=168&building_type=${encodeURIComponent(BT)}`),
-        cachedApiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/load-profile?metric=air_temp&days=14`).catch(() => noData),
-        cachedApiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/load-profile?metric=supply_temp&days=14`).catch(() => noData),
-        cachedApiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/load-profile?metric=return_temp&days=14`).catch(() => noData),
+        cachedApiFetch<any>(`/api/anomalies/recent?hours=168&building_type=${encodeURIComponent(BT)}`, undefined, { signal: controller.signal }),
+        cachedApiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/load-profile?metric=air_temp&days=14`, undefined, { signal: controller.signal }).catch(() => noData),
+        cachedApiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/load-profile?metric=supply_temp&days=14`, undefined, { signal: controller.signal }).catch(() => noData),
+        cachedApiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/load-profile?metric=return_temp&days=14`, undefined, { signal: controller.signal }).catch(() => noData),
       ])
 
-      st = await cachedApiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/status`).catch(() => null)
+      st = await cachedApiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/status`, undefined, { signal: controller.signal }).catch(() => null)
     }
+
+    if (loadController !== controller || controller.signal.aborted) return
 
     statusSnap.value = st
     anomalies.value = ax?.anomalies ?? []
@@ -433,7 +447,13 @@ async function loadAll() {
 
     renderHvacTriplet(airH, supplyH, retH)
     nextTick(() => instances.forEach((i) => i.resize()))
-  } catch {
+    finish('ok', { anomalyCount: anomalies.value.length })
+  } catch (error) {
+    if (isAbortError(error)) {
+      finish('abort')
+      return
+    }
+    finish('error', { message: error instanceof Error ? error.message : String(error) })
     ghData.value = []
     ghMaxVal.value = 1
   }
@@ -450,11 +470,10 @@ watch(
   () => {
     loadAll()
   },
-  { deep: true },
+  { deep: true, immediate: true },
 )
 
-onMounted(async () => {
-  await loadAll()
+onMounted(() => {
   window.addEventListener('resize', onResize)
   const el = document.querySelector('.home-page') as HTMLElement | null
   if (el && typeof ResizeObserver !== 'undefined') {
@@ -464,6 +483,8 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  loadController?.abort()
+  loadController = null
   disposeAll()
   window.removeEventListener('resize', onResize)
   ro?.disconnect()

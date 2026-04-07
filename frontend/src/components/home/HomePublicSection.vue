@@ -4,6 +4,7 @@ import * as echarts from 'echarts'
 import { Icon } from '@iconify/vue'
 import { cachedApiFetch } from '@/api/cached'
 import { MC, gc, isoDate } from '@/utils/homeCharts'
+import { isAbortError, startPerfSpan } from '@/utils/perf'
 import HomeActionCards from './HomeActionCards.vue'
 import HomeEnergyHeatmap from './HomeEnergyHeatmap.vue'
 import HomeMiniMetricCards from './HomeMiniMetricCards.vue'
@@ -21,6 +22,7 @@ const dualEl    = ref<HTMLElement | null>(null)
 const profileEl = ref<HTMLElement | null>(null)
 const comfortEl = ref<HTMLElement | null>(null)
 let instances: echarts.ECharts[] = []
+let loadController: AbortController | null = null
 
 const statusSnap  = ref<any>(null)
 const anomalies   = ref<any[]>([])
@@ -335,6 +337,13 @@ function fmtTime(iso: string) {
 }
 
 async function loadAll() {
+  loadController?.abort()
+  const controller = new AbortController()
+  loadController = controller
+  const finish = startPerfSpan('home.public.section.load', {
+    hasBundle: Boolean(props.bundle),
+  })
+
   if (props.bundle) {
     const en = props.bundle.energy ?? { records: [] }
     const lpE = props.bundle.load_profile_electricity ?? { hourly_profile: [] }
@@ -362,10 +371,12 @@ async function loadAll() {
     renderProfile(lpE.hourly_profile || [])
     renderComfort(hourlyT, hourlyH)
     nextTick(() => instances.forEach((i) => i.resize()))
+    finish('ok', { anomalyCount: anomalies.value.length })
     return
   }
 
   if (props.useBundle && props.bundlePending) {
+    finish('ok', { state: 'pending' })
     return
   }
 
@@ -380,15 +391,16 @@ async function loadAll() {
 
   try {
     const [en, lpE, lpT, lpH, ax, rv] = await Promise.all([
-      cachedApiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/energy?start_date=${sd}&end_date=${ed}&include_water=true`),
-      cachedApiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/load-profile?metric=electricity&days=14`),
-      cachedApiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/load-profile?metric=air_temp&days=14`).catch(() => ({ hourly_profile: [] })),
-      cachedApiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/load-profile?metric=humidity&days=14`).catch(() => ({ hourly_profile: [] })),
-      cachedApiFetch<any>(`/api/anomalies/recent?hours=168&building_type=${encodeURIComponent(BT)}`),
-      cachedApiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/rated-vs-actual?start_date=${sds}&end_date=${ed}&metric=electricity`).catch(() => null),
+      cachedApiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/energy?start_date=${sd}&end_date=${ed}&include_water=true`, undefined, { signal: controller.signal }),
+      cachedApiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/load-profile?metric=electricity&days=14`, undefined, { signal: controller.signal }),
+      cachedApiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/load-profile?metric=air_temp&days=14`, undefined, { signal: controller.signal }).catch(() => ({ hourly_profile: [] })),
+      cachedApiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/load-profile?metric=humidity&days=14`, undefined, { signal: controller.signal }).catch(() => ({ hourly_profile: [] })),
+      cachedApiFetch<any>(`/api/anomalies/recent?hours=168&building_type=${encodeURIComponent(BT)}`, undefined, { signal: controller.signal }),
+      cachedApiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/rated-vs-actual?start_date=${sds}&end_date=${ed}&metric=electricity`, undefined, { signal: controller.signal }).catch(() => null),
     ])
 
-    const st = await cachedApiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/status`).catch(() => null)
+    const st = await cachedApiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/status`, undefined, { signal: controller.signal }).catch(() => null)
+    if (loadController !== controller || controller.signal.aborted) return
     statusSnap.value  = st
     anomalies.value   = ax?.anomalies ?? []
     ratedSummary.value = rv?.summary ?? null
@@ -407,12 +419,18 @@ async function loadAll() {
     renderProfile(lpE.hourly_profile || [])
     renderComfort(hourlyT, hourlyH)
     nextTick(() => instances.forEach((i) => i.resize()))
-  } catch {
+    finish('ok', { anomalyCount: anomalies.value.length })
+  } catch (error) {
+    if (isAbortError(error)) {
+      finish('abort')
+      return
+    }
+    finish('error', { message: error instanceof Error ? error.message : String(error) })
     disposeAll()
   }
 }
 
-watch(() => [props.dataDate, props.bundle, props.bundlePending], () => loadAll(), { deep: true })
+watch(() => [props.dataDate, props.bundle, props.bundlePending], () => loadAll(), { deep: true, immediate: true })
 
 function onResize() {
   instances.forEach((c) => c.resize())
@@ -420,8 +438,7 @@ function onResize() {
 
 let ro: ResizeObserver | null = null
 
-onMounted(async () => {
-  await loadAll()
+onMounted(() => {
   window.addEventListener('resize', onResize)
   const el = document.querySelector('.home-page') as HTMLElement | null
   if (el && typeof ResizeObserver !== 'undefined') {
@@ -431,6 +448,8 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  loadController?.abort()
+  loadController = null
   disposeAll()
   window.removeEventListener('resize', onResize)
   ro?.disconnect()

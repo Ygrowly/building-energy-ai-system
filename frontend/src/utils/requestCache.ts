@@ -1,3 +1,5 @@
+import { createAbortError, recordPerf, startPerfSpan } from '@/utils/perf'
+
 interface CacheEntry<T> {
   data: T
   updatedAt: number
@@ -15,6 +17,7 @@ export interface RequestCacheSnapshot<T> {
 interface FetchRequestCacheOptions {
   force?: boolean
   persist?: RequestCachePersist
+  signal?: AbortSignal
   ttlMs?: number
 }
 
@@ -63,6 +66,33 @@ function removeSessionEntry(key: string): void {
   } catch {
     // Ignore storage remove failures.
   }
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw createAbortError()
+  }
+}
+
+function bindAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise
+  throwIfAborted(signal)
+
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(createAbortError())
+    signal.addEventListener('abort', onAbort, { once: true })
+
+    promise.then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort)
+        resolve(value)
+      },
+      (error) => {
+        signal.removeEventListener('abort', onAbort)
+        reject(error)
+      },
+    )
+  })
 }
 
 function resolveEntry<T>(key: string, persist: RequestCachePersist): CacheEntry<T> | null {
@@ -123,30 +153,55 @@ export async function fetchRequestCache<T>(
   const {
     force = false,
     persist = 'session',
+    signal,
     ttlMs = 60_000,
   } = options
 
+  throwIfAborted(signal)
+
   const snapshot = peekRequestCache<T>(key, ttlMs, persist)
   if (!force && snapshot.data != null && snapshot.isFresh) {
+    recordPerf('request-cache.hit', 'ok', 0, {
+      key,
+      ttlMs,
+      ageMs: snapshot.ageMs,
+    })
     return snapshot.data
   }
 
   const pending = inFlight.get(key) as Promise<T> | undefined
   if (pending) {
-    return pending
+    recordPerf('request-cache.join', 'ok', 0, { key })
+    return bindAbort(pending, signal)
   }
 
   const task = (async () => {
-    const result = await fetcher()
-    return saveEntry(key, result, persist)
+    const finish = startPerfSpan('request-cache.fill', {
+      key,
+      ttlMs,
+      persist,
+      force,
+    })
+    try {
+      throwIfAborted(signal)
+      const result = await fetcher()
+      throwIfAborted(signal)
+      const saved = saveEntry(key, result, persist)
+      finish('ok')
+      return saved
+    } catch (error) {
+      finish(error instanceof Error && error.name === 'AbortError' ? 'abort' : 'error')
+      throw error
+    }
   })()
 
   inFlight.set(key, task)
-  try {
-    return await task
-  } finally {
-    inFlight.delete(key)
-  }
+  void task.finally(() => {
+    if (inFlight.get(key) === task) {
+      inFlight.delete(key)
+    }
+  })
+  return bindAbort(task, signal)
 }
 
 export function invalidateRequestCache(keyPrefix?: string): void {

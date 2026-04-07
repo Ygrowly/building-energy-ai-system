@@ -3,6 +3,7 @@ import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import * as echarts from 'echarts'
 import { cachedApiFetch } from '@/api/cached'
 import { MC, gc, EUI_BASELINE, isoDate } from '@/utils/homeCharts'
+import { isAbortError, startPerfSpan } from '@/utils/perf'
 import HomeActionCards from './HomeActionCards.vue'
 import HomeEnergyHeatmap from './HomeEnergyHeatmap.vue'
 import HomeMiniMetricCards from './HomeMiniMetricCards.vue'
@@ -22,6 +23,7 @@ const trendEl = ref<HTMLElement | null>(null)
 const sparkEl = ref<HTMLElement | null>(null)
 const rankEl  = ref<HTMLElement | null>(null)
 let instances: echarts.ECharts[] = []
+let loadController: AbortController | null = null
 
 const peakValley  = ref<any>(null)
 const anomalies   = ref<any[]>([])
@@ -387,6 +389,13 @@ function renderRank(daily: { day: string; total: number }[]) {
 }
 
 async function loadAll() {
+  loadController?.abort()
+  const controller = new AbortController()
+  loadController = controller
+  const finish = startPerfSpan('home.office.section.load', {
+    hasBundle: Boolean(props.bundle),
+  })
+
   try {
     let lp: any
     let pv: any
@@ -399,6 +408,7 @@ async function loadAll() {
       en = props.bundle.energy ?? { records: [] }
       ax = props.bundle.anomalies ?? { anomalies: [] }
     } else if (props.useBundle && props.bundlePending) {
+      finish('ok', { state: 'pending' })
       return
     } else {
       const endD = props.dataDate ? new Date(props.dataDate + 'T12:00:00Z') : new Date()
@@ -408,12 +418,14 @@ async function loadAll() {
       const ed = isoDate(endD)
 
       ;[lp, pv, en, ax] = await Promise.all([
-        cachedApiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/load-profile?metric=electricity&days=14`),
-        cachedApiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/peak-valley-stats?metric=electricity&days=7`),
-        cachedApiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/energy?start_date=${sd}&end_date=${ed}&include_water=false`),
-        cachedApiFetch<any>(`/api/anomalies/recent?hours=168&building_type=${encodeURIComponent(BT)}`),
+        cachedApiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/load-profile?metric=electricity&days=14`, undefined, { signal: controller.signal }),
+        cachedApiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/peak-valley-stats?metric=electricity&days=7`, undefined, { signal: controller.signal }),
+        cachedApiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/energy?start_date=${sd}&end_date=${ed}&include_water=false`, undefined, { signal: controller.signal }),
+        cachedApiFetch<any>(`/api/anomalies/recent?hours=168&building_type=${encodeURIComponent(BT)}`, undefined, { signal: controller.signal }),
       ])
     }
+
+    if (loadController !== controller || controller.signal.aborted) return
 
     peakValley.value = pv
     anomalies.value  = ax?.anomalies ?? []
@@ -424,7 +436,13 @@ async function loadAll() {
     renderSparkline(pv.daily_totals || [])
     renderRank(pv.daily_totals || [])
     nextTick(() => instances.forEach((i) => i.resize()))
-  } catch {
+    finish('ok', { anomalyCount: anomalies.value.length })
+  } catch (error) {
+    if (isAbortError(error)) {
+      finish('abort')
+      return
+    }
+    finish('error', { message: error instanceof Error ? error.message : String(error) })
     disposeAll()
   }
 }
@@ -432,7 +450,7 @@ async function loadAll() {
 watch(
   () => [props.dataDate, props.overviewData, props.bundle, props.bundlePending],
   () => loadAll(),
-  { deep: true },
+  { deep: true, immediate: true },
 )
 
 function onResize() {
@@ -441,8 +459,7 @@ function onResize() {
 
 let ro: ResizeObserver | null = null
 
-onMounted(async () => {
-  await loadAll()
+onMounted(() => {
   window.addEventListener('resize', onResize)
   const el = document.querySelector('.home-page') as HTMLElement | null
   if (el && typeof ResizeObserver !== 'undefined') {
@@ -452,6 +469,8 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  loadController?.abort()
+  loadController = null
   disposeAll()
   window.removeEventListener('resize', onResize)
   ro?.disconnect()

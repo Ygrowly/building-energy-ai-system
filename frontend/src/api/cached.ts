@@ -10,6 +10,7 @@ import {
 interface CachedApiFetchOptions {
   force?: boolean
   persist?: RequestCachePersist
+  signal?: AbortSignal
   ttlMs?: number
 }
 
@@ -38,12 +39,12 @@ export async function cachedApiFetch<T>(
   options: CachedApiFetchOptions = {},
 ): Promise<T> {
   if (getMethod(init) !== 'GET' || init?.body != null) {
-    return apiFetch<T>(path, init)
+    return apiFetch<T>(path, { ...init, signal: options.signal ?? init?.signal })
   }
 
   return fetchRequestCache<T>(
     getCacheKey(path, init),
-    () => apiFetch<T>(path, init),
+    () => apiFetch<T>(path, { ...init, signal: options.signal ?? init?.signal }),
     options,
   )
 }

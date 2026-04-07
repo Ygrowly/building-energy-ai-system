@@ -2,6 +2,7 @@
 import { computed, ref, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import * as echarts from 'echarts'
 import { cachedApiFetch } from '@/api/cached'
+import { isAbortError, startPerfSpan } from '@/utils/perf'
 import {
   MC,
   gc,
@@ -45,6 +46,7 @@ const { captureChart } = useReportExport('home-chart-overview-energy')
 let chart: echarts.ECharts | null = null
 let ro: ResizeObserver | null = null
 let captureTimer: number | null = null
+let loadController: AbortController | null = null
 
 const tabOptions: Array<{ key: OverviewMetricTab; label: string }> = [
   { key: 'energy', label: '总能耗' },
@@ -181,6 +183,12 @@ function finalizeDailyRecords(map: Map<string, DailyEnergyRecord>) {
 }
 
 async function loadOverviewSeries() {
+  loadController?.abort()
+  const controller = new AbortController()
+  loadController = controller
+  const finish = startPerfSpan('home.overview.series.load', {
+    hasBundle: Boolean(props.overviewSeriesBundle),
+  })
   const { startDate, endDate } = getDateRange()
   const dayMap = buildEmptyDayMap(startDate, endDate)
   let hasExpected = false
@@ -200,6 +208,7 @@ async function loadOverviewSeries() {
     } else if (props.useBundle && props.bundlePending) {
       dailyRecords.value = finalizeDailyRecords(dayMap)
       overviewHint.value = ''
+      finish('ok', { state: 'pending' })
       return
     } else {
       responses = await Promise.all(
@@ -207,12 +216,18 @@ async function loadOverviewSeries() {
           const [energy, ratedElectricity, ratedWater] = await Promise.all([
             cachedApiFetch<any>(
               `/api/buildings/${encodeURIComponent(buildingType)}/energy?start_date=${startDate}&end_date=${endDate}&include_water=true`,
+              undefined,
+              { signal: controller.signal },
             ),
             cachedApiFetch<any>(
               `/api/buildings/${encodeURIComponent(buildingType)}/rated-vs-actual?start_date=${startDate}&end_date=${endDate}&metric=electricity`,
+              undefined,
+              { signal: controller.signal },
             ).catch(() => ({ records: [], module_status: 'no_expected_data' })),
             cachedApiFetch<any>(
               `/api/buildings/${encodeURIComponent(buildingType)}/rated-vs-actual?start_date=${startDate}&end_date=${endDate}&metric=water`,
+              undefined,
+              { signal: controller.signal },
             ).catch(() => ({ records: [], module_status: 'no_expected_data' })),
           ])
 
@@ -220,6 +235,8 @@ async function loadOverviewSeries() {
         }),
       )
     }
+
+    if (loadController !== controller || controller.signal.aborted) return
 
     responses.forEach(({ energy, ratedElectricity, ratedWater }) => {
       ;(energy?.records ?? []).forEach((record: any) => {
@@ -240,9 +257,15 @@ async function loadOverviewSeries() {
 
     dailyRecords.value = finalizeDailyRecords(dayMap)
     overviewHint.value = hasExpected ? '' : '额定期望值暂无数据，当前仅展示真实值'
-  } catch {
+    finish('ok', { expectedReady: hasExpected })
+  } catch (error) {
+    if (isAbortError(error)) {
+      finish('abort')
+      return
+    }
     dailyRecords.value = finalizeDailyRecords(dayMap)
     overviewHint.value = '总览数据加载失败，当前仅展示空状态'
+    finish('error', { message: error instanceof Error ? error.message : String(error) })
   }
 }
 
@@ -441,15 +464,12 @@ watch(
     await nextTick()
     renderOverviewChart()
   },
-  { deep: true },
+  { deep: true, immediate: true },
 )
 
 watch(metricTab, () => nextTick(() => renderOverviewChart()))
 
-onMounted(async () => {
-  await loadOverviewSeries()
-  await nextTick()
-  renderOverviewChart()
+onMounted(() => {
   window.addEventListener('resize', handleResize)
   if (energyEl.value && typeof ResizeObserver !== 'undefined') {
     ro = new ResizeObserver(() => chart?.resize())
@@ -458,6 +478,8 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  loadController?.abort()
+  loadController = null
   disposeChart()
   window.removeEventListener('resize', handleResize)
   ro?.disconnect()

@@ -201,10 +201,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, onMounted } from 'vue'
+import { ref, watch, onMounted, onUnmounted } from 'vue'
 import { Icon } from '@iconify/vue'
 import { RouterLink } from 'vue-router'
 import { cachedApiFetch, peekCachedApi } from '@/api/cached'
+import { isAbortError, startPerfSpan } from '@/utils/perf'
 import { useBuildingStore } from '@/stores/buildingStore'
 import { useDataRangeStore } from '@/stores/dataRangeStore'
 import { useReportExport } from '@/composables/useReportExport'
@@ -221,6 +222,7 @@ const anomalies = ref<any[]>([])
 const filterHours = ref('168')
 const OPERATIONS_BUNDLE_PATH = '/api/operations/bundle'
 const OPERATIONS_CACHE_TTL = 15_000
+let operationsLoadController: AbortController | null = null
 
 function applyAnomaliesData(data: any) {
   anomalies.value = data?.anomalies ?? []
@@ -277,21 +279,41 @@ function setBundleLoading(next: boolean) {
 }
 
 async function fetchOperationsBundle(force = false) {
+  operationsLoadController?.abort()
+  const controller = new AbortController()
+  operationsLoadController = controller
+  const finish = startPerfSpan('operations.bundle.load', {
+    force,
+    anomalyHours: filterHours.value,
+    predictionHours: predFilterHours.value,
+  })
   setBundleLoading(true)
   fetchError.value = ''
   predError.value = ''
   try {
     const data = await cachedApiFetch<any>(getOperationsBundlePath(), undefined, {
       force,
+      signal: controller.signal,
       ttlMs: OPERATIONS_CACHE_TTL,
     })
+    if (operationsLoadController !== controller || controller.signal.aborted) return
     applyOperationsBundle(data)
+    finish('ok')
   } catch (e: any) {
+    if (isAbortError(e)) {
+      finish('abort')
+      return
+    }
     const message = e?.message ?? '运维数据加载失败'
-    fetchError.value = message
-    predError.value = message
+    if (operationsLoadController === controller) {
+      fetchError.value = message
+      predError.value = message
+    }
+    finish('error', { message })
   } finally {
-    setBundleLoading(false)
+    if (operationsLoadController === controller) {
+      setBundleLoading(false)
+    }
   }
 }
 
@@ -321,6 +343,11 @@ onMounted(() => {
   if (!initialOperationsCache.bundleFresh) {
     void fetchOperationsBundle(true)
   }
+})
+
+onUnmounted(() => {
+  operationsLoadController?.abort()
+  operationsLoadController = null
 })
 
 // ── 报表集成 ───────────────────────────────────────

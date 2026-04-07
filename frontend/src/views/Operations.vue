@@ -219,35 +219,11 @@ const loading = ref(false)
 const fetchError = ref('')
 const anomalies = ref<any[]>([])
 const filterHours = ref('168')
-const OPERATIONS_CACHE_TTL = 60_000
-const WORK_ORDER_PREVIEW_TTL = 30_000
-
-function getAnomalyPath() {
-  return `/api/anomalies/recent?hours=${filterHours.value}`
-}
-
-function getPredictionPath() {
-  return `/api/predictions/recent?hours=${predFilterHours.value}`
-}
+const OPERATIONS_BUNDLE_PATH = '/api/operations/bundle'
+const OPERATIONS_CACHE_TTL = 15_000
 
 function applyAnomaliesData(data: any) {
   anomalies.value = data?.anomalies ?? []
-}
-
-async function fetchAnomalies(force = false) {
-  loading.value = true
-  fetchError.value = ''
-  try {
-    const data = await cachedApiFetch<any>(getAnomalyPath(), undefined, {
-      force,
-      ttlMs: OPERATIONS_CACHE_TTL,
-    })
-    applyAnomaliesData(data)
-  } catch (e: any) {
-    fetchError.value = e.message
-  } finally {
-    loading.value = false
-  }
 }
 
 // ── 预测预警 ───────────────────────────────────────
@@ -258,22 +234,6 @@ const predFilterHours = ref('168')
 
 function applyPredictionsData(data: any) {
   predictions.value = data?.predictions ?? []
-}
-
-async function fetchPredictions(force = false) {
-  predLoading.value = true
-  predError.value = ''
-  try {
-    const data = await cachedApiFetch<any>(getPredictionPath(), undefined, {
-      force,
-      ttlMs: OPERATIONS_CACHE_TTL,
-    })
-    applyPredictionsData(data)
-  } catch (e: any) {
-    predError.value = e.message
-  } finally {
-    predLoading.value = false
-  }
 }
 
 const _METRIC_LABELS: Record<string, string> = {
@@ -300,43 +260,67 @@ function applyPendingOrdersData(data: any) {
   pendingOrders.value = data?.work_orders ?? []
 }
 
-async function fetchPendingOrders(force = false) {
-  workOrderLoading.value = true
+function getOperationsBundlePath() {
+  return `${OPERATIONS_BUNDLE_PATH}?anomaly_hours=${filterHours.value}&prediction_hours=${predFilterHours.value}`
+}
+
+function applyOperationsBundle(data: any) {
+  applyAnomaliesData(data?.anomalies)
+  applyPredictionsData(data?.predictions)
+  applyPendingOrdersData(data?.pending_work_orders)
+}
+
+function setBundleLoading(next: boolean) {
+  loading.value = next
+  predLoading.value = next
+  workOrderLoading.value = next
+}
+
+async function fetchOperationsBundle(force = false) {
+  setBundleLoading(true)
+  fetchError.value = ''
+  predError.value = ''
   try {
-    const data = await cachedApiFetch<any>('/api/work-orders?status=pending_approval', undefined, {
+    const data = await cachedApiFetch<any>(getOperationsBundlePath(), undefined, {
       force,
-      ttlMs: WORK_ORDER_PREVIEW_TTL,
+      ttlMs: OPERATIONS_CACHE_TTL,
     })
-    applyPendingOrdersData(data)
-  } catch {
-    // 静默处理，不影响主界面
+    applyOperationsBundle(data)
+  } catch (e: any) {
+    const message = e?.message ?? '运维数据加载失败'
+    fetchError.value = message
+    predError.value = message
   } finally {
-    workOrderLoading.value = false
+    setBundleLoading(false)
   }
+}
+
+async function fetchAnomalies(force = false) {
+  await fetchOperationsBundle(force)
+}
+
+async function fetchPredictions(force = false) {
+  await fetchOperationsBundle(force)
 }
 
 function hydrateOperationsCache() {
-  const anomalySnapshot = peekCachedApi<any>(getAnomalyPath(), { ttlMs: OPERATIONS_CACHE_TTL })
-  const predictionSnapshot = peekCachedApi<any>(getPredictionPath(), { ttlMs: OPERATIONS_CACHE_TTL })
-  const orderSnapshot = peekCachedApi<any>('/api/work-orders?status=pending_approval', { ttlMs: WORK_ORDER_PREVIEW_TTL })
-
-  if (anomalySnapshot.data) applyAnomaliesData(anomalySnapshot.data)
-  if (predictionSnapshot.data) applyPredictionsData(predictionSnapshot.data)
-  if (orderSnapshot.data) applyPendingOrdersData(orderSnapshot.data)
-
+  const snapshot = peekCachedApi<any>(getOperationsBundlePath(), { ttlMs: OPERATIONS_CACHE_TTL })
+  if (snapshot.data) {
+    applyOperationsBundle(snapshot.data)
+  }
   return {
-    anomaliesFresh: anomalySnapshot.isFresh,
-    predictionsFresh: predictionSnapshot.isFresh,
-    ordersFresh: orderSnapshot.isFresh,
+    bundleFresh: snapshot.isFresh,
   }
 }
 
+const initialOperationsCache = hydrateOperationsCache()
+setBundleLoading(!initialOperationsCache.bundleFresh)
+
 onMounted(() => {
-  const cache = hydrateOperationsCache()
   void dataRangeStore.fetch()
-  if (!cache.anomaliesFresh) void fetchAnomalies(true)
-  if (!cache.predictionsFresh) void fetchPredictions(true)
-  if (!cache.ordersFresh) void fetchPendingOrders(true)
+  if (!initialOperationsCache.bundleFresh) {
+    void fetchOperationsBundle(true)
+  }
 })
 
 // ── 报表集成 ───────────────────────────────────────

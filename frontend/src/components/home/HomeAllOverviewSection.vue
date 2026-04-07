@@ -8,6 +8,9 @@ defineProps<{
   overviewData: any
   anomalyData: any[]
   aiStewardLoading?: boolean
+  overviewSeriesBundle?: Record<string, any> | null
+  useBundle?: boolean
+  bundlePending?: boolean
   sankeyData: {
     nodes: { name: string }[]
     links: { source: string | number; target: string | number; value: number }[]
@@ -41,7 +44,12 @@ function handleStewardApplyStrategy() {
 <template>
   <div class="home-all-section home-all-overview-section">
     <div class="overview-top-row">
-      <HomeOverviewVsExpectedCard :overview-data="overviewData" />
+      <HomeOverviewVsExpectedCard
+        :overview-data="overviewData"
+        :overview-series-bundle="overviewSeriesBundle"
+        :use-bundle="useBundle"
+        :bundle-pending="bundlePending"
+      />
       <HomeBuildingEnergyShareCard :overview-data="overviewData" />
     </div>
 

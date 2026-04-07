@@ -14,6 +14,9 @@ import { useReportExport } from '@/composables/useReportExport'
 
 const props = defineProps<{
   overviewData: any
+  overviewSeriesBundle?: Record<string, any> | null
+  useBundle?: boolean
+  bundlePending?: boolean
 }>()
 
 type OverviewMetricTab = 'energy' | 'carbon'
@@ -183,23 +186,40 @@ async function loadOverviewSeries() {
   let hasExpected = false
 
   try {
-    const responses = await Promise.all(
-      BUILDING_TYPES.map(async (buildingType) => {
-        const [energy, ratedElectricity, ratedWater] = await Promise.all([
-          cachedApiFetch<any>(
-            `/api/buildings/${encodeURIComponent(buildingType)}/energy?start_date=${startDate}&end_date=${endDate}&include_water=true`,
-          ),
-          cachedApiFetch<any>(
-            `/api/buildings/${encodeURIComponent(buildingType)}/rated-vs-actual?start_date=${startDate}&end_date=${endDate}&metric=electricity`,
-          ).catch(() => ({ records: [], module_status: 'no_expected_data' })),
-          cachedApiFetch<any>(
-            `/api/buildings/${encodeURIComponent(buildingType)}/rated-vs-actual?start_date=${startDate}&end_date=${endDate}&metric=water`,
-          ).catch(() => ({ records: [], module_status: 'no_expected_data' })),
-        ])
+    let responses: Array<{ energy: any; ratedElectricity: any; ratedWater: any }> = []
 
-        return { energy, ratedElectricity, ratedWater }
-      }),
-    )
+    if (props.overviewSeriesBundle) {
+      responses = BUILDING_TYPES.map((buildingType) => {
+        const bundled = props.overviewSeriesBundle?.[buildingType] ?? {}
+        return {
+          energy: bundled.energy ?? { records: [] },
+          ratedElectricity: bundled.rated_electricity ?? { records: [], module_status: 'no_expected_data' },
+          ratedWater: bundled.rated_water ?? { records: [], module_status: 'no_expected_data' },
+        }
+      })
+    } else if (props.useBundle && props.bundlePending) {
+      dailyRecords.value = finalizeDailyRecords(dayMap)
+      overviewHint.value = ''
+      return
+    } else {
+      responses = await Promise.all(
+        BUILDING_TYPES.map(async (buildingType) => {
+          const [energy, ratedElectricity, ratedWater] = await Promise.all([
+            cachedApiFetch<any>(
+              `/api/buildings/${encodeURIComponent(buildingType)}/energy?start_date=${startDate}&end_date=${endDate}&include_water=true`,
+            ),
+            cachedApiFetch<any>(
+              `/api/buildings/${encodeURIComponent(buildingType)}/rated-vs-actual?start_date=${startDate}&end_date=${endDate}&metric=electricity`,
+            ).catch(() => ({ records: [], module_status: 'no_expected_data' })),
+            cachedApiFetch<any>(
+              `/api/buildings/${encodeURIComponent(buildingType)}/rated-vs-actual?start_date=${startDate}&end_date=${endDate}&metric=water`,
+            ).catch(() => ({ records: [], module_status: 'no_expected_data' })),
+          ])
+
+          return { energy, ratedElectricity, ratedWater }
+        }),
+      )
+    }
 
     responses.forEach(({ energy, ratedElectricity, ratedWater }) => {
       ;(energy?.records ?? []).forEach((record: any) => {
@@ -409,13 +429,19 @@ function disposeChart() {
 }
 
 watch(
-  () => props.overviewData?.data_date,
+  () => [props.overviewData?.data_date, props.overviewSeriesBundle, props.bundlePending],
   async (current, previous) => {
-    if (current === previous) return
+    if (
+      previous &&
+      current[0] === previous[0] &&
+      current[1] === previous[1] &&
+      current[2] === previous[2]
+    ) return
     await loadOverviewSeries()
     await nextTick()
     renderOverviewChart()
   },
+  { deep: true },
 )
 
 watch(metricTab, () => nextTick(() => renderOverviewChart()))

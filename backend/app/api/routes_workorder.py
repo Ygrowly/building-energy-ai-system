@@ -53,6 +53,7 @@ def _require_role(user: User, *roles: str) -> None:
 async def _invalidate_related_cache() -> None:
     await delete_cache_by_prefix("workorders:")
     await delete_cache_by_prefix("incidents:")
+    await delete_cache_by_prefix("operations:bundle:")
 
 
 # ---------------------------------------------------------------------------

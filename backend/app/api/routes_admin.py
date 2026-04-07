@@ -14,7 +14,7 @@ import logging
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -30,6 +30,24 @@ from app.schemas.mcp_schemas import MCPError
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
+
+
+async def _invalidate_operational_data_cache(
+    *,
+    include_predictions: bool = False,
+    include_workorders: bool = False,
+) -> None:
+    await delete_cache_by_prefix("overview:")
+    await delete_cache_by_prefix("anomalies:")
+    await delete_cache_by_prefix("home:bundle:")
+
+    if include_predictions:
+        await delete_cache_by_prefix("predictions:")
+
+    if include_workorders:
+        await delete_cache_by_prefix("workorders:")
+        await delete_cache_by_prefix("incidents:")
+        await delete_cache_by_prefix("operations:bundle:")
 
 
 @router.post("/compute-expected")
@@ -67,6 +85,7 @@ async def detect_anomalies(db: AsyncSession = Depends(get_db)):
         "admin: 异常检测完毕，flags=%d，events=%d，telemetry=%d，status=%d，attrib=%d",
         total_flags, total_events, total_telemetry, total_device_status, total_attributions,
     )
+    await _invalidate_operational_data_cache(include_workorders=True)
     return {
         "status": "ok",
         "total_flags": total_flags,
@@ -87,7 +106,6 @@ async def rebuild_all():
     两步分别使用独立的 Session，避免第一步长时间运行后连接被服务器关闭，
     导致第二步拿到死连接（asyncpg InterfaceError: underlying connection is closed）。
     """
-    import traceback as _tb
     logger.info("admin: rebuild-all 开始 ...")
 
     async with AsyncSessionLocal() as db1:
@@ -106,6 +124,7 @@ async def rebuild_all():
         "admin: rebuild-all 完毕，flags=%d，events=%d，telemetry=%d，device_status=%d，attributions=%d",
         total_flags, total_events, total_telemetry, total_device_status, total_attributions,
     )
+    await _invalidate_operational_data_cache(include_workorders=True)
 
     return {
         "status": "ok",
@@ -215,6 +234,11 @@ async def run_forecast(
                 await trigger_ai_review_for_pending(session)
     except Exception:
         logger.exception("预警工单流程异常")
+
+    await _invalidate_operational_data_cache(
+        include_predictions=True,
+        include_workorders=True,
+    )
 
     return {
         "status": "ok",

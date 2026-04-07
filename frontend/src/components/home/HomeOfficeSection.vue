@@ -10,6 +10,9 @@ import HomeMiniMetricCards from './HomeMiniMetricCards.vue'
 const props = defineProps<{
   dataDate: string
   overviewData: any
+  bundle?: any
+  useBundle?: boolean
+  bundlePending?: boolean
 }>()
 
 const BT = 'Office'
@@ -384,19 +387,33 @@ function renderRank(daily: { day: string; total: number }[]) {
 }
 
 async function loadAll() {
-  const endD = props.dataDate ? new Date(props.dataDate + 'T12:00:00Z') : new Date()
-  const startD = new Date(endD)
-  startD.setUTCDate(startD.getUTCDate() - 6)
-  const sd = isoDate(startD)
-  const ed = isoDate(endD)
-
   try {
-    const [lp, pv, en, ax] = await Promise.all([
-      cachedApiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/load-profile?metric=electricity&days=14`),
-      cachedApiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/peak-valley-stats?metric=electricity&days=7`),
-      cachedApiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/energy?start_date=${sd}&end_date=${ed}&include_water=false`),
-      cachedApiFetch<any>(`/api/anomalies/recent?hours=168&building_type=${encodeURIComponent(BT)}`),
-    ])
+    let lp: any
+    let pv: any
+    let en: any
+    let ax: any
+
+    if (props.bundle) {
+      lp = props.bundle.load_profile_electricity ?? { hourly_profile: [] }
+      pv = props.bundle.peak_valley ?? null
+      en = props.bundle.energy ?? { records: [] }
+      ax = props.bundle.anomalies ?? { anomalies: [] }
+    } else if (props.useBundle && props.bundlePending) {
+      return
+    } else {
+      const endD = props.dataDate ? new Date(props.dataDate + 'T12:00:00Z') : new Date()
+      const startD = new Date(endD)
+      startD.setUTCDate(startD.getUTCDate() - 6)
+      const sd = isoDate(startD)
+      const ed = isoDate(endD)
+
+      ;[lp, pv, en, ax] = await Promise.all([
+        cachedApiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/load-profile?metric=electricity&days=14`),
+        cachedApiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/peak-valley-stats?metric=electricity&days=7`),
+        cachedApiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/energy?start_date=${sd}&end_date=${ed}&include_water=false`),
+        cachedApiFetch<any>(`/api/anomalies/recent?hours=168&building_type=${encodeURIComponent(BT)}`),
+      ])
+    }
 
     peakValley.value = pv
     anomalies.value  = ax?.anomalies ?? []
@@ -413,7 +430,7 @@ async function loadAll() {
 }
 
 watch(
-  () => [props.dataDate, props.overviewData],
+  () => [props.dataDate, props.overviewData, props.bundle, props.bundlePending],
   () => loadAll(),
   { deep: true },
 )

@@ -332,6 +332,7 @@ async function approve(ticketId: string, approved: boolean) {
       if (!approved) order.reject_reason = rejectReason.value
     }
     invalidateCachedApi('/api/work-orders')
+    invalidateCachedApi('/api/operations/bundle')
 
     actionResult.value = {
       ...actionResult.value,

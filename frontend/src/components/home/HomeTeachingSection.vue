@@ -8,6 +8,9 @@ import HomeMiniMetricCards from './HomeMiniMetricCards.vue'
 
 const props = defineProps<{
   dataDate: string
+  bundle?: any
+  useBundle?: boolean
+  bundlePending?: boolean
 }>()
 
 const BT = 'Education'
@@ -367,25 +370,44 @@ function renderHvacTriplet(
 }
 
 async function loadAll() {
-  const endD = props.dataDate ? new Date(props.dataDate + 'T12:00:00Z') : new Date()
-  const startD = new Date(endD)
-  startD.setUTCDate(startD.getUTCDate() - 6)
-
-  const noData = { hourly_profile: [] }
-
   try {
-    const [lp, rv, ax, lpAir, lpSupply, lpReturn] = await Promise.all([
-      cachedApiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/load-profile?metric=electricity&days=14`),
-      cachedApiFetch<any>(
-        `/api/buildings/${encodeURIComponent(BT)}/rated-vs-actual?start_date=${isoDate(startD)}&end_date=${isoDate(endD)}&metric=electricity`,
-      ),
-      cachedApiFetch<any>(`/api/anomalies/recent?hours=168&building_type=${encodeURIComponent(BT)}`),
-      cachedApiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/load-profile?metric=air_temp&days=14`).catch(() => noData),
-      cachedApiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/load-profile?metric=supply_temp&days=14`).catch(() => noData),
-      cachedApiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/load-profile?metric=return_temp&days=14`).catch(() => noData),
-    ])
+    let lp: any
+    let rv: any
+    let ax: any
+    let lpAir: any
+    let lpSupply: any
+    let lpReturn: any
+    let st: any
 
-    const st = await cachedApiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/status`).catch(() => null)
+    if (props.bundle) {
+      lp = props.bundle.load_profile_electricity ?? { hourly_profile: [], weekday_profile: [] }
+      rv = props.bundle.rated_vs_actual_electricity ?? { records: [], summary: null }
+      ax = props.bundle.anomalies ?? { anomalies: [] }
+      lpAir = props.bundle.load_profile_air_temp ?? { hourly_profile: [] }
+      lpSupply = props.bundle.load_profile_supply_temp ?? { hourly_profile: [] }
+      lpReturn = props.bundle.load_profile_return_temp ?? { hourly_profile: [] }
+      st = props.bundle.status ?? null
+    } else if (props.useBundle && props.bundlePending) {
+      return
+    } else {
+      const endD = props.dataDate ? new Date(props.dataDate + 'T12:00:00Z') : new Date()
+      const startD = new Date(endD)
+      startD.setUTCDate(startD.getUTCDate() - 6)
+      const noData = { hourly_profile: [] }
+
+      ;[lp, rv, ax, lpAir, lpSupply, lpReturn] = await Promise.all([
+        cachedApiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/load-profile?metric=electricity&days=14`),
+        cachedApiFetch<any>(
+          `/api/buildings/${encodeURIComponent(BT)}/rated-vs-actual?start_date=${isoDate(startD)}&end_date=${isoDate(endD)}&metric=electricity`,
+        ),
+        cachedApiFetch<any>(`/api/anomalies/recent?hours=168&building_type=${encodeURIComponent(BT)}`),
+        cachedApiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/load-profile?metric=air_temp&days=14`).catch(() => noData),
+        cachedApiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/load-profile?metric=supply_temp&days=14`).catch(() => noData),
+        cachedApiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/load-profile?metric=return_temp&days=14`).catch(() => noData),
+      ])
+
+      st = await cachedApiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/status`).catch(() => null)
+    }
 
     statusSnap.value = st
     anomalies.value = ax?.anomalies ?? []
@@ -424,10 +446,11 @@ function onResize() {
 let ro: ResizeObserver | null = null
 
 watch(
-  () => props.dataDate,
+  () => [props.dataDate, props.bundle, props.bundlePending],
   () => {
     loadAll()
   },
+  { deep: true },
 )
 
 onMounted(async () => {

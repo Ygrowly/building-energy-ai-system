@@ -88,19 +88,37 @@
       :ai-steward-loading="aiStewardLoading"
       :overview-data="overviewData"
       :anomaly-data="anomalyData"
+      :overview-series-bundle="homeBundle?.overview_series ?? null"
+      :use-bundle="true"
+      :bundle-pending="homeBundleLoading"
       :sankey-data="sankeyData"
       @refresh="handleAiStewardRefresh"
       @view-all="handleAiStewardViewAll"
       @view-curve="handleAiStewardViewCurve"
       @apply-strategy="handleAiStewardApplyStrategy"
     />
-    <HomeTeachingSection v-else-if="activeBuilding === 'Education'" :data-date="dataDateForSections" />
+    <HomeTeachingSection
+      v-else-if="activeBuilding === 'Education'"
+      :data-date="dataDateForSections"
+      :bundle="homeBundle?.sections?.Education ?? null"
+      :use-bundle="true"
+      :bundle-pending="homeBundleLoading"
+    />
     <HomeOfficeSection
       v-else-if="activeBuilding === 'Office'"
       :data-date="dataDateForSections"
       :overview-data="overviewData"
+      :bundle="homeBundle?.sections?.Office ?? null"
+      :use-bundle="true"
+      :bundle-pending="homeBundleLoading"
     />
-    <HomePublicSection v-else-if="activeBuilding === 'Public services'" :data-date="dataDateForSections" />
+    <HomePublicSection
+      v-else-if="activeBuilding === 'Public services'"
+      :data-date="dataDateForSections"
+      :bundle="homeBundle?.sections?.['Public services'] ?? null"
+      :use-bundle="true"
+      :bundle-pending="homeBundleLoading"
+    />
   </div>
 </template>
 
@@ -142,10 +160,13 @@ const weatherHumi = ref<number | null>(null)
 const overviewData = ref<any>(null)
 const anomalyData = ref<any[]>([])
 const aiStewardLoading = ref(false)
+const homeBundle = ref<any>(null)
+const homeBundleLoading = ref(false)
 const sankeyData = ref<{
   nodes: { name: string }[]
   links: { source: string | number; target: string | number; value: number }[]
 } | null>(null)
+const HOME_BUNDLE_PATH = '/api/home/bundle'
 const HOME_CACHE_TTL = 60_000
 
 const buildingOptions = [
@@ -498,16 +519,29 @@ function applySankey(data: any) {
   sankeyData.value = data?.nodes?.length && data?.links?.length ? data : null
 }
 
+function applyHomeBundle(data: any) {
+  homeBundle.value = data ?? null
+  if (data?.overview) applyOverview(data.overview)
+  if (data?.anomalies) applyAnomalies(data.anomalies)
+  if (data?.sankey) applySankey(data.sankey)
+}
+
 function hydrateHomeCache() {
+  const bundle = peekCachedApi<any>(HOME_BUNDLE_PATH, { ttlMs: HOME_CACHE_TTL })
+  if (bundle.data) {
+    applyHomeBundle(bundle.data)
+  }
+
   const overview = peekCachedApi<any>('/api/overview', { ttlMs: HOME_CACHE_TTL })
   const anomalies = peekCachedApi<any>('/api/anomalies/recent?hours=168', { ttlMs: HOME_CACHE_TTL })
   const sankey = peekCachedApi<any>('/api/anomalies/sankey', { ttlMs: HOME_CACHE_TTL })
 
-  if (overview.data) applyOverview(overview.data)
-  if (anomalies.data) applyAnomalies(anomalies.data)
-  if (sankey.data) applySankey(sankey.data)
+  if (!bundle.data && overview.data) applyOverview(overview.data)
+  if (!bundle.data && anomalies.data) applyAnomalies(anomalies.data)
+  if (!bundle.data && sankey.data) applySankey(sankey.data)
 
   return {
+    bundleFresh: bundle.isFresh,
     overviewFresh: overview.isFresh,
     anomaliesFresh: anomalies.isFresh,
     sankeyFresh: sankey.isFresh,
@@ -550,11 +584,27 @@ async function fetchSankeyData(force = false) {
   }
 }
 
+async function fetchHomeBundle(force = false) {
+  homeBundleLoading.value = true
+  try {
+    const data = await cachedApiFetch<any>(HOME_BUNDLE_PATH, undefined, {
+      force,
+      ttlMs: HOME_CACHE_TTL,
+    })
+    applyHomeBundle(data)
+  } catch {
+    homeBundle.value = null
+    await Promise.all([fetchOverview(force), fetchAnomalies(force), fetchSankeyData(force)])
+  } finally {
+    homeBundleLoading.value = false
+  }
+}
+
 async function handleAiStewardRefresh() {
   if (aiStewardLoading.value) return
   aiStewardLoading.value = true
   try {
-    await Promise.all([fetchOverview(true), fetchAnomalies(true), fetchSankeyData(true)])
+    await fetchHomeBundle(true)
   } finally {
     aiStewardLoading.value = false
   }
@@ -572,14 +622,14 @@ function handleAiStewardApplyStrategy() {
   activeBuilding.value = 'all'
 }
 
+const initialHomeCache = hydrateHomeCache()
+homeBundleLoading.value = !initialHomeCache.bundleFresh
+
 onMounted(async () => {
-  const cache = hydrateHomeCache()
   void buildingStore.fetchBuildings()
-  await Promise.all([
-    fetchOverview(!cache.overviewFresh),
-    fetchAnomalies(!cache.anomaliesFresh),
-    fetchSankeyData(!cache.sankeyFresh),
-  ])
+  if (!initialHomeCache.bundleFresh) {
+    await fetchHomeBundle(true)
+  }
 })
 
 // ── 报表集成 ─────────────────────────────────────────────────

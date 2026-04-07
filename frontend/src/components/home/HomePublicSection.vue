@@ -10,6 +10,9 @@ import HomeMiniMetricCards from './HomeMiniMetricCards.vue'
 
 const props = defineProps<{
   dataDate: string
+  bundle?: any
+  useBundle?: boolean
+  bundlePending?: boolean
 }>()
 
 const BT = 'Public services'
@@ -332,6 +335,40 @@ function fmtTime(iso: string) {
 }
 
 async function loadAll() {
+  if (props.bundle) {
+    const en = props.bundle.energy ?? { records: [] }
+    const lpE = props.bundle.load_profile_electricity ?? { hourly_profile: [] }
+    const lpT = props.bundle.load_profile_air_temp ?? { hourly_profile: [] }
+    const lpH = props.bundle.load_profile_humidity ?? { hourly_profile: [] }
+    const ax = props.bundle.anomalies ?? { anomalies: [] }
+    const rv = props.bundle.rated_vs_actual_electricity ?? null
+    const st = props.bundle.status ?? null
+
+    statusSnap.value = st
+    anomalies.value = ax?.anomalies ?? []
+    ratedSummary.value = rv?.summary ?? null
+
+    const toHourly = (profile: any[]) =>
+      Array.from({ length: 24 }, (_, h) => {
+        const row = profile?.find((x: any) => x.hour === h)
+        return row?.avg_value != null ? Number(row.avg_value) : null
+      })
+
+    const hourlyT = toHourly(lpT.hourly_profile)
+    const hourlyH = toHourly(lpH.hourly_profile)
+
+    disposeAll()
+    renderDual(en.records || [])
+    renderProfile(lpE.hourly_profile || [])
+    renderComfort(hourlyT, hourlyH)
+    nextTick(() => instances.forEach((i) => i.resize()))
+    return
+  }
+
+  if (props.useBundle && props.bundlePending) {
+    return
+  }
+
   const endD = props.dataDate ? new Date(props.dataDate + 'T12:00:00Z') : new Date()
   const startD = new Date(endD)
   startD.setUTCDate(startD.getUTCDate() - 29)
@@ -375,7 +412,7 @@ async function loadAll() {
   }
 }
 
-watch(() => props.dataDate, () => loadAll())
+watch(() => [props.dataDate, props.bundle, props.bundlePending], () => loadAll(), { deep: true })
 
 function onResize() {
   instances.forEach((c) => c.resize())

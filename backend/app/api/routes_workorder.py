@@ -34,10 +34,10 @@ from app.services.dispatch_service import (
     complete_dispatch_task,
     get_current_dispatch_task,
     load_current_dispatches_by_work_order_ids,
-    load_dispatch_events_by_task_ids,
     list_dispatch_tasks_for_work_order,
     serialize_dispatch_task,
 )
+from app.services.dispatch_event_service import load_dispatch_events_by_task_ids
 from app.services.work_order_service import (
     DISPATCHABLE_WORK_ORDER_STATUSES,
     build_batch_dispatch_preview,
@@ -224,16 +224,6 @@ class AdminReviewRequest(BaseModel):
         ..., pattern=r"^(confirm|override_approve|override_reject|close_escalated)$"
     )
     notes: str | None = None
-
-
-async def _load_assigned_users(
-    db: AsyncSession,
-    work_orders: list[WorkOrder],
-) -> dict[str, User]:
-    return await _load_users_by_ids(
-        db,
-        [wo.assigned_to for wo in work_orders if wo.assigned_to],
-    )
 
 
 async def _load_users_by_ids(

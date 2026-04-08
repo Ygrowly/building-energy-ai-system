@@ -156,6 +156,15 @@
       }
     },
     {
+      "path": "pages/worker/profile/dispatch-profile",
+      "style": {
+        "navigationBarTitleText": "我的派工画像",
+        "navigationBarBackgroundColor": "#E4EDB8",
+        "navigationBarTextStyle": "white",
+        "navigationStyle": "custom"
+      }
+    },
+    {
       "path": "pages/worker/profile/security",
       "style": {
         "navigationBarTitleText": "账号与安全",

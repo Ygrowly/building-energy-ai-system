@@ -22,6 +22,14 @@ function matchesTab(wo: any, tab: WorkOrderTabKey) {
   return wo.status === tab
 }
 
+function currentExecutionStatus(wo: any) {
+  return wo.current_dispatch?.execution_status || wo.execution_status || ''
+}
+
+function currentSlaStatus(wo: any) {
+  return wo.current_dispatch?.sla_status || wo.sla_status || ''
+}
+
 export function useWorkOrdersData(options: UseWorkOrdersDataOptions) {
   const loading = ref(false)
   const fetchError = ref('')
@@ -34,7 +42,7 @@ export function useWorkOrdersData(options: UseWorkOrdersDataOptions) {
   const timelineErrorState = ref<Record<string, string>>({})
 
   const filteredOrders = computed(() => allOrders.value.filter(wo => matchesTab(wo, activeTab.value)))
-  const overdueCount = computed(() => allOrders.value.filter(wo => wo.execution_status === 'overdue' || wo.sla_status === 'overdue').length)
+  const overdueCount = computed(() => allOrders.value.filter(wo => currentExecutionStatus(wo) === 'overdue' || currentSlaStatus(wo) === 'overdue').length)
   const isCurrentTabEmpty = computed(() => activeTab.value === 'shared_hall' ? hallEntries.value.length === 0 : filteredOrders.value.length === 0)
   const emptyMessage = computed(() => WORK_ORDER_EMPTY_MESSAGES[activeTab.value])
 
@@ -44,7 +52,9 @@ export function useWorkOrdersData(options: UseWorkOrdersDataOptions) {
   }
 
   async function fetchHallEntries(focusedHallEntryId = '') {
-    const data = await apiFetch<{ hall_entries?: any[] }>('/api/dispatch-hall?status=open&entry_type=support_request,takeover_candidate&include_applications=true&page=1&page_size=50')
+    const data = await apiFetch<{ hall_entries?: any[] }>(
+      '/api/dispatch-hall?status=open&entry_type=support_request,takeover_candidate&include_applications=true&sort_by=ops_priority&page=1&page_size=80',
+    )
     hallEntries.value = (data?.hall_entries ?? [])
       .sort((a, b) => {
         if (focusedHallEntryId) {

@@ -12,20 +12,23 @@ from app.core.cache import delete_cache_by_prefix
 from app.core.security import get_current_user
 from app.db.models import DispatchTask, User, WorkOrder, WorkerProfile, WorkerProfileSkill
 from app.db.session import get_db_session
+from app.services.audit_log_service import write_work_order_audit_log as _write_audit_log
+from app.services.dispatch_event_service import (
+    list_dispatch_events,
+    load_dispatch_events_by_task_ids,
+)
 from app.services.dispatch_service import (
     cancel_dispatch_task,
     complete_dispatch_task,
     get_dispatch_task_by_id,
     list_dispatch_tasks,
-    list_dispatch_events,
-    load_dispatch_events_by_task_ids,
     nudge_dispatch_task,
     reassign_dispatch_task,
     reject_dispatch_task,
     serialize_dispatch_task,
     update_dispatch_task_action,
 )
-from app.services.work_order_service import _write_audit_log, transition_status
+from app.services.work_order_service import transition_status
 
 router = APIRouter(prefix="/dispatch-tasks", tags=["派工执行"])
 

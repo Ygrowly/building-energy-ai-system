@@ -8,11 +8,26 @@ export default defineConfig({
       output: {
         manualChunks(id) {
           if (!id.includes('node_modules')) return
-          if (id.includes('/echarts/') || id.includes('/zrender/') || id.includes('/vue-echarts/')) {
-            return 'vendor-charts'
+          if (id.includes('/zrender/')) {
+            return 'vendor-zrender'
+          }
+          if (id.includes('/echarts/')) {
+            return 'vendor-echarts'
+          }
+          if (id.includes('/vue-echarts/')) {
+            return 'vendor-echarts-vue'
+          }
+          if (id.includes('/jspdf/')) {
+            return 'vendor-pdf'
+          }
+          if (id.includes('/html2canvas/')) {
+            return 'vendor-html2canvas'
+          }
+          if (id.includes('/dompurify/')) {
+            return 'vendor-dompurify'
           }
           if (id.includes('/html2pdf.js/')) {
-            return 'vendor-export'
+            return 'vendor-html2pdf'
           }
           if (id.includes('/marked/')) {
             return 'vendor-markdown'

@@ -26,9 +26,9 @@ from app.db.models import (
     WorkOrderAuditLog,
     WorkOrderAnomalyLink,
 )
+from app.services.audit_log_service import write_work_order_audit_log as _write_audit_log
 from app.services.dispatch_service import derive_dispatch_ui_meta_from_task
 from app.services.work_order_service import (
-    _write_audit_log,
     append_anomaly_evidence_to_work_order,
     create_work_order,
     sync_incident_from_work_order,

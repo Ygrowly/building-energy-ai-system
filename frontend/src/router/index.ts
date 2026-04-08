@@ -57,6 +57,12 @@ const router = createRouter({
       meta: { title: '执行跟踪', requiresAuth: true, workOrderMode: 'tracking' },
     },
     {
+      path: '/worker-profiles',
+      name: 'WorkerProfiles',
+      component: () => import('@/views/WorkerProfiles.vue'),
+      meta: { title: '人员画像', requiresAuth: true },
+    },
+    {
       path: '/datacenter',
       name: 'DataCenter',
       component: () => import('@/views/DataCenter.vue'),
@@ -76,6 +82,7 @@ const KEEP_ALIVE_ROUTE_NAMES = new Set([
   'Dashboard',
   'Operations',
   'WorkOrders',
+  'WorkerProfiles',
   'DataCenter',
   'QueryStats',
 ])

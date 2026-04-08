@@ -211,7 +211,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { Icon } from '@iconify/vue'
-import * as echarts from 'echarts'
+import * as echarts from '@/utils/echarts'
 import { apiFetch } from '@/api/http'
 import { useDataRangeStore } from '@/stores/dataRangeStore'
 

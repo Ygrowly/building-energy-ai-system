@@ -23,10 +23,10 @@ from app.db.models import (
     User,
     WorkOrder,
     WorkOrderAnomalyLink,
-    WorkOrderAuditLog,
     WorkerProfile,
     WorkerProfileSkill,
 )
+from app.services.audit_log_service import write_work_order_audit_log as _write_audit_log
 from app.services.dispatch_service import (
     create_dispatch_task,
     derive_dispatch_ui_meta_from_task,
@@ -122,32 +122,6 @@ def _safe_load_json(raw: str | None) -> Any:
 def validate_transition(current: str, target: str) -> bool:
     allowed = VALID_TRANSITIONS.get(current, set())
     return target in allowed
-
-
-# ---------------------------------------------------------------------------
-# 审计日志写入
-# ---------------------------------------------------------------------------
-async def _write_audit_log(
-    db: AsyncSession,
-    *,
-    work_order_id: str,
-    action: str,
-    old_status: str | None,
-    new_status: str,
-    actor_type: str,
-    actor_id: str | None = None,
-    detail: dict[str, Any] | None = None,
-) -> None:
-    log_entry = WorkOrderAuditLog(
-        work_order_id=work_order_id,
-        action=action,
-        old_status=old_status,
-        new_status=new_status,
-        actor_type=actor_type,
-        actor_id=actor_id,
-        detail_json=json.dumps(detail, ensure_ascii=False, default=str) if detail else None,
-    )
-    db.add(log_entry)
 
 
 # ---------------------------------------------------------------------------

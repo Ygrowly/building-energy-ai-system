@@ -16,6 +16,7 @@ from app.db.models import (
     WorkerProfileSkill,
 )
 from app.db.session import get_db_session
+from app.services.audit_log_service import write_work_order_audit_log as _write_audit_log
 from app.services.dispatch_hall_service import (
     approve_dispatch_hall_application,
     accept_assigned_support_hall_entry,
@@ -35,11 +36,10 @@ from app.services.dispatch_hall_service import (
 )
 from app.services.dispatch_service import (
     get_dispatch_task_by_id,
-    record_dispatch_event,
     reassign_dispatch_task,
     serialize_dispatch_task,
 )
-from app.services.work_order_service import _write_audit_log
+from app.services.dispatch_event_service import record_dispatch_event
 
 router = APIRouter(prefix="/dispatch-hall", tags=["共享工单大厅"])
 
@@ -224,6 +224,9 @@ async def list_dispatch_hall_entries_endpoint(
     work_order_id: str | None = None,
     incident_id: str | None = None,
     source_dispatch_id: str | None = None,
+    building_id: str | None = None,
+    target_team_id: str | None = None,
+    sort_by: str = "ops_priority",
     include_applications: bool = False,
     page: int = 1,
     page_size: int = 20,
@@ -246,6 +249,9 @@ async def list_dispatch_hall_entries_endpoint(
         work_order_id=work_order_id,
         incident_id=incident_id,
         source_dispatch_id=source_dispatch_id,
+        building_id=building_id,
+        target_team_id=target_team_id,
+        sort_by=sort_by,
         page=page,
         page_size=page_size,
     )

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
-import * as echarts from 'echarts'
+import * as echarts from '@/utils/echarts'
 import { useBuildingStore } from '@/stores/buildingStore'
 import { apiFetch } from '@/api/http'
 import { MC, gc, EUI_BASELINE, HOME_BUILDING_COLORS } from '@/utils/homeCharts'

@@ -66,6 +66,7 @@ const shiftLabel = computed(() => {
   const map: Record<string, string> = {
     on_duty: '值班中',
     standby: '待命',
+    busy: '忙碌',
     off_duty: '离岗',
   }
   return map[workerProfile.value?.shift_status || ''] || '值班中'

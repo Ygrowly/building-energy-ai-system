@@ -185,6 +185,50 @@ def test_can_view_dispatch_hall_entry_matches_combined_scope() -> None:
     ) is False
 
 
+def test_serialize_dispatch_hall_entry_adds_application_stats_and_risk_score() -> None:
+    now = datetime.now(timezone.utc)
+    entry = SimpleNamespace(
+        id="hall-1",
+        work_order_id="wo-1",
+        incident_id="incident-1",
+        source_dispatch_id="dispatch-1",
+        entry_type="takeover_candidate",
+        status="open",
+        visibility_scope="team_or_recommended",
+        target_team_ids_json='["team-1"]',
+        target_skill_tags_json='["hvac"]',
+        target_user_ids_json='["ops-2"]',
+        reason="接单超时",
+        support_reason=None,
+        sla_stage="assigned",
+        overdue_level="overdue",
+        allow_direct_claim=False,
+        assigned_to=None,
+        assigned_team_id=None,
+        assigned_by=None,
+        created_by="system",
+        expired_at=None,
+        assigned_at=None,
+        closed_at=None,
+        created_at=now,
+        updated_at=now,
+    )
+
+    payload = dispatch_hall_service.serialize_dispatch_hall_entry(
+        entry,
+        applications=[
+            {"id": "app-1", "status": "pending", "updated_at": "2026-04-07T10:00:00+00:00"},
+            {"id": "app-2", "status": "rejected", "updated_at": "2026-04-07T09:00:00+00:00"},
+        ],
+    )
+
+    assert payload["application_stats"]["total"] == 2
+    assert payload["application_stats"]["pending"] == 1
+    assert payload["application_stats"]["rejected"] == 1
+    assert payload["latest_application"]["id"] == "app-1"
+    assert payload["risk_score"] == 90
+
+
 @pytest.mark.asyncio
 async def test_create_or_reopen_takeover_hall_entry_applies_derived_targets(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(

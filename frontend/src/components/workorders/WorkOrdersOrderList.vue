@@ -23,11 +23,11 @@
             {{ statusLabels[wo.status] ?? wo.status }}
           </span>
           <span
-            v-if="wo.execution_status"
+            v-if="executionStatusForOrderValue(wo)"
             class="execution-chip"
-            :class="executionChipClassValue(wo.execution_status)"
+            :class="executionChipClassValue(executionStatusForOrderValue(wo))"
           >
-            {{ executionLabels[wo.execution_status] ?? wo.execution_status }}
+            {{ executionLabels[executionStatusForOrderValue(wo)] ?? executionStatusForOrderValue(wo) }}
           </span>
           <span class="expand-btn">{{ expandedId === wo.ticket_id ? '▲' : '▼' }}</span>
         </div>
@@ -163,6 +163,10 @@ const props = defineProps({
     type: Function as PropType<(status: string) => Record<string, boolean>>,
     required: true,
   },
+  executionStatusForOrder: {
+    type: Function as PropType<(wo: any) => string>,
+    required: true,
+  },
   buildingName: {
     type: Function as PropType<(id: string) => string>,
     required: true,
@@ -196,6 +200,7 @@ const props = defineProps({
 const statusCardClassValue = (wo: any) => props.statusCardClass(wo)
 const statusChipClassValue = (status: string) => props.statusChipClass(status)
 const executionChipClassValue = (status: string) => props.executionChipClass(status)
+const executionStatusForOrderValue = (wo: any) => props.executionStatusForOrder(wo)
 const buildingNameValue = (id: string) => props.buildingName(id)
 const formatTimeValue = (value?: string | null) => props.formatTime(value)
 const detailRowsValue = (wo: any) => props.detailRows(wo)

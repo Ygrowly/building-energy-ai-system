@@ -261,7 +261,7 @@ import { ref, reactive, computed, watch, onMounted, onUnmounted, nextTick } from
 import { Icon } from '@iconify/vue'
 import { apiFetch } from '@/api/http'
 import { useDataRangeStore } from '@/stores/dataRangeStore'
-import * as echarts from 'echarts'
+import * as echarts from '@/utils/echarts'
 import { useReportExport } from '@/composables/useReportExport'
 
 // ── 报表集成 ──

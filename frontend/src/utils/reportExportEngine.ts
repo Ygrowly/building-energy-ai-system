@@ -12,7 +12,7 @@
  * @param filename - 文件名（不含扩展名）
  */
 export async function exportToPDF(element: HTMLElement, filename: string): Promise<void> {
-  const { default: html2pdf } = await import('html2pdf.js')
+  const { default: html2pdf } = await import('html2pdf.js/src/index.js')
   const options = {
     margin: [8, 8, 8, 8],
     filename: `${filename}.pdf`,

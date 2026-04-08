@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
-import * as echarts from 'echarts'
+import * as echarts from '@/utils/echarts'
 import { Icon } from '@iconify/vue'
 import { cachedApiFetch } from '@/api/cached'
 import { MC, gc, isoDate } from '@/utils/homeCharts'

@@ -5,7 +5,7 @@
  */
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { cachedApiFetch } from '@/api/cached'
+import { apiFetch } from '@/api/http'
 import {
   buildWorkorderNotificationItems,
   type WorkorderNotificationHallEntry,

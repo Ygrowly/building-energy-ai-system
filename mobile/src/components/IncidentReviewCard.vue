@@ -36,21 +36,17 @@
 
     <view class="summary-box">
       <text class="summary-line">{{ anomalySummary }}</text>
-      <view class="summary-foot">
-        <text class="state-dot" :class="{ active: incident.is_active, recovered: !incident.is_active }" />
-        <text class="state-text">{{ stateText }}</text>
-      </view>
-    </view>
-
-    <view class="progress-brief">
-      <view class="progress-head">
-        <view class="progress-owner">
-          <text class="owner-name">{{ assigneeText }}</text>
-          <text v-if="teamText" class="owner-team">{{ teamText }}</text>
+      <view class="brief-facts">
+        <view
+          v-for="item in dispatchBriefMetrics"
+          :key="item.label"
+          class="brief-chip"
+          :class="item.tone || 'default'"
+        >
+          <text class="brief-label">{{ item.label }}</text>
+          <text class="brief-value">{{ item.value }}</text>
         </view>
-        <text class="progress-meta">{{ progressMetaText }}</text>
       </view>
-      <text class="progress-note">{{ progressText }}</text>
     </view>
 
     <view v-if="showQuickActions" class="action-strip" @click.stop>
@@ -59,11 +55,16 @@
     </view>
 
     <view class="fold-trigger" @click.stop="toggleDetails">
-      <text class="fold-label">{{ detailsExpanded ? '收起补充信息' : '展开补充信息' }}</text>
+      <text class="fold-label">{{ detailsExpanded ? '收起详情' : '展开详情' }}</text>
       <text class="fold-arrow">{{ detailsExpanded ? '收起' : '更多' }}</text>
     </view>
 
     <view v-if="detailsExpanded" class="detail-panel" @click.stop>
+      <view class="detail-block">
+        <text class="detail-title">当前推进</text>
+        <text class="detail-line">{{ assigneeBriefText }}</text>
+        <text class="detail-line">{{ progressText }}</text>
+      </view>
       <view class="detail-block">
         <text class="detail-title">时间线</text>
         <text class="detail-line">{{ timeRow || '暂无时间线信息' }}</text>
@@ -131,40 +132,59 @@
     </view>
 
     <text v-if="causeLabel" class="cause-text">根因：{{ causeLabel }}</text>
-    <text class="summary">{{ summaryText }}</text>
+    <text class="summary">{{ classicSummaryText }}</text>
 
-    <view class="metric-grid">
-      <view class="metric-card">
-        <text class="metric-label">连续次数</text>
-        <text class="metric-value">{{ incident.anomaly_count }} 次</text>
-      </view>
-      <view class="metric-card danger" v-if="incident.peak_deviation_pct !== null">
-        <text class="metric-label">峰值偏差</text>
-        <text class="metric-value">{{ signedPeak }}</text>
-      </view>
-      <view class="metric-card" v-if="timeSpan">
-        <text class="metric-label">异常时段</text>
-        <text class="metric-value">{{ timeSpan }}</text>
+    <view class="brief-facts">
+      <view
+        v-for="item in classicBriefMetrics"
+        :key="item.label"
+        class="brief-chip"
+        :class="item.tone || 'default'"
+      >
+        <text class="brief-label">{{ item.label }}</text>
+        <text class="brief-value">{{ item.value }}</text>
       </view>
     </view>
 
-    <view class="time-row-classic">
-      <view class="time-block">
-        <text class="time-caption">首次发现</text>
-        <text class="time-label">{{ formatTime(incident.first_seen_at) }}</text>
-      </view>
-      <view class="time-block align-right">
-        <text class="time-caption">最近异常</text>
-        <text class="time-label">{{ formatTime(incident.last_seen_at) }}</text>
-      </view>
+    <view class="fold-trigger" @click.stop="toggleDetails">
+      <text class="fold-label">{{ detailsExpanded ? '收起详情' : '展开详情' }}</text>
+      <text class="fold-arrow">{{ detailsExpanded ? '收起' : '更多' }}</text>
     </view>
 
-    <view v-if="incident.current_work_order?.ai_reason" class="ai-reason">
-      <view class="ai-head">
-        <text class="ai-label">AI 分析</text>
-        <text class="ai-arrow">查看详情</text>
+    <view v-if="detailsExpanded" class="detail-panel detail-panel--classic" @click.stop>
+      <view class="metric-grid">
+        <view class="metric-card">
+          <text class="metric-label">连续次数</text>
+          <text class="metric-value">{{ incident.anomaly_count }} 次</text>
+        </view>
+        <view class="metric-card danger" v-if="incident.peak_deviation_pct !== null">
+          <text class="metric-label">峰值偏差</text>
+          <text class="metric-value">{{ signedPeak }}</text>
+        </view>
+        <view class="metric-card" v-if="timeSpan">
+          <text class="metric-label">异常时段</text>
+          <text class="metric-value">{{ timeSpan }}</text>
+        </view>
       </view>
-      <text class="ai-text">{{ aiReasonText }}</text>
+
+      <view class="time-row-classic">
+        <view class="time-block">
+          <text class="time-caption">首次发现</text>
+          <text class="time-label">{{ formatTime(incident.first_seen_at) }}</text>
+        </view>
+        <view class="time-block align-right">
+          <text class="time-caption">最近异常</text>
+          <text class="time-label">{{ formatTime(incident.last_seen_at) }}</text>
+        </view>
+      </view>
+
+      <view v-if="incident.current_work_order?.ai_reason" class="ai-reason">
+        <view class="ai-head">
+          <text class="ai-label">AI 分析</text>
+          <text class="ai-arrow">查看详情</text>
+        </view>
+        <text class="ai-text">{{ aiReasonText }}</text>
+      </view>
     </view>
   </view>
 </template>
@@ -222,6 +242,7 @@ const classicRuleLabel = computed(() => formatRuleLabel(props.incident.rule_trig
 const causeLabel = computed(() => formatRootCauseLabel(props.incident.hvac_root_cause))
 const summaryText = computed(() => sanitizeDisplayText(props.incident.summary_text))
 const aiReasonText = computed(() => sanitizeDisplayText(props.incident.current_work_order?.ai_reason))
+const classicSummaryText = computed(() => summaryText.value || aiReasonText.value || '暂无异常概述')
 const currentDispatch = computed(() => props.incident.current_dispatch || null)
 const signedPeak = computed(() => {
   const value = props.incident.peak_deviation_pct
@@ -256,6 +277,9 @@ const suggestedActionText = computed(() => buildSuggestedActionText(props.incide
 const ruleLabel = computed(() => buildRuleLabel(props.incident))
 const assigneeText = computed(() => currentDispatch.value?.assigned_to_name || props.incident.current_work_order?.assigned_to_name || '待分配责任人')
 const teamText = computed(() => currentDispatch.value?.assigned_team_name || props.incident.current_work_order?.assigned_team_name || '')
+const assigneeBriefText = computed(() => {
+  return teamText.value ? `${assigneeText.value} · ${teamText.value}` : assigneeText.value
+})
 const dispatchAttemptText = computed(() => {
   const attemptNo = currentDispatch.value?.attempt_no || 0
   if (attemptNo <= 1) return ''
@@ -300,6 +324,30 @@ const progressMetaText = computed(() => {
   if (executionStatus.value === 'pending_accept') return '等待接单'
   if (executionStatus.value === 'waiting_support') return '等待协同'
   return '处理中'
+})
+const dispatchBriefMetrics = computed(() => ([
+  { label: '责任人', value: assigneeBriefText.value, tone: 'default' },
+  {
+    label: '推进',
+    value: progressMetaText.value,
+    tone: executionStatus.value === 'overdue' ? 'danger' : executionStatus.value === 'pending_accept' ? 'accent' : 'default',
+  },
+  { label: '现场', value: stateText.value, tone: props.incident.is_active ? 'danger' : 'success' },
+].filter(item => item.value)))
+const classicBriefMetrics = computed(() => {
+  const items: Array<{ label: string; value: string; tone?: 'default' | 'danger' | 'accent' | 'success' }> = [
+    { label: '连续次数', value: `${props.incident.anomaly_count ?? 0} 次` },
+  ]
+
+  if (signedPeak.value) {
+    items.push({ label: '峰值偏差', value: signedPeak.value, tone: 'danger' })
+  }
+
+  if (timeSpan.value) {
+    items.push({ label: '异常时段', value: timeSpan.value, tone: 'accent' })
+  }
+
+  return items
 })
 
 function emitAction(type: 'trend' | 'contact' | 'nudge' | 'detail' | 'suggest_reassign') {
@@ -513,6 +561,11 @@ function formatTime(value: string | null): string {
   font-size: 24rpx;
   color: #415164;
   line-height: 1.7;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .summary-foot {
@@ -538,6 +591,53 @@ function formatTime(value: string | null): string {
 .detail-panel,
 .ai-reason {
   margin-bottom: 16rpx;
+}
+
+.brief-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12rpx;
+  margin-top: 14rpx;
+}
+
+.brief-chip {
+  flex: 1 1 180rpx;
+  min-width: 0;
+  padding: 14rpx 16rpx;
+  border-radius: 18rpx;
+  background: #ffffff;
+  border: 1rpx solid #e3eaf5;
+
+  &.danger {
+    background: #fff4f3;
+    border-color: #ffd8d3;
+  }
+
+  &.accent {
+    background: #eef4ff;
+    border-color: #d7e5ff;
+  }
+
+  &.success {
+    background: #eefcf7;
+    border-color: #d6f2e6;
+  }
+}
+
+.brief-label {
+  display: block;
+  font-size: 20rpx;
+  color: #7d8797;
+  margin-bottom: 6rpx;
+}
+
+.brief-value {
+  display: block;
+  font-size: 22rpx;
+  font-weight: 700;
+  color: #1b2a41;
+  line-height: 1.5;
+  word-break: break-all;
 }
 
 .progress-head {
@@ -644,6 +744,23 @@ function formatTime(value: string | null): string {
   font-size: 22rpx;
   color: #46576d;
   line-height: 1.6;
+}
+
+.detail-panel--classic {
+  margin-top: 12rpx;
+}
+
+.detail-panel--classic .metric-grid {
+  margin-bottom: 14rpx;
+}
+
+.detail-panel--classic .time-row-classic {
+  margin-top: 0;
+}
+
+.detail-panel--classic .ai-reason {
+  margin-top: 14rpx;
+  margin-bottom: 0;
 }
 
 .secondary-actions {

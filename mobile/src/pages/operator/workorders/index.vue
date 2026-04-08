@@ -4,18 +4,31 @@
 
     <!-- 分组切换 -->
     <view class="tab-shell">
-      <view class="tab-switch">
-        <view
-          v-for="tab in switchTabs"
-          :key="tab.value"
-          class="switch-item"
-          :class="{ active: activeTab === tab.value }"
-          @click="onSwitchTab(tab.value)"
-        >
-          <text class="switch-label">{{ tab.label }}</text>
-          <view v-if="tab.count > 0" class="count-dot">{{ tab.count }}</view>
-        </view>
+      <view class="tab-shell-head">
+        <text class="tab-shell-title">状态筛选</text>
+        <text class="tab-shell-hint">左右滑动切换</text>
       </view>
+      <scroll-view
+        scroll-x
+        class="tab-switch-scroll"
+        :show-scrollbar="false"
+        :scroll-into-view="activeTabScrollId"
+        :scroll-with-animation="true"
+      >
+        <view class="tab-switch">
+          <view
+            v-for="(tab, index) in switchTabs"
+            :id="`operator-tab-${index}`"
+            :key="tab.value"
+            class="switch-item"
+            :class="{ active: activeTab === tab.value }"
+            @click="onSwitchTab(tab.value)"
+          >
+            <text class="switch-label">{{ tab.label }}</text>
+            <view v-if="tab.count > 0" class="count-dot">{{ formatTabCount(tab.count) }}</view>
+          </view>
+        </view>
+      </scroll-view>
     </view>
 
     <scroll-view scroll-y class="list-area" @scrolltolower="loadMore">
@@ -761,6 +774,10 @@ const emptyText = computed(() => {
   }
   return map[activeTab.value] ?? '暂无工单'
 })
+const activeTabScrollId = computed(() => {
+  const index = switchTabs.value.findIndex(tab => tab.value === activeTab.value)
+  return index >= 0 ? `operator-tab-${index}` : ''
+})
 
 const activeTabLabel = computed(() => {
   return switchTabs.value.find(tab => tab.value === activeTab.value)?.label || '事件列表'
@@ -981,6 +998,10 @@ function onSwitchTab(val: string) {
     dispatchExecutionFilter.value = 'all'
   }
   loadData()
+}
+
+function formatTabCount(count: number) {
+  return count > 99 ? '99+' : String(count)
 }
 
 function hallPendingApplications(entry: DispatchHallEntry) {
@@ -1619,48 +1640,89 @@ onMounted(loadData)
   margin: 20rpx 24rpx 6rpx;
   position: relative;
   z-index: 1;
+  padding: 16rpx;
+  border-radius: 28rpx;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(245, 248, 253, 0.88));
+  border: 1rpx solid rgba(225, 231, 240, 0.95);
+  box-shadow: 0 12rpx 34rpx rgba(20, 32, 58, 0.08);
+}
+
+.tab-shell-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16rpx;
+  padding: 0 6rpx 12rpx;
+}
+
+.tab-shell-title {
+  font-size: 24rpx;
+  font-weight: 700;
+  color: #1f2937;
+}
+
+.tab-shell-hint {
+  font-size: 20rpx;
+  color: #8a94a6;
+}
+
+.tab-switch-scroll {
+  white-space: nowrap;
 }
 
 .tab-switch {
-  display: flex;
-  background: #fff;
-  border: 1rpx solid rgba(225,231,240,0.9);
-  border-radius: 24rpx;
-  padding: 8rpx;
-  box-shadow: 0 10rpx 30rpx rgba(20, 32, 58, 0.08);
+  display: inline-flex;
+  gap: 12rpx;
+  min-width: 100%;
+  box-sizing: border-box;
 }
 
 .switch-item {
-  flex: 1;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 8rpx;
-  height: 76rpx;
-  color: #7d8797;
+  gap: 10rpx;
+  min-width: 144rpx;
+  height: 80rpx;
+  padding: 0 24rpx;
+  color: #6b7280;
   position: relative;
-  border-radius: 18rpx;
+  flex-shrink: 0;
+  border-radius: 22rpx;
+  border: 1rpx solid rgba(214, 223, 235, 0.92);
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 8rpx 18rpx rgba(15, 23, 42, 0.04);
   &.active {
-    color: #1d4ed8;
+    color: #ffffff;
     font-weight: 700;
-    background: linear-gradient(135deg, #eef4ff, #ffffff);
-    box-shadow: inset 0 0 0 1rpx rgba(97, 139, 255, 0.18);
+    border-color: transparent;
+    background: linear-gradient(135deg, #2563eb, #3b82f6);
+    box-shadow: 0 14rpx 28rpx rgba(37, 99, 235, 0.22);
   }
 }
 
 .switch-label {
   font-size: 24rpx;
+  font-weight: 700;
+  white-space: nowrap;
 }
 
 .count-dot {
-  background: linear-gradient(135deg, #ff5d73, #ff7a5c);
-  color: #fff;
+  background: rgba(37, 99, 235, 0.1);
+  color: #2563eb;
   border-radius: 999rpx;
   font-size: 18rpx;
-  padding: 3rpx 10rpx;
-  min-width: 34rpx;
+  font-weight: 700;
+  line-height: 1;
+  padding: 6rpx 12rpx;
+  min-width: 40rpx;
   text-align: center;
-  box-shadow: 0 6rpx 16rpx rgba(255, 93, 115, 0.28);
+  box-sizing: border-box;
+}
+
+.switch-item.active .count-dot {
+  background: rgba(255, 255, 255, 0.18);
+  color: #ffffff;
 }
 
 .list-area {

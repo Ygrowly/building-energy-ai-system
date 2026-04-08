@@ -35,6 +35,7 @@ from typing import Any
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.buildings import get_building_label
 from app.db.models import Building, EnergyData, KpiExpectedHourly
 
 logger = logging.getLogger(__name__)
@@ -411,12 +412,6 @@ _FLAG_TO_RULE = {
     "flag_return_deviation": "return_temp_deviation",
 }
 
-_BUILDING_DISPLAY_NAMES = {
-    "Education": "教学楼",
-    "Office": "办公楼",
-    "Public services": "公共楼",
-}
-
 _RULE_MESSAGES: dict[str, str] = {
     "water_leak":            "水耗异常",
     "electricity_overload":  "总电耗超标",
@@ -539,7 +534,7 @@ async def generate_anomaly_events(
     )
     bld_row = bld_result.fetchone()
     primary_usage = (bld_row[0] if bld_row else None) or ""
-    building_display = _BUILDING_DISPLAY_NAMES.get(primary_usage, building_id)
+    building_display = get_building_label(primary_usage or building_id, building_id)
     ts_list, _ts_set = _normalize_target_timestamps(target_timestamps)
 
     if ts_list is not None:

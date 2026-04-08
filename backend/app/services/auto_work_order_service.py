@@ -17,6 +17,7 @@ from typing import Any
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.buildings import get_building_label
 from app.db.models import AnomalyEvent, PredictedAnomalyEvent
 from app.services.incident_service import (
     create_or_merge_alert_incident,
@@ -24,15 +25,6 @@ from app.services.incident_service import (
 )
 
 logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# 楼宇显示名映射（与 anomaly_detection_service 一致）
-# ---------------------------------------------------------------------------
-_BUILDING_DISPLAY = {
-    "Fox_office_Alice": "Alice 办公楼",
-    "Fox_education_Louie": "Louie 教学楼",
-    "Fox_public_Henry": "Henry 公共服务楼",
-}
 
 # ---------------------------------------------------------------------------
 # 异常规则 → 中文描述
@@ -120,7 +112,7 @@ def _assign_prediction_priority(pred: PredictedAnomalyEvent) -> str:
 # ---------------------------------------------------------------------------
 def _build_alert_description(event: AnomalyEvent) -> tuple[str, str]:
     """返回 (issue_description, suggested_action)。"""
-    building_name = _BUILDING_DISPLAY.get(event.building_id, event.building_id)
+    building_name = get_building_label(event.building_id, event.building_id)
     rule_desc = _RULE_DESC.get(event.rule_triggered, event.rule_triggered)
     ts_str = event.data_timestamp.strftime("%Y-%m-%d %H:%M") if event.data_timestamp else "未知时间"
 
@@ -149,7 +141,7 @@ def _build_alert_description(event: AnomalyEvent) -> tuple[str, str]:
 
 def _build_prediction_description(pred: PredictedAnomalyEvent) -> tuple[str, str]:
     """返回 (issue_description, suggested_action)。"""
-    building_name = _BUILDING_DISPLAY.get(pred.building_id, pred.building_id)
+    building_name = get_building_label(pred.building_id, pred.building_id)
     metric_desc = _METRIC_DESC.get(pred.metric_name, pred.metric_name)
     ts_str = pred.forecast_for_timestamp.strftime("%Y-%m-%d %H:%M") if pred.forecast_for_timestamp else "未知时间"
 

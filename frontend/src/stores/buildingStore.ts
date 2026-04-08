@@ -8,6 +8,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { apiFetch } from '@/api/http'
+import { getBuildingLabel } from '@/constants/buildings'
 
 export interface BuildingInfo {
   building_id: string
@@ -16,21 +17,6 @@ export interface BuildingInfo {
   icon: string
   sqm: number
   meter_device_id: string
-}
-
-const BUILDING_NAME_ALIASES: Record<string, string> = {
-  Fox_education_Louie: '教学楼',
-  Education: '教学楼',
-  'Louie 教学楼': '教学楼',
-  Fox_office_Alice: '办公楼',
-  Office: '办公楼',
-  'Alice 办公楼': '办公楼',
-  Fox_public_Henry: '公共楼',
-  Public: '公共楼',
-  'Public services': '公共楼',
-  'Henry 公共服务楼': '公共楼',
-  公共服务楼: '公共楼',
-  公共楼: '公共楼',
 }
 
 export const useBuildingStore = defineStore('building', () => {
@@ -70,10 +56,6 @@ export const useBuildingStore = defineStore('building', () => {
     const value = String(raw || '').trim()
     if (!value) return '—'
 
-    if (BUILDING_NAME_ALIASES[value]) {
-      return BUILDING_NAME_ALIASES[value]
-    }
-
     const matched = buildings.value.find(b => (
       b.building_id === value
       || b.building_type === value
@@ -81,13 +63,13 @@ export const useBuildingStore = defineStore('building', () => {
     ))
 
     if (matched) {
-      return BUILDING_NAME_ALIASES[matched.display_name]
-        || BUILDING_NAME_ALIASES[matched.building_id]
-        || BUILDING_NAME_ALIASES[matched.building_type]
-        || matched.display_name
+      return getBuildingLabel(
+        matched.display_name || matched.building_type || matched.building_id,
+        matched.display_name || matched.building_id,
+      )
     }
 
-    return value
+    return getBuildingLabel(value, value)
   }
 
   /**

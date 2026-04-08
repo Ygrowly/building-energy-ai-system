@@ -14,17 +14,17 @@
             :class="{ 'qs-dropdown--open': dropdownBuildingOpen }"
             @click.stop="dropdownBuildingOpen = !dropdownBuildingOpen"
           >
-            <span class="qs-dropdown-value">{{ buildingOptions.find(b => b.key === selectedBuilding)?.label }}</span>
+            <span class="qs-dropdown-value">{{ buildingOptions.find(b => b.value === selectedBuilding)?.label }}</span>
             <Icon icon="mdi:chevron-down" width="14" class="qs-dropdown-arrow" :class="{ 'qs-dropdown-arrow--open': dropdownBuildingOpen }" />
             <Transition name="qs-drop">
               <div v-if="dropdownBuildingOpen" class="qs-dropdown-list" @click.stop>
                 <div
-                  v-for="b in buildingOptions" :key="b.key"
+                  v-for="b in buildingOptions" :key="b.value"
                   class="qs-dropdown-item"
-                  :class="{ 'qs-dropdown-item--selected': selectedBuilding === b.key }"
-                  @click="selectedBuilding = b.key; dropdownBuildingOpen = false"
+                  :class="{ 'qs-dropdown-item--selected': selectedBuilding === b.value }"
+                  @click="selectedBuilding = b.value; dropdownBuildingOpen = false"
                 >
-                  <Icon v-if="selectedBuilding === b.key" icon="mdi:check" width="13" class="qs-item-check" />
+                  <Icon v-if="selectedBuilding === b.value" icon="mdi:check" width="13" class="qs-item-check" />
                   <span>{{ b.label }}</span>
                 </div>
               </div>
@@ -260,6 +260,7 @@
 import { ref, reactive, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { Icon } from '@iconify/vue'
 import { apiFetch } from '@/api/http'
+import { BUILDING_TYPE_OPTIONS, getBuildingLabel, type BuildingType } from '@/constants/buildings'
 import { useDataRangeStore } from '@/stores/dataRangeStore'
 import * as echarts from 'echarts'
 import { useReportExport } from '@/composables/useReportExport'
@@ -270,12 +271,8 @@ const { registerSection, captureChart, setReportMeta } = useReportExport('querys
 const dataRangeStore = useDataRangeStore()
 
 // ── 筛选状态 ──
-const buildingOptions = [
-  { key: 'Education', label: '教学楼' },
-  { key: 'Office', label: '办公楼' },
-  { key: 'Public services', label: '公共楼' },
-]
-const selectedBuilding = ref('Office')
+const buildingOptions = BUILDING_TYPE_OPTIONS
+const selectedBuilding = ref<BuildingType>('Office')
 const startDate = ref('')
 const endDate = ref('')
 
@@ -289,7 +286,7 @@ const queryResult = ref<any>(null)
 const viewMode = ref<'data' | 'analysis'>('analysis')
 
 const buildingLabel = computed(() =>
-  buildingOptions.find(b => b.key === selectedBuilding.value)?.label ?? selectedBuilding.value
+  getBuildingLabel(selectedBuilding.value, selectedBuilding.value)
 )
 
 // 胶囊滑块

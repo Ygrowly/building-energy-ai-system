@@ -24,6 +24,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import and_, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.buildings import (
+    BUILDING_TYPE_ORDER,
+    BUILDING_TYPE_TO_ID,
+    get_building_icon,
+    get_building_label,
+    normalize_building_type,
+)
 from app.core.cache import cache_bucket, get_or_compute_json
 from app.core.config import get_settings
 from app.core.security import get_current_user_optional
@@ -44,25 +51,7 @@ settings = get_settings()
 _COP_PROXY_SCALING_FACTOR = 15.0
 _ZERO_HVAC_ENERGY_THRESHOLD = 0.1
 
-_BUILDING_ICONS = {
-    "Education": "🏫",
-    "Office": "🏢",
-    "Public": "🏛️",
-    "Public services": "🏛️",
-}
-_BUILDING_NAMES = {
-    "Education": "教学楼",
-    "Office": "办公楼",
-    "Public": "公共楼",
-    "Public services": "公共楼",
-}
-_bid_to_type: dict[str, str] = {
-    "Fox_education_Louie": "Education",
-    "Fox_office_Alice": "Office",
-    "Fox_public_Henry": "Public services",
-}
-
-_HOME_BUNDLE_BUILDING_TYPES = ("Education", "Office", "Public services")
+_HOME_BUNDLE_BUILDING_TYPES = BUILDING_TYPE_ORDER
 
 
 def _resolve_bundle_data_date(overview_payload: dict[str, Any] | None) -> date:
@@ -119,11 +108,11 @@ async def get_buildings(db: AsyncSession = Depends(get_db_session)):
                 {
                     "building_id": b.building_id,
                     "building_type": b.primary_space_usage,
-                    "display_name": _BUILDING_NAMES.get(
+                    "display_name": get_building_label(
                         b.primary_space_usage or "",
                         b.primary_space_usage or b.building_id,
                     ),
-                    "icon": _BUILDING_ICONS.get(b.primary_space_usage or "", "🏠"),
+                    "icon": get_building_icon(b.primary_space_usage),
                     "sqm": b.sqm,
                     "devices": dev_map.get(b.building_id, []),
                 }
@@ -276,8 +265,8 @@ async def get_building_status(
 
     return {
         "building_type": building_type,
-        "display_name": _BUILDING_NAMES.get(building_type, building_type),
-        "icon": _BUILDING_ICONS.get(building_type, "🏠"),
+        "display_name": get_building_label(building_type, building_type),
+        "icon": get_building_icon(building_type),
         "sqm": building.sqm,
         "devices": devices,
         "last_updated_utc": latest.timestamp.isoformat() if latest.timestamp else None,
@@ -1412,8 +1401,8 @@ async def get_overview(
             total_hac += float(hac or 0)
             buildings_detail.append({
                 "building_type": usage,
-                "display_name": _BUILDING_NAMES.get(usage or "", usage or bid),
-                "icon": _BUILDING_ICONS.get(usage or "", "🏠"),
+                "display_name": get_building_label(usage or "", usage or bid),
+                "icon": get_building_icon(usage),
                 "total_electricity_kwh": round(float(total_elec or 0), 2),
                 "total_water_m3": round(float(total_w or 0), 2),
                 "total_hac_energy_kwh": round(float(hac or 0), 2),
@@ -1521,11 +1510,7 @@ async def get_overview(
 
         for bd in buildings_detail:
             bt = bd["building_type"]
-            bid_for_pred = None
-            for k, v in _bid_to_type.items():
-                if v == bt:
-                    bid_for_pred = k
-                    break
+            bid_for_pred = BUILDING_TYPE_TO_ID.get(bt)
             pred_info = prediction_building_map.get(bid_for_pred or "", {})
             bd["prediction_warning_count"] = pred_info.get("count", 0)
             bd["prediction_status"] = pred_info.get("risk_level", "normal")
@@ -1674,13 +1659,6 @@ async def _get_anomaly_sankey_payload(db: AsyncSession) -> dict[str, Any]:
 # 实时风险预警（预警通知 Tab 数据源）
 # ---------------------------------------------------------------------------
 
-_BUILDING_DISPLAY: dict[str, str] = {
-    "Education": "教学楼",
-    "Office":    "办公楼",
-    "Public":    "图书馆",
-    "Public services": "图书馆",
-}
-
 _HVAC_MODE_LABEL: dict[str, str] = {
     "Cooling":     "制冷",
     "Heating":     "供暖",
@@ -1763,8 +1741,8 @@ async def get_risk_now(db: AsyncSession = Depends(get_db_session)):
 
         risk_items.append({
             "building_id":          building.building_id,
-            "building_name":        _BUILDING_DISPLAY.get(
-                                        building.primary_space_usage or "",
+            "building_name":        get_building_label(
+                                        building.primary_space_usage or building.building_id,
                                         building.building_id,
                                     ),
             "building_type":        building.primary_space_usage,
@@ -1855,7 +1833,7 @@ async def _get_recent_predictions_payload(
     for row in rows:
         (pid, created, as_of, forecast_for, horizon, bid, metric,
          pred_val, exp_val, dev_pct, rlevel, rule, model, confirmed) = row
-        bt = _bid_to_type.get(bid, bid)
+        bt = normalize_building_type(bid) or bid
         predictions.append({
             "id": pid,
             "created_at": created.isoformat() if created else None,
@@ -1863,7 +1841,7 @@ async def _get_recent_predictions_payload(
             "forecast_for_timestamp": forecast_for.isoformat() if forecast_for else None,
             "horizon_h": horizon,
             "building_id": bid,
-            "building_name": _BUILDING_NAMES.get(bt, bt),
+            "building_name": get_building_label(bt, bt),
             "building_type": bt,
             "metric_name": metric,
             "predicted_value": pred_val,
@@ -1956,12 +1934,12 @@ async def get_predictions_summary(
     total_warnings = 0
     for row in rows:
         bid, cnt, latest, metric_cnt, has_crit = row
-        bt = _bid_to_type.get(bid, bid)
+        bt = normalize_building_type(bid) or bid
         total_warnings += cnt
         buildings.append({
             "building_id": bid,
             "building_type": bt,
-            "building_name": _BUILDING_NAMES.get(bt, bt),
+            "building_name": get_building_label(bt, bt),
             "warning_count": cnt,
             "latest_prediction_at": latest.isoformat() if latest else None,
             "metric_count": metric_cnt,

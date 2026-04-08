@@ -36,6 +36,7 @@ from fastapi.responses import StreamingResponse
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from pydantic import BaseModel, Field, field_validator
 
+from app.core.buildings import get_building_label
 from app.core.cache import delete_cache_by_prefix, get_or_compute_json
 from app.core.config import get_settings
 from app.core.security import get_current_user_optional
@@ -222,17 +223,10 @@ def _thinking_event(
     return _sse(payload)
 
 
-_BUILDING_LABEL = {
-    "Education": "教学楼",
-    "Office": "办公楼",
-    "Public services": "公共楼",
-}
-
-
 def _describe_tool_call(tool_name: str, tool_input: dict) -> str:
     """根据工具名 + 输入参数，生成人类可读的调用描述。"""
     bid = tool_input.get("building_id", "")
-    building = _BUILDING_LABEL.get(bid, bid)
+    building = get_building_label(bid, bid)
 
     # 提取通用的时间段描述
     def _period() -> str:
@@ -263,7 +257,7 @@ def _describe_tool_call(tool_name: str, tool_input: dict) -> str:
     if tool_name == "compare_metric_across_buildings":
         metric = tool_input.get("metric", "")
         bids = tool_input.get("building_ids", [])
-        names = "、".join(_BUILDING_LABEL.get(b, b) for b in bids) if bids else ""
+        names = "、".join(get_building_label(b, b) for b in bids) if bids else ""
         label = f"对比{names}" if names else "多楼宇对比"
         return f"{label}{metric or '能耗'}指标{_period()}"
 

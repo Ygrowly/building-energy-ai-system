@@ -25,17 +25,13 @@ from typing import Any
 
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 
+from app.core.buildings import get_building_label
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # 常量
 # ---------------------------------------------------------------------------
-BUILDING_ZH: dict[str, str] = {
-    "Education": "教学楼",
-    "Office": "办公楼",
-    "Public services": "公共楼",
-}
-
 METRIC_ZH: dict[str, str] = {
     "electricity_kwh": "用电量",
     "water_m3": "用水量",
@@ -196,7 +192,7 @@ def _make_artifact(
 
 def _bname(building_id: str) -> str:
     """building_id → 中文名"""
-    return BUILDING_ZH.get(building_id, building_id)
+    return get_building_label(building_id, building_id)
 
 
 # ---------------------------------------------------------------------------

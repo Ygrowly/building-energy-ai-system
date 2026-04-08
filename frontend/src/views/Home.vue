@@ -12,12 +12,12 @@
         <div class="capsule-slider" :style="sliderStyle" />
         <button
           v-for="opt in buildingOptions"
-          :key="opt.key"
-          :ref="(el) => setBtnRef(el, opt.key)"
+          :key="opt.value"
+          :ref="(el) => setBtnRef(el, opt.value)"
           class="capsule-btn"
-          :class="{ active: activeBuilding === opt.key }"
+          :class="{ active: activeBuilding === opt.value }"
           type="button"
-          @click="activeBuilding = opt.key"
+          @click="activeBuilding = opt.value"
         >
           {{ opt.label }}
         </button>
@@ -134,6 +134,7 @@ import HomeAllOverviewSection from '@/components/home/HomeAllOverviewSection.vue
 import HomeTeachingSection from '@/components/home/HomeTeachingSection.vue'
 import HomeOfficeSection from '@/components/home/HomeOfficeSection.vue'
 import HomePublicSection from '@/components/home/HomePublicSection.vue'
+import { BUILDING_TYPE_ORDER, HOME_BUILDING_FILTER_OPTIONS, type BuildingFilterValue } from '@/constants/buildings'
 import { MC } from '@/utils/homeCharts'
 import { useReportExport } from '@/composables/useReportExport'
 import type { ReportCardItem } from '@/stores/reportStore'
@@ -173,13 +174,8 @@ const HOME_CACHE_TTL = 60_000
 const AI_STEWARD_ELECTRICITY_PRICE = 0.85
 let homeLoadController: AbortController | null = null
 
-const buildingOptions = [
-  { key: 'all', label: '全部' },
-  { key: 'Education', label: '教学楼' },
-  { key: 'Office', label: '办公楼' },
-  { key: 'Public services', label: '公共楼' },
-]
-const activeBuilding = ref('all')
+const buildingOptions = HOME_BUILDING_FILTER_OPTIONS
+const activeBuilding = ref<BuildingFilterValue>('all')
 const capsuleRef = ref<HTMLElement | null>(null)
 const btnRefs = new Map<string, HTMLElement>()
 
@@ -214,7 +210,7 @@ const dataDateForSections = computed(() => {
 })
 
 const CARBON_FACTOR = 0.5703
-const REPORT_BUILDING_ORDER = ['Education', 'Office', 'Public services'] as const
+const REPORT_BUILDING_ORDER = BUILDING_TYPE_ORDER
 const SANKEY_LABEL_MAP: Record<string, string> = {
   water_leak: '水耗异常',
   electricity_overload: '电耗过载',

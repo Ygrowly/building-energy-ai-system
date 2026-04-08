@@ -102,6 +102,7 @@
 import { Icon } from '@iconify/vue'
 import { PropType } from 'vue'
 import WorkOrderTimeline from '@/components/workorders/WorkOrderTimeline.vue'
+import { sanitizeBuildingText } from '@/constants/buildings'
 
 defineEmits<{
   'toggle-expand': [ticketId: string]
@@ -205,13 +206,7 @@ function displayTitleValue(wo: any) {
   const rawTitle = String(wo.issue_description || wo.ticket_id || '').trim()
   if (!rawTitle) return wo.ticket_id
 
-  return rawTitle
-    .replace(/Fox_public_Henry/g, '公共楼')
-    .replace(/Henry 公共服务楼/g, '公共楼')
-    .replace(/Fox_office_Alice/g, '办公楼')
-    .replace(/Alice 办公楼/g, '办公楼')
-    .replace(/Fox_education_Louie/g, '教学楼')
-    .replace(/Louie 教学楼/g, '教学楼')
+  return sanitizeBuildingText(rawTitle)
 }
 </script>
 

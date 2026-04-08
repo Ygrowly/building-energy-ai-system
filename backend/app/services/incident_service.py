@@ -14,6 +14,7 @@ from typing import Any
 from sqlalchemy import select, func as sa_func
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.buildings import get_building_label
 from app.db.models import (
     AnomalyEvent,
     AnomalyIncident,
@@ -37,12 +38,6 @@ from app.services.work_order_service import (
 logger = logging.getLogger(__name__)
 
 _INCIDENT_COUNTER: dict[str, int] = {}
-
-_BUILDING_DISPLAY = {
-    "Fox_office_Alice": "Alice 办公楼",
-    "Fox_education_Louie": "Louie 教学楼",
-    "Fox_public_Henry": "Henry 公共服务楼",
-}
 
 _RULE_DESC = {
     "water_leak": "水耗异常偏高",
@@ -197,7 +192,7 @@ def build_prediction_summary(
     latest_actual_value: float | None,
     latest_expected_value: float | None,
 ) -> str:
-    building_name = _BUILDING_DISPLAY.get(building_id, building_id)
+    building_name = get_building_label(building_id, building_id)
     metric_desc = _METRIC_DESC.get(metric_name, metric_name)
     first_str = first_seen_at.strftime("%Y-%m-%d %H:%M")
     last_str = last_seen_at.strftime("%Y-%m-%d %H:%M")
@@ -349,7 +344,7 @@ def build_incident_summary(
     latest_actual_value: float | None,
     latest_expected_value: float | None,
 ) -> str:
-    building_name = _BUILDING_DISPLAY.get(building_id, building_id)
+    building_name = get_building_label(building_id, building_id)
     rule_desc = _RULE_DESC.get(rule_triggered, rule_triggered)
     first_str = first_seen_at.strftime("%Y-%m-%d %H:%M")
     last_str = last_seen_at.strftime("%Y-%m-%d %H:%M")

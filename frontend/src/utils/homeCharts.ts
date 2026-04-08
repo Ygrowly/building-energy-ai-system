@@ -1,6 +1,8 @@
 /** 首页大屏 ECharts 主题与公共常量 */
 
 /** 主色板 — 高饱和、明确对比、深浅主题均可辨 */
+import { BUILDING_TYPE_ORDER, type BuildingType } from '@/constants/buildings'
+
 export const MC = {
   blue:  '#4b9ef5',  // 鲜蓝  — 实际用电 / 供水
   sage:  '#10d980',  // 鲜翠绿 — 国标期望
@@ -10,8 +12,8 @@ export const MC = {
   teal:  '#22d3ee',  // 青色   — 周末柱 / 预留
 }
 
-export const HOME_BUILDING_ORDER = ['Education', 'Office', 'Public services'] as const
-export type HomeBuildingType = typeof HOME_BUILDING_ORDER[number]
+export const HOME_BUILDING_ORDER = BUILDING_TYPE_ORDER
+export type HomeBuildingType = BuildingType
 
 export const HOME_BUILDING_COLORS: Record<HomeBuildingType, string> = {
   Education: MC.blue,

@@ -229,7 +229,7 @@
         <view class="msg-body">
           <text class="msg-title">{{ RULE_LABEL[anom.rule_triggered] || anom.rule_triggered }}</text>
           <text class="msg-sub">
-            {{ BUILDING_LABEL[anom.building_id] || anom.building_id }}
+            {{ formatBuildingLabel(anom.building_id) }}
             <text v-if="anom.deviation_pct != null" :class="'dev-' + deviationSeverity(anom.deviation_pct)"> · {{ anom.deviation_pct > 0 ? '+' : '' }}{{ anom.deviation_pct.toFixed(1) }}%</text>
             · {{ formatRelativeTime(anom.data_timestamp) }}
           </text>
@@ -311,6 +311,7 @@ import { RULE_LABEL } from '../constants/status'
 import { dataApi, type AnomalyItem, type PredictionItem } from '../api/data'
 import { incidentApi, type Incident } from '../api/incident'
 import { workOrderApi, type DispatchHallEntry } from '../api/workorder'
+import { ALL_BUILDING_FILTER_OPTIONS } from '../constants/buildings'
 import { formatRelativeTime, formatServerDateTime } from '../utils/format'
 import { getCache, setCache } from '../utils/cache'
 import { formatBuildingLabel, sanitizeDisplayText } from '../utils/display'
@@ -336,19 +337,7 @@ const RULE_EMOJI: Record<string, string> = {
   C_unexpected_on: '⏰',
 }
 
-const BUILDING_LABEL: Record<string, string> = {
-  Office: '办公楼',
-  Education: '教学楼',
-  'Public services': '公共楼',
-  Public: '公共楼',
-}
-
-const BUILDING_OPTIONS = [
-  { value: 'all', label: '全部建筑' },
-  { value: 'Education', label: '教学楼' },
-  { value: 'Office', label: '办公楼' },
-  { value: 'Public services', label: '公共楼' },
-]
+const BUILDING_OPTIONS = ALL_BUILDING_FILTER_OPTIONS
 
 const TIME_OPTIONS = [
   { value: 0, label: '全部时间' },

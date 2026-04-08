@@ -31,7 +31,7 @@ _SAME_YEAR_RANGE_RE = re.compile(
 _QUESTION_MARK_RE = re.compile(r"[?？]$")
 _RAW_TITLE_HINT_RE = re.compile(r"^(我|请|帮我|现在|想|需要|分析一下|看一下)")
 _BUILDING_TOKEN_RE = re.compile(
-    r"(教学楼|办公楼|实验楼|宿舍楼|行政楼|食堂|图书馆|商业楼|医院|园区|校区|机房|数据中心|"
+    r"(教学楼|办公楼|实验楼|宿舍楼|行政楼|食堂|公共楼|图书馆|商业楼|医院|园区|校区|机房|数据中心|"
     r"[A-Za-z0-9_-]{2,20}(?:楼|馆|中心|园区|校区|Office|Education|Building))"
 )
 

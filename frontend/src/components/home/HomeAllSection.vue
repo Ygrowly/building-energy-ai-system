@@ -4,6 +4,7 @@ import * as echarts from 'echarts'
 import { useBuildingStore } from '@/stores/buildingStore'
 import { apiFetch } from '@/api/http'
 import { MC, gc, EUI_BASELINE, HOME_BUILDING_COLORS } from '@/utils/homeCharts'
+import { BUILDING_TYPE_LABELS, BUILDING_TYPE_ORDER } from '@/constants/buildings'
 import HomeActionCards from './HomeActionCards.vue'
 import { useReportExport } from '@/composables/useReportExport'
 
@@ -18,6 +19,8 @@ const props = defineProps<{
 
 const buildingStore = useBuildingStore()
 const { captureChart } = useReportExport('home-charts')
+
+const BUILDING_NAMES = BUILDING_TYPE_ORDER.map((buildingType) => BUILDING_TYPE_LABELS[buildingType])
 
 // HVAC 图实时数据
 const hvacApiData = ref<{ outdoorTemp: number[]; actualHvac: number[]; simOptHvac: number[] } | null>(null)
@@ -127,8 +130,8 @@ function renderRadar() {
   const blds: any[] = props.overviewData?.buildings ?? []
   const bldStore = buildingStore.buildings
 
-  const keys  = ['Education', 'Office', 'Public services']
-  const names = ['教学楼', '办公楼', '公共楼']
+  const keys = BUILDING_TYPE_ORDER
+  const names = BUILDING_NAMES
   const colors = [MC.blue, MC.sage, MC.terra]
 
   // 五维：用电、用水、暖通、EUI偏离、告警数 — 各项归一化到 0-100
@@ -219,7 +222,7 @@ function renderRadar() {
 
 async function loadHvacData() {
   // 取所有楼的 hac_energy + air_temp 小时均值并合并
-  const types = ['Education', 'Office', 'Public services']
+  const types = BUILDING_TYPE_ORDER
   const hacSum = new Array(24).fill(0)
   const tempSum = new Array(24).fill(0)
   let n = 0
@@ -462,8 +465,8 @@ function switchCompare(metric: CompareMetric) {
 function renderRisk() {
   if (!riskEl.value) return
   const c = gc()
-  const labels = ['教学楼', '办公楼', '公共楼']
-  const keys = ['Education', 'Office', 'Public services']
+  const labels = BUILDING_NAMES
+  const keys = BUILDING_TYPE_ORDER
   const counts = keys.map((k) => props.anomalyData.filter((a: any) => a.building_type === k).length)
 
   const inst = echarts.init(riskEl.value)
@@ -579,8 +582,8 @@ function renderSankey() {
 function renderAnomalyDist() {
   if (!anomalyEl.value) return
   const c = gc()
-  const keys   = ['Education', 'Office', 'Public services']
-  const labels = ['教学楼', '办公楼', '公共楼']
+  const keys = BUILDING_TYPE_ORDER
+  const labels = BUILDING_NAMES
 
   const isUnresolved = (a: any) =>
     a.anomaly_status === 'Anomaly' || a.operation_status === 'Anomaly'

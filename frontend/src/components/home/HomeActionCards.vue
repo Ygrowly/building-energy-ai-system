@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { Icon } from '@iconify/vue'
+import { getBuildingLabel, type BuildingFilterValue } from '@/constants/buildings'
 
 const props = withDefaults(
   defineProps<{
-    tab: 'all' | 'Education' | 'Office' | 'Public services'
+    tab: BuildingFilterValue
     anomalies?: any[]
     ratedAnomalyHours?: number | null
     nightAbnormalHours?: number | null
@@ -15,12 +16,7 @@ const props = withDefaults(
 )
 
 function labelType(bt: string) {
-  const m: Record<string, string> = {
-    Education: '教学楼',
-    Office: '办公楼',
-    'Public services': '公共楼',
-  }
-  return m[bt] || bt
+  return getBuildingLabel(bt, bt)
 }
 
 const items = computed(() => {

@@ -10,6 +10,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
 
+from app.core.buildings import BUILDING_ID_TO_TYPE, BUILDING_TYPE_LABELS
 from app.core.config import get_settings
 from app.graph.viz_engine import build_chart_manifest, build_data_summary
 from app.schemas.report_schemas import (
@@ -23,13 +24,12 @@ from app.schemas.report_schemas import (
 DEFAULT_REPORT_TEMPLATE_ID = "formal-management-brief"
 
 _BUILDING_DISPLAY = {
-    "Education": "教学楼",
-    "Office": "办公楼",
-    "Public": "公共楼",
-    "Public services": "公共楼",
-    "Fox_education_Louie": "教学楼",
-    "Fox_office_Alice": "办公楼",
-    "Fox_public_Henry": "公共楼",
+    **BUILDING_TYPE_LABELS,
+    "Public": BUILDING_TYPE_LABELS["Public services"],
+    **{
+        building_id: BUILDING_TYPE_LABELS[building_type]
+        for building_id, building_type in BUILDING_ID_TO_TYPE.items()
+    },
 }
 
 _PLACEHOLDER_RE = re.compile(r"<<CHART:[^>]*>>")
@@ -54,6 +54,7 @@ _TARGET_PATTERNS = (
     "宿舍楼",
     "行政楼",
     "食堂",
+    "公共楼",
     "图书馆",
     "数据中心",
     "园区",

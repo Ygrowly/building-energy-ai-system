@@ -1,3 +1,5 @@
+import { getBuildingLabel } from '@/constants/buildings'
+
 export type WorkorderNotificationCategory =
   | 'pending_review'
   | 'pending_dispatch'
@@ -106,13 +108,7 @@ function summarizeText(value?: string | null): string {
 }
 
 function buildingLabel(buildingId?: string | null): string {
-  const map: Record<string, string> = {
-    Office: '办公楼',
-    Education: '教学楼',
-    'Public services': '公共楼',
-    Public: '公共楼',
-  }
-  return map[buildingId ?? ''] ?? buildingId ?? '未知楼栋'
+  return getBuildingLabel(buildingId, '未知楼栋')
 }
 
 function getExecutionStatus(incident: WorkorderNotificationIncident): string | null {

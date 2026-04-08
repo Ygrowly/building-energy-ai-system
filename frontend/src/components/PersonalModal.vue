@@ -615,6 +615,7 @@ import { useChatStore } from '@/stores/chatStore'
 import { useNotificationStore } from '@/stores/notificationStore'
 import { apiChangePassword, apiUpdateProfile } from '@/api/auth'
 import { apiFetch } from '@/api/http'
+import { ALL_BUILDING_FILTER_OPTIONS, getBuildingLabel } from '@/constants/buildings'
 import {
   buildWorkorderNotificationItems,
   filterWorkorderNotificationItems,
@@ -843,12 +844,7 @@ function closeDropdowns() {
   dropdownTimeOpen.value = false
 }
 
-const BUILDING_OPTIONS = [
-  { value: 'all',       label: '全部建筑' },
-  { value: 'Education', label: '教学楼' },
-  { value: 'Office',    label: '办公楼' },
-  { value: 'Public services',    label: '公共楼' },
-]
+const BUILDING_OPTIONS = ALL_BUILDING_FILTER_OPTIONS
 const TIME_OPTIONS = [
   { value: 0,    label: '全部时间' },
   { value: 24,   label: '近 24 小时' },
@@ -1092,11 +1088,7 @@ function deviationSeverity(pct?: number): 'high' | 'medium' | 'low' {
 }
 
 function buildingLabel(type?: string) {
-  const map: Record<string, string> = {
-    Office: '办公楼', Education: '教学楼',
-    'Public services': '图书馆', Public: '图书馆',
-  }
-  return map[type ?? ''] ?? type ?? '—'
+  return getBuildingLabel(type, '—')
 }
 
 const anomalies = ref<AnomalyItem[]>([])

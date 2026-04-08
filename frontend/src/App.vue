@@ -908,14 +908,19 @@ function getBuildingIcon(type: string): string {
 
 /* ── 右侧控制台 ── */
 .agent-panel {
+  display: flex;
+  flex-direction: column;
   flex-shrink: 0;
   width: v-bind(agentPanelWidth);
+  height: 100%;
+  min-height: 0;
   min-width: 0;
   border-left: none;
   overflow: hidden;
 }
 
 .agent-panel-placeholder {
+  flex: 1 1 auto;
   width: 100%;
   height: 100%;
   display: flex;

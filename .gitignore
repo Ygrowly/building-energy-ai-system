@@ -36,3 +36,10 @@ guide/
 .cursor/
 
 backend/forecast_multi_6_12h_bundle.pkl
+
+# Playwright
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
+/playwright/.auth/

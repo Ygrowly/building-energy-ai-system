@@ -1,0 +1,25 @@
+{
+  "name": "construction-management",
+  "version": "1.0.0",
+  "description": "基于多智能体 + MCP + 生成式 UI 的建筑能源智能管理系统。",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {},
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Ygrowly/building-energy-ai-system.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/Ygrowly/building-energy-ai-system/issues"
+  },
+  "homepage": "https://github.com/Ygrowly/building-energy-ai-system#readme",
+  "devDependencies": {
+    "@playwright/test": "^1.59.1",
+    "@types/node": "^25.5.2"
+  }
+}

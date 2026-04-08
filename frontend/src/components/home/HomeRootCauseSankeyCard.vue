@@ -215,7 +215,13 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="cpanel panel-sankey">
+  <div
+    class="cpanel panel-sankey"
+    data-pick-id="chart-overview-root-cause-sankey"
+    data-pick-type="chart"
+    data-pick-title="首页异常根因桑基图"
+    data-pick-subtitle="展示异常规则如何流向根因类型"
+  >
     <div class="cpanel-hd">
       <span class="cpanel-title">异常根因桑基图</span>
       <span class="cpanel-sub">规则流向根因类型</span>

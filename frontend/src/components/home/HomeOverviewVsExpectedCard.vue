@@ -492,8 +492,8 @@ onUnmounted(() => {
     class="cpanel overview-energy-panel"
     data-pick-id="chart-overview-energy"
     data-pick-type="chart"
-    :data-pick-title="chartMeta.title"
-    :data-pick-subtitle="chartMeta.subtitle"
+    :data-pick-title="`首页${chartMeta.title}`"
+    :data-pick-subtitle="`首页总览：${chartMeta.subtitle}`"
   >
     <div class="cpanel-hd overview-energy-panel-head">
       <div class="overview-chart-copy">

@@ -496,7 +496,13 @@ onUnmounted(() => {
   <div class="home-teach-section">
     <!-- 第一行：关键指标 + 供回水与室外温度 -->
     <div class="bento-row bento-r1">
-      <div class="cpanel">
+      <div
+        class="cpanel"
+        data-pick-id="teaching-kpi-key-metrics"
+        data-pick-type="kpi"
+        data-pick-title="教学楼关键指标"
+        data-pick-subtitle="偏差异常小时、供回水温差与用电偏差率"
+      >
         <div class="cpanel-hd">
           <span class="cpanel-title">关键指标</span>
           <span class="cpanel-sub">偏差异常小时 · 供回水温差 · 用电偏差率</span>
@@ -505,7 +511,13 @@ onUnmounted(() => {
           <HomeMiniMetricCards :cards="miniCards" />
         </div>
       </div>
-      <div class="cpanel">
+      <div
+        class="cpanel"
+        data-pick-id="teaching-chart-hvac-triplet"
+        data-pick-type="chart"
+        data-pick-title="教学楼供回水与室外温度"
+        data-pick-subtitle="展示室外、供水、回水的逐时均值"
+      >
         <div class="cpanel-hd">
           <span class="cpanel-title">供回水与室外温度</span>
           <span class="cpanel-sub">室外、供水、回水逐时均值（近 14 天）</span>
@@ -516,14 +528,26 @@ onUnmounted(() => {
 
     <!-- 第二行：额定 vs 实际（电） + 周节律对比 -->
     <div class="bento-row bento-r1">
-      <div class="cpanel">
+      <div
+        class="cpanel"
+        data-pick-id="teaching-chart-rated-vs-actual"
+        data-pick-type="chart"
+        data-pick-title="教学楼额定 vs 实际用电"
+        data-pick-subtitle="近 7 天逐小时对比国标期望与实际用电"
+      >
         <div class="cpanel-hd">
           <span class="cpanel-title">额定 vs 实际（电）</span>
           <span class="cpanel-sub">近 7 天逐小时对比国标期望</span>
         </div>
         <div ref="ratedEl" class="cpanel-body" style="height: 260px" />
       </div>
-      <div class="cpanel">
+      <div
+        class="cpanel"
+        data-pick-id="teaching-chart-weekday-pattern"
+        data-pick-type="chart"
+        data-pick-title="教学楼周节律对比"
+        data-pick-subtitle="按星期维度查看平均用电强度"
+      >
         <div class="cpanel-hd">
           <span class="cpanel-title">周节律对比</span>
           <span class="cpanel-sub">星期维度平均用电强度</span>
@@ -534,7 +558,13 @@ onUnmounted(() => {
 
     <!-- 第三行：7×24 热力图 + 建议动作 -->
     <div class="bento-row bento-r1">
-      <div class="cpanel">
+      <div
+        class="cpanel"
+        data-pick-id="teaching-chart-heatmap"
+        data-pick-type="heatmap"
+        data-pick-title="教学楼 7×24 节律热力图"
+        data-pick-subtitle="按授课时段查看教学楼逐时用电热力分布"
+      >
         <div class="cpanel-hd">
           <span class="cpanel-title">7×24 教学节律热力图</span>
           <span class="cpanel-sub">参考作息 8-12 / 14-18 / 19-21 时授课带，授课外偏高需关注</span>

@@ -462,7 +462,13 @@ onUnmounted(() => {
 
     <!-- 第一行：舒适区评分 + 异常事件时间轴 -->
     <div class="bento-row bento-r1">
-      <div class="cpanel">
+      <div
+        class="cpanel"
+        data-pick-id="public-kpi-comfort-score"
+        data-pick-type="kpi"
+        data-pick-title="公共楼舒适度评分"
+        data-pick-subtitle="基于最新温湿度快照的室内舒适度评估"
+      >
         <div class="cpanel-hd">
           <span class="cpanel-title">舒适区评分</span>
           <span class="cpanel-sub">基于最新温湿度快照判定室内热舒适程度，满分 100 分</span>
@@ -471,7 +477,13 @@ onUnmounted(() => {
           <HomeMiniMetricCards :cards="miniCards" />
         </div>
       </div>
-      <div class="cpanel">
+      <div
+        class="cpanel"
+        data-pick-id="public-timeline-anomalies"
+        data-pick-type="timeline"
+        data-pick-title="公共楼异常事件时间轴"
+        data-pick-subtitle="近 7 天公共楼异常事件按时间倒序排列"
+      >
         <div class="cpanel-hd">
           <span class="cpanel-title">异常事件时间轴</span>
           <span class="cpanel-sub">近 7 天内检测到的异常用能事件，按时间倒序排列</span>
@@ -500,14 +512,26 @@ onUnmounted(() => {
 
     <!-- 第二行：水电综合双轴趋势 + 全天候用电剖面 -->
     <div class="bento-row bento-r1">
-      <div class="cpanel">
+      <div
+        class="cpanel"
+        data-pick-id="public-chart-dual-trend"
+        data-pick-type="chart"
+        data-pick-title="公共楼水电综合双轴趋势"
+        data-pick-subtitle="近 30 日总用电量与总用水量双轴对比"
+      >
         <div class="cpanel-hd">
           <span class="cpanel-title">水电综合双轴趋势</span>
           <span class="cpanel-sub">近 30 日日总用电量（柱/kWh）与日总用水量（折线/m³）双轴对比</span>
         </div>
         <div ref="dualEl" class="cpanel-body" style="height: 260px" />
       </div>
-      <div class="cpanel">
+      <div
+        class="cpanel"
+        data-pick-id="public-chart-hourly-profile"
+        data-pick-type="chart"
+        data-pick-title="公共楼全天候用电剖面"
+        data-pick-subtitle="24 小时逐时平均用电强度分布"
+      >
         <div class="cpanel-hd">
           <span class="cpanel-title">全天候用电剖面</span>
           <span class="cpanel-sub">24 小时逐时平均用电强度（kWh/h），反映一天中的用电规律</span>
@@ -518,7 +542,13 @@ onUnmounted(() => {
 
     <!-- 第三行：舒适度趋势 + 建议动作 -->
     <div class="bento-row bento-r1">
-      <div class="cpanel">
+      <div
+        class="cpanel"
+        data-pick-id="public-chart-comfort-trend"
+        data-pick-type="chart"
+        data-pick-title="公共楼舒适度趋势"
+        data-pick-subtitle="逐时温度与湿度曲线，对照舒适区边界"
+      >
         <div class="cpanel-hd">
           <span class="cpanel-title">舒适度趋势（典型日）</span>
           <span class="cpanel-sub">室内逐时均温（°C，实线）与均湿度（%RH，虚线），参考线为舒适区边界</span>

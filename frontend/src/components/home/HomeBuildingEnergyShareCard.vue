@@ -136,7 +136,13 @@ function segmentStyle(
 </script>
 
 <template>
-  <div class="cpanel overview-share-panel">
+  <div
+    class="cpanel overview-share-panel"
+    data-pick-id="chart-overview-share"
+    data-pick-type="chart"
+    data-pick-title="首页各项能耗楼宇占比"
+    data-pick-subtitle="按用电、用水、暖通查看教学楼、办公楼、公共楼的当日分配结构"
+  >
     <div class="cpanel-hd share-card-head">
       <div class="share-card-copy">
         <span class="cpanel-title">各项能耗楼宇占比</span>
@@ -266,7 +272,7 @@ function segmentStyle(
 
 .share-row-icon {
   flex-shrink: 0;
-  color: var(--border-accent, #7aaa8e);
+  color: var(--border-accent, #5b876d);
 }
 
 .share-row-total {
@@ -359,18 +365,18 @@ function segmentStyle(
 }
 
 html[data-theme='light'] .share-legend-swatch {
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.78);
+  box-shadow: inset 0 0 0 1px rgba(215, 203, 203, 0.78);
 }
 
 html[data-theme='light'] .share-track {
   background: #eef2f6;
-  box-shadow: inset 0 0 0 1px rgba(226, 232, 240, 0.58);
+  box-shadow: inset 0 0 0 1px rgba(195, 208, 223, 0.58);
 }
 
 html[data-theme='light'] .share-segment::after {
   background: rgba(255, 255, 255, 0.98);
   color: #0f172a;
-  box-shadow: 0 10px 24px rgba(148, 163, 184, 0.2);
+  box-shadow: 0 10px 24px rgba(129, 145, 166, 0.2);
 }
 
 @container (max-width: 699px) {

@@ -483,7 +483,13 @@ onUnmounted(() => {
 
     <!-- 第一行：峰谷与夜间指标 + 日能耗排行 -->
     <div class="bento-row bento-r1">
-      <div class="cpanel">
+      <div
+        class="cpanel"
+        data-pick-id="office-kpi-peak-valley"
+        data-pick-type="kpi"
+        data-pick-title="办公楼峰谷与夜间指标"
+        data-pick-subtitle="近 7 日峰值、谷值、峰谷比与夜间异常采样次数"
+      >
         <div class="cpanel-hd">
           <span class="cpanel-title">峰谷与夜间指标</span>
           <span class="cpanel-sub">近 7 日峰值 · 谷值 · 峰谷比 · 夜间异常采样数</span>
@@ -492,7 +498,13 @@ onUnmounted(() => {
           <HomeMiniMetricCards :cards="miniCards" />
         </div>
       </div>
-      <div class="cpanel">
+      <div
+        class="cpanel"
+        data-pick-id="office-chart-daily-rank"
+        data-pick-type="chart"
+        data-pick-title="办公楼日能耗排行"
+        data-pick-subtitle="近 7 日总用电量由高到低排序，标出最高能耗日"
+      >
         <div class="cpanel-hd">
           <span class="cpanel-title">日能耗排行</span>
           <span class="cpanel-sub">近 7 日总用电量由高到低，橙色为最高能耗日</span>
@@ -503,14 +515,26 @@ onUnmounted(() => {
 
     <!-- 第二行：工作时段能耗带状图 + EUI 合规偏离 -->
     <div class="bento-row bento-r1">
-      <div class="cpanel">
+      <div
+        class="cpanel"
+        data-pick-id="office-chart-workband"
+        data-pick-type="chart"
+        data-pick-title="办公楼工作时段能耗带状图"
+        data-pick-subtitle="24 小时逐时平均用电强度，并标记 8:00-18:00 工作时段"
+      >
         <div class="cpanel-hd">
           <span class="cpanel-title">工作时段能耗带状图</span>
           <span class="cpanel-sub">24 小时逐时平均用电强度（kWh/h），绿色阴影为工作时段 8–18 时参考带</span>
         </div>
         <div ref="workEl" class="cpanel-body" style="height: 260px" />
       </div>
-      <div class="cpanel">
+      <div
+        class="cpanel"
+        data-pick-id="office-eui-compliance"
+        data-pick-type="kpi"
+        data-pick-title="办公楼 EUI 合规偏离"
+        data-pick-subtitle="建筑能源利用强度相对国标基线的偏离情况"
+      >
         <div class="cpanel-hd">
           <span class="cpanel-title">EUI 合规偏离</span>
           <span class="cpanel-sub">建筑能源利用强度相对国标 75 kWh/㎡·年 的倍率，1.0× 为合规基准</span>
@@ -563,7 +587,13 @@ onUnmounted(() => {
 
     <!-- 第三行：近 7 天趋势 + (峰谷效率 spark + 建议动作) -->
     <div class="bento-row bento-r1">
-      <div class="cpanel">
+      <div
+        class="cpanel"
+        data-pick-id="office-chart-trend-temperature"
+        data-pick-type="chart"
+        data-pick-title="办公楼近 7 天趋势与气温"
+        data-pick-subtitle="日总用电量与室外日均温度双轴对比"
+      >
         <div class="cpanel-hd">
           <span class="cpanel-title">近 7 天趋势与气温</span>
           <span class="cpanel-sub">日总用电量（柱/kWh）与室外日均温度（折线/°C）双轴对比</span>
@@ -571,7 +601,13 @@ onUnmounted(() => {
         <div ref="trendEl" class="cpanel-body" style="height: 260px" />
       </div>
       <div class="cpanel-col">
-        <div class="cpanel">
+        <div
+          class="cpanel"
+          data-pick-id="office-chart-sparkline"
+          data-pick-type="chart"
+          data-pick-title="办公楼峰谷效率趋势"
+          data-pick-subtitle="近期日总能耗走势，用于观察日间能耗波动"
+        >
           <div class="cpanel-hd">
             <span class="cpanel-title">峰谷效率</span>
             <span class="cpanel-sub">近期日总能耗走势（kWh），反映日间用能波动</span>

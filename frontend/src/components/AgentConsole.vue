@@ -1,7 +1,7 @@
 <template>
-  <div class="console">
+  <div class="console" ref="consoleEl">
     <!-- ── Cursor 风格顶栏 ─────────────────────────────────────────── -->
-    <div class="top-bar">
+    <div class="top-bar" ref="topBarEl">
       <!-- 会话 Tab 列表（可横向滚动） -->
       <div class="tab-list-wrap" @mouseenter="tabHover = true" @mouseleave="tabHover = false">
         <div class="tab-list" ref="tabListEl" @scroll="updateScrollThumb">
@@ -193,7 +193,7 @@
 
     <!-- Agent 状态条 -->
     <Transition name="fade">
-      <div class="agent-status-bar" v-if="store.currentAgentStatus">
+      <div class="agent-status-bar" v-if="store.currentAgentStatus" ref="statusBarEl">
         <span class="status-dot" :style="{ background: agentDotColor(store.currentAgentStatus.name) }"></span>
         <span class="status-label" :style="{ color: agentDotColor(store.currentAgentStatus.name) }">{{ store.currentAgentStatus.label }}</span>
         <span class="status-msg">{{ store.currentAgentStatus.message }}</span>
@@ -201,7 +201,15 @@
     </Transition>
 
     <!-- 消息列表 -->
-    <div class="messages" ref="messagesEl" @click="onMessagesClick">
+    <div
+      class="messages"
+      ref="messagesEl"
+      :style="messagesViewportStyle"
+      tabindex="0"
+      @click="onMessagesClick"
+      @scroll="onMessagesScroll"
+      @wheel="onMessagesWheel"
+    >
       <div v-if="!store.hasMessages" class="empty-hint">
         <p class="hint-greeting"><Icon icon="mdi:hand-wave" width="16" class="inline-icon" /> 你好！我是你的建筑能源智能运维助手</p>
         <p class="hint-sub">可以用自然语言提问，支持数据查询、故障诊断与工单生成。</p>
@@ -407,7 +415,7 @@
     </div>
 
     <!-- 输入框 -->
-    <div class="input-area">
+    <div class="input-area" ref="inputAreaEl">
       <div class="input-box" :class="{ focused: inputFocused, disabled: store.isLoading }">
         <!-- 选中元素上下文标签 -->
         <div v-if="pickerStore.selectedElement" class="picked-context">
@@ -638,9 +646,47 @@ function agentDotColor(name: string): string {
 const inputText = ref('')
 const inputFocused = ref(false)
 const showThinkingModeMenu = ref(false)
+const consoleEl = ref<HTMLElement>()
+const topBarEl = ref<HTMLElement>()
+const statusBarEl = ref<HTMLElement>()
 const messagesEl = ref<HTMLElement>()
+const inputAreaEl = ref<HTMLElement>()
+const shouldAutoScroll = ref(true)
+const messagesViewportHeight = ref<number | null>(null)
 const tabListEl = ref<HTMLElement>()
 const fileInputEl = ref<HTMLInputElement>()
+let layoutObserver: ResizeObserver | null = null
+
+const messagesViewportStyle = computed(() => (
+  messagesViewportHeight.value != null
+    ? {
+        height: `${messagesViewportHeight.value}px`,
+        maxHeight: `${messagesViewportHeight.value}px`,
+      }
+    : undefined
+))
+
+function syncMessagesViewport() {
+  const consoleHeight = consoleEl.value?.clientHeight ?? 0
+  const topBarHeight = topBarEl.value?.offsetHeight ?? 0
+  const statusBarHeight = statusBarEl.value?.offsetHeight ?? 0
+  const inputAreaHeight = inputAreaEl.value?.offsetHeight ?? 0
+  if (!consoleHeight) return
+
+  const available = Math.max(consoleHeight - topBarHeight - statusBarHeight - inputAreaHeight, 120)
+  messagesViewportHeight.value = available
+}
+
+function bindLayoutObserver() {
+  layoutObserver?.disconnect()
+  if (typeof ResizeObserver === 'undefined') return
+
+  layoutObserver = new ResizeObserver(() => syncMessagesViewport())
+  if (consoleEl.value) layoutObserver.observe(consoleEl.value)
+  if (topBarEl.value) layoutObserver.observe(topBarEl.value)
+  if (statusBarEl.value) layoutObserver.observe(statusBarEl.value)
+  if (inputAreaEl.value) layoutObserver.observe(inputAreaEl.value)
+}
 
 function triggerUpload() {
   fileInputEl.value?.click()
@@ -749,6 +795,29 @@ function onMessagesClick(e: MouseEvent) {
   }
 }
 
+function onMessagesScroll() {
+  shouldAutoScroll.value = _isNearBottom()
+}
+
+function onMessagesWheel(e: WheelEvent) {
+  const el = messagesEl.value
+  if (!el) return
+
+  const canScroll = el.scrollHeight > el.clientHeight + 1
+  if (!canScroll) return
+
+  const atTop = el.scrollTop <= 0
+  const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 1
+  const goingUp = e.deltaY < 0
+  const goingDown = e.deltaY > 0
+
+  if ((goingUp && !atTop) || (goingDown && !atBottom)) {
+    e.preventDefault()
+    e.stopPropagation()
+    el.scrollTop += e.deltaY
+  }
+}
+
 // 点击外部关闭
 function onDocClick(e: MouseEvent) {
   const target = e.target as Node
@@ -839,15 +908,30 @@ onMounted(() => {
   dataRangeStore.fetch()
   document.addEventListener('click', onDocClick, true)
   tabListEl.value?.addEventListener('wheel', onTabWheel, { passive: false })
-  nextTick(updateScrollThumb)
+  nextTick(() => {
+    updateScrollThumb()
+    bindLayoutObserver()
+    syncMessagesViewport()
+  })
 })
 onUnmounted(() => {
   document.removeEventListener('click', onDocClick, true)
   tabListEl.value?.removeEventListener('wheel', onTabWheel)
+  layoutObserver?.disconnect()
+  layoutObserver = null
 })
 
 /* tab 数量变化时更新滚动条 */
 watch(() => store.openTabs.length, () => nextTick(updateScrollThumb))
+
+watch(
+  () => [Boolean(store.currentAgentStatus), pickerStore.selectedElement?.id ?? ''],
+  async () => {
+    await nextTick()
+    bindLayoutObserver()
+    syncMessagesViewport()
+  },
+)
 
 // ── 最后一条 AI 消息（用于流式光标 + 图表释放定位）────────────────────────────
 const lastAiMsg = computed(() => {
@@ -1073,7 +1157,10 @@ function _isNearBottom(): boolean {
 }
 
 function _scrollToBottom() {
-  if (messagesEl.value) messagesEl.value.scrollTop = messagesEl.value.scrollHeight
+  if (messagesEl.value) {
+    messagesEl.value.scrollTop = messagesEl.value.scrollHeight
+    shouldAutoScroll.value = true
+  }
 }
 
 watch(
@@ -1093,8 +1180,9 @@ watch(
     },
   ],
   async () => {
+    const stickToBottom = shouldAutoScroll.value
     await nextTick()
-    if (_isNearBottom()) _scrollToBottom()
+    if (stickToBottom) _scrollToBottom()
   },
 )
 
@@ -1176,10 +1264,11 @@ function _processChartQueue() {
   const id = _chartQueue.shift()!
   activeChartId.value = id
   _queueTimer = setTimeout(async () => {
+    const stickToBottom = shouldAutoScroll.value
     readySet.add(id)
     activeChartId.value = null
     await nextTick()
-    if (_isNearBottom()) _scrollToBottom()
+    if (stickToBottom) _scrollToBottom()
     _processChartQueue()
   }, 400)
 }
@@ -1325,7 +1414,9 @@ function buildInlineSegments(msg: ChatMessage): InlineSegment[] {
 .console {
   display: flex;
   flex-direction: column;
+  flex: 1 1 auto;
   height: 100%;
+  min-height: 0;
   min-width: 0;
   background: var(--bg-card);           /* Cursor 风格：整面板统一底色 */
   /* 原底色 var(--bg-panel)，后续可恢复 */
@@ -1837,7 +1928,10 @@ html[data-theme="light"] .tab.active .tab-close {
 
 /* ── 消息区 ─────────────────────────────────────────────────────────────── */
 .messages {
-  flex: 1;
+  flex: 1 1 0%;
+  height: 0;
+  min-height: 0;
+  max-height: 100%;
   overflow-y: auto;
   overflow-x: hidden;
   padding: 12px 12px;
@@ -1846,6 +1940,33 @@ html[data-theme="light"] .tab.active .tab-close {
   gap: 8px;
   min-width: 0;
   background: transparent;              /* 继承 .console 底色，统一 */
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-y;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb, rgba(96, 165, 250, 0.42)) transparent;
+}
+
+.messages > * {
+  flex: 0 0 auto;
+}
+
+.messages::-webkit-scrollbar {
+  width: 6px;
+}
+
+.messages::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.messages::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb, rgba(96, 165, 250, 0.42));
+  border-radius: 999px;
+}
+
+.messages::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover, rgba(96, 165, 250, 0.7));
 }
 
 .empty-hint {
@@ -1893,10 +2014,21 @@ html[data-theme="light"] .tab.active .tab-close {
   box-shadow: var(--card-shadow-hover);
 }
 
-.msg { display: flex; align-items: flex-start; gap: 8px; min-width: 0; max-width: 100%; }
+.msg {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+  flex: 0 0 auto;
+}
 .msg-user { justify-content: flex-start; width: 100%; }
 .msg-error { justify-content: flex-start; }
-.msg-ai { width: 100%; overflow: hidden; }
+.msg-ai {
+  width: 100%;
+  overflow-x: hidden;
+  overflow-y: visible;
+}
 
 .bubble {
   max-width: 85%;

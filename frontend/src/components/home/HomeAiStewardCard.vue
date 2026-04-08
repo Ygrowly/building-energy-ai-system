@@ -61,7 +61,14 @@ const statusClass = computed(() => `status-tag--${props.statusTone}`)
 </script>
 
 <template>
-  <section class="home-ai-steward" aria-label="AI 智能运行管家">
+  <section
+    class="home-ai-steward"
+    aria-label="AI 智能运行管家"
+    data-pick-id="home-ai-steward"
+    data-pick-type="card"
+    :data-pick-title="title"
+    :data-pick-subtitle="reportTitle"
+  >
     <header class="home-ai-steward__header">
       <div class="home-ai-steward__title-wrap">
         <span class="home-ai-steward__title-icon">

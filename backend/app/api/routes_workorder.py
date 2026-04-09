@@ -38,6 +38,11 @@ from app.services.dispatch_service import (
     serialize_dispatch_task,
 )
 from app.services.dispatch_event_service import load_dispatch_events_by_task_ids
+from app.services.auto_dispatch_service import (
+    build_auto_dispatch_evaluation,
+    build_auto_reassign_evaluation,
+    execute_auto_dispatch,
+)
 from app.services.work_order_service import (
     DISPATCHABLE_WORK_ORDER_STATUSES,
     build_batch_dispatch_preview,
@@ -51,6 +56,8 @@ from app.services.work_order_service import (
     record_worker_dispatch_action,
     apply_ai_review,
 )
+from app.services.work_order_review_context_service import build_work_order_review_context
+from app.services.work_order_status_dimensions import sync_work_order_status_dimensions
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -152,16 +159,26 @@ async def register_pending_order(order_data: dict[str, Any]) -> WorkOrder | None
 async def _trigger_ai_review(work_order_id: str) -> None:
     """在独立 session 中触发 AI 审批（后台任务，不阻塞主流程）。"""
     try:
-        from app.services.ai_review_service import review_work_order
+        from app.services.ai_review_service import (
+            execute_auto_dispatch_after_ai_approval,
+            review_work_order,
+        )
         async with AsyncSessionLocal() as db:
-            await review_work_order(db, work_order_id)
+            reviewed_work_order = await review_work_order(db, work_order_id)
             await db.commit()
+            if reviewed_work_order and reviewed_work_order.ai_decision == "approve":
+                await execute_auto_dispatch_after_ai_approval(
+                    db,
+                    work_order_id=reviewed_work_order.id,
+                    trigger_source="background_ai_review",
+                )
         await _invalidate_related_cache()
         logger.info("AI 审批完成: work_order_id=%s", work_order_id)
     except Exception:
         logger.exception("AI 审批失败（降级处理）: work_order_id=%s", work_order_id)
         # 降级：如果审批服务本身异常，将工单标记为 fallback approve
         try:
+            from app.services.ai_review_service import execute_auto_dispatch_after_ai_approval
             async with AsyncSessionLocal() as db:
                 wo = await db.get(WorkOrder, work_order_id)
                 if wo and wo.status == "pending_review":
@@ -173,6 +190,11 @@ async def _trigger_ai_review(work_order_id: str) -> None:
                         fallback=True,
                     )
                     await db.commit()
+                    await execute_auto_dispatch_after_ai_approval(
+                        db,
+                        work_order_id=wo.id,
+                        trigger_source="background_ai_review_exception_fallback",
+                    )
                     await _invalidate_related_cache()
         except Exception:
             logger.exception("降级批准也失败了: work_order_id=%s", work_order_id)
@@ -295,6 +317,8 @@ def _audit_log_label(action: str) -> str:
         "ai_approve": "AI审批通过",
         "ai_fallback_approve": "AI审批通过（降级）",
         "ai_reject": "AI审批驳回",
+        "auto_dispatch_rollout_skipped": "自动派工灰度跳过",
+        "auto_dispatch_attempt_skipped": "自动派工尝试跳过",
         "admin_override": "管理员覆盖决策",
         "dispatch": "工单已进入派工流程",
         "dispatch_accept": "维修人员确认接单",
@@ -764,6 +788,28 @@ async def get_work_order_timeline_endpoint(
 
 
 # ---------------------------------------------------------------------------
+# GET /api/work-orders/{ticket_id}/review-context — AI 工单审查上下文
+# ---------------------------------------------------------------------------
+@router.get("/{ticket_id}/review-context", summary="获取工单 AI 审查上下文")
+async def get_work_order_review_context_endpoint(
+    ticket_id: str,
+    db: AsyncSession = Depends(get_db_session),
+    user: User = Depends(get_current_user),
+):
+    _require_role(user, "admin", "manager", "ops")
+    context = await build_work_order_review_context(db, ticket_id=ticket_id)
+    if context is None:
+        raise HTTPException(status_code=404, detail=f"工单 {ticket_id} 不存在")
+
+    if user.role == "ops":
+        current_dispatch = context.get("current_dispatch") or {}
+        if current_dispatch.get("assigned_to") != user.id:
+            raise HTTPException(status_code=403, detail="只能查看派发给自己的工单审查上下文")
+
+    return context
+
+
+# ---------------------------------------------------------------------------
 # POST /api/work-orders/approve — 兼容旧前端审批接口
 # ---------------------------------------------------------------------------
 @router.post("/approve", summary="审批工单（兼容旧接口）")
@@ -893,6 +939,106 @@ async def get_dispatch_candidates(
         "requirement": candidate_payload["requirement"],
         "candidates": candidate_payload["candidates"],
     }
+
+
+# ---------------------------------------------------------------------------
+# GET /api/work-orders/{ticket_id}/auto-dispatch-evaluation — 自动派工 dry-run
+# ---------------------------------------------------------------------------
+@router.get("/{ticket_id}/auto-dispatch-evaluation", summary="自动派工评估（只读 dry-run）")
+async def get_auto_dispatch_evaluation(
+    ticket_id: str,
+    min_score: int = Query(default=110, ge=0, le=200),
+    min_gap: int = Query(default=10, ge=0, le=100),
+    require_on_duty: bool = Query(default=True),
+    fallback_min_score: int = Query(default=80, ge=0, le=200),
+    fallback_allow_standby: bool = Query(default=True),
+    db: AsyncSession = Depends(get_db_session),
+    user: User = Depends(get_current_user),
+):
+    _require_role(user, "admin", "manager")
+
+    wo = await get_work_order_by_ticket_id(db, ticket_id)
+    if not wo:
+        raise HTTPException(status_code=404, detail="工单不存在")
+
+    return await build_auto_dispatch_evaluation(
+        db,
+        work_order=wo,
+        min_score=min_score,
+        min_gap=min_gap,
+        require_on_duty=require_on_duty,
+        fallback_min_score=fallback_min_score,
+        fallback_allow_standby=fallback_allow_standby,
+    )
+
+
+# ---------------------------------------------------------------------------
+# POST /api/work-orders/{ticket_id}/auto-dispatch — 自动派工执行（默认关闭）
+# ---------------------------------------------------------------------------
+@router.post("/{ticket_id}/auto-dispatch", summary="自动派工执行（feature flag 控制）")
+async def execute_auto_dispatch_endpoint(
+    ticket_id: str,
+    db: AsyncSession = Depends(get_db_session),
+    user: User = Depends(get_current_user),
+):
+    _require_role(user, "admin", "manager")
+
+    wo = await get_work_order_by_ticket_id(db, ticket_id)
+    if not wo:
+        raise HTTPException(status_code=404, detail="工单不存在")
+
+    result = await execute_auto_dispatch(
+        db,
+        work_order=wo,
+        actor_id=user.id,
+        enabled=settings.ENABLE_AUTO_DISPATCH_EXECUTION,
+        min_score=settings.AUTO_DISPATCH_MIN_SCORE,
+        min_gap=settings.AUTO_DISPATCH_MIN_GAP,
+        require_on_duty=settings.AUTO_DISPATCH_REQUIRE_ON_DUTY,
+        allow_low_confidence_fallback=settings.ENABLE_AUTO_DISPATCH_FALLBACK_EXECUTION,
+        fallback_min_score=settings.AUTO_DISPATCH_FALLBACK_MIN_SCORE,
+        fallback_allow_standby=settings.AUTO_DISPATCH_FALLBACK_ALLOW_STANDBY,
+        create_hall_fallback=settings.ENABLE_AUTO_DISPATCH_HALL_FALLBACK,
+    )
+    if result.get("action_taken"):
+        await db.commit()
+        await _invalidate_related_cache()
+    else:
+        await db.rollback()
+    return result
+
+
+# ---------------------------------------------------------------------------
+# GET /api/work-orders/{ticket_id}/auto-reassign-evaluation — 自动重派建议
+# ---------------------------------------------------------------------------
+@router.get("/{ticket_id}/auto-reassign-evaluation", summary="自动重派建议（只读 dry-run）")
+async def get_auto_reassign_evaluation(
+    ticket_id: str,
+    min_score: int = Query(default=115, ge=0, le=200),
+    min_gap: int = Query(default=10, ge=0, le=100),
+    require_on_duty: bool = Query(default=True),
+    require_overdue: bool = Query(default=True),
+    max_attempt_no: int = Query(default=3, ge=1, le=10),
+    db: AsyncSession = Depends(get_db_session),
+    user: User = Depends(get_current_user),
+):
+    _require_role(user, "admin", "manager")
+
+    wo = await get_work_order_by_ticket_id(db, ticket_id)
+    if not wo:
+        raise HTTPException(status_code=404, detail="工单不存在")
+    current_dispatch = await get_current_dispatch_task(db, work_order=wo)
+
+    return await build_auto_reassign_evaluation(
+        db,
+        work_order=wo,
+        current_dispatch=current_dispatch,
+        min_score=min_score,
+        min_gap=min_gap,
+        require_on_duty=require_on_duty,
+        require_overdue=require_overdue,
+        max_attempt_no=max_attempt_no,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1183,6 +1329,7 @@ async def ai_review_trigger(
     wo.ai_reviewed_at = None
     wo.ai_fallback = False
     wo.updated_at = datetime.now(timezone.utc)
+    sync_work_order_status_dimensions(wo)
     await db.commit()
 
     import asyncio

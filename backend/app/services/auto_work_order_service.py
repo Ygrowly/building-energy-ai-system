@@ -264,7 +264,10 @@ async def auto_create_prediction_orders(
 async def trigger_ai_review_for_pending(db: AsyncSession) -> int:
     """对所有 pending_review 工单触发 AI 审批，返回处理数量。"""
     from app.db.models import WorkOrder
-    from app.services.ai_review_service import review_work_order
+    from app.services.ai_review_service import (
+        execute_auto_dispatch_after_ai_approval,
+        review_work_order,
+    )
 
     result = await db.execute(
         select(WorkOrder.id)
@@ -281,9 +284,16 @@ async def trigger_ai_review_for_pending(db: AsyncSession) -> int:
     reviewed = 0
     for wo_id in pending_ids:
         try:
-            await review_work_order(db, wo_id)
+            reviewed_work_order = await review_work_order(db, wo_id)
             await db.commit()
-            reviewed += 1
+            if reviewed_work_order is not None:
+                reviewed += 1
+                if reviewed_work_order.ai_decision == "approve":
+                    await execute_auto_dispatch_after_ai_approval(
+                        db,
+                        work_order_id=reviewed_work_order.id,
+                        trigger_source="batch_pending_ai_review",
+                    )
         except Exception:
             await db.rollback()
             logger.exception("AI 审批失败: wo_id=%s", wo_id)

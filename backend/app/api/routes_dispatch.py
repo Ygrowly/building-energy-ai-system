@@ -28,6 +28,7 @@ from app.services.dispatch_service import (
     serialize_dispatch_task,
     update_dispatch_task_action,
 )
+from app.services.work_order_status_dimensions import sync_work_order_status_dimensions
 from app.services.work_order_service import transition_status
 
 router = APIRouter(prefix="/dispatch-tasks", tags=["派工执行"])
@@ -397,6 +398,7 @@ async def request_support_dispatch_task(
         )
         work_order.worker_result = "needs_parts"
         work_order.worker_notes = req.reason
+        sync_work_order_status_dimensions(work_order, dispatch_task=dispatch_task)
         await _write_audit_log(
             db,
             work_order_id=work_order.id,

@@ -3,10 +3,10 @@
 使用 pydantic-settings BaseSettings，兼容 Docker 环境变量注入。
 """
 from functools import lru_cache
-from typing import Any
+from typing import Annotated, Any
 
 from pydantic import field_validator
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, NoDecode
 
 
 class Settings(BaseSettings):
@@ -88,6 +88,19 @@ class Settings(BaseSettings):
     DISPATCH_SLA_JOB_INTERVAL_SECONDS: int = 60  # 派工 SLA 扫描间隔，单位秒；仅在 ENABLE_DISPATCH_SLA_JOB=True 时生效
     ENABLE_AUTO_WORK_ORDERS: bool = False  # 业务开关：异常/预测结果产生后，是否自动创建工单
     ENABLE_AUTO_AI_REVIEW: bool = False  # 业务开关：自动创建工单后，是否继续触发 AI 审批
+    ENABLE_AUTO_DISPATCH_EXECUTION: bool = False  # 业务开关：是否允许系统按 dry-run 结果自动创建派工任务
+    AUTO_DISPATCH_MIN_SCORE: int = 110  # 自动派工第一候选人最低推荐分
+    AUTO_DISPATCH_MIN_GAP: int = 10  # 自动派工第一候选人与第二候选人的最低分差
+    AUTO_DISPATCH_REQUIRE_ON_DUTY: bool = True  # 自动派工是否要求第一候选人为值班中
+    ENABLE_AUTO_DISPATCH_FALLBACK_EXECUTION: bool = False  # 是否允许低置信兜底派工
+    AUTO_DISPATCH_FALLBACK_MIN_SCORE: int = 80  # 低置信兜底派工最低推荐分
+    AUTO_DISPATCH_FALLBACK_ALLOW_STANDBY: bool = True  # 低置信兜底是否允许待命人员
+    ENABLE_AUTO_DISPATCH_HALL_FALLBACK: bool = False  # 无法指定个人时是否自动创建工单大厅接管入口
+    AUTO_DISPATCH_ALLOWED_BUILDINGS: Annotated[list[str], NoDecode] = []  # 灰度：允许自动派工的楼宇白名单；空表示不限
+    AUTO_DISPATCH_ALLOWED_PRIORITIES: Annotated[list[str], NoDecode] = []  # 灰度：允许自动派工的优先级白名单；空表示不限
+    AUTO_DISPATCH_ALLOWED_REQUIRED_SKILLS: Annotated[list[str], NoDecode] = []  # 灰度：允许自动派工的技能白名单；空表示不限
+    AUTO_DISPATCH_ALLOW_LOW_CONFIDENCE_IN_GREY: bool = False  # 灰度：是否允许低置信兜底派工
+    AUTO_DISPATCH_ALLOW_HALL_FALLBACK_IN_GREY: bool = False  # 灰度：是否允许工单大厅兜底
     ENABLE_CHAT_WORK_ORDERS: bool = False  # 对话开关：是否允许聊天链路直接生成工单草稿/工单流程
 
     # -----------------------------------------------------------------------
@@ -127,6 +140,22 @@ class Settings(BaseSettings):
                 return False
             if normalized in {"development", "dev", "debug"}:
                 return True
+        return value
+
+    @field_validator(
+        "AUTO_DISPATCH_ALLOWED_BUILDINGS",
+        "AUTO_DISPATCH_ALLOWED_PRIORITIES",
+        "AUTO_DISPATCH_ALLOWED_REQUIRED_SKILLS",
+        mode="before",
+    )
+    @classmethod
+    def _normalize_csv_list(cls, value: Any) -> Any:
+        if value in (None, "", []):
+            return []
+        if isinstance(value, str):
+            return [item.strip() for item in value.split(",") if item.strip()]
+        if isinstance(value, (list, tuple, set)):
+            return [str(item).strip() for item in value if str(item).strip()]
         return value
 
 

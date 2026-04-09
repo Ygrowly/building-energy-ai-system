@@ -505,11 +505,14 @@ async def load_dispatch_hall_applications_by_entry_ids(
 async def _find_latest_hall_entry(
     db: AsyncSession,
     *,
+    work_order_id: str | None = None,
     source_dispatch_id: str | None,
     entry_type: str,
     statuses: set[str] | None = None,
 ) -> DispatchHallEntry | None:
     query = select(DispatchHallEntry).where(DispatchHallEntry.entry_type == entry_type)
+    if work_order_id is not None:
+        query = query.where(DispatchHallEntry.work_order_id == work_order_id)
     if source_dispatch_id is None:
         query = query.where(DispatchHallEntry.source_dispatch_id.is_(None))
     else:
@@ -545,6 +548,7 @@ async def create_or_reopen_support_hall_entry(
     )
     entry = await _find_latest_hall_entry(
         db,
+        work_order_id=work_order.id,
         source_dispatch_id=source_dispatch_id,
         entry_type="support_request",
         statuses=_OPEN_ENTRY_STATUSES,
@@ -608,6 +612,7 @@ async def create_or_reopen_takeover_hall_entry(
     )
     entry = await _find_latest_hall_entry(
         db,
+        work_order_id=work_order.id,
         source_dispatch_id=source_dispatch_id,
         entry_type="takeover_candidate",
         statuses=_OPEN_ENTRY_STATUSES,

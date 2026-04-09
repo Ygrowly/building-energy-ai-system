@@ -22,50 +22,14 @@
     @open-batch-dispatch="openBatchDispatchPanel"
     @refresh="fetchOrders"
   >
-    <WorkOrdersHallList
-      v-if="!loading && activeTab === 'shared_hall' && hallEntries.length > 0"
-      :hall-entries="hallEntries"
-      :action-loading="actionLoading"
-      :priority-labels="PRIORITY_LABELS"
-      :format-time="formatTime"
-      :building-name="buildingName"
-      :hall-pending-applications="hallPendingApplications"
-      :hall-entry-title="hallEntryTitle"
-      :hall-entry-owner="hallEntryOwner"
-      :hall-entry-reason="hallEntryReason"
-      :hall-empty-hint="hallEmptyHint"
-      :can-suggest-hall-takeover="canSuggestHallTakeover"
-      :can-nudge-hall-owner="canNudgeHallOwner"
-      :hall-action-key="hallActionKey"
+    <WorkOrdersWorkspacePane
+      :workspace-mode="workspaceMode"
+      :main-pane-props="mainPaneProps"
       @approve="approveHallApplication"
       @reject="rejectHallApplication"
       @suggest="openHallReassignSuggestion"
       @nudge="nudgeHallOwner"
       @close-entry="closeHallEntry"
-    />
-
-    <WorkOrdersOrderList
-      v-else-if="!loading && filteredOrders.length > 0"
-      :orders="filteredOrders"
-      :expanded-id="expandedId"
-      :action-loading="actionLoading"
-      :rejecting-id="rejectingId"
-      :reject-reason="rejectReason"
-      :action-result="actionResult"
-      :priority-labels="PRIORITY_LABELS"
-      :status-labels="STATUS_LABELS"
-      :execution-labels="EXECUTION_LABELS"
-      :status-card-class="statusCardClass"
-      :status-chip-class="statusChipClass"
-      :execution-chip-class="executionChipClass"
-      :execution-status-for-order="executionStatusForOrder"
-      :building-name="buildingName"
-      :format-time="formatTime"
-      :detail-rows="detailRows"
-      :timeline-rows="timelineRows"
-      :is-timeline-loading="isTimelineLoading"
-      :timeline-error="timelineError"
-      :actions-for-order="actionsForOrder"
       @toggle-expand="toggleExpand"
       @run-action="runAction"
       @start-reject="startReject"
@@ -74,18 +38,10 @@
     />
 
     <template #overlays>
-      <WorkOrdersDispatchSheet
-        :visible="dispatchPanel.visible"
-        :panel="dispatchPanel"
-        :priority-labels="PRIORITY_LABELS"
+      <WorkOrdersOverlayPane
+        :dispatch-panel="dispatchPanel"
         :dispatch-submitting="dispatchSubmitting"
-        @close="closeDispatchPanel"
-        @confirm-candidate="confirmDispatchCandidate"
-      />
-
-      <WorkOrdersBatchSheet
-        :visible="batchPanel.visible"
-        :panel="batchPanel"
+        :batch-panel="batchPanel"
         :batch-preview-loading="batchPreviewLoading"
         :batch-dispatch-applying="batchDispatchApplying"
         :batch-sample-options="batchSampleOptions"
@@ -98,7 +54,9 @@
         :status-labels="STATUS_LABELS"
         :building-name="buildingName"
         :shift-label="shiftLabel"
-        @close="closeBatchDispatchPanel"
+        @close-dispatch="closeDispatchPanel"
+        @confirm-candidate="confirmDispatchCandidate"
+        @close-batch="closeBatchDispatchPanel"
         @refresh-preview="refreshBatchDispatchPreview"
         @select-sample-size="selectBatchSampleSize"
         @select-priority="selectBatchPriority"
@@ -114,11 +72,9 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import WorkOrdersBatchSheet from '@/components/workorders/WorkOrdersBatchSheet.vue'
-import WorkOrdersDispatchSheet from '@/components/workorders/WorkOrdersDispatchSheet.vue'
-import WorkOrdersHallList from '@/components/workorders/WorkOrdersHallList.vue'
-import WorkOrdersOrderList from '@/components/workorders/WorkOrdersOrderList.vue'
+import WorkOrdersOverlayPane from '@/components/workorders/WorkOrdersOverlayPane.vue'
 import WorkOrdersShell from '@/components/workorders/WorkOrdersShell.vue'
+import WorkOrdersWorkspacePane from '@/components/workorders/WorkOrdersWorkspacePane.vue'
 import { useBatchDispatch } from '@/composables/workorders/useBatchDispatch'
 import { useDispatchHallAdmin } from '@/composables/workorders/useDispatchHallAdmin'
 import { useWorkOrderActions } from '@/composables/workorders/useWorkOrderActions'
@@ -296,6 +252,40 @@ const {
   fetchOrders,
   closeDispatchPanel,
 })
+
+const mainPaneProps = computed(() => ({
+  loading: loading.value,
+  activeTab: activeTab.value,
+  hallEntries: hallEntries.value,
+  filteredOrders: filteredOrders.value,
+  expandedId: expandedId.value,
+  actionLoading: actionLoading.value,
+  rejectingId: rejectingId.value,
+  rejectReason: rejectReason.value,
+  actionResult: actionResult.value,
+  priorityLabels: PRIORITY_LABELS,
+  statusLabels: STATUS_LABELS,
+  executionLabels: EXECUTION_LABELS,
+  formatTime,
+  buildingName,
+  hallPendingApplications,
+  hallEntryTitle,
+  hallEntryOwner,
+  hallEntryReason,
+  hallEmptyHint,
+  canSuggestHallTakeover,
+  canNudgeHallOwner,
+  hallActionKey,
+  statusCardClass,
+  statusChipClass,
+  executionChipClass,
+  executionStatusForOrder,
+  detailRows,
+  timelineRows,
+  isTimelineLoading,
+  timelineError,
+  actionsForOrder,
+}))
 
 function startReject(ticketId: string) {
   rejectingId.value = ticketId

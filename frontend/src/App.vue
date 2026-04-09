@@ -248,7 +248,7 @@ function stopNotificationPolling() {
 
 function bootstrapNonCriticalUi() {
   clearNonCriticalSchedule()
-  if (isStandaloneAuth.value) return
+  if (isStandaloneAuth.value || !authStore.isLoggedIn) return
   agentConsoleVisible.value = true
   startNotificationPolling()
 }
@@ -343,7 +343,7 @@ function handleUserMenuItem(id: string) {
 
 async function handleLogout() {
   await authStore.logout()
-  router.push('/login')
+  router.replace('/login')
 }
 
 // ── 主题切换 ──────────────────────────────────────────
@@ -403,9 +403,12 @@ function onSidebarLeave() {
 
 // 进入主布局时再拉楼宇（纯登录首屏不请求，登录后进仪表盘会触发）
 watch(
-  () => route.meta.standaloneAuth,
-  (standalone) => {
-    if (standalone !== true) {
+  () => ({
+    standalone: route.meta.standaloneAuth,
+    loggedIn: authStore.isLoggedIn,
+  }),
+  ({ standalone, loggedIn }) => {
+    if (standalone !== true && loggedIn) {
       buildingStore.fetchBuildings()
       scheduleNonCriticalUi()
       return

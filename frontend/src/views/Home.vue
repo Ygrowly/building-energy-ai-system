@@ -17,7 +17,7 @@
           class="capsule-btn"
           :class="{ active: activeBuilding === opt.value }"
           type="button"
-          @click="activeBuilding = opt.value"
+          @click="handleBuildingSelect(opt.value)"
         >
           {{ opt.label }}
         </button>
@@ -99,24 +99,24 @@
     <HomeTeachingSection
       v-else-if="activeBuilding === 'Education'"
       :data-date="dataDateForSections"
-      :bundle="homeBundle?.sections?.Education ?? null"
+      :bundle="sectionBundles.Education ?? null"
       :use-bundle="true"
-      :bundle-pending="homeBundleLoading"
+      :bundle-pending="sectionBundleLoading.Education"
     />
     <HomeOfficeSection
       v-else-if="activeBuilding === 'Office'"
       :data-date="dataDateForSections"
       :overview-data="overviewData"
-      :bundle="homeBundle?.sections?.Office ?? null"
+      :bundle="sectionBundles.Office ?? null"
       :use-bundle="true"
-      :bundle-pending="homeBundleLoading"
+      :bundle-pending="sectionBundleLoading.Office"
     />
     <HomePublicSection
       v-else-if="activeBuilding === 'Public services'"
       :data-date="dataDateForSections"
-      :bundle="homeBundle?.sections?.['Public services'] ?? null"
+      :bundle="sectionBundles['Public services'] ?? null"
       :use-bundle="true"
-      :bundle-pending="homeBundleLoading"
+      :bundle-pending="sectionBundleLoading['Public services']"
     />
   </div>
 </template>
@@ -164,15 +164,39 @@ const predictionData = ref<any>(null)
 const aiStewardLoading = ref(false)
 const homeBundle = ref<any>(null)
 const homeBundleLoading = ref(false)
+const sectionBundles = ref<Record<string, any | null>>({
+  Education: null,
+  Office: null,
+  'Public services': null,
+})
+const sectionBundleLoading = ref<Record<string, boolean>>({
+  Education: false,
+  Office: false,
+  'Public services': false,
+})
 const sankeyData = ref<{
   nodes: { name: string }[]
   links: { source: string | number; target: string | number; value: number }[]
 } | null>(null)
-const HOME_BUNDLE_PATH = '/api/home/bundle'
+const HOME_BUNDLE_PATH = '/api/home/overview-bundle'
 const HOME_PREDICTIONS_PATH = '/api/predictions/recent?hours=168'
 const HOME_CACHE_TTL = 60_000
+const SECTION_CACHE_TTL = 300_000
 const AI_STEWARD_ELECTRICITY_PRICE = 0.85
+const SECTION_BUILDING_TYPES = BUILDING_TYPE_ORDER as readonly Exclude<BuildingFilterValue, 'all'>[]
 let homeLoadController: AbortController | null = null
+const sectionBundleInFlight = new Map<string, Promise<void>>()
+
+type IdleWindow = Window & {
+  requestIdleCallback?: (
+    callback: (deadline: { didTimeout: boolean; timeRemaining: () => number }) => void,
+    options?: { timeout?: number },
+  ) => number
+  cancelIdleCallback?: (handle: number) => void
+}
+
+let sectionPrefetchTimer = 0
+let sectionPrefetchIdleHandle: number | null = null
 
 const buildingOptions = HOME_BUILDING_FILTER_OPTIONS
 const activeBuilding = ref<BuildingFilterValue>('all')
@@ -181,6 +205,14 @@ const btnRefs = new Map<string, HTMLElement>()
 
 function setBtnRef(el: unknown, key: string) {
   if (el) btnRefs.set(key, el as HTMLElement)
+}
+
+function getSectionBundlePath(buildingType: Exclude<BuildingFilterValue, 'all'>) {
+  return `/api/home/section-bundle?building_type=${encodeURIComponent(buildingType)}`
+}
+
+function applySectionBundle(buildingType: Exclude<BuildingFilterValue, 'all'>, data: any) {
+  sectionBundles.value[buildingType] = data ?? null
 }
 
 const sliderStyle = computed(() => {
@@ -201,6 +233,13 @@ watch(activeBuilding, () => {
     forceSliderUpdate.value++
   })
 })
+
+function handleBuildingSelect(value: BuildingFilterValue) {
+  activeBuilding.value = value
+  if (value !== 'all') {
+    void ensureSectionBundle(value)
+  }
+}
 
 /** 子组件 API 用 YYYY-MM-DD；无数据时给今天避免空请求 */
 const dataDateForSections = computed(() => {
@@ -428,7 +467,7 @@ const aiStewardCardData = computed(() => {
       `较期望值偏离 ${deviationPct.toFixed(1)}%（${riskLabel}）。`
   }
 
-  const educationSection = homeBundle.value?.sections?.Education ?? null
+  const educationSection = sectionBundles.value.Education ?? null
   const educationDevices: any[] = educationSection?.status?.devices ?? []
   const educationAcDevices = educationDevices.filter((device) => device?.device_type === 'ac')
   const latestSupply = avg(educationAcDevices.map((device) => num(device?.latest_supply_temp_c)))
@@ -687,6 +726,17 @@ function hydrateHomeCache() {
     applyHomeBundle(bundle.data)
   }
 
+  const sectionFresh: Record<string, boolean> = {}
+  SECTION_BUILDING_TYPES.forEach((buildingType) => {
+    const snapshot = peekCachedApi<any>(getSectionBundlePath(buildingType), {
+      ttlMs: SECTION_CACHE_TTL,
+    })
+    if (snapshot.data) {
+      applySectionBundle(buildingType, snapshot.data)
+    }
+    sectionFresh[buildingType] = snapshot.isFresh
+  })
+
   const overview = peekCachedApi<any>('/api/overview', { ttlMs: HOME_CACHE_TTL })
   const anomalies = peekCachedApi<any>('/api/anomalies/recent?hours=168', { ttlMs: HOME_CACHE_TTL })
   const sankey = peekCachedApi<any>('/api/anomalies/sankey', { ttlMs: HOME_CACHE_TTL })
@@ -703,6 +753,7 @@ function hydrateHomeCache() {
     anomaliesFresh: anomalies.isFresh,
     sankeyFresh: sankey.isFresh,
     predictionsFresh: predictions.isFresh,
+    sectionFresh,
   }
 }
 
@@ -762,6 +813,97 @@ async function fetchPredictions(force = false, signal?: AbortSignal) {
   }
 }
 
+async function fetchSectionBundle(
+  buildingType: Exclude<BuildingFilterValue, 'all'>,
+  force = false,
+  options: { silent?: boolean } = {},
+) {
+  const existingTask = sectionBundleInFlight.get(buildingType)
+  if (existingTask) {
+    await existingTask
+    return
+  }
+
+  if (!options.silent) {
+    sectionBundleLoading.value[buildingType] = true
+  }
+
+  const task = (async () => {
+    try {
+      const data = await cachedApiFetch<any>(getSectionBundlePath(buildingType), undefined, {
+        force,
+        ttlMs: SECTION_CACHE_TTL,
+      })
+      applySectionBundle(buildingType, data)
+    } catch (error) {
+      if (isAbortError(error)) return
+      /* silent */
+    } finally {
+      if (!options.silent) {
+        sectionBundleLoading.value[buildingType] = false
+      }
+      sectionBundleInFlight.delete(buildingType)
+    }
+  })()
+
+  sectionBundleInFlight.set(buildingType, task)
+  await task
+}
+
+async function ensureSectionBundle(
+  buildingType: Exclude<BuildingFilterValue, 'all'>,
+  options: { force?: boolean; silent?: boolean } = {},
+) {
+  const snapshot = peekCachedApi<any>(getSectionBundlePath(buildingType), {
+    ttlMs: SECTION_CACHE_TTL,
+  })
+  if (snapshot.data) {
+    applySectionBundle(buildingType, snapshot.data)
+  }
+  if (!options.force && snapshot.isFresh) return
+  await fetchSectionBundle(buildingType, options.force ?? false, { silent: options.silent })
+}
+
+function clearSectionPrefetchSchedule() {
+  if (sectionPrefetchTimer) {
+    window.clearTimeout(sectionPrefetchTimer)
+    sectionPrefetchTimer = 0
+  }
+
+  const idleWindow = window as IdleWindow
+  if (sectionPrefetchIdleHandle != null && idleWindow.cancelIdleCallback) {
+    idleWindow.cancelIdleCallback(sectionPrefetchIdleHandle)
+    sectionPrefetchIdleHandle = null
+  }
+}
+
+function scheduleSectionPrefetch(exclude: BuildingFilterValue = activeBuilding.value) {
+  clearSectionPrefetchSchedule()
+
+  const targets = SECTION_BUILDING_TYPES.filter((buildingType) => buildingType !== exclude)
+  if (!targets.length) return
+
+  const runPrefetch = async () => {
+    for (const buildingType of targets) {
+      await ensureSectionBundle(buildingType, { silent: true })
+    }
+  }
+
+  const idleWindow = window as IdleWindow
+  if (idleWindow.requestIdleCallback) {
+    sectionPrefetchIdleHandle = idleWindow.requestIdleCallback(() => {
+      sectionPrefetchIdleHandle = null
+      void runPrefetch()
+    }, { timeout: 1200 })
+    return
+  }
+
+  sectionPrefetchTimer = window.setTimeout(() => {
+    sectionPrefetchTimer = 0
+    void runPrefetch()
+  }, 1200)
+}
+
 async function fetchHomeBundle(force = false) {
   homeLoadController?.abort()
   const controller = new AbortController()
@@ -776,6 +918,7 @@ async function fetchHomeBundle(force = false) {
     })
     if (homeLoadController !== controller || controller.signal.aborted) return
     applyHomeBundle(data)
+    scheduleSectionPrefetch(activeBuilding.value)
     finish('ok', { source: 'bundle' })
   } catch (error) {
     if (isAbortError(error)) {
@@ -815,17 +958,26 @@ function handleAiStewardViewAll() {
 const initialHomeCache = hydrateHomeCache()
 homeBundleLoading.value = !initialHomeCache.bundleFresh
 
+watch(activeBuilding, (value) => {
+  if (value !== 'all') {
+    void ensureSectionBundle(value)
+  }
+  scheduleSectionPrefetch(value)
+})
+
 onMounted(async () => {
   void buildingStore.fetchBuildings()
   const tasks: Promise<void>[] = []
   if (!initialHomeCache.bundleFresh) tasks.push(fetchHomeBundle(true))
   if (!initialHomeCache.predictionsFresh) tasks.push(fetchPredictions(true))
   if (tasks.length) await Promise.all(tasks)
+  scheduleSectionPrefetch(activeBuilding.value)
 })
 
 onUnmounted(() => {
   homeLoadController?.abort()
   homeLoadController = null
+  clearSectionPrefetchSchedule()
 })
 
 // ── 报表集成 ─────────────────────────────────────────────────

@@ -15,8 +15,8 @@
 """
 from __future__ import annotations
 
-import asyncio
 import logging
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
@@ -52,6 +52,38 @@ _COP_PROXY_SCALING_FACTOR = 15.0
 _ZERO_HVAC_ENERGY_THRESHOLD = 0.1
 
 _HOME_BUNDLE_BUILDING_TYPES = BUILDING_TYPE_ORDER
+_HOME_OVERVIEW_BUNDLE_TTL_SECONDS = 60
+_HOME_SECTION_BUNDLE_TTL_SECONDS = 300
+
+
+@dataclass(frozen=True)
+class _BuildingContext:
+    building_type: str
+    building_id: str
+    sqm: float | None
+    display_name: str
+
+
+def _get_building_context_cache(
+    db: AsyncSession,
+) -> dict[tuple[str, str], _BuildingContext]:
+    cache = db.info.get("building_context_cache")
+    if isinstance(cache, dict):
+        return cache
+
+    cache = {}
+    db.info["building_context_cache"] = cache
+    return cache
+
+
+def _cache_building_context(
+    db: AsyncSession,
+    context: _BuildingContext,
+) -> _BuildingContext:
+    cache = _get_building_context_cache(db)
+    cache[("id", context.building_id)] = context
+    cache[("type", context.building_type)] = context
+    return context
 
 
 def _resolve_bundle_data_date(overview_payload: dict[str, Any] | None) -> date:
@@ -62,6 +94,159 @@ def _resolve_bundle_data_date(overview_payload: dict[str, Any] | None) -> date:
         except ValueError:
             pass
     return datetime.now(timezone.utc).date()
+
+
+async def _get_latest_energy_data_date(db: AsyncSession) -> date:
+    result = await db.execute(
+        text('SELECT MAX("timestamp")::date AS latest_day FROM energy_data')
+    )
+    latest_day = result.scalar()
+    if isinstance(latest_day, date):
+        return latest_day
+    return datetime.now(timezone.utc).date()
+
+
+async def _resolve_building_context(
+    db: AsyncSession,
+    *,
+    building_type: str | None = None,
+    building_id: str | None = None,
+) -> _BuildingContext | None:
+    normalized_type = normalize_building_type(building_type) or building_type
+    cache = _get_building_context_cache(db)
+
+    if building_id:
+        cached = cache.get(("id", building_id))
+        if cached is not None:
+            return cached
+
+        result = await db.execute(
+            select(Building).where(Building.building_id == building_id)
+        )
+        building = result.scalar_one_or_none()
+        if not building:
+            return None
+        resolved_type = (
+            normalize_building_type(building.primary_space_usage)
+            or normalized_type
+            or building.primary_space_usage
+            or building.building_id
+        )
+        return _cache_building_context(
+            db,
+            _BuildingContext(
+                building_type=resolved_type,
+                building_id=building.building_id,
+                sqm=building.sqm,
+                display_name=get_building_label(
+                    resolved_type,
+                    resolved_type or building.building_id,
+                ),
+            ),
+        )
+
+    if normalized_type:
+        cached = cache.get(("type", normalized_type))
+        if cached is not None:
+            return cached
+
+        result = await db.execute(
+            select(Building).where(Building.primary_space_usage == normalized_type)
+        )
+        building = result.scalar_one_or_none()
+        if not building:
+            return None
+        return _cache_building_context(
+            db,
+            _BuildingContext(
+                building_type=normalized_type,
+                building_id=building.building_id,
+                sqm=building.sqm,
+                display_name=get_building_label(
+                    normalized_type,
+                    normalized_type or building.building_id,
+                ),
+            ),
+        )
+
+    return None
+
+
+async def _resolve_home_building_contexts(
+    db: AsyncSession,
+    *,
+    building_types: tuple[str, ...] = _HOME_BUNDLE_BUILDING_TYPES,
+) -> dict[str, _BuildingContext]:
+    normalized_types = tuple(
+        normalize_building_type(building_type) or building_type
+        for building_type in building_types
+    )
+    cache = _get_building_context_cache(db)
+
+    missing_types = [
+        building_type
+        for building_type in normalized_types
+        if cache.get(("type", building_type)) is None
+    ]
+    if missing_types:
+        result = await db.execute(
+            select(Building).where(Building.primary_space_usage.in_(missing_types))
+        )
+        for building in result.scalars():
+            resolved_type = (
+                normalize_building_type(building.primary_space_usage)
+                or building.primary_space_usage
+                or building.building_id
+            )
+            _cache_building_context(
+                db,
+                _BuildingContext(
+                    building_type=resolved_type,
+                    building_id=building.building_id,
+                    sqm=building.sqm,
+                    display_name=get_building_label(
+                        resolved_type,
+                        resolved_type or building.building_id,
+                    ),
+                ),
+            )
+
+    unresolved_types = [
+        building_type
+        for building_type in normalized_types
+        if cache.get(("type", building_type)) is None
+    ]
+    if unresolved_types:
+        raise HTTPException(
+            status_code=404,
+            detail=f"建筑类型不存在: {', '.join(unresolved_types)}",
+        )
+
+    return {
+        building_type: cache[("type", building_type)]
+        for building_type in normalized_types
+    }
+
+
+async def _require_building_context(
+    db: AsyncSession,
+    *,
+    building_type: str | None = None,
+    building_id: str | None = None,
+) -> _BuildingContext:
+    context = await _resolve_building_context(
+        db,
+        building_type=building_type,
+        building_id=building_id,
+    )
+    if context is None:
+        detail = (
+            f"建筑类型 {building_type} 不存在"
+            if building_type
+            else f"建筑 {building_id} 不存在"
+        )
+        raise HTTPException(status_code=404, detail=detail)
+    return context
 
 
 # ---------------------------------------------------------------------------
@@ -130,6 +315,7 @@ async def _get_recent_anomalies_payload(
     hours: int,
     building_type: str | None,
     only_unresolved: bool,
+    building_id: str | None = None,
 ) -> dict[str, Any]:
     max_ts_result = await db.execute(text("SELECT MAX(data_timestamp) FROM anomaly_events"))
     max_ts = max_ts_result.scalar()
@@ -152,14 +338,14 @@ async def _get_recent_anomalies_payload(
     resolved_filter = " AND ae.is_resolved = false" if only_unresolved else ""
     params: dict[str, Any] = {"t0": window_start, "t1": max_ts}
 
-    if building_type:
-        bld_result = await db.execute(
-            select(Building.building_id).where(Building.primary_space_usage == building_type)
-        )
-        bid = bld_result.scalar_one_or_none()
-        if bid:
-            building_filter = " AND ae.building_id = :bid"
-            params["bid"] = bid
+    resolved_building_id = building_id
+    if resolved_building_id is None and building_type:
+        context = await _resolve_building_context(db, building_type=building_type)
+        resolved_building_id = context.building_id if context else None
+
+    if resolved_building_id:
+        building_filter = " AND ae.building_id = :bid"
+        params["bid"] = resolved_building_id
 
     anomaly_result = await db.execute(text(f"""
         SELECT
@@ -236,14 +422,14 @@ async def _get_recent_anomalies_payload(
 async def get_building_status(
     building_type: str,
     db: AsyncSession = Depends(get_db_session),
+    building_id: str | None = None,
 ):
     """查询指定建筑最新一条传感器读数（实时状态快照）。building_type 如 'Office'。"""
-    bld_result = await db.execute(
-        select(Building).where(Building.primary_space_usage == building_type)
+    building = await _require_building_context(
+        db,
+        building_type=building_type,
+        building_id=building_id,
     )
-    building = bld_result.scalar_one_or_none()
-    if not building:
-        raise HTTPException(status_code=404, detail=f"建筑类型 {building_type} 不存在")
 
     result = await db.execute(
         select(EnergyData)
@@ -264,9 +450,9 @@ async def get_building_status(
     devices = [{"device_id": r[0], "device_type": r[1]} for r in dev_result.fetchall()]
 
     return {
-        "building_type": building_type,
-        "display_name": get_building_label(building_type, building_type),
-        "icon": get_building_icon(building_type),
+        "building_type": building.building_type,
+        "display_name": building.display_name,
+        "icon": get_building_icon(building.building_type),
         "sqm": building.sqm,
         "devices": devices,
         "last_updated_utc": latest.timestamp.isoformat() if latest.timestamp else None,
@@ -641,6 +827,7 @@ async def get_building_energy_trend(
     include_water: bool = Query(False, description="是否包含每日用水量"),
     include_device_status: bool = Query(False, description="是否包含设备运行状态日聚合（正常数/COP/功率/温差）"),
     db: AsyncSession = Depends(get_db_session),
+    building_id: str | None = None,
 ):
     """
     从物化视图查询按天汇总的能耗趋势。building_type 如 'Office'。
@@ -657,20 +844,17 @@ async def get_building_energy_trend(
     ttl_seconds = settings.CACHE_BUILDING_ENERGY_TREND_TTL_SECONDS
 
     async def _compute() -> dict[str, Any]:
-        bld_result = await db.execute(
-            select(Building.building_id).where(
-                Building.primary_space_usage == building_type
-            )
+        building = await _require_building_context(
+            db,
+            building_type=building_type,
+            building_id=building_id,
         )
-        building_id = bld_result.scalar_one_or_none()
-        if not building_id:
-            raise HTTPException(status_code=404, detail=f"建筑类型 {building_type} 不存在")
 
         # ── 能耗数据：优先从物化视图查询 ──
         result = await db.execute(
             select(DailyEnergySummary)
             .where(
-                DailyEnergySummary.building_id == building_id,
+                DailyEnergySummary.building_id == building.building_id,
                 DailyEnergySummary.day >= start_date,
                 DailyEnergySummary.day <= end_date,
             )
@@ -715,7 +899,7 @@ async def get_building_energy_trend(
                       AND timestamp >= :sd AND timestamp <= :ed
                     GROUP BY day ORDER BY day
                 """),
-                {"bid": building_id, "sd": start_date, "ed": end_date},
+                {"bid": building.building_id, "sd": start_date, "ed": end_date},
             )
             records = [
                 {
@@ -762,7 +946,7 @@ async def get_building_energy_trend(
                     GROUP BY 1
                     ORDER BY 1
                 """),
-                {"bid": building_id, "sd": start_date, "ed": end_date},
+                {"bid": building.building_id, "sd": start_date, "ed": end_date},
             )
             fallback_cop_result = await db.execute(
                 text("""
@@ -794,7 +978,7 @@ async def get_building_energy_trend(
                     ORDER BY 1
                 """),
                 {
-                    "bid": building_id,
+                    "bid": building.building_id,
                     "sd": start_date,
                     "ed": end_date,
                     "min_energy": _ZERO_HVAC_ENERGY_THRESHOLD,
@@ -836,8 +1020,8 @@ async def get_building_energy_trend(
                     rec["ac_cop"] = fallback.get("ac_cop")
 
         return {
-            "building_type": building_type,
-            "building_id": building_id,
+            "building_type": building.building_type,
+            "building_id": building.building_id,
             "start_date": start_date.isoformat(),
             "end_date": end_date.isoformat(),
             "source": source,
@@ -868,17 +1052,17 @@ async def get_rated_vs_actual(
     end_date: date   = Query(..., description="结束日期 YYYY-MM-DD"),
     metric: str      = Query("electricity", description="指标：electricity | water | hac_energy"),
     db: AsyncSession = Depends(get_db_session),
+    building_id: str | None = None,
 ):
     if metric not in _METRIC_COLS:
         raise HTTPException(status_code=400, detail=f"metric 只能为：{list(_METRIC_COLS.keys())}")
     actual_col, expected_col, unit = _METRIC_COLS[metric]
 
-    bld_result = await db.execute(
-        select(Building.building_id).where(Building.primary_space_usage == building_type)
+    building = await _require_building_context(
+        db,
+        building_type=building_type,
+        building_id=building_id,
     )
-    building_id = bld_result.scalar_one_or_none()
-    if not building_id:
-        raise HTTPException(status_code=404, detail=f"建筑类型 {building_type} 不存在")
 
     start_dt = datetime(start_date.year, start_date.month, start_date.day, tzinfo=timezone.utc)
     end_dt   = datetime(end_date.year,   end_date.month,   end_date.day,   tzinfo=timezone.utc) + timedelta(days=1)
@@ -903,13 +1087,13 @@ async def get_rated_vs_actual(
           AND e.timestamp >= :t0
           AND e.timestamp < :t1
         ORDER BY e.timestamp ASC
-    """), {"bid": building_id, "t0": start_dt, "t1": end_dt})
+    """), {"bid": building.building_id, "t0": start_dt, "t1": end_dt})
     rows = rows_result.fetchall()
 
     if not rows:
         return {
-            "building_type": building_type,
-            "building_id": building_id,
+            "building_type": building.building_type,
+            "building_id": building.building_id,
             "metric": metric,
             "unit": unit,
             "start_date": start_date.isoformat(),
@@ -950,8 +1134,8 @@ async def get_rated_vs_actual(
     anom_rate = round(anomaly_count / total * 100, 2) if total > 0 else 0.0
 
     return {
-        "building_type": building_type,
-        "building_id": building_id,
+        "building_type": building.building_type,
+        "building_id": building.building_id,
         "metric": metric,
         "unit": unit,
         "start_date": start_date.isoformat(),
@@ -997,6 +1181,146 @@ _WD_LABELS: dict[int, str] = {
 }
 
 
+async def _get_latest_energy_timestamp(
+    db: AsyncSession,
+    building_id: str,
+) -> datetime | None:
+    max_row = await db.execute(
+        select(func.max(EnergyData.timestamp)).where(
+            EnergyData.building_id == building_id
+        )
+    )
+    return max_row.scalar()
+
+
+def _build_empty_load_profile_payload(
+    *,
+    building_type: str,
+    building_id: str,
+    metric: str,
+    days: int,
+) -> dict[str, Any]:
+    return {
+        "building_type": building_type,
+        "building_id": building_id,
+        "metric": metric,
+        "days": days,
+        "window_end": None,
+        "window_start": None,
+        "hourly_profile": [],
+        "weekday_profile": [],
+    }
+
+
+async def _get_load_profile_payloads(
+    db: AsyncSession,
+    *,
+    building_type: str,
+    building_id: str,
+    metrics: list[str],
+    days: int,
+) -> dict[str, dict[str, Any]]:
+    max_ts = await _get_latest_energy_timestamp(db, building_id)
+    if max_ts is None:
+        return {
+            metric: _build_empty_load_profile_payload(
+                building_type=building_type,
+                building_id=building_id,
+                metric=metric,
+                days=days,
+            )
+            for metric in metrics
+        }
+
+    if max_ts.tzinfo is None:
+        end_dt = max_ts.replace(tzinfo=timezone.utc)
+    else:
+        end_dt = max_ts.astimezone(timezone.utc)
+    start_dt = end_dt - timedelta(days=days)
+
+    select_hour_parts = ["EXTRACT(HOUR FROM e.timestamp)::int AS hr", "COUNT(*)::int AS sample_count"]
+    select_weekday_parts = ["EXTRACT(ISODOW FROM e.timestamp)::int AS wd", "COUNT(*)::int AS sample_count"]
+    for metric in metrics:
+        col = _LOAD_PROFILE_METRICS[metric]
+        select_hour_parts.append(f'AVG(e.{col})::float AS "{metric}"')
+        select_weekday_parts.append(f'AVG(e.{col})::float AS "{metric}"')
+
+    hourly_sql = text(
+        f"""
+        SELECT {", ".join(select_hour_parts)}
+          FROM energy_data e
+         WHERE e.building_id = :bid
+           AND e.timestamp >= :t0
+           AND e.timestamp <= :t1
+         GROUP BY hr
+         ORDER BY hr
+        """
+    )
+    weekday_sql = text(
+        f"""
+        SELECT {", ".join(select_weekday_parts)}
+          FROM energy_data e
+         WHERE e.building_id = :bid
+           AND e.timestamp >= :t0
+           AND e.timestamp <= :t1
+         GROUP BY wd
+         ORDER BY wd
+        """
+    )
+
+    params = {"bid": building_id, "t0": start_dt, "t1": end_dt}
+    hourly_rows = (await db.execute(hourly_sql, params)).mappings().all()
+    weekday_rows = (await db.execute(weekday_sql, params)).mappings().all()
+
+    payloads: dict[str, dict[str, Any]] = {}
+    for metric in metrics:
+        hourly_map = {
+            int(row["hr"]): (
+                float(row[metric] or 0),
+                int(row["sample_count"] or 0),
+            )
+            for row in hourly_rows
+            if row["hr"] is not None
+        }
+        weekday_map = {
+            int(row["wd"]): (
+                float(row[metric] or 0),
+                int(row["sample_count"] or 0),
+            )
+            for row in weekday_rows
+            if row["wd"] is not None
+        }
+
+        payloads[metric] = {
+            "building_type": building_type,
+            "building_id": building_id,
+            "metric": metric,
+            "days": days,
+            "window_end": end_dt.isoformat(),
+            "window_start": start_dt.isoformat(),
+            "hourly_profile": [
+                {
+                    "hour": hour,
+                    "avg_value": round(hourly_map.get(hour, (0.0, 0))[0], 4),
+                    "sample_count": hourly_map.get(hour, (0.0, 0))[1],
+                    "anomaly_count": 0,
+                }
+                for hour in range(24)
+            ],
+            "weekday_profile": [
+                {
+                    "weekday": wd,
+                    "label": _WD_LABELS.get(wd, str(wd)),
+                    "avg_value": round(weekday_map.get(wd, (0.0, 0))[0], 4),
+                    "sample_count": weekday_map.get(wd, (0.0, 0))[1],
+                }
+                for wd in range(1, 8)
+            ],
+        }
+
+    return payloads
+
+
 @router.get(
     "/buildings/{building_type}/load-profile",
     summary="按小时与星期聚合负荷曲线",
@@ -1009,6 +1333,7 @@ async def get_load_profile(
     ),
     days: int = Query(14, ge=1, le=90, description="回溯天数，以库内最新时间为终点"),
     db: AsyncSession = Depends(get_db_session),
+    building_id: str | None = None,
 ):
     """从 energy_data 聚合小时均值与星期均值，供首页节律类图表使用。"""
     if metric not in _LOAD_PROFILE_METRICS:
@@ -1017,115 +1342,19 @@ async def get_load_profile(
             detail=f"metric 只能为：{list(_LOAD_PROFILE_METRICS.keys())}",
         )
 
-    col = _LOAD_PROFILE_METRICS[metric]
-
-    bld_result = await db.execute(
-        select(Building.building_id).where(
-            Building.primary_space_usage == building_type
-        )
+    building = await _require_building_context(
+        db,
+        building_type=building_type,
+        building_id=building_id,
     )
-    building_id = bld_result.scalar_one_or_none()
-    if not building_id:
-        raise HTTPException(status_code=404, detail=f"建筑类型 {building_type} 不存在")
-
-    max_row = await db.execute(
-        select(func.max(EnergyData.timestamp)).where(
-            EnergyData.building_id == building_id
-        )
+    payloads = await _get_load_profile_payloads(
+        db,
+        building_type=building.building_type,
+        building_id=building.building_id,
+        metrics=[metric],
+        days=days,
     )
-    max_ts = max_row.scalar()
-    if max_ts is None:
-        return {
-            "building_type": building_type,
-            "building_id": building_id,
-            "metric": metric,
-            "days": days,
-            "window_end": None,
-            "window_start": None,
-            "hourly_profile": [],
-            "weekday_profile": [],
-        }
-
-    if max_ts.tzinfo is None:
-        end_dt = max_ts.replace(tzinfo=timezone.utc)
-    else:
-        end_dt = max_ts.astimezone(timezone.utc)
-    start_dt = end_dt - timedelta(days=days)
-
-    hourly_sql = text(
-        f"""
-        SELECT EXTRACT(HOUR FROM e.timestamp)::int AS hr,
-               AVG(e.{col})::float AS avg_val,
-               COUNT(*)::int AS n
-          FROM energy_data e
-         WHERE e.building_id = :bid
-           AND e.timestamp >= :t0
-           AND e.timestamp <= :t1
-         GROUP BY hr
-         ORDER BY hr
-        """
-    )
-    h_result = await db.execute(
-        hourly_sql, {"bid": building_id, "t0": start_dt, "t1": end_dt}
-    )
-    hourly_map: dict[int, tuple[float, int]] = {}
-    for hr, avg_val, n in h_result.fetchall():
-        if hr is None:
-            continue
-        hourly_map[int(hr)] = (float(avg_val or 0), int(n or 0))
-
-    hourly_profile = []
-    for h in range(24):
-        av, n = hourly_map.get(h, (0.0, 0))
-        hourly_profile.append({
-            "hour": h,
-            "avg_value": round(av, 4),
-            "sample_count": n,
-            "anomaly_count": 0,
-        })
-
-    wd_sql = text(
-        f"""
-        SELECT EXTRACT(ISODOW FROM e.timestamp)::int AS wd,
-               AVG(e.{col})::float AS avg_val,
-               COUNT(*)::int AS n
-          FROM energy_data e
-         WHERE e.building_id = :bid
-           AND e.timestamp >= :t0
-           AND e.timestamp <= :t1
-         GROUP BY wd
-         ORDER BY wd
-        """
-    )
-    wd_result = await db.execute(
-        wd_sql, {"bid": building_id, "t0": start_dt, "t1": end_dt}
-    )
-    wd_map: dict[int, tuple[float, int]] = {}
-    for wd, avg_val, n in wd_result.fetchall():
-        if wd is None:
-            continue
-        wd_map[int(wd)] = (float(avg_val or 0), int(n or 0))
-
-    weekday_profile = []
-    for wd in range(1, 8):
-        av, n = wd_map.get(wd, (0.0, 0))
-        weekday_profile.append({
-            "weekday": wd,
-            "label": _WD_LABELS.get(wd, str(wd)),
-            "avg_value": round(av, 4),
-            "sample_count": n,
-        })
-
-    return {
-        "building_type": building_type,
-        "building_id": building_id,
-        "metric": metric,
-        "days": days,
-        "window_end": end_dt.isoformat(),
-        "window_start": start_dt.isoformat(),
-        "hourly_profile": hourly_profile,
-        "weekday_profile": weekday_profile,
-    }
+    return payloads[metric]
 
 
 # ---------------------------------------------------------------------------
@@ -1144,6 +1373,7 @@ async def get_peak_valley_stats(
         description="夜间单小时判定阈值（电 kWh；水/暖通按同列数值）",
     ),
     db: AsyncSession = Depends(get_db_session),
+    building_id: str | None = None,
 ):
     if metric not in _PEAK_VALLEY_METRICS:
         raise HTTPException(
@@ -1152,25 +1382,17 @@ async def get_peak_valley_stats(
         )
     col = _LOAD_PROFILE_METRICS[metric]
 
-    bld_result = await db.execute(
-        select(Building.building_id).where(
-            Building.primary_space_usage == building_type
-        )
+    building = await _require_building_context(
+        db,
+        building_type=building_type,
+        building_id=building_id,
     )
-    building_id = bld_result.scalar_one_or_none()
-    if not building_id:
-        raise HTTPException(status_code=404, detail=f"建筑类型 {building_type} 不存在")
 
-    max_row = await db.execute(
-        select(func.max(EnergyData.timestamp)).where(
-            EnergyData.building_id == building_id
-        )
-    )
-    max_ts = max_row.scalar()
+    max_ts = await _get_latest_energy_timestamp(db, building.building_id)
     if max_ts is None:
         return {
-            "building_type": building_type,
-            "building_id": building_id,
+            "building_type": building.building_type,
+            "building_id": building.building_id,
             "metric": metric,
             "days": days,
             "peak_value": None,
@@ -1200,7 +1422,7 @@ async def get_peak_valley_stats(
         """
     )
     d_result = await db.execute(
-        daily_sql, {"bid": building_id, "t0": start_dt, "t1": end_dt}
+        daily_sql, {"bid": building.building_id, "t0": start_dt, "t1": end_dt}
     )
     daily_rows = d_result.fetchall()
     daily_totals: list[dict[str, Any]] = []
@@ -1236,13 +1458,13 @@ async def get_peak_valley_stats(
     )
     n_result = await db.execute(
         night_sql,
-        {"bid": building_id, "t0": start_dt, "t1": end_dt, "thr": night_threshold},
+        {"bid": building.building_id, "t0": start_dt, "t1": end_dt, "thr": night_threshold},
     )
     night_abnormal_hours = int(n_result.scalar() or 0)
 
     return {
-        "building_type": building_type,
-        "building_id": building_id,
+        "building_type": building.building_type,
+        "building_id": building.building_id,
         "metric": metric,
         "days": days,
         "night_threshold": night_threshold,
@@ -1545,11 +1767,13 @@ async def get_recent_anomalies(
     building_type: str | None = Query(None, description="按建筑类型过滤"),
     only_unresolved: bool = Query(False, description="是否只返回未解决的异常，默认返回全部"),
     db: AsyncSession = Depends(get_db_session),
+    building_id: str | None = None,
 ):
     cache_key = (
         "anomalies:recent:"
         f"{hours}:"
         f"{building_type or 'all'}:"
+        f"{building_id or 'all'}:"
         f"{'unresolved' if only_unresolved else 'all'}:"
         f"{cache_bucket()}"
     )
@@ -1561,6 +1785,7 @@ async def get_recent_anomalies(
             hours=hours,
             building_type=building_type,
             only_unresolved=only_unresolved,
+            building_id=building_id,
         )
 
     return await get_or_compute_json(cache_key, ttl_seconds, _compute)
@@ -1597,27 +1822,38 @@ _ROOT_CAUSE_LABEL = {
 @router.get("/anomalies/sankey", summary="异常根因桑基图聚合数据")
 async def get_anomaly_sankey(
     db: AsyncSession = Depends(get_db_session),
+    building_id: str | None = None,
 ):
-    cache_key = f"anomalies:sankey:{cache_bucket()}"
+    cache_key = f"anomalies:sankey:{building_id or 'all'}:{cache_bucket()}"
     ttl_seconds = settings.CACHE_ANOMALIES_SANKEY_TTL_SECONDS
 
     async def _compute() -> dict[str, Any]:
-        return await _get_anomaly_sankey_payload(db)
+        return await _get_anomaly_sankey_payload(db, building_id=building_id)
 
     return await get_or_compute_json(cache_key, ttl_seconds, _compute)
 
 
-async def _get_anomaly_sankey_payload(db: AsyncSession) -> dict[str, Any]:
-    agg_result = await db.execute(text("""
+async def _get_anomaly_sankey_payload(
+    db: AsyncSession,
+    *,
+    building_id: str | None = None,
+) -> dict[str, Any]:
+    filters = ["is_resolved = false"]
+    params: dict[str, Any] = {}
+    if building_id:
+        filters.append("building_id = :bid")
+        params["bid"] = building_id
+
+    agg_result = await db.execute(text(f"""
         SELECT
             rule_triggered,
             hvac_root_cause,
             COUNT(*) AS cnt
         FROM anomaly_events
-        WHERE is_resolved = false
+        WHERE {' AND '.join(filters)}
         GROUP BY rule_triggered, hvac_root_cause
         ORDER BY cnt DESC
-    """))
+    """), params)
     rows = agg_result.fetchall()
 
     if not rows:
@@ -2105,43 +2341,299 @@ async def _get_home_bundle_for_building(
         }
 
 
+async def _get_home_overview_series_payload(
+    db: AsyncSession,
+    *,
+    context: _BuildingContext,
+    overview_start: date,
+    overview_end: date,
+) -> dict[str, Any]:
+    energy = await get_building_energy_trend(
+        building_type=context.building_type,
+        building_id=context.building_id,
+        start_date=overview_start,
+        end_date=overview_end,
+        include_water=True,
+        include_device_status=False,
+        db=db,
+    )
+    rated_electricity = await get_rated_vs_actual(
+        building_type=context.building_type,
+        building_id=context.building_id,
+        start_date=overview_start,
+        end_date=overview_end,
+        metric="electricity",
+        db=db,
+    )
+    rated_water = await get_rated_vs_actual(
+        building_type=context.building_type,
+        building_id=context.building_id,
+        start_date=overview_start,
+        end_date=overview_end,
+        metric="water",
+        db=db,
+    )
+    return {
+        "energy": energy,
+        "rated_electricity": rated_electricity,
+        "rated_water": rated_water,
+    }
+
+
+async def _get_home_section_payload(
+    db: AsyncSession,
+    *,
+    context: _BuildingContext,
+    target_date: date,
+) -> dict[str, Any]:
+    overview_start = target_date - timedelta(days=6)
+    public_section_start = target_date - timedelta(days=29)
+    anomalies = await get_recent_anomalies(
+        hours=168,
+        building_type=context.building_type,
+        building_id=context.building_id,
+        only_unresolved=False,
+        db=db,
+    )
+
+    if context.building_type == "Education":
+        load_profiles = await _get_load_profile_payloads(
+            db,
+            building_type=context.building_type,
+            building_id=context.building_id,
+            metrics=["electricity", "air_temp", "supply_temp", "return_temp"],
+            days=14,
+        )
+        rated_electricity = await get_rated_vs_actual(
+            building_type=context.building_type,
+            building_id=context.building_id,
+            start_date=overview_start,
+            end_date=target_date,
+            metric="electricity",
+            db=db,
+        )
+        status = await get_building_status(
+            building_type=context.building_type,
+            building_id=context.building_id,
+            db=db,
+        )
+        return {
+            "load_profile_electricity": load_profiles["electricity"],
+            "rated_vs_actual_electricity": rated_electricity,
+            "anomalies": anomalies,
+            "load_profile_air_temp": load_profiles["air_temp"],
+            "load_profile_supply_temp": load_profiles["supply_temp"],
+            "load_profile_return_temp": load_profiles["return_temp"],
+            "status": status,
+        }
+
+    if context.building_type == "Office":
+        energy = await get_building_energy_trend(
+            building_type=context.building_type,
+            building_id=context.building_id,
+            start_date=overview_start,
+            end_date=target_date,
+            include_water=False,
+            include_device_status=False,
+            db=db,
+        )
+        load_profiles = await _get_load_profile_payloads(
+            db,
+            building_type=context.building_type,
+            building_id=context.building_id,
+            metrics=["electricity"],
+            days=14,
+        )
+        peak_valley = await get_peak_valley_stats(
+            building_type=context.building_type,
+            building_id=context.building_id,
+            metric="electricity",
+            days=7,
+            night_threshold=50.0,
+            db=db,
+        )
+        return {
+            "load_profile_electricity": load_profiles["electricity"],
+            "peak_valley": peak_valley,
+            "energy": energy,
+            "anomalies": anomalies,
+        }
+
+    energy = await get_building_energy_trend(
+        building_type=context.building_type,
+        building_id=context.building_id,
+        start_date=public_section_start,
+        end_date=target_date,
+        include_water=True,
+        include_device_status=False,
+        db=db,
+    )
+    load_profiles = await _get_load_profile_payloads(
+        db,
+        building_type=context.building_type,
+        building_id=context.building_id,
+        metrics=["electricity", "air_temp", "humidity"],
+        days=14,
+    )
+    rated_electricity = await get_rated_vs_actual(
+        building_type=context.building_type,
+        building_id=context.building_id,
+        start_date=overview_start,
+        end_date=target_date,
+        metric="electricity",
+        db=db,
+    )
+    status = await get_building_status(
+        building_type=context.building_type,
+        building_id=context.building_id,
+        db=db,
+    )
+    return {
+        "energy": energy,
+        "load_profile_electricity": load_profiles["electricity"],
+        "load_profile_air_temp": load_profiles["air_temp"],
+        "load_profile_humidity": load_profiles["humidity"],
+        "anomalies": anomalies,
+        "rated_vs_actual_electricity": rated_electricity,
+        "status": status,
+    }
+
+
+async def _compute_home_overview_bundle_payload() -> dict[str, Any]:
+    async with AsyncSessionLocal() as db:
+        contexts = await _resolve_home_building_contexts(db)
+        overview = await get_overview(query_date=None, db=db)
+        anomalies = await get_recent_anomalies(
+            hours=168,
+            building_type=None,
+            building_id=None,
+            only_unresolved=False,
+            db=db,
+        )
+        sankey = await get_anomaly_sankey(db=db, building_id=None)
+        target_date = _resolve_bundle_data_date(overview)
+        overview_start = target_date - timedelta(days=6)
+
+        overview_series: dict[str, Any] = {}
+        for building_type in _HOME_BUNDLE_BUILDING_TYPES:
+            overview_series[building_type] = await _get_home_overview_series_payload(
+                db,
+                context=contexts[building_type],
+                overview_start=overview_start,
+                overview_end=target_date,
+            )
+
+        return {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "overview": overview,
+            "anomalies": anomalies,
+            "sankey": sankey,
+            "overview_series": overview_series,
+        }
+
+
+async def _compute_home_section_bundle_payload(
+    building_type: str,
+) -> dict[str, Any]:
+    async with AsyncSessionLocal() as db:
+        context = await _require_building_context(db, building_type=building_type)
+        target_date = await _get_latest_energy_data_date(db)
+        payload = await _get_home_section_payload(
+            db,
+            context=context,
+            target_date=target_date,
+        )
+        return {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "data_date": target_date.isoformat(),
+            "building_type": context.building_type,
+            **payload,
+        }
+
+
+async def _compute_home_bundle_payload() -> dict[str, Any]:
+    async with AsyncSessionLocal() as db:
+        contexts = await _resolve_home_building_contexts(db)
+        overview = await get_overview(query_date=None, db=db)
+        anomalies = await get_recent_anomalies(
+            hours=168,
+            building_type=None,
+            building_id=None,
+            only_unresolved=False,
+            db=db,
+        )
+        sankey = await get_anomaly_sankey(db=db, building_id=None)
+        target_date = _resolve_bundle_data_date(overview)
+        overview_start = target_date - timedelta(days=6)
+
+        overview_series: dict[str, Any] = {}
+        sections: dict[str, Any] = {}
+        for building_type in _HOME_BUNDLE_BUILDING_TYPES:
+            context = contexts[building_type]
+            overview_series[building_type] = await _get_home_overview_series_payload(
+                db,
+                context=context,
+                overview_start=overview_start,
+                overview_end=target_date,
+            )
+            sections[building_type] = await _get_home_section_payload(
+                db,
+                context=context,
+                target_date=target_date,
+            )
+
+        return {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "overview": overview,
+            "anomalies": anomalies,
+            "sankey": sankey,
+            "overview_series": overview_series,
+            "sections": sections,
+        }
+
+
+@router.get("/home/overview-bundle", summary="获取首页首屏总览聚合数据")
+async def get_home_overview_bundle():
+    cache_key = f"home:overview-bundle:{cache_bucket()}"
+
+    async def _compute() -> dict[str, Any]:
+        return await _compute_home_overview_bundle_payload()
+
+    return await get_or_compute_json(
+        cache_key,
+        _HOME_OVERVIEW_BUNDLE_TTL_SECONDS,
+        _compute,
+    )
+
+
+@router.get("/home/section-bundle", summary="获取首页单个楼宇分区聚合数据")
+async def get_home_section_bundle(
+    building_type: str = Query(..., description="楼宇类型"),
+):
+    normalized_building_type = normalize_building_type(building_type) or building_type
+    cache_key = (
+        "home:section-bundle:"
+        f"{normalized_building_type}:"
+        f"{cache_bucket()}"
+    )
+
+    async def _compute() -> dict[str, Any]:
+        return await _compute_home_section_bundle_payload(normalized_building_type)
+
+    return await get_or_compute_json(
+        cache_key,
+        _HOME_SECTION_BUNDLE_TTL_SECONDS,
+        _compute,
+    )
+
+
 @router.get("/home/bundle", summary="获取首页聚合数据")
 async def get_home_bundle():
     cache_key = f"home:bundle:latest:{cache_bucket()}"
     ttl_seconds = settings.CACHE_OVERVIEW_TTL_SECONDS
 
     async def _compute() -> dict[str, Any]:
-        core_payload = await _get_home_bundle_core_payload()
-        overview_payload = core_payload.get("overview")
-        target_date = _resolve_bundle_data_date(overview_payload)
-        overview_start = target_date - timedelta(days=6)
-        public_section_start = target_date - timedelta(days=29)
-
-        building_payloads = await asyncio.gather(*[
-            _get_home_bundle_for_building(
-                building_type=building_type,
-                overview_start=overview_start,
-                overview_end=target_date,
-                public_section_start=public_section_start,
-            )
-            for building_type in _HOME_BUNDLE_BUILDING_TYPES
-        ])
-
-        overview_series: dict[str, Any] = {}
-        sections: dict[str, Any] = {}
-        for payload in building_payloads:
-            building_type = payload["building_type"]
-            overview_series[building_type] = payload["overview_series"]
-            sections[building_type] = payload["section"]
-
-        return {
-            "generated_at": datetime.now(timezone.utc).isoformat(),
-            "overview": overview_payload,
-            "anomalies": core_payload.get("anomalies"),
-            "sankey": core_payload.get("sankey"),
-            "overview_series": overview_series,
-            "sections": sections,
-        }
+        return await _compute_home_bundle_payload()
 
     return await get_or_compute_json(cache_key, ttl_seconds, _compute)
 

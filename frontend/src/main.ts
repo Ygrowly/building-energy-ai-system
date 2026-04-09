@@ -18,14 +18,25 @@ app.use(router)
 const authStore = useAuthStore()
 
 setAuthProvider({
-  getAccessToken: () => authStore.accessToken,
+  getAccessToken: () => authStore.getAccessToken(),
   refreshToken: () => authStore.refresh(),
   onUnauthorized: () => {
     authStore._clearTokens()
-    router.push('/login')
+    const currentRoute = router.currentRoute.value
+    const redirect = currentRoute.meta.requiresAuth === false ? undefined : currentRoute.fullPath
+    void router.replace(
+      redirect
+        ? { name: 'Login', query: { redirect } }
+        : { name: 'Login' },
+    )
   },
 })
 
-setStreamAuthProvider(() => authStore.accessToken)
+setStreamAuthProvider(() => authStore.getAccessToken())
 
-app.mount('#app')
+async function bootstrap() {
+  await router.isReady()
+  app.mount('#app')
+}
+
+void bootstrap()

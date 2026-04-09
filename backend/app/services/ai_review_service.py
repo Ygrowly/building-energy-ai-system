@@ -17,6 +17,7 @@ from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.core.config import get_settings
 from app.db.models import WorkOrder, WorkOrderAnomalyLink
@@ -74,6 +75,7 @@ async def review_work_order(db: AsyncSession, work_order_id: str) -> WorkOrder |
     # 行锁防并发
     result = await db.execute(
         select(WorkOrder)
+        .options(selectinload(WorkOrder.anomaly_links))
         .where(WorkOrder.id == work_order_id)
         .with_for_update(skip_locked=True)
     )

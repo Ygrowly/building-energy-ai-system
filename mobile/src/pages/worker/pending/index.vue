@@ -501,13 +501,13 @@ onUnmounted(() => {
   font-size: 40rpx;
   font-weight: 900;
   letter-spacing: 1rpx;
-  font-family: 'RuiZiZhenYan', sans-serif;
+  font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif;
 }
 
 .portal-title.small {
   font-size: 38rpx;
   font-weight: 900;
-  font-family: 'RuiZiZhenYan', sans-serif;
+  font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif;
   flex: 1;
   min-width: 0;
   white-space: nowrap;

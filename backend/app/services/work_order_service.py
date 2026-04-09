@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import case as sa_case
+from sqlalchemy import inspect as sa_inspect
 from sqlalchemy import select, func as sa_func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -271,7 +272,11 @@ def derive_dispatch_requirement(work_order: WorkOrder) -> dict[str, Any]:
         work_order.issue_description or "",
         work_order.suggested_action or "",
     ]
-    for link in getattr(work_order, "anomaly_links", []) or []:
+    state = sa_inspect(work_order, raiseerr=False)
+    anomaly_links = []
+    if state is None or "anomaly_links" not in getattr(state, "unloaded", set()):
+        anomaly_links = getattr(work_order, "anomaly_links", []) or []
+    for link in anomaly_links:
         text_parts.extend([
             getattr(link, "rule_triggered", "") or "",
             getattr(link, "hvac_root_cause", "") or "",

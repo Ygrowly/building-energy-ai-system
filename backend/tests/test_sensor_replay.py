@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -10,7 +11,12 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
+import scripts.sensor_replay as sensor_replay
+
 from scripts.sensor_replay import (
+    LockFile,
+    _merge_env_file,
+    build_ingest_anchor,
     load_checkpoint,
     load_replay_rounds,
     save_checkpoint,
@@ -104,3 +110,61 @@ def test_checkpoint_roundtrip():
 
     raw = json.loads(checkpoint_path.read_text(encoding="utf-8"))
     assert raw["rows_written"] == 1
+
+
+def test_load_checkpoint_rejects_corrupt_json():
+    checkpoint_path = _case_dir() / "checkpoint.json"
+    checkpoint_path.write_text("{broken", encoding="utf-8")
+
+    try:
+        load_checkpoint(checkpoint_path)
+    except RuntimeError as exc:
+        assert "checkpoint 文件损坏" in str(exc)
+    else:
+        raise AssertionError("expected RuntimeError for corrupt checkpoint")
+
+
+def test_merge_env_file_preserves_existing_values():
+    env_path = _case_dir() / ".env"
+    env_path.write_text(
+        "DATABASE_URL=from-file\nNEW_KEY=from-file\n",
+        encoding="utf-8",
+    )
+
+    env = {"DATABASE_URL": "from-shell"}
+    _merge_env_file(env_path, env=env)
+
+    assert env["DATABASE_URL"] == "from-shell"
+    assert env["NEW_KEY"] == "from-file"
+
+
+def test_lock_file_reclaims_stale_lock(monkeypatch):
+    lock_path = _case_dir() / "checkpoint.json.lock"
+    lock_path.write_text(
+        json.dumps(
+            {
+                "pid": 999999,
+                "started_at": "2026-04-02T00:00:00+00:00",
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(sensor_replay, "_pid_is_running", lambda pid: False)
+
+    with LockFile(lock_path):
+        payload = json.loads(lock_path.read_text(encoding="utf-8"))
+        assert payload["pid"] == os.getpid()
+
+    if lock_path.exists():
+        payload = json.loads(lock_path.read_text(encoding="utf-8"))
+        assert payload["released_at"]
+
+
+def test_build_ingest_anchor_uses_next_hour_after_checkpoint():
+    anchor = build_ingest_anchor(
+        {"last_ingest_ts": "2026-04-02T04:00:00+00:00"},
+        now=datetime(2026, 4, 2, 4, 20, tzinfo=timezone.utc),
+    )
+
+    assert anchor == datetime(2026, 4, 2, 5, 0, tzinfo=timezone.utc)

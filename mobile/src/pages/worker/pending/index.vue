@@ -24,20 +24,6 @@
                 </view>
               </view>
               <text class="portal-subtitle">待协同、待接管和我的大厅申请都在这里集中处理</text>
-              <view class="portal-metrics">
-                <view class="portal-metric">
-                  <text class="portal-metric-num">{{ hallStats.supportCount }}</text>
-                  <text class="portal-metric-label">待协同</text>
-                </view>
-                <view class="portal-metric">
-                  <text class="portal-metric-num">{{ hallStats.takeoverCount }}</text>
-                  <text class="portal-metric-label">待接管</text>
-                </view>
-                <view class="portal-metric">
-                  <text class="portal-metric-num">{{ hallStats.appliedCount }}</text>
-                  <text class="portal-metric-label">我的申请</text>
-                </view>
-              </view>
               <image
                 class="portal-figure-img"
                 src="/static/images/worker-hero.png"
@@ -180,7 +166,6 @@ let unsubscribeWorkerSync: (() => void) | null = null
 
 const userName = computed(() => authStore.user?.username || '维修师傅')
 const avatarChar = computed(() => userName.value.slice(0, 1).toUpperCase())
-const currentUserId = computed(() => authStore.user?.id || '')
 const stats = computed(() => {
   const incidentStats = getWorkerDashboardStats(incidents.value)
   const pendingSupport = supportEntries.value.filter(entry => entry.status === 'assigned').length
@@ -193,15 +178,6 @@ const stats = computed(() => {
   }
 })
 const todoCount = computed(() => stats.value.inProgress + stats.value.pendingStart)
-const hallStats = computed(() => {
-  const entries = hallEntries.value
-  const appliedCount = entries.filter(entry => hasPendingApplication(entry)).length
-  return {
-    supportCount: entries.filter(entry => entry.entry_type === 'support_request').length,
-    takeoverCount: entries.filter(entry => entry.entry_type === 'takeover_candidate').length,
-    appliedCount,
-  }
-})
 const featuredOrder = computed(() => {
   const supportTarget = supportEntries.value[0]
   if (supportTarget) {
@@ -289,11 +265,6 @@ async function loadData() {
   } finally {
     loading.value = false
   }
-}
-
-function hasPendingApplication(entry: DispatchHallEntry) {
-  if (!currentUserId.value) return false
-  return entry.applications.some(item => item.applicant_user_id === currentUserId.value && item.status === 'pending')
 }
 
 function shortTicket(ticketId: string) {
@@ -581,39 +552,6 @@ onUnmounted(() => {
   color: #6d7c49;
   font-size: 24rpx;
   line-height: 1.45;
-}
-
-.portal-metrics {
-  position: relative;
-  z-index: 1;
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12rpx;
-  margin-top: 22rpx;
-  padding-right: 20rpx;
-}
-
-.portal-metric {
-  padding: 16rpx 10rpx;
-  border-radius: 22rpx;
-  background: rgba(255, 255, 255, 0.82);
-  box-shadow: inset 0 0 0 2rpx rgba(228, 237, 184, 0.6);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8rpx;
-}
-
-.portal-metric-num {
-  font-size: 34rpx;
-  line-height: 1;
-  color: #31411f;
-  font-weight: 800;
-}
-
-.portal-metric-label {
-  font-size: 20rpx;
-  color: #73814f;
 }
 
 .portal-figure-img {

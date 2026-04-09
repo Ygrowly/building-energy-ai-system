@@ -24,10 +24,13 @@ def _ensure_import_path() -> tuple[Path, Path]:
 
 REPO_ROOT, BACKEND_DIR = _ensure_import_path()
 
-def _load_backend_env() -> None:
-    env_path = BACKEND_DIR / ".env"
-    if not env_path.is_file():
-        return
+def _merge_env_file(
+    env_path: Path,
+    *,
+    override: bool = False,
+    env: dict[str, str] | None = None,
+) -> None:
+    target_env = os.environ if env is None else env
     for raw_line in env_path.read_text(encoding="utf-8").splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#") or "=" not in line:
@@ -39,7 +42,15 @@ def _load_backend_env() -> None:
             continue
         if value and len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
             value = value[1:-1]
-        os.environ[key] = value
+        if override or key not in target_env:
+            target_env[key] = value
+
+
+def _load_backend_env() -> None:
+    env_path = BACKEND_DIR / ".env"
+    if not env_path.is_file():
+        return
+    _merge_env_file(env_path, override=False)
 
 
 _load_backend_env()
@@ -88,14 +99,42 @@ class LockFile:
         self.path = path
         self.acquired = False
 
+    def _read_payload(self) -> dict[str, Any] | None:
+        try:
+            payload = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        return payload if isinstance(payload, dict) else None
+
+    def _can_reclaim(self) -> bool:
+        payload = self._read_payload()
+        if payload and payload.get("released_at"):
+            return True
+        pid = payload.get("pid") if payload else None
+        if isinstance(pid, int) and _pid_is_running(pid):
+            return False
+        return True
+
     def acquire(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        reclaimed_existing = False
+        if self.path.exists():
+            if not self._can_reclaim():
+                raise RuntimeError(
+                    f"检测到已有运行中的回放实例，锁文件存在: {self.path}"
+                )
+            logger.warning("检测到陈旧锁文件，已自动接管: %s", self.path)
+            try:
+                self.path.unlink(missing_ok=True)
+            except PermissionError:
+                reclaimed_existing = True
         payload = {
             "pid": os.getpid(),
             "started_at": datetime.now(timezone.utc).isoformat(),
         }
         try:
-            with self.path.open("x", encoding="utf-8") as fh:
+            open_mode = "w" if reclaimed_existing else "x"
+            with self.path.open(open_mode, encoding="utf-8") as fh:
                 json.dump(payload, fh, ensure_ascii=False, indent=2)
             self.acquired = True
         except FileExistsError as exc:
@@ -108,6 +147,15 @@ class LockFile:
             return
         try:
             self.path.unlink(missing_ok=True)
+        except PermissionError:
+            payload = {
+                "pid": os.getpid(),
+                "released_at": datetime.now(timezone.utc).isoformat(),
+            }
+            self.path.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
         finally:
             self.acquired = False
 
@@ -117,6 +165,20 @@ class LockFile:
 
     def __exit__(self, exc_type, exc, tb) -> None:
         self.release()
+
+
+def _pid_is_running(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    if pid == os.getpid():
+        return True
+    try:
+        os.kill(pid, 0)
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
 
 
 def _parse_float(raw: str | None, *, field_name: str, row_number: int) -> float | None:
@@ -199,7 +261,13 @@ async def validate_building_ids(rounds: list[ReplayRound]) -> None:
 def load_checkpoint(checkpoint_path: Path) -> dict[str, Any] | None:
     if not checkpoint_path.is_file():
         return None
-    return json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    try:
+        payload = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"checkpoint 文件损坏，请删除后重试: {checkpoint_path}") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"checkpoint 内容非法，请删除后重试: {checkpoint_path}")
+    return payload
 
 
 def save_checkpoint(
@@ -218,38 +286,227 @@ def save_checkpoint(
         "rows_written": len(round_item.rows),
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
-    checkpoint_path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2),
+    serialized = json.dumps(payload, ensure_ascii=False, indent=2)
+    temp_path = checkpoint_path.with_name(f"{checkpoint_path.name}.{os.getpid()}.tmp")
+    temp_path.write_text(
+        serialized,
         encoding="utf-8",
     )
+    try:
+        temp_path.replace(checkpoint_path)
+    except PermissionError:
+        checkpoint_path.write_text(serialized, encoding="utf-8")
+        try:
+            temp_path.unlink(missing_ok=True)
+        except PermissionError:
+            pass
 
 
-def _current_source_hour(now: datetime | None = None) -> datetime:
-    local_now = now or datetime.now().astimezone()
-    return datetime(
-        local_now.year,
-        local_now.month,
-        local_now.day,
-        local_now.hour,
-        0,
-        0,
-    )
+def _ensure_utc_timestamp(ts: datetime) -> datetime:
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return ts.astimezone(timezone.utc)
 
 
-def _seconds_until_next_hour(now: datetime | None = None) -> float:
-    local_now = now or datetime.now().astimezone()
-    next_hour = (local_now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1))
-    return max((next_hour - local_now).total_seconds(), 0.0)
+def _align_to_hour(ts: datetime) -> datetime:
+    return _ensure_utc_timestamp(ts).replace(minute=0, second=0, microsecond=0)
+
+
+def _parse_checkpoint_timestamp(raw: Any) -> datetime | None:
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return _ensure_utc_timestamp(parsed)
+
+
+def build_ingest_anchor(
+    checkpoint: dict[str, Any] | None,
+    *,
+    now: datetime | None = None,
+) -> datetime:
+    anchor = _align_to_hour(now or datetime.now(timezone.utc))
+    if not checkpoint:
+        return anchor
+    last_ingest_ts = _parse_checkpoint_timestamp(checkpoint.get("last_ingest_ts"))
+    if last_ingest_ts is None:
+        return anchor
+    next_after_checkpoint = _align_to_hour(last_ingest_ts) + timedelta(hours=1)
+    if next_after_checkpoint > anchor:
+        return next_after_checkpoint
+    return anchor
+
+
+async def load_existing_round_actual_timestamps(
+    round_item: ReplayRound,
+) -> dict[str, datetime]:
+    building_ids = sorted({row.building_id for row in round_item.rows if row.building_id})
+    if not building_ids:
+        return {}
+
+    source_timestamp = _ensure_utc_timestamp(round_item.source_timestamp)
+    try:
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                text(
+                    """
+                    SELECT building_id, timestamp
+                    FROM energy_data
+                    WHERE source_timestamp = :source_timestamp
+                      AND building_id = ANY(:building_ids)
+                    """
+                ),
+                {
+                    "source_timestamp": source_timestamp,
+                    "building_ids": building_ids,
+                },
+            )
+            rows = result.fetchall()
+    except (OSError, SQLAlchemyError) as exc:
+        raise RuntimeError("读取已有回放状态失败，请确认数据库连接可用") from exc
+
+    existing: dict[str, datetime] = {}
+    for building_id, actual_ts in rows:
+        if actual_ts is None:
+            continue
+        existing[str(building_id)] = _ensure_utc_timestamp(actual_ts)
+    return existing
+
+
+async def _delete_pipeline_outputs_for_timestamp(
+    building_ids: list[str],
+    target_timestamp: datetime,
+) -> dict[str, int]:
+    if not building_ids:
+        return {}
+
+    target_timestamp = _ensure_utc_timestamp(target_timestamp)
+    params = {
+        "building_ids": building_ids,
+        "target_timestamp": target_timestamp,
+    }
+    sql_map = {
+        "anomaly_device_attributions": """
+            DELETE FROM anomaly_device_attributions
+            WHERE building_id = ANY(:building_ids)
+              AND timestamp = :target_timestamp
+        """,
+        "anomaly_events": """
+            DELETE FROM anomaly_events
+            WHERE building_id = ANY(:building_ids)
+              AND data_timestamp = :target_timestamp
+        """,
+        "kpi_anomaly_flags": """
+            DELETE FROM kpi_anomaly_flags
+            WHERE building_id = ANY(:building_ids)
+              AND timestamp = :target_timestamp
+        """,
+        "kpi_expected_hourly": """
+            DELETE FROM kpi_expected_hourly
+            WHERE building_id = ANY(:building_ids)
+              AND timestamp = :target_timestamp
+        """,
+        "device_telemetry_hourly": """
+            DELETE FROM device_telemetry_hourly
+            WHERE building_id = ANY(:building_ids)
+              AND timestamp = :target_timestamp
+        """,
+    }
+
+    counts: dict[str, int] = {}
+    async with AsyncSessionLocal() as session:
+        for table_name, sql in sql_map.items():
+            result = await session.execute(text(sql), params)
+            counts[table_name] = int(result.rowcount or 0)
+        await session.commit()
+    return counts
+
+
+async def _rebuild_latest_device_status(building_ids: list[str]) -> int:
+    if not building_ids:
+        return 0
+    async with AsyncSessionLocal() as session:
+        await session.execute(
+            text("DELETE FROM device_status_latest WHERE building_id = ANY(:building_ids)"),
+            {"building_ids": building_ids},
+        )
+        result = await session.execute(
+            text(
+                """
+                INSERT INTO device_status_latest
+                  (device_id, building_id, device_type,
+                   last_seen_at, online_status, running_state, health_status,
+                   latest_power_kw, latest_flow_rate,
+                   latest_supply_temp_c, latest_return_temp_c, latest_payload_json)
+                SELECT DISTINCT ON (device_id)
+                    device_id,
+                    building_id,
+                    device_type,
+                    timestamp,
+                    online_status,
+                    running_state,
+                    health_status,
+                    power_kw,
+                    flow_rate,
+                    supply_temp_c,
+                    return_temp_c,
+                    metric_payload_json
+                FROM device_telemetry_hourly
+                WHERE building_id = ANY(:building_ids)
+                ORDER BY device_id, timestamp DESC
+                """
+            ),
+            {"building_ids": building_ids},
+        )
+        await session.commit()
+        return int(result.rowcount or 0)
+
+
+async def cleanup_stale_round_outputs(
+    existing_actual_timestamps: dict[str, datetime],
+    *,
+    current_ingest_ts: datetime,
+) -> dict[str, Any]:
+    current_ingest_ts = _ensure_utc_timestamp(current_ingest_ts)
+    grouped: dict[datetime, list[str]] = {}
+
+    for building_id, actual_ts in existing_actual_timestamps.items():
+        normalized_ts = _ensure_utc_timestamp(actual_ts)
+        if normalized_ts == current_ingest_ts:
+            continue
+        grouped.setdefault(normalized_ts, []).append(building_id)
+
+    if not grouped:
+        return {"deleted": {}, "status_rebuilt": 0}
+
+    deleted: dict[str, dict[str, int]] = {}
+    affected_buildings: set[str] = set()
+    for target_timestamp in sorted(grouped.keys()):
+        building_ids = sorted(set(grouped[target_timestamp]))
+        deleted[target_timestamp.isoformat()] = await _delete_pipeline_outputs_for_timestamp(
+            building_ids,
+            target_timestamp,
+        )
+        affected_buildings.update(building_ids)
+
+    rebuilt = await _rebuild_latest_device_status(sorted(affected_buildings))
+    return {
+        "deleted": deleted,
+        "status_rebuilt": rebuilt,
+    }
 
 
 async def ingest_round(round_item: ReplayRound, ingest_ts: datetime) -> list[str]:
+    ingest_ts = _ensure_utc_timestamp(ingest_ts)
     params: list[dict[str, Any]] = []
     building_ids: list[str] = []
     for row in round_item.rows:
         params.append(
             {
                 "timestamp": ingest_ts,
-                "source_timestamp": row.source_timestamp.replace(tzinfo=timezone.utc),
+                "source_timestamp": _ensure_utc_timestamp(row.source_timestamp),
                 "building_id": row.building_id,
                 **row.values,
             }
@@ -368,6 +625,7 @@ async def replay(args: argparse.Namespace) -> int:
 
     logger.info("从第 %d/%d 轮开始回放", start_index + 1, len(rounds))
     schedule_anchor = time.monotonic()
+    ingest_anchor = build_ingest_anchor(checkpoint)
 
     for offset, round_item in enumerate(rounds[start_index:]):
         if offset > 0:
@@ -377,7 +635,19 @@ async def replay(args: argparse.Namespace) -> int:
                 logger.info("等待 %.1f 秒后执行下一轮", wait_seconds)
                 await asyncio.sleep(wait_seconds)
 
-        ingest_ts = datetime.now(timezone.utc)
+        ingest_ts = ingest_anchor + timedelta(seconds=offset * ROUND_INTERVAL_SECONDS)
+        existing_actual_timestamps = await load_existing_round_actual_timestamps(round_item)
+        cleanup_summary = await cleanup_stale_round_outputs(
+            existing_actual_timestamps,
+            current_ingest_ts=ingest_ts,
+        )
+        if cleanup_summary["deleted"]:
+            logger.info(
+                "已清理旧派生数据，源时间=%s，写入时间=%s，清理摘要=%s",
+                round_item.source_timestamp,
+                ingest_ts.isoformat(),
+                cleanup_summary,
+            )
         logger.info(
             "开始回放第 %d/%d 轮，源时间=%s，写入时间=%s，行数=%d",
             round_item.index + 1,

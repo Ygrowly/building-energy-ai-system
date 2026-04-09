@@ -9,6 +9,7 @@ export interface WorkerTeamInfo {
 }
 
 export interface WorkerSkillInfo {
+  skill_id?: string
   code: string
   name: string
   category?: string | null

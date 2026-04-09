@@ -5,7 +5,7 @@
  * 每个调用方传入唯一 namespace，组件卸载时自动清理该命名空间的段落。
  */
 import { onUnmounted } from 'vue'
-import type * as echarts from 'echarts'
+import type * as echarts from '@/utils/echarts'
 import { useReportStore } from '@/stores/reportStore'
 import type { ReportSection, KpiItem, TableColumn, SummaryItem } from '@/stores/reportStore'
 

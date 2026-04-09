@@ -1,138 +1,35 @@
 <template>
-  <div class="workorders">
-    <header class="page-header">
-      <div class="header-copy">
-        <h1><Icon icon="mdi:clipboard-list" width="22" class="page-icon" /> {{ workspaceConfig.title }}</h1>
-        <span class="subtitle">{{ workspaceConfig.subtitle }}</span>
-      </div>
-      <div class="workspace-pills" aria-label="工单页面切换">
-        <button
-          v-for="item in workspaceSwitchItems"
-          :key="item.mode"
-          class="workspace-pill"
-          :class="{ active: workspaceMode === item.mode }"
-          @click="switchWorkspace(item.path)"
-        >
-          <Icon :icon="item.icon" width="14" />
-          <span>{{ item.label }}</span>
-        </button>
-      </div>
-    </header>
-
-    <div class="toolbar">
-      <div class="tab-group">
-        <button
-          v-for="tab in tabs"
-          :key="tab.value"
-          class="tab-btn"
-          :class="{ active: activeTab === tab.value }"
-          @click="switchTab(tab.value)"
-        >
-          {{ tab.label }}
-          <span class="tab-count" v-if="tabCount(tab.value) > 0">{{ tabCount(tab.value) }}</span>
-        </button>
-      </div>
-      <div class="toolbar-actions">
-        <button
-          v-if="activeTab === 'pending_dispatch'"
-          class="refresh-btn accent"
-          @click="openBatchDispatchPanel"
-          :disabled="loading || batchPreviewLoading"
-        >
-          <Icon :icon="batchPreviewLoading ? 'mdi:loading' : 'mdi:playlist-plus'" width="14" class="btn-icon" />
-          {{ batchPreviewLoading ? '生成中...' : '批量推荐' }}
-        </button>
-        <button class="refresh-btn" @click="fetchOrders" :disabled="loading">
-          <Icon :icon="loading ? 'mdi:loading' : 'mdi:refresh'" width="14" class="btn-icon" />
-          {{ loading ? '刷新中...' : '刷新' }}
-        </button>
-      </div>
-    </div>
-
-    <div class="summary-strip" v-if="activeTab !== 'shared_hall' && allOrders.length">
-      <div class="summary-pill">
-        <span class="summary-value">{{ allOrders.length }}</span>
-        <span class="summary-label">工单总数</span>
-      </div>
-      <div class="summary-pill warning">
-        <span class="summary-value">{{ tabCount('pending_dispatch') }}</span>
-        <span class="summary-label">待派工</span>
-      </div>
-      <div class="summary-pill active">
-        <span class="summary-value">{{ tabCount('dispatched') }}</span>
-        <span class="summary-label">执行中</span>
-      </div>
-      <div class="summary-pill danger">
-        <span class="summary-value">{{ overdueCount }}</span>
-        <span class="summary-label">高风险</span>
-      </div>
-    </div>
-
-    <div class="summary-strip" v-if="activeTab === 'shared_hall' && hallEntries.length">
-      <div class="summary-pill">
-        <span class="summary-value">{{ hallEntries.length }}</span>
-        <span class="summary-label">大厅事项</span>
-      </div>
-      <div class="summary-pill active">
-        <span class="summary-value">{{ hallSupportCount }}</span>
-        <span class="summary-label">协同事项</span>
-      </div>
-      <div class="summary-pill warning">
-        <span class="summary-value">{{ hallTakeoverCount }}</span>
-        <span class="summary-label">待接管</span>
-      </div>
-      <div class="summary-pill danger">
-        <span class="summary-value">{{ hallPendingApplicationCount }}</span>
-        <span class="summary-label">待处理申请</span>
-      </div>
-    </div>
-
-    <div v-if="loading" class="loading-bar">加载工单列表...</div>
-    <div v-if="fetchError" class="error-bar"><Icon icon="mdi:alert" width="14" class="bar-icon" /> {{ fetchError }}</div>
-
-    <WorkOrdersHallList
-      v-if="!loading && activeTab === 'shared_hall' && hallEntries.length > 0"
-      :hall-entries="hallEntries"
-      :action-loading="actionLoading"
-      :priority-labels="PRIORITY_LABELS"
-      :format-time="formatTime"
-      :building-name="buildingName"
-      :hall-pending-applications="hallPendingApplications"
-      :hall-entry-title="hallEntryTitle"
-      :hall-entry-owner="hallEntryOwner"
-      :hall-entry-reason="hallEntryReason"
-      :hall-empty-hint="hallEmptyHint"
-      :can-suggest-hall-takeover="canSuggestHallTakeover"
-      :can-nudge-hall-owner="canNudgeHallOwner"
-      :hall-action-key="hallActionKey"
+  <WorkOrdersShell
+    :workspace-config="workspaceConfig"
+    :workspace-switch-items="workspaceSwitchItems"
+    :workspace-mode="workspaceMode"
+    :tabs="tabs"
+    :active-tab="activeTab"
+    :loading="loading"
+    :batch-preview-loading="batchPreviewLoading"
+    :all-orders-count="allOrders.length"
+    :hall-entries-count="hallEntries.length"
+    :overdue-count="overdueCount"
+    :hall-support-count="hallSupportCount"
+    :hall-takeover-count="hallTakeoverCount"
+    :hall-pending-application-count="hallPendingApplicationCount"
+    :fetch-error="fetchError"
+    :is-current-tab-empty="isCurrentTabEmpty"
+    :empty-message="emptyMessage"
+    :tab-count="tabCount"
+    @switch-workspace="switchWorkspace"
+    @switch-tab="switchTab"
+    @open-batch-dispatch="openBatchDispatchPanel"
+    @refresh="fetchOrders"
+  >
+    <WorkOrdersWorkspacePane
+      :workspace-mode="workspaceMode"
+      :main-pane-props="mainPaneProps"
       @approve="approveHallApplication"
       @reject="rejectHallApplication"
       @suggest="openHallReassignSuggestion"
       @nudge="nudgeHallOwner"
       @close-entry="closeHallEntry"
-    />
-
-    <WorkOrdersOrderList
-      v-else-if="!loading && filteredOrders.length > 0"
-      :orders="filteredOrders"
-      :expanded-id="expandedId"
-      :action-loading="actionLoading"
-      :rejecting-id="rejectingId"
-      :reject-reason="rejectReason"
-      :action-result="actionResult"
-      :priority-labels="PRIORITY_LABELS"
-      :status-labels="STATUS_LABELS"
-      :execution-labels="EXECUTION_LABELS"
-      :status-card-class="statusCardClass"
-      :status-chip-class="statusChipClass"
-      :execution-chip-class="executionChipClass"
-      :building-name="buildingName"
-      :format-time="formatTime"
-      :detail-rows="detailRows"
-      :timeline-rows="timelineRows"
-      :is-timeline-loading="isTimelineLoading"
-      :timeline-error="timelineError"
-      :actions-for-order="actionsForOrder"
       @toggle-expand="toggleExpand"
       @run-action="runAction"
       @start-reject="startReject"
@@ -140,56 +37,44 @@
       @cancel-reject="cancelReject"
     />
 
-    <div v-if="!loading && isCurrentTabEmpty && !fetchError" class="empty-state">
-      <p class="empty-icon"><Icon icon="mdi:clipboard-list" width="40" /></p>
-      <p>{{ emptyMessage }}</p>
-      <p class="empty-sub">系统会根据 AI 审阅、派工和执行推进自动更新这里的状态。</p>
-    </div>
-
-    <WorkOrdersDispatchSheet
-      :visible="dispatchPanel.visible"
-      :panel="dispatchPanel"
-      :priority-labels="PRIORITY_LABELS"
-      :dispatch-submitting="dispatchSubmitting"
-      @close="closeDispatchPanel"
-      @confirm-candidate="confirmDispatchCandidate"
-    />
-
-    <WorkOrdersBatchSheet
-      :visible="batchPanel.visible"
-      :panel="batchPanel"
-      :batch-preview-loading="batchPreviewLoading"
-      :batch-dispatch-applying="batchDispatchApplying"
-      :batch-sample-options="batchSampleOptions"
-      :batch-worker-cap-options="batchWorkerCapOptions"
-      :batch-priority-options="batchPriorityOptions"
-      :batch-options="batchOptions"
-      :batch-worker-loads="batchWorkerLoads"
-      :retryable-batch-failures="retryableBatchFailures"
-      :priority-labels="PRIORITY_LABELS"
-      :status-labels="STATUS_LABELS"
-      :building-name="buildingName"
-      :shift-label="shiftLabel"
-      @close="closeBatchDispatchPanel"
-      @refresh-preview="refreshBatchDispatchPreview"
-      @select-sample-size="selectBatchSampleSize"
-      @select-priority="selectBatchPriority"
-      @select-worker-cap="selectBatchWorkerCap"
-      @retry-failed="retryBatchFailedItems"
-      @review-failed="reviewBatchFailedItem"
-      @confirm-dispatch="confirmBatchDispatch"
-    />
-  </div>
+    <template #overlays>
+      <WorkOrdersOverlayPane
+        :dispatch-panel="dispatchPanel"
+        :dispatch-submitting="dispatchSubmitting"
+        :batch-panel="batchPanel"
+        :batch-preview-loading="batchPreviewLoading"
+        :batch-dispatch-applying="batchDispatchApplying"
+        :batch-sample-options="batchSampleOptions"
+        :batch-worker-cap-options="batchWorkerCapOptions"
+        :batch-priority-options="batchPriorityOptions"
+        :batch-options="batchOptions"
+        :batch-worker-loads="batchWorkerLoads"
+        :retryable-batch-failures="retryableBatchFailures"
+        :priority-labels="PRIORITY_LABELS"
+        :status-labels="STATUS_LABELS"
+        :building-name="buildingName"
+        :shift-label="shiftLabel"
+        @close-dispatch="closeDispatchPanel"
+        @confirm-candidate="confirmDispatchCandidate"
+        @close-batch="closeBatchDispatchPanel"
+        @refresh-preview="refreshBatchDispatchPreview"
+        @select-sample-size="selectBatchSampleSize"
+        @select-priority="selectBatchPriority"
+        @select-worker-cap="selectBatchWorkerCap"
+        @retry-failed="retryBatchFailedItems"
+        @review-failed="reviewBatchFailedItem"
+        @confirm-dispatch="confirmBatchDispatch"
+      />
+    </template>
+  </WorkOrdersShell>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Icon } from '@iconify/vue'
-import WorkOrdersBatchSheet from '@/components/workorders/WorkOrdersBatchSheet.vue'
-import WorkOrdersDispatchSheet from '@/components/workorders/WorkOrdersDispatchSheet.vue'
-import WorkOrdersHallList from '@/components/workorders/WorkOrdersHallList.vue'
-import WorkOrdersOrderList from '@/components/workorders/WorkOrdersOrderListEnhanced.vue'
+import WorkOrdersOverlayPane from '@/components/workorders/WorkOrdersOverlayPane.vue'
+import WorkOrdersShell from '@/components/workorders/WorkOrdersShell.vue'
+import WorkOrdersWorkspacePane from '@/components/workorders/WorkOrdersWorkspacePaneEnhanced.vue'
 import { useBatchDispatch } from '@/composables/workorders/useBatchDispatch'
 import { useDispatchHallAdmin } from '@/composables/workorders/useDispatchHallAdmin'
 import { useWorkOrderActions } from '@/composables/workorders/useWorkOrderActions'
@@ -277,6 +162,9 @@ const {
 
 const {
   currentDispatchForOrder,
+  executionStatusForOrder,
+  executionLabelForOrder,
+  assigneeNameForOrder,
   detailRows,
   timelineRows,
   buildingName,
@@ -365,6 +253,40 @@ const {
   closeDispatchPanel,
 })
 
+const mainPaneProps = computed(() => ({
+  loading: loading.value,
+  activeTab: activeTab.value,
+  hallEntries: hallEntries.value,
+  filteredOrders: filteredOrders.value,
+  expandedId: expandedId.value,
+  actionLoading: actionLoading.value,
+  rejectingId: rejectingId.value,
+  rejectReason: rejectReason.value,
+  actionResult: actionResult.value,
+  priorityLabels: PRIORITY_LABELS,
+  statusLabels: STATUS_LABELS,
+  executionLabels: EXECUTION_LABELS,
+  formatTime,
+  buildingName,
+  hallPendingApplications,
+  hallEntryTitle,
+  hallEntryOwner,
+  hallEntryReason,
+  hallEmptyHint,
+  canSuggestHallTakeover,
+  canNudgeHallOwner,
+  hallActionKey,
+  statusCardClass,
+  statusChipClass,
+  executionChipClass,
+  executionStatusForOrder,
+  detailRows,
+  timelineRows,
+  isTimelineLoading,
+  timelineError,
+  actionsForOrder,
+}))
+
 function startReject(ticketId: string) {
   rejectingId.value = ticketId
   rejectReason.value = ''
@@ -445,8 +367,8 @@ watch(allOrders, (orders) => {
       building: buildingName(wo.building_id),
       priority: PRIORITY_LABELS[wo.priority] ?? wo.priority ?? '—',
       status: STATUS_LABELS[wo.status] ?? wo.status,
-      execution: EXECUTION_LABELS[wo.execution_status] ?? wo.execution_status ?? '—',
-      assignee: wo.assigned_to_name || '未派工',
+      execution: executionLabelForOrder(wo),
+      assignee: assigneeNameForOrder(wo) || '未派工',
       created_at: formatTime(wo.created_at),
     })),
   })

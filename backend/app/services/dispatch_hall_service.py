@@ -4,7 +4,7 @@ import json
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func as sa_func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import DispatchHallApplication, DispatchHallEntry, User, WorkOrder
@@ -320,6 +320,27 @@ def serialize_dispatch_hall_entry(
     source_dispatch_summary: dict[str, Any] | None = None,
     applications: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    application_payloads = applications or []
+    application_stats = {
+        "total": len(application_payloads),
+        "pending": sum(1 for item in application_payloads if item.get("status") == "pending"),
+        "approved": sum(1 for item in application_payloads if item.get("status") == "approved"),
+        "rejected": sum(1 for item in application_payloads if item.get("status") == "rejected"),
+        "withdrawn": sum(1 for item in application_payloads if item.get("status") == "withdrawn"),
+    }
+    latest_application = sorted(
+        application_payloads,
+        key=lambda item: item.get("updated_at") or item.get("created_at") or "",
+        reverse=True,
+    )[0] if application_payloads else None
+    risk_score = 0
+    if entry.entry_type == "takeover_candidate":
+        risk_score += 50
+    if entry.overdue_level == "overdue":
+        risk_score += 30
+    elif entry.overdue_level == "warning":
+        risk_score += 15
+    risk_score += application_stats["pending"] * 10
     return {
         "id": entry.id,
         "work_order_id": entry.work_order_id,
@@ -350,7 +371,10 @@ def serialize_dispatch_hall_entry(
         "updated_at": _dt_to_iso(entry.updated_at),
         "work_order": work_order_summary,
         "source_dispatch": source_dispatch_summary,
-        "applications": applications or [],
+        "applications": application_payloads,
+        "application_stats": application_stats,
+        "latest_application": latest_application,
+        "risk_score": risk_score,
     }
 
 
@@ -364,10 +388,15 @@ async def list_dispatch_hall_entries(
     work_order_id: str | None = None,
     incident_id: str | None = None,
     source_dispatch_id: str | None = None,
+    building_id: str | None = None,
+    target_team_id: str | None = None,
+    sort_by: str = "ops_priority",
     page: int = 1,
     page_size: int = 20,
 ) -> tuple[list[DispatchHallEntry], int]:
     query = select(DispatchHallEntry)
+    if building_id:
+        query = query.join(WorkOrder, WorkOrder.id == DispatchHallEntry.work_order_id).where(WorkOrder.building_id == building_id)
     if status_filter:
         query = query.where(DispatchHallEntry.status.in_(status_filter))
     if entry_type_filter:
@@ -380,16 +409,65 @@ async def list_dispatch_hall_entries(
         query = query.where(DispatchHallEntry.incident_id == incident_id)
     if source_dispatch_id:
         query = query.where(DispatchHallEntry.source_dispatch_id == source_dispatch_id)
+    if target_team_id:
+        query = query.where(DispatchHallEntry.target_team_ids_json.contains(target_team_id))
 
-    query = query.order_by(DispatchHallEntry.created_at.desc(), DispatchHallEntry.id.desc())
+    if sort_by == "oldest":
+        query = query.order_by(DispatchHallEntry.created_at.asc(), DispatchHallEntry.id.asc())
+    elif sort_by == "updated":
+        query = query.order_by(DispatchHallEntry.updated_at.desc(), DispatchHallEntry.created_at.desc())
+    else:
+        query = query.order_by(
+            DispatchHallEntry.entry_type.desc(),
+            DispatchHallEntry.overdue_level.desc().nullslast(),
+            DispatchHallEntry.updated_at.desc(),
+            DispatchHallEntry.created_at.desc(),
+            DispatchHallEntry.id.desc(),
+        )
     items = list((await db.execute(query)).scalars().all())
 
     if viewer is not None and getattr(viewer, "role", None) == "ops":
         items = [item for item in items if _hall_entry_visible_to_user(item, viewer)]
 
+    if sort_by == "ops_priority":
+        counts = await load_dispatch_hall_application_counts(db, hall_entry_ids=[item.id for item in items])
+        items.sort(
+            key=lambda item: (
+                counts.get(item.id, {}).get("pending", 0),
+                item.entry_type == "takeover_candidate",
+                item.overdue_level == "overdue",
+                item.updated_at or item.created_at,
+            ),
+            reverse=True,
+        )
+
     total = len(items)
     offset = max(page - 1, 0) * page_size
     return items[offset: offset + page_size], total
+
+
+async def load_dispatch_hall_application_counts(
+    db: AsyncSession,
+    *,
+    hall_entry_ids: list[str],
+) -> dict[str, dict[str, int]]:
+    if not hall_entry_ids:
+        return {}
+    result = await db.execute(
+        select(
+            DispatchHallApplication.hall_entry_id,
+            DispatchHallApplication.status,
+            sa_func.count(DispatchHallApplication.id),
+        )
+        .where(DispatchHallApplication.hall_entry_id.in_(hall_entry_ids))
+        .group_by(DispatchHallApplication.hall_entry_id, DispatchHallApplication.status)
+    )
+    grouped: dict[str, dict[str, int]] = {}
+    for entry_id, status, count in result.all():
+        bucket = grouped.setdefault(entry_id, {"total": 0, "pending": 0, "approved": 0, "rejected": 0, "withdrawn": 0})
+        bucket[str(status)] = int(count)
+        bucket["total"] += int(count)
+    return grouped
 
 
 async def get_dispatch_hall_entry_by_id(
@@ -427,11 +505,14 @@ async def load_dispatch_hall_applications_by_entry_ids(
 async def _find_latest_hall_entry(
     db: AsyncSession,
     *,
+    work_order_id: str | None = None,
     source_dispatch_id: str | None,
     entry_type: str,
     statuses: set[str] | None = None,
 ) -> DispatchHallEntry | None:
     query = select(DispatchHallEntry).where(DispatchHallEntry.entry_type == entry_type)
+    if work_order_id is not None:
+        query = query.where(DispatchHallEntry.work_order_id == work_order_id)
     if source_dispatch_id is None:
         query = query.where(DispatchHallEntry.source_dispatch_id.is_(None))
     else:
@@ -467,6 +548,7 @@ async def create_or_reopen_support_hall_entry(
     )
     entry = await _find_latest_hall_entry(
         db,
+        work_order_id=work_order.id,
         source_dispatch_id=source_dispatch_id,
         entry_type="support_request",
         statuses=_OPEN_ENTRY_STATUSES,
@@ -530,6 +612,7 @@ async def create_or_reopen_takeover_hall_entry(
     )
     entry = await _find_latest_hall_entry(
         db,
+        work_order_id=work_order.id,
         source_dispatch_id=source_dispatch_id,
         entry_type="takeover_candidate",
         statuses=_OPEN_ENTRY_STATUSES,

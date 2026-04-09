@@ -499,6 +499,7 @@ const navItems = [
   { path: '/datacenter', icon: 'mdi:database-outline', label: '数据中心' },
   { path: '/operations', icon: 'mdi:wrench',           label: '智慧运维' },
   { path: '/workorders', icon: 'mdi:clipboard-list',   label: '工单管理' },
+  { path: '/worker-profiles', icon: 'mdi:account-hard-hat', label: '人员画像' },
 ]
 
 function isNavActive(path: string) {

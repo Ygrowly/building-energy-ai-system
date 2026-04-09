@@ -118,6 +118,11 @@
           <text class="menu-title">个人资料</text>
           <text class="menu-desc">查看和维护基础信息</text>
         </view>
+        <view class="menu-card" @click="goTo('dispatchProfile')">
+          <view class="menu-icon olive">派</view>
+          <text class="menu-title">我的派工画像</text>
+          <text class="menu-desc">确认技能范围与当前接单状态</text>
+        </view>
         <view class="menu-card" @click="goTo('security')">
           <view class="menu-icon blue">安</view>
           <text class="menu-title">账号安全</text>
@@ -172,6 +177,7 @@ const shiftLabel = computed(() => {
   const map: Record<string, string> = {
     on_duty: '值班中',
     standby: '待命',
+    busy: '忙碌',
     off_duty: '离岗',
   }
   return map[workerProfile.value?.shift_status || ''] || '值班中'
@@ -190,6 +196,7 @@ const notificationText = computed(() => {
 
 const SUB_PAGES: Record<string, string> = {
   info: '/pages/worker/profile/info',
+  dispatchProfile: '/pages/worker/profile/dispatch-profile',
   security: '/pages/worker/profile/security',
   notification: '/pages/worker/profile/notification',
   about: '/pages/worker/profile/about',
@@ -557,6 +564,10 @@ onShow(() => {
 
 .menu-icon.coral {
   background: linear-gradient(135deg, #d6e29f, #b5c875);
+}
+
+.menu-icon.olive {
+  background: linear-gradient(135deg, #aabf68, #7d9151);
 }
 
 .menu-icon.blue {

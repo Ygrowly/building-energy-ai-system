@@ -262,7 +262,7 @@ import { Icon } from '@iconify/vue'
 import { apiFetch } from '@/api/http'
 import { BUILDING_TYPE_OPTIONS, getBuildingLabel, type BuildingType } from '@/constants/buildings'
 import { useDataRangeStore } from '@/stores/dataRangeStore'
-import * as echarts from 'echarts'
+import * as echarts from '@/utils/echarts'
 import { useReportExport } from '@/composables/useReportExport'
 
 // ── 报表集成 ──

@@ -3,25 +3,40 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from sqlalchemy import func as sa_func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import (
-    AnomalyIncident,
-    DispatchEvent,
     DispatchTask,
     User,
     WorkOrder,
+)
+from app.services.dispatch_event_service import (
+    record_dispatch_event,
+    serialize_dispatch_event,
 )
 from app.services.dispatch_hall_service import (
     close_open_hall_entries_for_dispatch,
     create_or_reopen_support_hall_entry,
     create_or_reopen_takeover_hall_entry,
 )
+from app.services.dispatch_notification_service import (
+    build_nudge_notification,
+    build_timeout_notification,
+    mark_dispatch_reminded,
+    resolve_nudge_message,
+)
+from app.services.incident_read_model_service import (
+    sync_incident_dispatch_projection as _sync_incident_dispatch_projection,
+)
+from app.services.work_order_status_dimensions import sync_work_order_status_dimensions
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from app.db.models import DispatchEvent
 
 _DISPATCH_STAGE_SLA_MINUTES: dict[str, dict[str, int]] = {
     "high": {"accept": 5, "arrive": 20, "start": 30, "finish": 90},
@@ -62,36 +77,6 @@ def _get_dispatch_sla(priority: str | None) -> dict[str, int]:
     return _DISPATCH_STAGE_SLA_MINUTES.get(priority or "", _DISPATCH_STAGE_SLA_MINUTES["medium"])
 
 
-def _dispatch_stage_label(dispatch_status: str) -> str:
-    mapping = {
-        "assigned": "接单",
-        "accepted": "到场",
-        "arrived": "开始处理",
-        "processing": "处理完成",
-        "waiting_support": "协同完成",
-    }
-    return mapping.get(dispatch_status, "处理")
-
-
-def _dispatch_timeout_note(
-    dispatch_task: DispatchTask,
-    *,
-    timeout_level: str,
-    due_at: datetime | None,
-    now: datetime,
-) -> str:
-    stage_label = _dispatch_stage_label(dispatch_task.dispatch_status)
-    if due_at is None:
-        return f"{stage_label}阶段 SLA 状态已更新"
-
-    minutes_left = int((due_at - now).total_seconds() // 60)
-    if timeout_level == "warning":
-        return f"{stage_label}阶段即将超时，剩余 {max(minutes_left, 0)} 分钟，系统已提醒责任人尽快处理"
-    if timeout_level == "overdue":
-        return f"{stage_label}阶段已超时 {abs(minutes_left)} 分钟，系统已自动提醒责任人并建议管理员评估接管"
-    return f"{stage_label}阶段已恢复正常"
-
-
 def _team_from_user(user: User | None) -> tuple[str | None, str | None]:
     profile = getattr(user, "worker_profile", None) if user else None
     team = getattr(profile, "team", None) if profile else None
@@ -112,6 +97,7 @@ def _sync_work_order_dispatch_projection(
         work_order.accepted_at = None
         work_order.arrived_at = None
         work_order.processing_started_at = None
+        sync_work_order_status_dimensions(work_order)
         return
 
     work_order.current_dispatch_id = dispatch_task.id
@@ -121,51 +107,7 @@ def _sync_work_order_dispatch_projection(
     work_order.arrived_at = dispatch_task.arrived_at
     work_order.processing_started_at = dispatch_task.processing_started_at
     work_order.updated_at = datetime.now(timezone.utc)
-
-
-async def _sync_incident_dispatch_projection(
-    db: AsyncSession,
-    *,
-    work_order: WorkOrder,
-    dispatch_task: DispatchTask | None,
-    blocked_reason: str | None = None,
-) -> None:
-    if not work_order.incident_id:
-        return
-
-    incident = await db.get(AnomalyIncident, work_order.incident_id)
-    if incident is None:
-        return
-
-    incident.current_work_order_id = work_order.id
-    incident.workflow_status = work_order.status
-    incident.priority = work_order.priority
-    incident.updated_at = datetime.now(timezone.utc)
-
-    if dispatch_task is None:
-        incident.current_dispatch_id = None
-        incident.current_dispatch_status = None
-        incident.current_assigned_to = None
-        incident.current_assigned_team_id = None
-        incident.current_accept_deadline_at = None
-        incident.current_arrive_deadline_at = None
-        incident.current_finish_deadline_at = None
-        incident.dispatch_overdue_flag = False
-        incident.dispatch_blocked_reason = blocked_reason
-        incident.latest_dispatch_note = blocked_reason
-        return
-
-    incident.current_dispatch_id = dispatch_task.id
-    incident.current_dispatch_status = dispatch_task.dispatch_status
-    incident.current_assigned_to = dispatch_task.assigned_to
-    incident.current_assigned_team_id = dispatch_task.assigned_team_id
-    incident.current_accept_deadline_at = dispatch_task.accept_deadline_at
-    incident.current_arrive_deadline_at = dispatch_task.arrive_deadline_at
-    incident.current_finish_deadline_at = dispatch_task.finish_deadline_at
-    incident.last_dispatch_at = dispatch_task.assigned_at
-    incident.dispatch_blocked_reason = blocked_reason
-    incident.latest_dispatch_note = dispatch_task.latest_note or blocked_reason
-    incident.dispatch_overdue_flag = derive_dispatch_timeout_level(dispatch_task)[0] != "normal"
+    sync_work_order_status_dimensions(work_order, dispatch_task=dispatch_task)
 
 
 def derive_dispatch_timeout_level(dispatch_task: DispatchTask) -> tuple[str, datetime | None]:
@@ -187,59 +129,6 @@ def derive_dispatch_timeout_level(dispatch_task: DispatchTask) -> tuple[str, dat
     if minutes_left <= 30:
         return "warning", deadline
     return "normal", deadline
-
-
-async def record_dispatch_event(
-    db: AsyncSession,
-    *,
-    dispatch_task: DispatchTask,
-    event_type: str,
-    actor_type: str,
-    actor_id: str | None = None,
-    payload: dict[str, Any] | None = None,
-) -> DispatchEvent:
-    event = DispatchEvent(
-        dispatch_task_id=dispatch_task.id,
-        work_order_id=dispatch_task.work_order_id,
-        incident_id=dispatch_task.incident_id,
-        event_type=event_type,
-        actor_type=actor_type,
-        actor_id=actor_id,
-        payload_json=_json_dumps(payload),
-    )
-    db.add(event)
-    return event
-
-
-async def list_dispatch_events(
-    db: AsyncSession,
-    *,
-    dispatch_task_id: str,
-) -> list[DispatchEvent]:
-    result = await db.execute(
-        select(DispatchEvent)
-        .where(DispatchEvent.dispatch_task_id == dispatch_task_id)
-        .order_by(DispatchEvent.created_at.asc())
-    )
-    return list(result.scalars().all())
-
-
-async def load_dispatch_events_by_task_ids(
-    db: AsyncSession,
-    *,
-    dispatch_task_ids: list[str],
-) -> dict[str, list[DispatchEvent]]:
-    if not dispatch_task_ids:
-        return {}
-    result = await db.execute(
-        select(DispatchEvent)
-        .where(DispatchEvent.dispatch_task_id.in_(dispatch_task_ids))
-        .order_by(DispatchEvent.created_at.asc())
-    )
-    grouped: dict[str, list[DispatchEvent]] = {}
-    for item in result.scalars().all():
-        grouped.setdefault(item.dispatch_task_id, []).append(item)
-    return grouped
 
 
 async def get_dispatch_task_by_id(
@@ -389,27 +278,25 @@ async def scan_dispatch_sla_states(
         work_order = work_orders_by_id.get(dispatch_task.work_order_id)
 
         if next_timeout in {"warning", "overdue"}:
-            message = _dispatch_timeout_note(
+            notification = build_timeout_notification(
                 dispatch_task,
                 timeout_level=next_timeout,
+                previous_timeout_level=previous_timeout,
                 due_at=due_at,
                 now=current_time,
             )
-            dispatch_task.latest_note = message
-            dispatch_task.reminder_count = int(dispatch_task.reminder_count or 0) + 1
-            dispatch_task.last_reminded_at = current_time
+            message = notification.message
+            mark_dispatch_reminded(
+                dispatch_task,
+                reminded_at=current_time,
+                message=message,
+            )
             await record_dispatch_event(
                 db,
                 dispatch_task=dispatch_task,
-                event_type="timeout_warning" if next_timeout == "warning" else "timeout_overdue",
+                event_type=notification.event_type,
                 actor_type="scheduler",
-                payload={
-                    "timeout_level": next_timeout,
-                    "previous_timeout_level": previous_timeout,
-                    "deadline_at": _dt_to_iso(due_at),
-                    "message": message,
-                    "stage": dispatch_task.dispatch_status,
-                },
+                payload=notification.payload,
             )
             if next_timeout == "warning":
                 warning_events += 1
@@ -532,7 +419,7 @@ async def create_dispatch_task(
     await record_dispatch_event(
         db,
         dispatch_task=dispatch_task,
-        event_type="assigned" if dispatch_mode != "auto" else "auto_assigned",
+        event_type="auto_assigned" if dispatch_mode.startswith("auto") else "assigned",
         actor_type=actor_type,
         actor_id=assigned_by,
         payload={
@@ -676,10 +563,20 @@ async def nudge_dispatch_task(
     if dispatch_task.dispatch_status in {"completed", "cancelled", "transferred", "rejected", "escalated"}:
         raise ValueError("当前派工任务已结束，无法催办")
 
-    dispatch_task.reminder_count = int(dispatch_task.reminder_count or 0) + 1
-    dispatch_task.last_reminded_at = now
+    nudge_message = resolve_nudge_message(
+        dispatch_task,
+        requested_message=message,
+    )
+    mark_dispatch_reminded(
+        dispatch_task,
+        reminded_at=now,
+        message=nudge_message,
+    )
+    notification = build_nudge_notification(
+        dispatch_task,
+        requested_message=message,
+    )
     dispatch_task.updated_at = now
-    dispatch_task.latest_note = message or dispatch_task.latest_note or "调度已催办，请尽快处理"
     _mark_dispatch_projection_status(dispatch_task)
     _sync_work_order_dispatch_projection(work_order, dispatch_task)
     await _sync_incident_dispatch_projection(
@@ -691,14 +588,10 @@ async def nudge_dispatch_task(
     await record_dispatch_event(
         db,
         dispatch_task=dispatch_task,
-        event_type="reminded",
+        event_type=notification.event_type,
         actor_type=actor_type,
         actor_id=actor_id,
-        payload={
-            "message": message,
-            "reminder_count": dispatch_task.reminder_count,
-            "dispatch_status": dispatch_task.dispatch_status,
-        },
+        payload=notification.payload,
     )
     return dispatch_task
 
@@ -810,6 +703,7 @@ async def complete_dispatch_task(
     if result == "needs_parts":
         dispatch_task.dispatch_status = "waiting_support"
         dispatch_task.support_reason = notes
+        _sync_work_order_dispatch_projection(work_order, dispatch_task)
         await _sync_incident_dispatch_projection(
             db,
             work_order=work_order,
@@ -908,20 +802,6 @@ async def reassign_dispatch_task(
         transfer_from_dispatch_id=dispatch_task.id,
     )
     return new_dispatch
-
-
-def serialize_dispatch_event(event: DispatchEvent) -> dict[str, Any]:
-    return {
-        "id": event.id,
-        "dispatch_task_id": event.dispatch_task_id,
-        "work_order_id": event.work_order_id,
-        "incident_id": event.incident_id,
-        "event_type": event.event_type,
-        "actor_type": event.actor_type,
-        "actor_id": event.actor_id,
-        "payload": _json_loads(event.payload_json),
-        "created_at": _dt_to_iso(event.created_at),
-    }
 
 
 def derive_dispatch_ui_meta_from_task(

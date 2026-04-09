@@ -153,6 +153,10 @@
                   {{ hallEntryTypeLabel(entry) }}
                 </text>
                 <text class="hall-priority-badge">{{ priorityText(entry.work_order?.priority) }}</text>
+                <text v-if="entry.application_stats?.total" class="hall-priority-badge">
+                  申请 {{ entry.application_stats.total }} / 待处理 {{ entry.application_stats.pending }}
+                </text>
+                <text v-if="entry.risk_score" class="hall-risk-badge">风险 {{ entry.risk_score }}</text>
               </view>
               <text class="hall-time">{{ formatDateTime(entry.created_at) }}</text>
             </view>
@@ -172,6 +176,10 @@
               <view class="hall-detail-line">
                 <text class="hall-detail-label">进入原因</text>
                 <text class="hall-detail-value multiline">{{ hallEntryReason(entry) }}</text>
+              </view>
+              <view v-if="hallVisibilitySummary(entry)" class="hall-detail-line">
+                <text class="hall-detail-label">可见范围</text>
+                <text class="hall-detail-value multiline">{{ hallVisibilitySummary(entry) }}</text>
               </view>
             </view>
 
@@ -911,6 +919,7 @@ async function loadData() {
         status: 'open',
         entry_type: 'support_request,takeover_candidate',
         include_applications: true,
+        sort_by: 'ops_priority',
         page: 1,
         page_size: 50,
       })
@@ -923,6 +932,7 @@ async function loadData() {
           const aCount = hallPendingApplications(a).length
           const bCount = hallPendingApplications(b).length
           if (bCount !== aCount) return bCount - aCount
+          if ((b.risk_score || 0) !== (a.risk_score || 0)) return (b.risk_score || 0) - (a.risk_score || 0)
           if (a.entry_type !== b.entry_type) return a.entry_type === 'takeover_candidate' ? -1 : 1
           return (b.created_at || '').localeCompare(a.created_at || '')
         })
@@ -1033,6 +1043,14 @@ function hallEntryReason(entry: DispatchHallEntry) {
     return sanitizeDisplayText(entry.reason || entry.work_order?.dispatch_blocked_reason) || '当前派工已超时，等待接管确认'
   }
   return sanitizeDisplayText(entry.support_reason || entry.reason) || '主责任人申请协同支援'
+}
+
+function hallVisibilitySummary(entry: DispatchHallEntry) {
+  const parts: string[] = []
+  if (entry.target_team_ids?.length) parts.push(`目标班组 ${entry.target_team_ids.length} 个`)
+  if (entry.target_skill_tags?.length) parts.push(`技能 ${entry.target_skill_tags.join(' / ')}`)
+  if (entry.target_user_ids?.length) parts.push(`推荐人员 ${entry.target_user_ids.length} 人`)
+  return parts.join(' · ')
 }
 
 function applicationTypeLabel(application: DispatchHallApplication) {
@@ -2494,6 +2512,15 @@ onMounted(loadData)
 .hall-priority-badge {
   background: #f8fafc;
   color: #6b7280;
+}
+
+.hall-risk-badge {
+  padding: 8rpx 14rpx;
+  border-radius: 999rpx;
+  font-size: 20rpx;
+  font-weight: 700;
+  background: rgba(255, 179, 163, 0.2);
+  color: #b94731;
 }
 
 .hall-time {

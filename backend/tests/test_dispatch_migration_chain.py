@@ -21,11 +21,12 @@ def test_dispatch_migration_files_exist_in_sequence() -> None:
         "020_dispatch_hall_phase1.sql",
         "021_dispatch_query_indexes.sql",
         "022_dispatch_hall_visibility_scope_length.sql",
+        "023_work_order_status_dimensions.sql",
     ]
     actual = [
         path.name
         for path in sorted(MIGRATIONS_DIR.glob("*.sql"))
-        if 17 <= int(path.name.split("_", 1)[0]) <= 22
+        if 17 <= int(path.name.split("_", 1)[0]) <= 23
     ]
     assert actual == expected
 
@@ -114,3 +115,18 @@ def test_migration_022_widens_dispatch_hall_visibility_scope() -> None:
 
     assert "ALTER TABLE dispatch_hall_entries" in sql
     assert "ALTER COLUMN visibility_scope TYPE VARCHAR(32)" in sql
+
+
+def test_migration_023_adds_work_order_status_dimensions() -> None:
+    sql = _migration_text("023_work_order_status_dimensions.sql")
+    statements = _split_sql_statements(sql)
+
+    assert "ADD COLUMN IF NOT EXISTS approval_status" in sql
+    assert "ADD COLUMN IF NOT EXISTS dispatch_summary_status" in sql
+    assert "ADD COLUMN IF NOT EXISTS work_result" in sql
+    assert "UPDATE work_orders AS wo" in sql
+    assert "wo.status = 'pending_review' THEN 'pending_review'" in sql
+    assert "wo.status IN ('auto_rejected', 'admin_override_rejected') THEN 'rejected'" in sql
+    assert "wo.status IN ('pending_dispatch', 'auto_approved', 'admin_override_approved') THEN 'pending_dispatch'" in sql
+    assert "FROM dispatch_tasks dt" in sql
+    assert any("CREATE INDEX IF NOT EXISTS idx_wo_approval_dispatch_created" in stmt for stmt in statements)

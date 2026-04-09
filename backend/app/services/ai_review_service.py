@@ -20,9 +20,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.db.models import WorkOrder, WorkOrderAnomalyLink
+from app.services.audit_log_service import write_work_order_audit_log
 from app.services.context_event_service import (
     query_active_events,
     serialize_context_event,
+)
+from app.services.auto_dispatch_service import (
+    build_auto_dispatch_rollout_gate,
+    execute_auto_dispatch,
 )
 from app.services.work_order_service import apply_ai_review
 
@@ -64,8 +69,8 @@ _SYSTEM_PROMPT = (
 # ---------------------------------------------------------------------------
 # 核心审批函数
 # ---------------------------------------------------------------------------
-async def review_work_order(db: AsyncSession, work_order_id: str) -> None:
-    """对一个 pending_review 工单执行 AI 审批。"""
+async def review_work_order(db: AsyncSession, work_order_id: str) -> WorkOrder | None:
+    """对一个 pending_review 工单执行 AI 审批，返回本次实际处理的工单。"""
     # 行锁防并发
     result = await db.execute(
         select(WorkOrder)
@@ -76,12 +81,12 @@ async def review_work_order(db: AsyncSession, work_order_id: str) -> None:
 
     if not wo:
         logger.warning("工单不存在: %s", work_order_id)
-        return
+        return None
 
     # 幂等：已审批则跳过
     if wo.ai_reviewed_at is not None or wo.status != "pending_review":
         logger.debug("工单已审批或非 pending_review，跳过: %s", wo.ticket_id)
-        return
+        return None
 
     # 收集异常证据
     links_result = await db.execute(
@@ -104,7 +109,7 @@ async def review_work_order(db: AsyncSession, work_order_id: str) -> None:
             decision="approve",
             reason="无生效特殊事件，直接批准派单",
         )
-        return
+        return wo
 
     # 有事件 -> 调用 LLM
     llm_input = _build_llm_input(wo, links, active_events)
@@ -118,7 +123,7 @@ async def review_work_order(db: AsyncSession, work_order_id: str) -> None:
             reason="AI 审批 LLM 调用失败，降级批准",
             fallback=True,
         )
-        return
+        return wo
 
     # 解析结果
     decision = llm_result.get("decision", "approve")
@@ -138,6 +143,144 @@ async def review_work_order(db: AsyncSession, work_order_id: str) -> None:
         fallback=False,
     )
     logger.info("AI 审批完成: %s -> %s (%s)", wo.ticket_id, decision, reason[:50])
+    return wo
+
+
+async def execute_auto_dispatch_after_ai_approval(
+    db: AsyncSession,
+    *,
+    work_order_id: str,
+    trigger_source: str = "ai_review",
+) -> dict[str, Any]:
+    """
+    在 AI 审批事务提交后，单独尝试自动派工。
+
+    该函数自行处理 commit / rollback，避免自动派工异常反向影响审批结果落库。
+    """
+    work_order = await db.get(WorkOrder, work_order_id)
+    if work_order is None:
+        return {
+            "executed": False,
+            "action_taken": False,
+            "reason": "work_order_not_found",
+            "message": "AI 审批已完成，但工单已不存在，跳过自动派工",
+        }
+    work_order_id_value = work_order.id
+    work_order_ticket_id = work_order.ticket_id
+    work_order_status = work_order.status
+
+    try:
+        rollout_gate = build_auto_dispatch_rollout_gate(
+            work_order,
+            allowed_buildings=settings.AUTO_DISPATCH_ALLOWED_BUILDINGS,
+            allowed_priorities=settings.AUTO_DISPATCH_ALLOWED_PRIORITIES,
+            allowed_required_skills=settings.AUTO_DISPATCH_ALLOWED_REQUIRED_SKILLS,
+        )
+        if not rollout_gate["allowed"]:
+            blocker_labels = "、".join(item["label"] for item in rollout_gate["blockers"][:3])
+            await write_work_order_audit_log(
+                db,
+                work_order_id=work_order_id_value,
+                action="auto_dispatch_rollout_skipped",
+                old_status=work_order_status,
+                new_status=work_order_status,
+                actor_type="system",
+                actor_id=None,
+                detail={
+                    "trigger_source": trigger_source,
+                    "rollout_gate": rollout_gate,
+                    "message": blocker_labels,
+                },
+            )
+            await db.commit()
+            logger.info(
+                "AI 审批后自动派工被灰度拦截: ticket=%s trigger=%s blockers=%s",
+                work_order_ticket_id,
+                trigger_source,
+                blocker_labels,
+            )
+            return {
+                "executed": False,
+                "action_taken": False,
+                "observation_recorded": True,
+                "reason": "auto_dispatch_rollout_filtered",
+                "message": f"自动派工灰度未覆盖当前工单：{blocker_labels}",
+                "ticket_id": work_order_ticket_id,
+                "rollout_gate": rollout_gate,
+            }
+
+        result = await execute_auto_dispatch(
+            db,
+            work_order=work_order,
+            actor_id=None,
+            enabled=settings.ENABLE_AUTO_DISPATCH_EXECUTION,
+            min_score=settings.AUTO_DISPATCH_MIN_SCORE,
+            min_gap=settings.AUTO_DISPATCH_MIN_GAP,
+            require_on_duty=settings.AUTO_DISPATCH_REQUIRE_ON_DUTY,
+            allow_low_confidence_fallback=(
+                settings.ENABLE_AUTO_DISPATCH_FALLBACK_EXECUTION
+                and settings.AUTO_DISPATCH_ALLOW_LOW_CONFIDENCE_IN_GREY
+            ),
+            fallback_min_score=settings.AUTO_DISPATCH_FALLBACK_MIN_SCORE,
+            fallback_allow_standby=settings.AUTO_DISPATCH_FALLBACK_ALLOW_STANDBY,
+            create_hall_fallback=(
+                settings.ENABLE_AUTO_DISPATCH_HALL_FALLBACK
+                and settings.AUTO_DISPATCH_ALLOW_HALL_FALLBACK_IN_GREY
+            ),
+        )
+        if result.get("action_taken"):
+            await db.commit()
+        else:
+            await db.rollback()
+            await write_work_order_audit_log(
+                db,
+                work_order_id=work_order_id_value,
+                action="auto_dispatch_attempt_skipped",
+                old_status=work_order_status,
+                new_status=work_order_status,
+                actor_type="system",
+                actor_id=None,
+                detail={
+                    "trigger_source": trigger_source,
+                    "reason": result.get("reason"),
+                    "message": result.get("message"),
+                    "rollout_gate": rollout_gate,
+                    "strategy": (result.get("evaluation") or {}).get("strategy"),
+                    "blockers": (result.get("evaluation") or {}).get("blockers") or [],
+                    "high_confidence_blockers": (
+                        (result.get("evaluation") or {}).get("high_confidence_blockers")
+                        or []
+                    ),
+                },
+            )
+            await db.commit()
+            result["observation_recorded"] = True
+
+        logger.info(
+            "AI 审批后自动派工尝试完成: ticket=%s trigger=%s action_taken=%s executed=%s reason=%s strategy=%s",
+            work_order_ticket_id,
+            trigger_source,
+            result.get("action_taken", False),
+            result.get("executed", False),
+            result.get("reason"),
+            (result.get("evaluation") or {}).get("strategy"),
+        )
+        result["rollout_gate"] = rollout_gate
+        return result
+    except Exception:
+        await db.rollback()
+        logger.exception(
+            "AI 审批后自动派工异常: work_order_id=%s trigger=%s",
+            work_order_id,
+            trigger_source,
+        )
+        return {
+            "executed": False,
+            "action_taken": False,
+            "reason": "auto_dispatch_after_ai_review_failed",
+            "message": "AI 审批已完成，但自动派工执行异常",
+            "ticket_id": work_order_ticket_id,
+        }
 
 
 # ---------------------------------------------------------------------------

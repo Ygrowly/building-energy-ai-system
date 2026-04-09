@@ -5,6 +5,10 @@
         <div class="hall-badge-row">
           <span class="candidate-tag">{{ entry.entry_type === 'support_request' ? '工单大厅协同' : '超时待接管' }}</span>
           <span class="candidate-tag">{{ priorityLabels[entry.work_order?.priority] ?? entry.work_order?.priority ?? '普通工单' }}</span>
+          <span v-if="entry.application_stats" class="candidate-tag urgent">
+            申请 {{ entry.application_stats.total || 0 }} · 待处理 {{ entry.application_stats.pending || 0 }}
+          </span>
+          <span v-if="entry.risk_score" class="candidate-tag risk">风险 {{ entry.risk_score }}</span>
         </div>
         <span class="card-meta">{{ formatTimeValue(entry.created_at) }}</span>
       </div>
@@ -16,6 +20,10 @@
         <div class="detail-row">
           <span class="detail-label">进入原因</span>
           <span class="detail-val wrap">{{ hallEntryReasonValue(entry) }}</span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-label">可见范围</span>
+          <span class="detail-val wrap">{{ visibilityText(entry) }}</span>
         </div>
         <div class="detail-row">
           <span class="detail-label">建议措施</span>
@@ -53,7 +61,14 @@
             </div>
           </div>
         </div>
-        <p v-else class="timeline-hint">{{ hallEmptyHintValue(entry) }}</p>
+        <div v-else>
+          <p class="timeline-hint">{{ hallEmptyHintValue(entry) }}</p>
+          <div v-if="latestApplication(entry)" class="latest-application">
+            <span>{{ applicationStatusLabel(latestApplication(entry)?.status) }}</span>
+            <strong>{{ latestApplication(entry)?.applicant_username || '维修人员' }}</strong>
+            <p>{{ latestApplication(entry)?.handle_note || latestApplication(entry)?.note || '暂无处理说明' }}</p>
+          </div>
+        </div>
       </div>
 
       <div class="action-bar">
@@ -162,6 +177,32 @@ const hallActionKeyValue = (entryId: string, applicationId: string, action: 'app
   props.hallActionKey(entryId, applicationId, action)
 const buildingNameValue = (id: string) => props.buildingName(id)
 const formatTimeValue = (value?: string | null) => props.formatTime(value)
+
+function latestApplication(entry: any) {
+  return entry.latest_application || [...(entry.applications || [])].sort((a: any, b: any) => {
+    const aTime = a.updated_at || a.created_at || ''
+    const bTime = b.updated_at || b.created_at || ''
+    return bTime.localeCompare(aTime)
+  })[0] || null
+}
+
+function applicationStatusLabel(status?: string) {
+  const map: Record<string, string> = {
+    approved: '已同意',
+    rejected: '已驳回',
+    withdrawn: '已撤回',
+    pending: '待处理',
+  }
+  return map[status || ''] || '申请动态'
+}
+
+function visibilityText(entry: any) {
+  const parts: string[] = []
+  if (entry.target_team_ids?.length) parts.push(`目标班组 ${entry.target_team_ids.length} 个`)
+  if (entry.target_skill_tags?.length) parts.push(`技能 ${entry.target_skill_tags.join(' / ')}`)
+  if (entry.target_user_ids?.length) parts.push(`推荐人员 ${entry.target_user_ids.length} 人`)
+  return parts.length ? parts.join(' · ') : '所有可见维修人员'
+}
 </script>
 
 <style scoped>
@@ -189,7 +230,13 @@ const formatTimeValue = (value?: string | null) => props.formatTime(value)
 .candidate-note { font-size: 12px; color: var(--text-secondary); margin: 10px 0; }
 .candidate-tag, .score-pill { border-radius: 999px; padding: 4px 10px; font-size: 11px; }
 .candidate-tag { background: rgba(148, 163, 184, 0.12); color: var(--text-secondary); }
+.candidate-tag.urgent { color: #b45309; background: rgba(245, 158, 11, 0.12); }
+.candidate-tag.risk { color: #b91c1c; background: rgba(248, 113, 113, 0.12); }
 .score-pill { background: rgba(16, 185, 129, 0.1); color: var(--success); }
+.latest-application { border: 1px dashed var(--border); border-radius: 10px; padding: 10px 12px; background: rgba(148, 163, 184, 0.08); font-size: 12px; color: var(--text-secondary); }
+.latest-application span { display: inline-block; margin-right: 8px; color: var(--accent); font-weight: 700; }
+.latest-application strong { color: var(--text-primary); }
+.latest-application p { margin-top: 6px; }
 .action-bar { display: flex; gap: 8px; align-items: center; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); }
 .action-btn { border: none; border-radius: 8px; font-size: 13px; font-weight: 600; padding: 8px 16px; cursor: pointer; }
 .action-btn.primary { background: var(--accent); color: white; }

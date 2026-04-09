@@ -29,6 +29,19 @@ export function useWorkOrderPresentation(options: UseWorkOrderPresentationOption
     return wo.current_dispatch?.attempt_no || wo.dispatch_attempt_no || 0
   }
 
+  function executionStatusForOrder(wo: any) {
+    return currentDispatchForOrder(wo)?.execution_status || wo.execution_status || ''
+  }
+
+  function executionLabelForOrder(wo: any) {
+    const status = executionStatusForOrder(wo)
+    return status ? options.executionLabels[status] ?? status : '—'
+  }
+
+  function assigneeNameForOrder(wo: any) {
+    return currentDispatchForOrder(wo)?.assigned_to_name || wo.assigned_to_name || ''
+  }
+
   function currentBlockReason(wo: any) {
     const currentDispatch = currentDispatchForOrder(wo)
     return wo.dispatch_blocked_reason
@@ -56,8 +69,8 @@ export function useWorkOrderPresentation(options: UseWorkOrderPresentationOption
       { label: '工单 ID', value: wo.ticket_id, cls: 'mono accent' },
       { label: '楼宇', value: buildingName(wo.building_id) },
       { label: '当前状态', value: options.statusLabels[wo.status] ?? wo.status },
-      { label: '执行进度', value: options.executionLabels[currentDispatch?.execution_status || wo.execution_status] ?? currentDispatch?.execution_status ?? wo.execution_status ?? '—' },
-      { label: '责任人', value: currentDispatch?.assigned_to_name || wo.assigned_to_name || '未派工' },
+      { label: '执行进度', value: executionLabelForOrder(wo) },
+      { label: '责任人', value: assigneeNameForOrder(wo) || '未派工' },
       { label: '责任班组', value: currentDispatch?.assigned_team_name || wo.assigned_team_name || '—' },
       { label: '派工批次', value: dispatchAttemptCount(wo) > 0 ? `第 ${dispatchAttemptCount(wo)} 次` : '—' },
       { label: 'SLA', value: (currentDispatch?.sla_status || wo.sla_status) ? `${currentDispatch?.sla_status || wo.sla_status}${(currentDispatch?.sla_minutes_left ?? wo.sla_minutes_left) != null ? ` · 剩余 ${currentDispatch?.sla_minutes_left ?? wo.sla_minutes_left} 分钟` : ''}` : '—' },
@@ -92,7 +105,7 @@ export function useWorkOrderPresentation(options: UseWorkOrderPresentationOption
       }))
     }
     return [
-      wo.dispatch_at ? { time: formatTime(wo.dispatch_at), label: '工单已派发', note: wo.assigned_to_name ? `已派给 ${wo.assigned_to_name}` : '' } : null,
+      wo.dispatch_at ? { time: formatTime(wo.dispatch_at), label: '工单已派发', note: assigneeNameForOrder(wo) ? `已派给 ${assigneeNameForOrder(wo)}` : '' } : null,
       wo.accepted_at ? { time: formatTime(wo.accepted_at), label: '已接单', note: '' } : null,
       wo.arrived_at ? { time: formatTime(wo.arrived_at), label: '已到场', note: '' } : null,
       wo.processing_started_at ? { time: formatTime(wo.processing_started_at), label: '开始处理', note: wo.worker_notes || '' } : null,
@@ -166,6 +179,9 @@ export function useWorkOrderPresentation(options: UseWorkOrderPresentationOption
 
   return {
     currentDispatchForOrder,
+    executionStatusForOrder,
+    executionLabelForOrder,
+    assigneeNameForOrder,
     detailRows,
     timelineRows,
     buildingName,

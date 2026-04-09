@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
-import * as echarts from 'echarts'
+import * as echarts from '@/utils/echarts'
 import { cachedApiFetch } from '@/api/cached'
 import { MC, gc, buildHeatmapCells, isoDate } from '@/utils/homeCharts'
 import { isAbortError, startPerfSpan } from '@/utils/perf'

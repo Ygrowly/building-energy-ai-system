@@ -18,21 +18,27 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.db.models import (
-    AnomalyIncident,
     DispatchTask,
     User,
     WorkOrder,
     WorkOrderAnomalyLink,
-    WorkOrderAuditLog,
     WorkerProfile,
     WorkerProfileSkill,
 )
+from app.services.audit_log_service import write_work_order_audit_log as _write_audit_log
 from app.services.dispatch_service import (
     create_dispatch_task,
     derive_dispatch_ui_meta_from_task,
     get_current_dispatch_task,
     serialize_dispatch_task,
     update_dispatch_task_action,
+)
+from app.services.incident_read_model_service import (
+    sync_incident_from_work_order as _sync_incident_from_work_order,
+)
+from app.services.work_order_status_dimensions import (
+    serialize_work_order_status_dimensions,
+    sync_work_order_status_dimensions,
 )
 
 logger = logging.getLogger(__name__)
@@ -125,32 +131,6 @@ def validate_transition(current: str, target: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# 审计日志写入
-# ---------------------------------------------------------------------------
-async def _write_audit_log(
-    db: AsyncSession,
-    *,
-    work_order_id: str,
-    action: str,
-    old_status: str | None,
-    new_status: str,
-    actor_type: str,
-    actor_id: str | None = None,
-    detail: dict[str, Any] | None = None,
-) -> None:
-    log_entry = WorkOrderAuditLog(
-        work_order_id=work_order_id,
-        action=action,
-        old_status=old_status,
-        new_status=new_status,
-        actor_type=actor_type,
-        actor_id=actor_id,
-        detail_json=json.dumps(detail, ensure_ascii=False, default=str) if detail else None,
-    )
-    db.add(log_entry)
-
-
-# ---------------------------------------------------------------------------
 # 工单创建
 # ---------------------------------------------------------------------------
 async def create_work_order(
@@ -185,6 +165,9 @@ async def create_work_order(
         priority=priority,
         source=source,
         status="pending_review",
+        approval_status="pending_review",
+        dispatch_summary_status=None,
+        work_result=None,
         session_id=session_id,
         created_by=created_by,
         incident_id=incident_id,
@@ -554,28 +537,6 @@ def derive_dispatch_ui_meta(
     }
 
 
-def _map_work_order_status_to_incident_status(status: str) -> tuple[str, bool]:
-    """
-    返回 (incident_status, is_active)。
-    is_active 表示 incident 是否仍可被视为活跃问题对象。
-    """
-    mapping: dict[str, tuple[str, bool]] = {
-        "pending_review": ("open", True),
-        "pending_dispatch": ("open", True),
-        "auto_rejected": ("watching", True),
-        "dispatched": ("dispatched", True),
-        "completed": ("resolved", False),
-        "false_alarm": ("false_positive", False),
-        "escalated": ("in_progress", False),
-        # 历史状态兼容
-        "auto_approved": ("open", True),
-        "admin_override_approved": ("open", True),
-        "admin_override_rejected": ("closed", False),
-        "closed": ("closed", False),
-    }
-    return mapping.get(status, ("open", True))
-
-
 async def sync_incident_from_work_order(
     db: AsyncSession,
     *,
@@ -583,29 +544,10 @@ async def sync_incident_from_work_order(
 ) -> None:
     """
     将当前工单状态同步到 incident 的展示状态。
+
+    兼容旧调用入口；实际投影逻辑集中在 incident_read_model_service。
     """
-    if not work_order.incident_id:
-        return
-
-    incident = await db.get(AnomalyIncident, work_order.incident_id)
-    if not incident:
-        return
-    if incident.current_work_order_id and incident.current_work_order_id != work_order.id:
-        return
-
-    now = datetime.now(timezone.utc)
-    incident.workflow_status = work_order.status
-    incident.priority = work_order.priority
-    incident.current_work_order_id = work_order.id
-    if work_order.status == "pending_dispatch":
-        incident.dispatch_blocked_reason = work_order.dispatch_blocked_reason
-        incident.latest_dispatch_note = "AI审批已通过，等待调度人员派工"
-    incident.incident_status, incident.is_active = _map_work_order_status_to_incident_status(
-        work_order.status
-    )
-    incident.updated_at = now
-    if not incident.is_active and incident.resolved_at is None:
-        incident.resolved_at = now
+    await _sync_incident_from_work_order(db, work_order=work_order)
 
 
 # ---------------------------------------------------------------------------
@@ -638,6 +580,7 @@ async def transition_status(
         work_order.pending_dispatch_at = work_order.pending_dispatch_at or work_order.updated_at
     if new_status == "closed":
         work_order.closed_at = datetime.now(timezone.utc)
+    sync_work_order_status_dimensions(work_order)
 
     await sync_incident_from_work_order(db, work_order=work_order)
 
@@ -1310,6 +1253,7 @@ async def record_worker_dispatch_action(
     if action == "support_resolved":
         work_order.dispatch_blocked_reason = None
     work_order.updated_at = datetime.now(timezone.utc)
+    sync_work_order_status_dimensions(work_order, dispatch_task=dispatch_task)
     await sync_incident_from_work_order(db, work_order=work_order)
     await _write_audit_log(
         db,
@@ -1381,6 +1325,7 @@ def serialize_work_order(
         "suggested_action": wo.suggested_action,
         "priority": wo.priority,
         "status": wo.status,
+        **serialize_work_order_status_dimensions(wo, dispatch_task=current_dispatch),
         "ai_decision": wo.ai_decision,
         "ai_reason": wo.ai_reason,
         "ai_fallback": wo.ai_fallback,

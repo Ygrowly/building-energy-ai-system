@@ -50,6 +50,8 @@
               {{ entryTypeLabel(entry) }}
             </text>
             <text class="priority-badge">{{ priorityText(entry) }}</text>
+            <text v-if="applicationCountText(entry)" class="plain-badge">{{ applicationCountText(entry) }}</text>
+            <text v-if="entry.risk_score" class="risk-badge">风险{{ entry.risk_score }}</text>
             <text v-if="applicationBadge(entry)" class="plain-badge">{{ applicationBadge(entry) }}</text>
           </view>
           <text class="time-text">{{ formatDateTime(entry.created_at) }}</text>
@@ -74,6 +76,10 @@
           <view v-if="latestApplicationSummary(entry)" class="detail-line">
             <text class="detail-label">申请状态</text>
             <text class="detail-value multiline">{{ latestApplicationSummary(entry) }}</text>
+          </view>
+          <view v-if="visibilitySummary(entry)" class="detail-line">
+            <text class="detail-label">可见范围</text>
+            <text class="detail-value multiline">{{ visibilitySummary(entry) }}</text>
           </view>
         </view>
 
@@ -178,6 +184,20 @@ function applicationBadge(entry: DispatchHallEntry) {
   return ''
 }
 
+function applicationCountText(entry: DispatchHallEntry) {
+  const stats = entry.application_stats
+  if (!stats || !stats.total) return ''
+  return `${stats.total}人申请`
+}
+
+function visibilitySummary(entry: DispatchHallEntry) {
+  const parts: string[] = []
+  if (entry.target_team_ids?.length) parts.push(`目标班组 ${entry.target_team_ids.length} 个`)
+  if (entry.target_skill_tags?.length) parts.push(`技能 ${entry.target_skill_tags.join(' / ')}`)
+  if (entry.target_user_ids?.length) parts.push(`推荐人员 ${entry.target_user_ids.length} 人`)
+  return parts.join(' · ')
+}
+
 function latestApplicationSummary(entry: DispatchHallEntry) {
   const latest = latestMyApplication(entry)
   if (!latest) return ''
@@ -274,6 +294,7 @@ async function loadData() {
       status: 'open',
       entry_type: 'support_request,takeover_candidate',
       include_applications: true,
+      sort_by: 'ops_priority',
       page: 1,
       page_size: 50,
     })
@@ -532,6 +553,7 @@ onUnmounted(() => {
 
 .type-badge,
 .priority-badge,
+.risk-badge,
 .plain-badge {
   padding: 8rpx 16rpx;
   border-radius: 999rpx;
@@ -556,6 +578,11 @@ onUnmounted(() => {
 .plain-badge {
   color: #5f7137;
   background: rgba(228, 237, 184, 0.78);
+}
+
+.risk-badge {
+  color: #a33a28;
+  background: rgba(255, 170, 140, 0.2);
 }
 
 .time-text {

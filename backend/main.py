@@ -21,7 +21,9 @@ from app.api.routes_workorder import router as workorder_router
 from app.api.routes_incidents import router as incidents_router
 from app.api.routes_dispatch import router as dispatch_router
 from app.api.routes_dispatch_hall import router as dispatch_hall_router
+from app.api.routes_worker_profiles import router as worker_profiles_router
 from app.api.routes_context_events import router as context_events_router
+from app.api.routes_work_order_insights import router as work_order_insights_router
 from app.api.routes_admin import router as admin_router
 from app.core.config import get_settings
 
@@ -363,7 +365,9 @@ app.include_router(workorder_router, prefix="/api")
 app.include_router(incidents_router, prefix="/api")
 app.include_router(dispatch_router, prefix="/api")
 app.include_router(dispatch_hall_router, prefix="/api")
+app.include_router(worker_profiles_router, prefix="/api")
 app.include_router(context_events_router, prefix="/api")
+app.include_router(work_order_insights_router, prefix="/api")
 app.include_router(report_router, prefix="/api")
 app.include_router(admin_router)
 

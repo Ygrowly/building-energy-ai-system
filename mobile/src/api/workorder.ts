@@ -261,6 +261,14 @@ export interface DispatchHallApplication {
   updated_at: string | null
 }
 
+export interface DispatchHallApplicationStats {
+  total: number
+  pending: number
+  approved: number
+  rejected: number
+  withdrawn: number
+}
+
 export interface DispatchHallEntry {
   id: string
   work_order_id: string
@@ -292,6 +300,9 @@ export interface DispatchHallEntry {
   work_order?: DispatchHallWorkOrderSummary | null
   source_dispatch?: DispatchHallSourceDispatchSummary | null
   applications: DispatchHallApplication[]
+  application_stats?: DispatchHallApplicationStats
+  latest_application?: DispatchHallApplication | null
+  risk_score?: number
 }
 
 export interface DispatchHallListResponse {
@@ -522,6 +533,9 @@ export const workOrderApi = {
     work_order_id?: string
     incident_id?: string
     source_dispatch_id?: string
+    building_id?: string
+    target_team_id?: string
+    sort_by?: string
     include_applications?: boolean
     page?: number
     page_size?: number

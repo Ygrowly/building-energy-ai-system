@@ -851,7 +851,8 @@ class IncidentPredictionLink(Base):
 class WorkOrder(Base):
     """
     工单主表，完整生命周期：pending_review → AI 审批 → 派发 → 反馈 → 关闭。
-    状态合法值:
+    status 是旧兼容展示状态；新代码应优先读取三维投影字段。
+    旧状态合法值:
       pending_review, pending_dispatch, auto_rejected,
       dispatched, completed, false_alarm, escalated, closed
     同时兼容历史状态:
@@ -873,8 +874,11 @@ class WorkOrder(Base):
     suggested_action: str = Column(Text, nullable=False)
     priority: str = Column(String(16), nullable=False, default="medium")
 
-    # 状态机
+    # 状态机（兼容）与三维状态投影
     status: str = Column(String(32), nullable=False, default="pending_review")
+    approval_status: str = Column(String(32), nullable=True)
+    dispatch_summary_status: str = Column(String(32), nullable=True)
+    work_result: str = Column(String(32), nullable=True)
 
     # AI 审批结果
     ai_decision: str = Column(String(16), nullable=True)
@@ -944,6 +948,9 @@ class WorkOrder(Base):
 
     __table_args__ = (
         Index("idx_wo_status", "status"),
+        Index("idx_wo_approval_status", "approval_status"),
+        Index("idx_wo_dispatch_summary_status", "dispatch_summary_status"),
+        Index("idx_wo_work_result", "work_result"),
         Index("idx_wo_building", "building_id"),
         Index("idx_wo_created", created_at.desc()),
         Index("idx_wo_status_pending_dispatch_created", "status", pending_dispatch_at.asc(), created_at.asc()),

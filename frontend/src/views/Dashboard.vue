@@ -381,7 +381,7 @@
 <script setup lang="ts">
 import { ref, onMounted, computed, watch, nextTick } from 'vue'
 import { Icon } from '@iconify/vue'
-import * as echarts from 'echarts'
+import * as echarts from '@/utils/echarts'
 import { apiFetch } from '@/api/http'
 import { cachedApiFetch, peekCachedApi } from '@/api/cached'
 import { useBuildingStore } from '@/stores/buildingStore'

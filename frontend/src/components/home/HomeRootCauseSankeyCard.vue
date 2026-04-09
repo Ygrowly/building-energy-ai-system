@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, watch, onMounted, onUnmounted, nextTick } from 'vue'
-import * as echarts from 'echarts'
+import * as echarts from '@/utils/echarts'
 import { MC, gc } from '@/utils/homeCharts'
 import { useReportExport } from '@/composables/useReportExport'
 

@@ -54,6 +54,7 @@ _ZERO_HVAC_ENERGY_THRESHOLD = 0.1
 _HOME_BUNDLE_BUILDING_TYPES = BUILDING_TYPE_ORDER
 _HOME_OVERVIEW_BUNDLE_TTL_SECONDS = 60
 _HOME_SECTION_BUNDLE_TTL_SECONDS = 300
+_HOME_SECTION_BUNDLE_SCOPES = {"overview", "charts", "all"}
 
 
 @dataclass(frozen=True)
@@ -1185,12 +1186,13 @@ async def _get_latest_energy_timestamp(
     db: AsyncSession,
     building_id: str,
 ) -> datetime | None:
-    max_row = await db.execute(
-        select(func.max(EnergyData.timestamp)).where(
-            EnergyData.building_id == building_id
-        )
+    latest_row = await db.execute(
+        select(EnergyData.timestamp)
+        .where(EnergyData.building_id == building_id)
+        .order_by(EnergyData.timestamp.desc())
+        .limit(1)
     )
-    return max_row.scalar()
+    return latest_row.scalar_one_or_none()
 
 
 def _build_empty_load_profile_payload(
@@ -2380,14 +2382,11 @@ async def _get_home_overview_series_payload(
     }
 
 
-async def _get_home_section_payload(
+async def _get_home_section_overview_payload(
     db: AsyncSession,
     *,
     context: _BuildingContext,
-    target_date: date,
 ) -> dict[str, Any]:
-    overview_start = target_date - timedelta(days=6)
-    public_section_start = target_date - timedelta(days=29)
     anomalies = await get_recent_anomalies(
         hours=168,
         building_type=context.building_type,
@@ -2395,6 +2394,40 @@ async def _get_home_section_payload(
         only_unresolved=False,
         db=db,
     )
+
+    if context.building_type == "Office":
+        peak_valley = await get_peak_valley_stats(
+            building_type=context.building_type,
+            building_id=context.building_id,
+            metric="electricity",
+            days=7,
+            night_threshold=50.0,
+            db=db,
+        )
+        return {
+            "anomalies": anomalies,
+            "peak_valley": peak_valley,
+        }
+
+    status = await get_building_status(
+        building_type=context.building_type,
+        building_id=context.building_id,
+        db=db,
+    )
+    return {
+        "anomalies": anomalies,
+        "status": status,
+    }
+
+
+async def _get_home_section_charts_payload(
+    db: AsyncSession,
+    *,
+    context: _BuildingContext,
+    target_date: date,
+) -> dict[str, Any]:
+    overview_start = target_date - timedelta(days=6)
+    public_section_start = target_date - timedelta(days=29)
 
     if context.building_type == "Education":
         load_profiles = await _get_load_profile_payloads(
@@ -2412,19 +2445,12 @@ async def _get_home_section_payload(
             metric="electricity",
             db=db,
         )
-        status = await get_building_status(
-            building_type=context.building_type,
-            building_id=context.building_id,
-            db=db,
-        )
         return {
             "load_profile_electricity": load_profiles["electricity"],
             "rated_vs_actual_electricity": rated_electricity,
-            "anomalies": anomalies,
             "load_profile_air_temp": load_profiles["air_temp"],
             "load_profile_supply_temp": load_profiles["supply_temp"],
             "load_profile_return_temp": load_profiles["return_temp"],
-            "status": status,
         }
 
     if context.building_type == "Office":
@@ -2444,19 +2470,9 @@ async def _get_home_section_payload(
             metrics=["electricity"],
             days=14,
         )
-        peak_valley = await get_peak_valley_stats(
-            building_type=context.building_type,
-            building_id=context.building_id,
-            metric="electricity",
-            days=7,
-            night_threshold=50.0,
-            db=db,
-        )
         return {
             "load_profile_electricity": load_profiles["electricity"],
-            "peak_valley": peak_valley,
             "energy": energy,
-            "anomalies": anomalies,
         }
 
     energy = await get_building_energy_trend(
@@ -2483,20 +2499,20 @@ async def _get_home_section_payload(
         metric="electricity",
         db=db,
     )
-    status = await get_building_status(
-        building_type=context.building_type,
-        building_id=context.building_id,
-        db=db,
-    )
     return {
         "energy": energy,
         "load_profile_electricity": load_profiles["electricity"],
         "load_profile_air_temp": load_profiles["air_temp"],
         "load_profile_humidity": load_profiles["humidity"],
-        "anomalies": anomalies,
         "rated_vs_actual_electricity": rated_electricity,
-        "status": status,
     }
+
+
+def _merge_home_section_payloads(*payloads: dict[str, Any]) -> dict[str, Any]:
+    merged: dict[str, Any] = {}
+    for payload in payloads:
+        merged.update(payload)
+    return merged
 
 
 async def _compute_home_overview_bundle_payload() -> dict[str, Any]:
@@ -2534,19 +2550,39 @@ async def _compute_home_overview_bundle_payload() -> dict[str, Any]:
 
 async def _compute_home_section_bundle_payload(
     building_type: str,
+    scope: str = "all",
 ) -> dict[str, Any]:
     async with AsyncSessionLocal() as db:
         context = await _require_building_context(db, building_type=building_type)
         target_date = await _get_latest_energy_data_date(db)
-        payload = await _get_home_section_payload(
-            db,
-            context=context,
-            target_date=target_date,
-        )
+        if scope == "overview":
+            payload = await _get_home_section_overview_payload(
+                db,
+                context=context,
+            )
+        elif scope == "charts":
+            payload = await _get_home_section_charts_payload(
+                db,
+                context=context,
+                target_date=target_date,
+            )
+        else:
+            payload = _merge_home_section_payloads(
+                await _get_home_section_overview_payload(
+                    db,
+                    context=context,
+                ),
+                await _get_home_section_charts_payload(
+                    db,
+                    context=context,
+                    target_date=target_date,
+                ),
+            )
         return {
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "data_date": target_date.isoformat(),
             "building_type": context.building_type,
+            "scope": scope,
             **payload,
         }
 
@@ -2576,10 +2612,16 @@ async def _compute_home_bundle_payload() -> dict[str, Any]:
                 overview_start=overview_start,
                 overview_end=target_date,
             )
-            sections[building_type] = await _get_home_section_payload(
-                db,
-                context=context,
-                target_date=target_date,
+            sections[building_type] = _merge_home_section_payloads(
+                await _get_home_section_overview_payload(
+                    db,
+                    context=context,
+                ),
+                await _get_home_section_charts_payload(
+                    db,
+                    context=context,
+                    target_date=target_date,
+                ),
             )
 
         return {
@@ -2594,7 +2636,7 @@ async def _compute_home_bundle_payload() -> dict[str, Any]:
 
 @router.get("/home/overview-bundle", summary="获取首页首屏总览聚合数据")
 async def get_home_overview_bundle():
-    cache_key = f"home:overview-bundle:{cache_bucket()}"
+    cache_key = "home:overview-bundle:v2"
 
     async def _compute() -> dict[str, Any]:
         return await _compute_home_overview_bundle_payload()
@@ -2609,16 +2651,22 @@ async def get_home_overview_bundle():
 @router.get("/home/section-bundle", summary="获取首页单个楼宇分区聚合数据")
 async def get_home_section_bundle(
     building_type: str = Query(..., description="楼宇类型"),
+    scope: str = Query("all", description="返回范围：overview | charts | all"),
 ):
     normalized_building_type = normalize_building_type(building_type) or building_type
-    cache_key = (
-        "home:section-bundle:"
-        f"{normalized_building_type}:"
-        f"{cache_bucket()}"
-    )
+    normalized_scope = scope.strip().lower()
+    if normalized_scope not in _HOME_SECTION_BUNDLE_SCOPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"scope 只能为：{sorted(_HOME_SECTION_BUNDLE_SCOPES)}",
+        )
+    cache_key = f"home:section-bundle:v2:{normalized_scope}:{normalized_building_type}"
 
     async def _compute() -> dict[str, Any]:
-        return await _compute_home_section_bundle_payload(normalized_building_type)
+        return await _compute_home_section_bundle_payload(
+            normalized_building_type,
+            scope=normalized_scope,
+        )
 
     return await get_or_compute_json(
         cache_key,

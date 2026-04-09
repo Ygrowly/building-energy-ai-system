@@ -1,23 +1,34 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { apiFetch } from '@/api/http'
+import { cachedApiFetch } from '@/api/cached'
 import { buildHeatmapCells } from '@/utils/homeCharts'
+
+type LoadProfilePayload = {
+  hourly_profile?: Array<{ hour: number; avg_value: number | null }>
+  weekday_profile?: Array<{ weekday: number; avg_value: number | null }>
+}
 
 const props = withDefaults(
   defineProps<{
     buildingTypes: string[]
+    profiles?: Array<LoadProfilePayload | null | undefined>
     title?: string
     subtitle?: string
     pickId?: string
     pickTitle?: string
     pickSubtitle?: string
+    useBundle?: boolean
+    bundlePending?: boolean
   }>(),
   {
+    profiles: () => [],
     title: '24h 能耗日历热力图',
     subtitle: '近两周逐时负荷合成的 7×24 节律',
     pickId: 'chart-heatmap',
     pickTitle: '24h 能耗日历热力图',
     pickSubtitle: '',
+    useBundle: false,
+    bundlePending: false,
   },
 )
 
@@ -40,6 +51,9 @@ const ghLegendColors = computed(() => {
 
 const pickSubtitleText = computed(() => props.pickSubtitle || props.subtitle)
 const heatmapKey = computed(() => props.buildingTypes.join('|'))
+const bundledProfiles = computed(() =>
+  (props.profiles ?? []).filter((profile): profile is LoadProfilePayload => profile != null),
+)
 
 function getGhColor(v: number): string {
   const dark = document.documentElement.dataset.theme !== 'light'
@@ -70,50 +84,75 @@ function hideGhTip() {
   ghTip.value.show = false
 }
 
-async function loadHeatmap() {
-  if (!props.buildingTypes.length) {
-    ghData.value = []
-    ghMaxVal.value = 1
+function resetHeatmap() {
+  ghData.value = []
+  ghMaxVal.value = 1
+}
+
+function applyProfiles(profiles: LoadProfilePayload[]) {
+  if (!profiles.length) {
+    resetHeatmap()
     return
   }
 
   const hourlySum = new Array(24).fill(0)
   const weekdaySum = new Array(7).fill(0)
-  let count = 0
+
+  profiles.forEach((profile) => {
+    for (const point of profile.hourly_profile || []) {
+      hourlySum[point.hour] += Number(point.avg_value ?? 0)
+    }
+    for (const point of profile.weekday_profile || []) {
+      if (point.weekday >= 1 && point.weekday <= 7) {
+        weekdaySum[point.weekday - 1] += Number(point.avg_value ?? 0)
+      }
+    }
+  })
+
+  const count = profiles.length
+  const hourly = hourlySum.map((sum, hour) => ({ hour, avg_value: sum / count }))
+  const weekly = weekdaySum.map((sum, index) => ({ weekday: index + 1, avg_value: sum / count }))
+  const cells = buildHeatmapCells(hourly, weekly)
+  ghData.value = cells
+  ghMaxVal.value = Math.max(...cells.map((cell) => cell.v), 1)
+}
+
+async function loadHeatmap() {
+  if (!props.buildingTypes.length) {
+    resetHeatmap()
+    return
+  }
+
+  if (bundledProfiles.value.length) {
+    applyProfiles(bundledProfiles.value)
+    return
+  }
+
+  if (props.useBundle && props.bundlePending) {
+    return
+  }
 
   try {
-    await Promise.all(
-      props.buildingTypes.map(async (buildingType) => {
-        const res = await apiFetch<any>(
+    const profiles = await Promise.all(
+      props.buildingTypes.map((buildingType) =>
+        cachedApiFetch<LoadProfilePayload>(
           `/api/buildings/${encodeURIComponent(buildingType)}/load-profile?metric=electricity&days=14`,
-        )
-
-        count++
-        for (const point of res.hourly_profile || []) {
-          hourlySum[point.hour] += Number(point.avg_value ?? 0)
-        }
-        for (const point of res.weekday_profile || []) {
-          if (point.weekday >= 1 && point.weekday <= 7) {
-            weekdaySum[point.weekday - 1] += Number(point.avg_value ?? 0)
-          }
-        }
-      }),
+          undefined,
+          { ttlMs: 300_000 },
+        ),
+      ),
     )
-
-    if (!count) throw new Error('heatmap data unavailable')
-
-    const hourly = hourlySum.map((sum, hour) => ({ hour, avg_value: sum / count }))
-    const weekly = weekdaySum.map((sum, index) => ({ weekday: index + 1, avg_value: sum / count }))
-    const cells = buildHeatmapCells(hourly, weekly)
-    ghData.value = cells
-    ghMaxVal.value = Math.max(...cells.map((cell) => cell.v), 1)
+    applyProfiles(profiles)
   } catch {
-    ghData.value = []
-    ghMaxVal.value = 1
+    resetHeatmap()
   }
 }
 
-watch(heatmapKey, () => loadHeatmap(), { immediate: true })
+watch(
+  () => [heatmapKey.value, props.bundlePending, props.useBundle, props.profiles],
+  () => loadHeatmap(),
+  { deep: true, immediate: true },
+)
 </script>
 
 <template>

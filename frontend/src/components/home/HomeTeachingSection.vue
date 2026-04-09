@@ -3,6 +3,7 @@ import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import * as echarts from '@/utils/echarts'
 import { cachedApiFetch } from '@/api/cached'
 import { MC, gc, buildHeatmapCells, isoDate } from '@/utils/homeCharts'
+import { createDeferredTaskRunner } from '@/utils/deferredTasks'
 import { isAbortError, startPerfSpan } from '@/utils/perf'
 import HomeActionCards from './HomeActionCards.vue'
 import HomeMiniMetricCards from './HomeMiniMetricCards.vue'
@@ -12,6 +13,7 @@ const props = defineProps<{
   bundle?: any
   useBundle?: boolean
   bundlePending?: boolean
+  chartBundlePending?: boolean
 }>()
 
 const BT = 'Education'
@@ -61,6 +63,7 @@ const weekdayEl = ref<HTMLElement | null>(null)
 const hvacEl = ref<HTMLElement | null>(null)
 let instances: echarts.ECharts[] = []
 let loadController: AbortController | null = null
+const chartTaskRunner = createDeferredTaskRunner()
 
 const ratedSummary = ref<{ anomaly_hours?: number; anomaly_rate_pct?: number } | null>(null)
 const statusSnap = ref<any>(null)
@@ -427,13 +430,21 @@ async function loadAll() {
     anomalies.value = ax?.anomalies ?? []
     ratedSummary.value = rv?.summary ?? null
 
+    const hasChartPayload = Boolean(
+      (rv?.records?.length ?? 0) ||
+      (lp?.hourly_profile?.length ?? 0) ||
+      (lpAir?.hourly_profile?.length ?? 0) ||
+      (lpSupply?.hourly_profile?.length ?? 0) ||
+      (lpReturn?.hourly_profile?.length ?? 0),
+    )
+    if (props.chartBundlePending && !hasChartPayload) {
+      finish('ok', { state: 'charts_pending' })
+      return
+    }
+
     const cells = buildHeatmapCells(lp.hourly_profile || [], lp.weekday_profile || [])
     ghData.value = cells
     ghMaxVal.value = Math.max(...cells.map((x) => x.v), 1)
-
-    disposeAll()
-    renderRated(rv?.records || [])
-    renderWeekday(lp.weekday_profile || [])
 
     const toHourly = (profile: any[], fallback: number | null = null) =>
       Array.from({ length: 24 }, (_, h) => {
@@ -445,8 +456,18 @@ async function loadAll() {
     const supplyH = toHourly(lpSupply.hourly_profile, null)
     const retH = toHourly(lpReturn.hourly_profile, null)
 
-    renderHvacTriplet(airH, supplyH, retH)
-    nextTick(() => instances.forEach((i) => i.resize()))
+    chartTaskRunner.clear()
+    disposeAll()
+    chartTaskRunner.schedule(
+      [
+        () => renderRated(rv?.records || []),
+        () => renderWeekday(lp.weekday_profile || []),
+        () => renderHvacTriplet(airH, supplyH, retH),
+      ],
+      () => {
+        nextTick(() => instances.forEach((i) => i.resize()))
+      },
+    )
     finish('ok', { anomalyCount: anomalies.value.length })
   } catch (error) {
     if (isAbortError(error)) {
@@ -466,7 +487,7 @@ function onResize() {
 let ro: ResizeObserver | null = null
 
 watch(
-  () => [props.dataDate, props.bundle, props.bundlePending],
+  () => [props.dataDate, props.bundle, props.bundlePending, props.chartBundlePending],
   () => {
     loadAll()
   },
@@ -485,6 +506,7 @@ onMounted(() => {
 onUnmounted(() => {
   loadController?.abort()
   loadController = null
+  chartTaskRunner.clear()
   disposeAll()
   window.removeEventListener('resize', onResize)
   ro?.disconnect()

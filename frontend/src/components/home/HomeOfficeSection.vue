@@ -3,6 +3,7 @@ import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import * as echarts from '@/utils/echarts'
 import { cachedApiFetch } from '@/api/cached'
 import { MC, gc, EUI_BASELINE, isoDate } from '@/utils/homeCharts'
+import { createDeferredTaskRunner } from '@/utils/deferredTasks'
 import { isAbortError, startPerfSpan } from '@/utils/perf'
 import HomeActionCards from './HomeActionCards.vue'
 import HomeEnergyHeatmap from './HomeEnergyHeatmap.vue'
@@ -14,6 +15,7 @@ const props = defineProps<{
   bundle?: any
   useBundle?: boolean
   bundlePending?: boolean
+  chartBundlePending?: boolean
 }>()
 
 const BT = 'Office'
@@ -24,6 +26,7 @@ const sparkEl = ref<HTMLElement | null>(null)
 const rankEl  = ref<HTMLElement | null>(null)
 let instances: echarts.ECharts[] = []
 let loadController: AbortController | null = null
+const chartTaskRunner = createDeferredTaskRunner()
 
 const peakValley  = ref<any>(null)
 const anomalies   = ref<any[]>([])
@@ -430,12 +433,28 @@ async function loadAll() {
     peakValley.value = pv
     anomalies.value  = ax?.anomalies ?? []
 
+    const hasChartPayload = Boolean(
+      (lp?.hourly_profile?.length ?? 0) ||
+      (en?.records?.length ?? 0),
+    )
+    if (props.chartBundlePending && !hasChartPayload) {
+      finish('ok', { state: 'charts_pending' })
+      return
+    }
+
+    chartTaskRunner.clear()
     disposeAll()
-    renderWorkBand(lp.hourly_profile || [])
-    renderTrend(en.records || [])
-    renderSparkline(pv.daily_totals || [])
-    renderRank(pv.daily_totals || [])
-    nextTick(() => instances.forEach((i) => i.resize()))
+    chartTaskRunner.schedule(
+      [
+        () => renderWorkBand(lp.hourly_profile || []),
+        () => renderTrend(en.records || []),
+        () => renderSparkline(pv?.daily_totals || []),
+        () => renderRank(pv?.daily_totals || []),
+      ],
+      () => {
+        nextTick(() => instances.forEach((i) => i.resize()))
+      },
+    )
     finish('ok', { anomalyCount: anomalies.value.length })
   } catch (error) {
     if (isAbortError(error)) {
@@ -448,7 +467,7 @@ async function loadAll() {
 }
 
 watch(
-  () => [props.dataDate, props.overviewData, props.bundle, props.bundlePending],
+  () => [props.dataDate, props.overviewData, props.bundle, props.bundlePending, props.chartBundlePending],
   () => loadAll(),
   { deep: true, immediate: true },
 )
@@ -471,6 +490,7 @@ onMounted(() => {
 onUnmounted(() => {
   loadController?.abort()
   loadController = null
+  chartTaskRunner.clear()
   disposeAll()
   window.removeEventListener('resize', onResize)
   ro?.disconnect()
@@ -626,6 +646,9 @@ onUnmounted(() => {
     <div class="bento-row bento-r-full">
       <HomeEnergyHeatmap
         :building-types="[BT]"
+        :profiles="[bundle?.load_profile_electricity ?? null]"
+        :use-bundle="useBundle"
+        :bundle-pending="chartBundlePending"
         title="24h 能耗日历热力图"
         subtitle="近两周办公楼逐时负荷合成的 7×24 节律"
         pick-id="office-chart-heatmap"

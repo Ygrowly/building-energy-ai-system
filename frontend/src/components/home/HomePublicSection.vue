@@ -4,6 +4,7 @@ import * as echarts from '@/utils/echarts'
 import { Icon } from '@iconify/vue'
 import { cachedApiFetch } from '@/api/cached'
 import { MC, gc, isoDate } from '@/utils/homeCharts'
+import { createDeferredTaskRunner } from '@/utils/deferredTasks'
 import { isAbortError, startPerfSpan } from '@/utils/perf'
 import HomeActionCards from './HomeActionCards.vue'
 import HomeEnergyHeatmap from './HomeEnergyHeatmap.vue'
@@ -14,6 +15,7 @@ const props = defineProps<{
   bundle?: any
   useBundle?: boolean
   bundlePending?: boolean
+  chartBundlePending?: boolean
 }>()
 
 const BT = 'Public services'
@@ -23,6 +25,7 @@ const profileEl = ref<HTMLElement | null>(null)
 const comfortEl = ref<HTMLElement | null>(null)
 let instances: echarts.ECharts[] = []
 let loadController: AbortController | null = null
+const chartTaskRunner = createDeferredTaskRunner()
 
 const statusSnap  = ref<any>(null)
 const anomalies   = ref<any[]>([])
@@ -357,6 +360,18 @@ async function loadAll() {
     anomalies.value = ax?.anomalies ?? []
     ratedSummary.value = rv?.summary ?? null
 
+    const hasChartPayload = Boolean(
+      (en?.records?.length ?? 0) ||
+      (lpE?.hourly_profile?.length ?? 0) ||
+      (lpT?.hourly_profile?.length ?? 0) ||
+      (lpH?.hourly_profile?.length ?? 0) ||
+      (rv?.records?.length ?? 0),
+    )
+    if (props.chartBundlePending && !hasChartPayload) {
+      finish('ok', { state: 'charts_pending' })
+      return
+    }
+
     const toHourly = (profile: any[]) =>
       Array.from({ length: 24 }, (_, h) => {
         const row = profile?.find((x: any) => x.hour === h)
@@ -366,11 +381,18 @@ async function loadAll() {
     const hourlyT = toHourly(lpT.hourly_profile)
     const hourlyH = toHourly(lpH.hourly_profile)
 
+    chartTaskRunner.clear()
     disposeAll()
-    renderDual(en.records || [])
-    renderProfile(lpE.hourly_profile || [])
-    renderComfort(hourlyT, hourlyH)
-    nextTick(() => instances.forEach((i) => i.resize()))
+    chartTaskRunner.schedule(
+      [
+        () => renderDual(en.records || []),
+        () => renderProfile(lpE.hourly_profile || []),
+        () => renderComfort(hourlyT, hourlyH),
+      ],
+      () => {
+        nextTick(() => instances.forEach((i) => i.resize()))
+      },
+    )
     finish('ok', { anomalyCount: anomalies.value.length })
     return
   }
@@ -414,11 +436,18 @@ async function loadAll() {
     const hourlyT = toHourly(lpT.hourly_profile)
     const hourlyH = toHourly(lpH.hourly_profile)
 
+    chartTaskRunner.clear()
     disposeAll()
-    renderDual(en.records || [])
-    renderProfile(lpE.hourly_profile || [])
-    renderComfort(hourlyT, hourlyH)
-    nextTick(() => instances.forEach((i) => i.resize()))
+    chartTaskRunner.schedule(
+      [
+        () => renderDual(en.records || []),
+        () => renderProfile(lpE.hourly_profile || []),
+        () => renderComfort(hourlyT, hourlyH),
+      ],
+      () => {
+        nextTick(() => instances.forEach((i) => i.resize()))
+      },
+    )
     finish('ok', { anomalyCount: anomalies.value.length })
   } catch (error) {
     if (isAbortError(error)) {
@@ -430,7 +459,11 @@ async function loadAll() {
   }
 }
 
-watch(() => [props.dataDate, props.bundle, props.bundlePending], () => loadAll(), { deep: true, immediate: true })
+watch(
+  () => [props.dataDate, props.bundle, props.bundlePending, props.chartBundlePending],
+  () => loadAll(),
+  { deep: true, immediate: true },
+)
 
 function onResize() {
   instances.forEach((c) => c.resize())
@@ -450,6 +483,7 @@ onMounted(() => {
 onUnmounted(() => {
   loadController?.abort()
   loadController = null
+  chartTaskRunner.clear()
   disposeAll()
   window.removeEventListener('resize', onResize)
   ro?.disconnect()
@@ -565,6 +599,9 @@ onUnmounted(() => {
     <div class="bento-row bento-r-full">
       <HomeEnergyHeatmap
         :building-types="[BT]"
+        :profiles="[bundle?.load_profile_electricity ?? null]"
+        :use-bundle="useBundle"
+        :bundle-pending="chartBundlePending"
         title="24h 能耗日历热力图"
         subtitle="近两周公共楼逐时负荷合成的 7×24 节律"
         pick-id="public-chart-heatmap"

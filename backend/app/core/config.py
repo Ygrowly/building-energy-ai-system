@@ -2,11 +2,57 @@
 核心配置：从 .env 文件读取所有环境变量。
 使用 pydantic-settings BaseSettings，兼容 Docker 环境变量注入。
 """
+import inspect
 from functools import lru_cache
-from typing import Annotated, Any
+from typing import Any
 
 from pydantic import field_validator
-from pydantic_settings import BaseSettings, NoDecode
+from pydantic_settings import (
+    BaseSettings,
+    DotEnvSettingsSource,
+    EnvSettingsSource,
+    PydanticBaseSettingsSource,
+)
+
+
+CSV_LIST_FIELDS = frozenset(
+    {
+        "AUTO_DISPATCH_ALLOWED_BUILDINGS",
+        "AUTO_DISPATCH_ALLOWED_PRIORITIES",
+        "AUTO_DISPATCH_ALLOWED_REQUIRED_SKILLS",
+    }
+)
+
+
+class _CsvListCompatMixin:
+    """Keep CSV env values as raw strings so the field validator can normalize them."""
+
+    def prepare_field_value(
+        self, field_name: str, field: Any, value: Any, value_is_complex: bool
+    ) -> Any:
+        if field_name in CSV_LIST_FIELDS and isinstance(value, str):
+            return value
+        return super().prepare_field_value(field_name, field, value, value_is_complex)
+
+
+class CsvEnvSettingsSource(_CsvListCompatMixin, EnvSettingsSource):
+    pass
+
+
+class CsvDotEnvSettingsSource(_CsvListCompatMixin, DotEnvSettingsSource):
+    pass
+
+
+def _build_settings_source(
+    source_cls: type[PydanticBaseSettingsSource],
+    settings_cls: type[BaseSettings],
+    **kwargs: Any,
+) -> PydanticBaseSettingsSource:
+    supported_params = inspect.signature(source_cls.__init__).parameters
+    compatible_kwargs = {
+        key: value for key, value in kwargs.items() if key in supported_params
+    }
+    return source_cls(settings_cls, **compatible_kwargs)
 
 
 class Settings(BaseSettings):
@@ -96,9 +142,9 @@ class Settings(BaseSettings):
     AUTO_DISPATCH_FALLBACK_MIN_SCORE: int = 80  # 低置信兜底派工最低推荐分
     AUTO_DISPATCH_FALLBACK_ALLOW_STANDBY: bool = True  # 低置信兜底是否允许待命人员
     ENABLE_AUTO_DISPATCH_HALL_FALLBACK: bool = False  # 无法指定个人时是否自动创建工单大厅接管入口
-    AUTO_DISPATCH_ALLOWED_BUILDINGS: Annotated[list[str], NoDecode] = []  # 灰度：允许自动派工的楼宇白名单；空表示不限
-    AUTO_DISPATCH_ALLOWED_PRIORITIES: Annotated[list[str], NoDecode] = []  # 灰度：允许自动派工的优先级白名单；空表示不限
-    AUTO_DISPATCH_ALLOWED_REQUIRED_SKILLS: Annotated[list[str], NoDecode] = []  # 灰度：允许自动派工的技能白名单；空表示不限
+    AUTO_DISPATCH_ALLOWED_BUILDINGS: list[str] = []  # 灰度：允许自动派工的楼宇白名单；空表示不限
+    AUTO_DISPATCH_ALLOWED_PRIORITIES: list[str] = []  # 灰度：允许自动派工的优先级白名单；空表示不限
+    AUTO_DISPATCH_ALLOWED_REQUIRED_SKILLS: list[str] = []  # 灰度：允许自动派工的技能白名单；空表示不限
     AUTO_DISPATCH_ALLOW_LOW_CONFIDENCE_IN_GREY: bool = False  # 灰度：是否允许低置信兜底派工
     AUTO_DISPATCH_ALLOW_HALL_FALLBACK_IN_GREY: bool = False  # 灰度：是否允许工单大厅兜底
     ENABLE_CHAT_WORK_ORDERS: bool = False  # 对话开关：是否允许聊天链路直接生成工单草稿/工单流程
@@ -130,6 +176,48 @@ class Settings(BaseSettings):
     CACHE_LOCAL_DEFAULT_TTL_SECONDS: int = 60
 
     model_config = {"env_file": ".env", "extra": "ignore"}
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        return (
+            init_settings,
+            _build_settings_source(
+                CsvEnvSettingsSource,
+                settings_cls,
+                case_sensitive=getattr(env_settings, "case_sensitive", None),
+                env_prefix=getattr(env_settings, "env_prefix", None),
+                env_nested_delimiter=getattr(
+                    env_settings, "env_nested_delimiter", None
+                ),
+                env_ignore_empty=getattr(env_settings, "env_ignore_empty", None),
+                env_parse_none_str=getattr(env_settings, "env_parse_none_str", None),
+                env_parse_enums=getattr(env_settings, "env_parse_enums", None),
+            ),
+            _build_settings_source(
+                CsvDotEnvSettingsSource,
+                settings_cls,
+                env_file=getattr(dotenv_settings, "env_file", None),
+                env_file_encoding=getattr(dotenv_settings, "env_file_encoding", None),
+                case_sensitive=getattr(dotenv_settings, "case_sensitive", None),
+                env_prefix=getattr(dotenv_settings, "env_prefix", None),
+                env_nested_delimiter=getattr(
+                    dotenv_settings, "env_nested_delimiter", None
+                ),
+                env_ignore_empty=getattr(dotenv_settings, "env_ignore_empty", None),
+                env_parse_none_str=getattr(
+                    dotenv_settings, "env_parse_none_str", None
+                ),
+                env_parse_enums=getattr(dotenv_settings, "env_parse_enums", None),
+            ),
+            file_secret_settings,
+        )
 
     @field_validator("DEBUG", mode="before")
     @classmethod

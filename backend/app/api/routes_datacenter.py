@@ -18,7 +18,6 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-import pandas as pd
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -29,7 +28,6 @@ from app.core.config import get_settings
 from app.core.security import get_current_active_user
 from app.db.models import DatasetFile, EnergyData, User
 from app.db.session import AsyncSessionLocal
-from app.services import data_analyzer
 
 log = logging.getLogger(__name__)
 settings = get_settings()
@@ -46,13 +44,26 @@ ALLOWED_DOC_TYPES = {".pdf", ".docx", ".doc", ".txt", ".md"}
 MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
 
 
+def _get_pandas():
+    import pandas as pd
+
+    return pd
+
+
+def _get_data_analyzer():
+    from app.services import data_analyzer
+
+    return data_analyzer
+
+
 def _build_import_batch_params(
-    df_sub: pd.DataFrame,
+    df_sub: Any,
     mapped_fields: list[str],
     batch_start: int,
     batch_size: int,
 ) -> tuple[list[dict[str, Any]], set[str], datetime | None, datetime | None, int, list[str]]:
     """把 DataFrame 分块转换为 executemany 参数，避免一次性展开整表 records。"""
+    pd = _get_pandas()
     batch_df = df_sub.iloc[batch_start: batch_start + batch_size]
     batch_params: list[dict[str, Any]] = []
     imported_bids: set[str] = set()
@@ -130,7 +141,8 @@ async def upload_dataset(
     await asyncio.to_thread(save_path.write_bytes, content)
 
     try:
-        result = await asyncio.to_thread(data_analyzer.analyze_file, str(save_path))
+        analyzer = _get_data_analyzer()
+        result = await asyncio.to_thread(analyzer.analyze_file, str(save_path))
     except Exception as exc:
         save_path.unlink(missing_ok=True)
         log.exception("文件解析失败：%s", file.filename)
@@ -204,7 +216,8 @@ async def get_dataset(
 
     # 实时重新读取样本数据（避免存储大量行数据在 DB 中）
     try:
-        analysis = await asyncio.to_thread(data_analyzer.analyze_file, record.file_path)
+        analyzer = _get_data_analyzer()
+        analysis = await asyncio.to_thread(analyzer.analyze_file, record.file_path)
         sample_rows = analysis["sample_rows"]
     except Exception:
         sample_rows = []
@@ -308,7 +321,8 @@ async def analyze_dataset(
     stats = json.loads(record.stats_json or "{}")
 
     try:
-        analysis = await asyncio.to_thread(data_analyzer.analyze_file, record.file_path)
+        analyzer = _get_data_analyzer()
+        analysis = await asyncio.to_thread(analyzer.analyze_file, record.file_path)
         sample_rows = analysis["sample_rows"]
     except Exception as exc:
         raise HTTPException(
@@ -318,7 +332,7 @@ async def analyze_dataset(
 
     async def _stream():
         try:
-            async for chunk in data_analyzer.ai_analyze_stream(
+            async for chunk in analyzer.ai_analyze_stream(
                 original_name=record.original_name,
                 row_count=record.row_count or 0,
                 column_count=record.column_count or 0,
@@ -665,7 +679,8 @@ async def import_dataset_to_energy_data(
                 yield _emit({"stage": "parsing", "progress": 0.0, "msg": "正在解析文件..."})
 
                 try:
-                    df, _ = await asyncio.to_thread(data_analyzer.parse_file, file_path)
+                    analyzer = _get_data_analyzer()
+                    df, _ = await asyncio.to_thread(analyzer.parse_file, file_path)
                 except Exception as exc:
                     yield _emit({"error": f"文件解析失败：{exc}"})
                     yield "data: [DONE]\n\n"
@@ -715,7 +730,7 @@ async def import_dataset_to_energy_data(
                 df_sub = df_sub[df_sub["building_id"].isin(valid_bids)]
 
                 # 解析时间戳（向量化，比行循环快 10-50x）
-                df_sub["timestamp"] = pd.to_datetime(df_sub["timestamp"], utc=True)
+                df_sub["timestamp"] = _get_pandas().to_datetime(df_sub["timestamp"], utc=True)
                 df_sub = df_sub.dropna(subset=["timestamp", "building_id"])
 
                 total = len(df_sub)

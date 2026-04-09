@@ -25,7 +25,6 @@ from app.db.session import get_db_session as get_db, AsyncSessionLocal
 from app.services.dispatch_service import scan_dispatch_sla_states
 from app.services.kpi_expected_service import compute_and_store_all_buildings
 from app.services.anomaly_detection_service import detect_and_store_all_buildings
-from app.services.forecast_service import forecast_building_kpi
 from app.schemas.mcp_schemas import MCPError
 
 logger = logging.getLogger(__name__)
@@ -168,6 +167,8 @@ async def run_forecast(
     - 复用 forecast_building_kpi()，未来可被独立调度器直接调用
     - 默认不在 API 进程启动时自动触发周期任务
     """
+    from app.services.forecast_service import forecast_building_kpi
+
     if body.building_id:
         building_ids = [body.building_id]
     else:

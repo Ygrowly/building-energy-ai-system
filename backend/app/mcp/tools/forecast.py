@@ -14,16 +14,14 @@ from app.schemas.mcp_schemas import (
     ForecastKPIOutput,
     MCPError,
 )
-from app.services.forecast_service import (
-    forecast_building_kpi,
-    forecast_from_raw_features,
-)
 
 
 async def building_kpi_forecast(
     inp: ForecastKPIInput,
     session: AsyncSession,
 ) -> ForecastKPIOutput | MCPError:
+    from app.services.forecast_service import forecast_building_kpi
+
     return await forecast_building_kpi(
         building_id=inp.building_id,
         session=session,
@@ -35,4 +33,6 @@ async def building_kpi_forecast(
 def building_kpi_forecast_debug(
     inp: ForecastFromFeaturesInput,
 ) -> ForecastFromFeaturesOutput | MCPError:
+    from app.services.forecast_service import forecast_from_raw_features
+
     return forecast_from_raw_features(features=inp.features)

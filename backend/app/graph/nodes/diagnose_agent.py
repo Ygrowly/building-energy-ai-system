@@ -16,7 +16,6 @@ Diagnose Agent（故障诊断专家）节点。
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import time
 from typing import Any
@@ -30,6 +29,7 @@ from app.core.config import get_settings
 from app.db.session import AsyncSessionLocal
 from app.graph.state import AgentState, update_context_summary
 from app.graph.evidence import extract_evidence
+from app.graph.tool_payloads import build_tool_content_and_artifact, extract_tool_payload
 from app.mcp.server import call_tool
 from app.mcp.tools.data_query import get_buildings_cache
 from app.schemas.mcp_schemas import (
@@ -209,24 +209,23 @@ def _make_mcp_tool(
     description: str,
     args_schema=None,
 ) -> StructuredTool:
-    async def _invoke(**kwargs: Any) -> str:
+    async def _invoke(**kwargs: Any) -> tuple[str, Any]:
         if set(kwargs.keys()) == {"kwargs"} and isinstance(kwargs.get("kwargs"), dict):
             kwargs = kwargs["kwargs"]
         async with AsyncSessionLocal() as session:
             result = await call_tool(tool_name, kwargs, session=session)
-        if isinstance(result, dict):
-            raw = json.dumps(result, ensure_ascii=False, default=str)
-        elif hasattr(result, "model_dump"):
-            raw = json.dumps(result.model_dump(), ensure_ascii=False, default=str)
-        else:
-            raw = str(result)
-        return _truncate_tool_response(raw)
+        return build_tool_content_and_artifact(
+            tool_name=tool_name,
+            result=result,
+            max_chars=_TOOL_RESPONSE_MAX_CHARS,
+        )
 
     return StructuredTool.from_function(
         coroutine=_invoke,
         name=tool_name,
         description=description,
         args_schema=args_schema,
+        response_format="content_and_artifact",
     )
 
 
@@ -588,10 +587,8 @@ async def diagnose_agent_node(state: AgentState) -> dict[str, Any]:
     for msg in new_messages:
         if not isinstance(msg, ToolMessage):
             continue
-        content = msg.content or ""
-        try:
-            data = json.loads(content)
-        except (json.JSONDecodeError, TypeError):
+        data = extract_tool_payload(msg)
+        if not isinstance(data, dict):
             continue
 
         evidence.extend(extract_evidence(data))

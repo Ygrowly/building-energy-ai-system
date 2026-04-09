@@ -5,7 +5,6 @@ import { cachedApiFetch } from '@/api/cached'
 import { MC, gc, EUI_BASELINE, isoDate } from '@/utils/homeCharts'
 import { createDeferredTaskRunner } from '@/utils/deferredTasks'
 import { isAbortError, startPerfSpan } from '@/utils/perf'
-import HomeActionCards from './HomeActionCards.vue'
 import HomeEnergyHeatmap from './HomeEnergyHeatmap.vue'
 import HomeMiniMetricCards from './HomeMiniMetricCards.vue'
 
@@ -634,27 +633,18 @@ onUnmounted(() => {
           </div>
           <div ref="sparkEl" class="cpanel-body" style="height: 150px" />
         </div>
-        <HomeActionCards
-          tab="Office"
-          :anomalies="anomalies"
-          :night-abnormal-hours="peakValley?.night_abnormal_hours ?? null"
-          :eui-ratio="euiRatio"
+        <HomeEnergyHeatmap
+          :building-types="[BT]"
+          :profiles="[bundle?.load_profile_electricity ?? null]"
+          :use-bundle="useBundle"
+          :bundle-pending="chartBundlePending"
+          title="24h 能耗日历热力图"
+          subtitle="近两周办公楼逐时负荷合成的 7×24 节律"
+          pick-id="office-chart-heatmap"
+          pick-title="办公楼 24h 能耗日历热力图"
+          pick-subtitle="近两周办公楼典型负荷节律"
         />
       </div>
-    </div>
-
-    <div class="bento-row bento-r-full">
-      <HomeEnergyHeatmap
-        :building-types="[BT]"
-        :profiles="[bundle?.load_profile_electricity ?? null]"
-        :use-bundle="useBundle"
-        :bundle-pending="chartBundlePending"
-        title="24h 能耗日历热力图"
-        subtitle="近两周办公楼逐时负荷合成的 7×24 节律"
-        pick-id="office-chart-heatmap"
-        pick-title="办公楼 24h 能耗日历热力图"
-        pick-subtitle="近两周办公楼典型负荷节律"
-      />
     </div>
 
   </div>

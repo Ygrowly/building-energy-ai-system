@@ -43,6 +43,7 @@ from app.core.security import get_current_user_optional
 from app.db.session import AsyncSessionLocal
 from app.db.session_store import session_store
 from app.graph.state import initial_state
+from app.graph.tool_payloads import extract_tool_payload, normalize_tool_payload
 from app.graph.workflow import get_graph
 from app.graph.nodes.router_agent import _try_fast_path as _router_fast_path
 from app.mcp.tools.data_query import list_available_buildings
@@ -199,7 +200,7 @@ class ChatResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 def _sse(data: dict[str, Any]) -> str:
-    return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+    return f"data: {json.dumps(normalize_tool_payload(data), ensure_ascii=False)}\n\n"
 
 
 def _thinking_event(
@@ -663,23 +664,21 @@ async def _stream_graph(
                 if output:
                     if name == "web_search":
                         yield _thinking_event("web_search", _web_search_done_message(output), hop_count=0)
-                    try:
-                        parsed = json.loads(output)
-                        raw_snapshot = _build_raw_data_snapshot_artifact(name, parsed)
-                        if raw_snapshot is not None:
-                            yield _artifact_event(raw_snapshot)
-                        if parsed.get("status") == "pending_approval" and get_settings().ENABLE_CHAT_WORK_ORDERS:
-                            yield _artifact_event({
-                                "widget": "WorkOrderCard",
-                                "component_type": "WorkOrderCard",
-                                "title": "\u7ef4\u4fee\u5de5\u5355\u5f85\u786e\u8ba4",
-                                "data_payload": parsed,
-                                "source_info": {"tool": "create_work_order_draft"},
-                            })
-                        elif parsed.get("component_type") == "ReportDownload":
-                            yield _artifact_event(parsed)
-                    except (json.JSONDecodeError, TypeError):
-                        pass
+                parsed = extract_tool_payload(raw_output)
+                if isinstance(parsed, dict):
+                    raw_snapshot = _build_raw_data_snapshot_artifact(name, parsed)
+                    if raw_snapshot is not None:
+                        yield _artifact_event(raw_snapshot)
+                    if parsed.get("status") == "pending_approval" and get_settings().ENABLE_CHAT_WORK_ORDERS:
+                        yield _artifact_event({
+                            "widget": "WorkOrderCard",
+                            "component_type": "WorkOrderCard",
+                            "title": "\u7ef4\u4fee\u5de5\u5355\u5f85\u786e\u8ba4",
+                            "data_payload": parsed,
+                            "source_info": {"tool": "create_work_order_draft"},
+                        })
+                    elif parsed.get("component_type") == "ReportDownload":
+                        yield _artifact_event(parsed)
 
             elif kind == "on_chain_end" and name in ("data_react", "data_synthesis", "diagnose_agent", "router"):
                 node_elapsed = time.time() - _t.pop(f"node_{name}", time.time())

@@ -14,7 +14,6 @@ Phase 2 (data_synthesis_node):
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import time
 from typing import Any
@@ -30,6 +29,7 @@ from app.core.data_range import get_data_range
 from app.db.session import AsyncSessionLocal
 from app.graph.state import AgentState, update_context_summary
 from app.graph.evidence import extract_evidence
+from app.graph.tool_payloads import build_tool_content_and_artifact, extract_tool_payload
 from app.schemas.mcp_schemas import MCPError
 from app.mcp.server import call_tool
 from app.schemas.mcp_schemas import (
@@ -139,24 +139,23 @@ def _make_mcp_tool(
     description: str,
     args_schema: type[BaseModel] | None = None,
 ) -> StructuredTool:
-    async def _invoke(**kwargs: Any) -> str:
+    async def _invoke(**kwargs: Any) -> tuple[str, Any]:
         if set(kwargs.keys()) == {"kwargs"} and isinstance(kwargs.get("kwargs"), dict):
             kwargs = kwargs["kwargs"]
         async with AsyncSessionLocal() as session:
             result = await call_tool(tool_name, kwargs, session=session)
-        if isinstance(result, dict):
-            raw = json.dumps(result, ensure_ascii=False, default=str)
-        elif hasattr(result, "model_dump"):
-            raw = json.dumps(result.model_dump(), ensure_ascii=False, default=str)
-        else:
-            raw = str(result)
-        return _truncate_tool_response(raw)
+        return build_tool_content_and_artifact(
+            tool_name=tool_name,
+            result=result,
+            max_chars=_TOOL_RESPONSE_MAX_CHARS,
+        )
 
     return StructuredTool.from_function(
         coroutine=_invoke,
         name=tool_name,
         description=description,
         args_schema=args_schema,
+        response_format="content_and_artifact",
     )
 
 
@@ -385,10 +384,7 @@ async def data_react_node(state: AgentState) -> dict[str, Any]:
     for msg in new_messages:
         if not isinstance(msg, ToolMessage):
             continue
-        try:
-            payload = json.loads(msg.content or "")
-        except (json.JSONDecodeError, TypeError):
-            continue
+        payload = extract_tool_payload(msg)
         if isinstance(payload, dict):
             evidence.extend(extract_evidence(payload))
 

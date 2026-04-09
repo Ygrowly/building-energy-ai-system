@@ -6,7 +6,6 @@ import { cachedApiFetch } from '@/api/cached'
 import { MC, gc, isoDate } from '@/utils/homeCharts'
 import { createDeferredTaskRunner } from '@/utils/deferredTasks'
 import { isAbortError, startPerfSpan } from '@/utils/perf'
-import HomeActionCards from './HomeActionCards.vue'
 import HomeEnergyHeatmap from './HomeEnergyHeatmap.vue'
 import HomeMiniMetricCards from './HomeMiniMetricCards.vue'
 
@@ -589,14 +588,6 @@ onUnmounted(() => {
         </div>
         <div ref="comfortEl" class="cpanel-body" style="height: 260px" />
       </div>
-      <HomeActionCards
-        tab="Public services"
-        :anomalies="anomalies"
-        :rated-anomaly-hours="ratedSummary?.anomaly_hours ?? null"
-      />
-    </div>
-
-    <div class="bento-row bento-r-full">
       <HomeEnergyHeatmap
         :building-types="[BT]"
         :profiles="[bundle?.load_profile_electricity ?? null]"

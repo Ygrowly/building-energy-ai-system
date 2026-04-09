@@ -18,7 +18,6 @@
 """
 from __future__ import annotations
 
-import json
 import logging
 import uuid
 from typing import Any
@@ -26,6 +25,7 @@ from typing import Any
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 
 from app.core.buildings import get_building_label
+from app.graph.tool_payloads import extract_tool_payload
 
 logger = logging.getLogger(__name__)
 
@@ -141,26 +141,27 @@ def _extract_tool_triples(
     messages: list[BaseMessage],
 ) -> list[tuple[str, dict[str, Any], dict[str, Any]]]:
     """从 ReAct 消息链中提取 (tool_name, tool_args, tool_result) 三元组。"""
-    call_args: dict[str, dict[str, Any]] = {}
+    call_meta: dict[str, dict[str, Any]] = {}
     for msg in messages:
         if isinstance(msg, AIMessage):
             for tc in getattr(msg, "tool_calls", None) or []:
-                call_args[tc["id"]] = tc.get("args", {})
+                call_meta[tc["id"]] = {
+                    "name": tc.get("name", "") or "",
+                    "args": tc.get("args", {}) or {},
+                }
 
     triples: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
     for msg in messages:
         if not isinstance(msg, ToolMessage):
             continue
-        tool_name = getattr(msg, "name", "") or ""
-        try:
-            result = json.loads(msg.content)
-        except (json.JSONDecodeError, TypeError):
-            continue
+        tool_call_meta = call_meta.get(getattr(msg, "tool_call_id", ""), {})
+        tool_name = getattr(msg, "name", "") or tool_call_meta.get("name", "") or ""
+        result = extract_tool_payload(msg)
         if not isinstance(result, dict):
             continue
         if "error" in result and "error_code" in result:
             continue
-        args = call_args.get(getattr(msg, "tool_call_id", ""), {})
+        args = tool_call_meta.get("args", {})
         triples.append((tool_name, args, result))
 
     return triples

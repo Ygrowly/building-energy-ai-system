@@ -243,6 +243,108 @@ async def test_auto_dispatch_operation_explain_endpoint_rejects_bad_mode() -> No
 
 
 @pytest.mark.asyncio
+async def test_auto_reassign_shadow_insights_endpoint_passes_filters(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mock_build = AsyncMock(return_value={"readonly": True, "summary": {"total_evaluations": 0}})
+    monkeypatch.setattr(
+        routes_work_order_insights,
+        "build_auto_reassign_shadow_insights",
+        mock_build,
+    )
+
+    response = await routes_work_order_insights.get_auto_reassign_shadow_insights(
+        date_from=date(2026, 4, 1),
+        date_to=date(2026, 4, 9),
+        building_id="Fox_public_Henry",
+        priority="high",
+        required_skill="hvac",
+        trigger_reason="assigned_overdue",
+        eligible=True,
+        current_dispatch_status="assigned",
+        team_id="team-1",
+        assignee_id="ops-1",
+        page=2,
+        page_size=10,
+        db=SimpleNamespace(),
+        user=SimpleNamespace(id="manager-1", role="manager"),
+    )
+
+    assert response["readonly"] is True
+    assert mock_build.await_args.kwargs == {
+        "date_from": date(2026, 4, 1),
+        "date_to": date(2026, 4, 9),
+        "building_id": "Fox_public_Henry",
+        "priority": "high",
+        "required_skill": "hvac",
+        "trigger_reason": "assigned_overdue",
+        "eligible": True,
+        "current_dispatch_status": "assigned",
+        "team_id": "team-1",
+        "assignee_id": "ops-1",
+        "page": 2,
+        "page_size": 10,
+    }
+
+
+@pytest.mark.asyncio
+async def test_auto_reassign_shadow_insights_endpoint_rejects_bad_trigger() -> None:
+    with pytest.raises(HTTPException) as exc_info:
+        await routes_work_order_insights.get_auto_reassign_shadow_insights(
+            trigger_reason="manual",
+            db=SimpleNamespace(),
+            user=SimpleNamespace(id="manager-1", role="manager"),
+        )
+
+    assert exc_info.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_auto_dispatch_run_health_insights_endpoint_passes_filters(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mock_build = AsyncMock(return_value={"readonly": True, "summary": {"total_runs": 0}})
+    monkeypatch.setattr(
+        routes_work_order_insights,
+        "build_auto_dispatch_run_health_insights",
+        mock_build,
+    )
+
+    response = await routes_work_order_insights.get_auto_dispatch_run_health_insights(
+        date_from=date(2026, 4, 1),
+        date_to=date(2026, 4, 9),
+        trigger_source="scheduler",
+        slow_threshold_ms=12000,
+        recent_limit=15,
+        slow_limit=8,
+        db=SimpleNamespace(),
+        user=SimpleNamespace(id="manager-1", role="manager"),
+    )
+
+    assert response["readonly"] is True
+    assert mock_build.await_args.kwargs == {
+        "date_from": date(2026, 4, 1),
+        "date_to": date(2026, 4, 9),
+        "trigger_source": "scheduler",
+        "slow_threshold_ms": 12000,
+        "recent_limit": 15,
+        "slow_limit": 8,
+    }
+
+
+@pytest.mark.asyncio
+async def test_auto_dispatch_run_health_insights_endpoint_rejects_bad_source() -> None:
+    with pytest.raises(HTTPException) as exc_info:
+        await routes_work_order_insights.get_auto_dispatch_run_health_insights(
+            trigger_source="worker",
+            db=SimpleNamespace(),
+            user=SimpleNamespace(id="manager-1", role="manager"),
+        )
+
+    assert exc_info.value.status_code == 400
+
+
+@pytest.mark.asyncio
 async def test_work_order_insight_query_endpoint_returns_deterministic_answer(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

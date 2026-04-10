@@ -1054,23 +1054,42 @@ async def test_scan_dispatch_sla_states_updates_warning_and_overdue_tasks() -> N
     assert overdue_task.timeout_level == "overdue"
     assert overdue_task.reminder_count == 1
     assert "已超时" in (overdue_task.latest_note or "")
+    assert set(summary["timings_ms"]) == {
+        "load_dispatch_tasks",
+        "load_work_orders",
+        "load_current_assignees",
+        "prepare_candidate_context",
+        "process_loop",
+        "total",
+    }
+    assert summary["timings_ms"]["total"] >= 0
 
 
 @pytest.mark.asyncio
 async def test_scan_dispatch_sla_admin_endpoint_clears_cache_when_updates_exist(monkeypatch: pytest.MonkeyPatch) -> None:
-    db = SimpleNamespace(commit=AsyncMock())
+    db = SimpleNamespace(commit=AsyncMock(), rollback=AsyncMock())
     monkeypatch.setattr(
         routes_admin,
         "scan_dispatch_sla_states",
-        AsyncMock(return_value={"scanned": 3, "updated": 2, "warning_events": 1, "overdue_events": 1}),
+        AsyncMock(
+            return_value={
+                "scanned": 3,
+                "updated": 2,
+                "warning_events": 1,
+                "overdue_events": 1,
+                "timings_ms": {"total": 1200},
+            }
+        ),
     )
     monkeypatch.setattr(routes_admin, "delete_cache_by_prefix", AsyncMock())
+    monkeypatch.setattr(routes_admin, "record_dispatch_operation_run", AsyncMock())
 
     response = await routes_admin.scan_dispatch_sla(db=db)
 
     assert response["status"] == "ok"
     assert response["updated"] == 2
     assert routes_admin.delete_cache_by_prefix.await_count == 2
+    assert routes_admin.record_dispatch_operation_run.await_args.kwargs["run_status"] == "success"
 
 
 @pytest.mark.asyncio
@@ -1394,3 +1413,299 @@ async def test_scan_dispatch_sla_states_closes_takeover_hall_entry_after_recover
 
     dispatch_service.close_open_hall_entries_for_dispatch.assert_awaited_once()
     dispatch_service.create_or_reopen_takeover_hall_entry.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_scan_dispatch_sla_states_executes_phase1_auto_reassign_on_assigned_overdue(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services import dispatch_service
+    from app.services import work_order_service
+
+    now = datetime.now(timezone.utc)
+    overdue_task = _make_dispatch_task(dispatch_id="dispatch-overdue", dispatch_status="assigned")
+    overdue_task.timeout_level = "normal"
+    overdue_task.accept_deadline_at = now - timedelta(minutes=3)
+    overdue_task.latest_note = None
+    overdue_task.work_order_id = "wo-1"
+    work_order = _make_work_order()
+    work_order.id = "wo-1"
+    work_order.assigned_to = overdue_task.assigned_to
+    work_order.assigned_at = overdue_task.assigned_at
+    work_order.accepted_at = overdue_task.accepted_at
+    work_order.arrived_at = overdue_task.arrived_at
+    work_order.processing_started_at = overdue_task.processing_started_at
+    work_order.updated_at = now
+    assignee = _make_user("ops-1", "张工")
+    db = SimpleNamespace(
+        add=MagicMock(),
+        execute=AsyncMock(side_effect=[
+            _ScalarResult([overdue_task]),
+            _ScalarResult([work_order]),
+            _ScalarResult([assignee]),
+        ]),
+    )
+
+    monkeypatch.setattr(dispatch_service.settings, "ENABLE_AUTO_REASSIGN_EXECUTION", True)
+    monkeypatch.setattr(dispatch_service.settings, "ENABLE_AUTO_REASSIGN_PHASE1_TRIGGER", True)
+    monkeypatch.setattr(dispatch_service.settings, "ENABLE_AUTO_REASSIGN_SHADOW_MODE", False)
+    monkeypatch.setattr(dispatch_service.settings, "AUTO_REASSIGN_TRIGGER_ASSIGNED_OVERDUE", True)
+    monkeypatch.setattr(dispatch_service.settings, "AUTO_REASSIGN_TRIGGER_ACCEPTED_OVERDUE", False)
+    monkeypatch.setattr(dispatch_service.settings, "AUTO_REASSIGN_TRIGGER_ASSIGNEE_UNAVAILABLE", False)
+    monkeypatch.setattr(dispatch_service, "record_dispatch_event", AsyncMock())
+    monkeypatch.setattr(dispatch_service, "_sync_incident_dispatch_projection", AsyncMock())
+    monkeypatch.setattr(dispatch_service, "create_or_reopen_takeover_hall_entry", AsyncMock())
+    monkeypatch.setattr(dispatch_service, "close_open_hall_entries_for_dispatch", AsyncMock())
+    mock_prepare_context = AsyncMock(
+        return_value={
+            "workers": [SimpleNamespace(id="ops-2", username="李工")],
+            "active_counts": {"ops-2": 1},
+        }
+    )
+    monkeypatch.setattr(work_order_service, "prepare_dispatch_candidate_context", mock_prepare_context)
+    mock_attempt = AsyncMock(return_value=({"action_taken": True, "dispatch_id": "dispatch-2"}, None))
+    monkeypatch.setattr(dispatch_service, "_attempt_phase_one_auto_reassign", mock_attempt)
+
+    summary = await dispatch_service.scan_dispatch_sla_states(db, now=now)
+
+    assert summary["auto_reassign_triggers"] == 1
+    assert summary["auto_reassign_executed"] == 1
+    assert summary["auto_reassign_hall_fallbacks"] == 0
+    assert mock_attempt.await_args.kwargs["trigger"]["reason"] == "assigned_overdue"
+    assert mock_attempt.await_args.kwargs["dispatch_workers"] == [SimpleNamespace(id="ops-2", username="李工")]
+    assert mock_attempt.await_args.kwargs["dispatch_active_counts"] == {"ops-2": 1}
+    mock_prepare_context.assert_awaited_once()
+    dispatch_service.create_or_reopen_takeover_hall_entry.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_attempt_phase_one_auto_reassign_skips_live_execution_outside_rollout_and_opens_hall(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services import dispatch_service
+
+    work_order = _make_work_order()
+    work_order.id = "wo-1"
+    dispatch_task = _make_dispatch_task(dispatch_id="dispatch-1", dispatch_status="assigned")
+    dispatch_task.timeout_level = "warning"
+    hall_entry = SimpleNamespace(id="hall-1")
+
+    monkeypatch.setattr(
+        dispatch_service,
+        "_build_phase_one_auto_reassign_rollout_gate",
+        lambda work_order: {
+            "allowed": False,
+            "blockers": [{"reason": "reassign_rollout_building_not_allowed", "label": "当前楼宇不在自动重派灰度范围内"}],
+        },
+    )
+    mock_audit = AsyncMock()
+    mock_hall = AsyncMock(return_value=hall_entry)
+    monkeypatch.setattr(dispatch_service, "write_work_order_audit_log", mock_audit)
+    monkeypatch.setattr(dispatch_service, "create_or_reopen_takeover_hall_entry", mock_hall)
+
+    result, created_hall_entry = await dispatch_service._attempt_phase_one_auto_reassign(
+        SimpleNamespace(),
+        work_order=work_order,
+        dispatch_task=dispatch_task,
+        trigger={
+            "reason": "assignee_unavailable",
+            "label": "当前责任人客观不可用",
+            "create_hall_fallback": True,
+        },
+    )
+
+    assert result["action_taken"] is False
+    assert result["reason"] == "auto_reassign_rollout_filtered"
+    assert created_hall_entry is hall_entry
+    assert mock_audit.await_args.kwargs["action"] == "auto_reassign_rollout_skipped"
+    mock_hall.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_scan_dispatch_sla_states_records_shadow_evaluation_without_live_execution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services import dispatch_service
+    from app.services import work_order_service
+
+    now = datetime.now(timezone.utc)
+    overdue_task = _make_dispatch_task(dispatch_id="dispatch-shadow", dispatch_status="assigned")
+    overdue_task.timeout_level = "normal"
+    overdue_task.accept_deadline_at = now - timedelta(minutes=4)
+    overdue_task.latest_note = None
+    overdue_task.work_order_id = "wo-1"
+    work_order = _make_work_order()
+    work_order.id = "wo-1"
+    assignee = _make_user("ops-1", "张工")
+    db = SimpleNamespace(
+        add=MagicMock(),
+        execute=AsyncMock(side_effect=[
+            _ScalarResult([overdue_task]),
+            _ScalarResult([work_order]),
+            _ScalarResult([assignee]),
+        ]),
+    )
+
+    monkeypatch.setattr(dispatch_service.settings, "ENABLE_AUTO_REASSIGN_EXECUTION", False)
+    monkeypatch.setattr(dispatch_service.settings, "ENABLE_AUTO_REASSIGN_PHASE1_TRIGGER", True)
+    monkeypatch.setattr(dispatch_service.settings, "ENABLE_AUTO_REASSIGN_SHADOW_MODE", True)
+    monkeypatch.setattr(dispatch_service.settings, "AUTO_REASSIGN_TRIGGER_ASSIGNED_OVERDUE", True)
+    monkeypatch.setattr(dispatch_service.settings, "AUTO_REASSIGN_TRIGGER_ACCEPTED_OVERDUE", False)
+    monkeypatch.setattr(dispatch_service.settings, "AUTO_REASSIGN_TRIGGER_ASSIGNEE_UNAVAILABLE", False)
+    monkeypatch.setattr(dispatch_service, "record_dispatch_event", AsyncMock())
+    monkeypatch.setattr(dispatch_service, "_sync_incident_dispatch_projection", AsyncMock())
+    monkeypatch.setattr(dispatch_service, "create_or_reopen_takeover_hall_entry", AsyncMock(return_value=SimpleNamespace(id="hall-1")))
+    monkeypatch.setattr(dispatch_service, "close_open_hall_entries_for_dispatch", AsyncMock())
+    mock_prepare_context = AsyncMock(
+        return_value={
+            "workers": [SimpleNamespace(id="ops-2", username="李工")],
+            "active_counts": {"ops-2": 1},
+        }
+    )
+    monkeypatch.setattr(work_order_service, "prepare_dispatch_candidate_context", mock_prepare_context)
+    mock_shadow = AsyncMock(
+        return_value={
+            "logged": True,
+            "evaluation": {"eligible": True, "apply_payload": {"assigned_to": "ops-2"}},
+            "would_execute": True,
+            "would_hall_fallback": False,
+        }
+    )
+    monkeypatch.setattr(dispatch_service, "_record_phase_one_auto_reassign_shadow", mock_shadow)
+    mock_attempt = AsyncMock()
+    monkeypatch.setattr(dispatch_service, "_attempt_phase_one_auto_reassign", mock_attempt)
+
+    summary = await dispatch_service.scan_dispatch_sla_states(db, now=now)
+
+    assert summary["auto_reassign_triggers"] == 1
+    assert summary["auto_reassign_executed"] == 0
+    assert summary["auto_reassign_shadow_evaluated"] == 1
+    assert summary["auto_reassign_shadow_would_execute"] == 1
+    assert summary["auto_reassign_shadow_would_hall_fallbacks"] == 0
+    mock_shadow.assert_awaited_once()
+    assert mock_shadow.await_args.kwargs["dispatch_workers"] == [SimpleNamespace(id="ops-2", username="李工")]
+    assert mock_shadow.await_args.kwargs["dispatch_active_counts"] == {"ops-2": 1}
+    mock_prepare_context.assert_awaited_once()
+    mock_attempt.assert_not_awaited()
+    dispatch_service.create_or_reopen_takeover_hall_entry.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_scan_dispatch_sla_states_does_not_auto_reassign_accepted_overdue_without_prior_reminders(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services import dispatch_service
+
+    now = datetime.now(timezone.utc)
+    overdue_task = _make_dispatch_task(dispatch_id="dispatch-overdue", dispatch_status="accepted")
+    overdue_task.timeout_level = "normal"
+    overdue_task.arrive_deadline_at = now - timedelta(minutes=5)
+    overdue_task.reminder_count = 0
+    overdue_task.latest_note = None
+    overdue_task.work_order_id = "wo-1"
+    work_order = _make_work_order()
+    work_order.id = "wo-1"
+    work_order.assigned_to = overdue_task.assigned_to
+    work_order.assigned_at = overdue_task.assigned_at
+    work_order.accepted_at = overdue_task.accepted_at
+    work_order.arrived_at = overdue_task.arrived_at
+    work_order.processing_started_at = overdue_task.processing_started_at
+    work_order.updated_at = now
+    assignee = _make_user("ops-1", "张工")
+    db = SimpleNamespace(
+        add=MagicMock(),
+        execute=AsyncMock(side_effect=[
+            _ScalarResult([overdue_task]),
+            _ScalarResult([work_order]),
+            _ScalarResult([assignee]),
+        ]),
+    )
+
+    monkeypatch.setattr(dispatch_service.settings, "ENABLE_AUTO_REASSIGN_EXECUTION", True)
+    monkeypatch.setattr(dispatch_service.settings, "ENABLE_AUTO_REASSIGN_PHASE1_TRIGGER", True)
+    monkeypatch.setattr(dispatch_service.settings, "AUTO_REASSIGN_TRIGGER_ASSIGNED_OVERDUE", False)
+    monkeypatch.setattr(dispatch_service.settings, "AUTO_REASSIGN_TRIGGER_ACCEPTED_OVERDUE", True)
+    monkeypatch.setattr(dispatch_service.settings, "AUTO_REASSIGN_ACCEPTED_MIN_PREVIOUS_REMINDERS", 1)
+    monkeypatch.setattr(dispatch_service.settings, "AUTO_REASSIGN_TRIGGER_ASSIGNEE_UNAVAILABLE", False)
+    monkeypatch.setattr(dispatch_service, "record_dispatch_event", AsyncMock())
+    monkeypatch.setattr(dispatch_service, "_sync_incident_dispatch_projection", AsyncMock())
+    monkeypatch.setattr(dispatch_service, "create_or_reopen_takeover_hall_entry", AsyncMock())
+    monkeypatch.setattr(dispatch_service, "close_open_hall_entries_for_dispatch", AsyncMock())
+    mock_attempt = AsyncMock(return_value=({"action_taken": True, "dispatch_id": "dispatch-2"}, None))
+    monkeypatch.setattr(dispatch_service, "_attempt_phase_one_auto_reassign", mock_attempt)
+
+    summary = await dispatch_service.scan_dispatch_sla_states(db, now=now)
+
+    assert summary["auto_reassign_triggers"] == 0
+    assert summary["auto_reassign_executed"] == 0
+    mock_attempt.assert_not_awaited()
+    dispatch_service.create_or_reopen_takeover_hall_entry.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_scan_dispatch_sla_states_triggers_phase1_auto_reassign_when_assignee_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services import dispatch_service
+    from app.services import work_order_service
+
+    now = datetime.now(timezone.utc)
+    dispatch_task = _make_dispatch_task(dispatch_id="dispatch-unavailable", dispatch_status="assigned")
+    dispatch_task.timeout_level = "normal"
+    dispatch_task.accept_deadline_at = now + timedelta(minutes=40)
+    dispatch_task.work_order_id = "wo-1"
+    work_order = _make_work_order()
+    work_order.id = "wo-1"
+    work_order.assigned_to = dispatch_task.assigned_to
+    work_order.assigned_at = dispatch_task.assigned_at
+    work_order.accepted_at = dispatch_task.accepted_at
+    work_order.arrived_at = dispatch_task.arrived_at
+    work_order.processing_started_at = dispatch_task.processing_started_at
+    work_order.updated_at = now
+    assignee = _make_user("ops-1", "张工")
+    assignee.is_active = False
+    db = SimpleNamespace(
+        add=MagicMock(),
+        execute=AsyncMock(side_effect=[
+            _ScalarResult([dispatch_task]),
+            _ScalarResult([work_order]),
+            _ScalarResult([assignee]),
+        ]),
+    )
+
+    monkeypatch.setattr(dispatch_service.settings, "ENABLE_AUTO_REASSIGN_EXECUTION", True)
+    monkeypatch.setattr(dispatch_service.settings, "ENABLE_AUTO_REASSIGN_PHASE1_TRIGGER", True)
+    monkeypatch.setattr(dispatch_service.settings, "ENABLE_AUTO_REASSIGN_SHADOW_MODE", False)
+    monkeypatch.setattr(dispatch_service.settings, "AUTO_REASSIGN_TRIGGER_ASSIGNED_OVERDUE", False)
+    monkeypatch.setattr(dispatch_service.settings, "AUTO_REASSIGN_TRIGGER_ACCEPTED_OVERDUE", False)
+    monkeypatch.setattr(dispatch_service.settings, "AUTO_REASSIGN_TRIGGER_ASSIGNEE_UNAVAILABLE", True)
+    monkeypatch.setattr(dispatch_service, "record_dispatch_event", AsyncMock())
+    monkeypatch.setattr(dispatch_service, "_sync_incident_dispatch_projection", AsyncMock())
+    monkeypatch.setattr(dispatch_service, "create_or_reopen_takeover_hall_entry", AsyncMock())
+    monkeypatch.setattr(dispatch_service, "close_open_hall_entries_for_dispatch", AsyncMock())
+    mock_prepare_context = AsyncMock(
+        return_value={
+            "workers": [SimpleNamespace(id="ops-2", username="李工")],
+            "active_counts": {"ops-2": 1},
+        }
+    )
+    monkeypatch.setattr(work_order_service, "prepare_dispatch_candidate_context", mock_prepare_context)
+    mock_attempt = AsyncMock(
+        return_value=(
+            {"action_taken": False, "reason": "auto_reassign_not_eligible"},
+            SimpleNamespace(id="hall-1"),
+        )
+    )
+    monkeypatch.setattr(dispatch_service, "_attempt_phase_one_auto_reassign", mock_attempt)
+
+    summary = await dispatch_service.scan_dispatch_sla_states(db, now=now)
+
+    assert summary["updated"] == 1
+    assert summary["auto_reassign_triggers"] == 1
+    assert summary["auto_reassign_executed"] == 0
+    assert summary["auto_reassign_hall_fallbacks"] == 1
+    assert mock_attempt.await_args.kwargs["trigger"]["reason"] == "assignee_unavailable"
+    assert mock_attempt.await_args.kwargs["dispatch_workers"] == [SimpleNamespace(id="ops-2", username="李工")]
+    assert mock_attempt.await_args.kwargs["dispatch_active_counts"] == {"ops-2": 1}
+    mock_prepare_context.assert_awaited_once()
+    dispatch_service.record_dispatch_event.assert_not_awaited()

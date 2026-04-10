@@ -48,6 +48,9 @@ AUTO_DISPATCH_SKIP_LABELS: dict[str, str] = {
     "rollout_building_not_allowed": "当前楼宇不在自动派工灰度范围内",
     "rollout_priority_not_allowed": "当前优先级不在自动派工灰度范围内",
     "rollout_skill_not_allowed": "当前工单技能类型不在自动派工灰度范围内",
+    "reassign_rollout_building_not_allowed": "当前楼宇不在自动重派灰度范围内",
+    "reassign_rollout_priority_not_allowed": "当前优先级不在自动重派灰度范围内",
+    "reassign_rollout_skill_not_allowed": "当前工单技能类型不在自动重派灰度范围内",
     "assignee_unavailable": "自动派工候选人已不可用",
     "no_current_dispatch": "当前工单没有有效派工任务",
     "dispatch_stage_not_reassignable": "当前派工阶段不适合自动重派",
@@ -163,6 +166,39 @@ def build_auto_dispatch_rollout_gate(
     allowed_priorities: list[str] | tuple[str, ...] | set[str] | None = None,
     allowed_required_skills: list[str] | tuple[str, ...] | set[str] | None = None,
 ) -> dict[str, Any]:
+    return _build_rollout_gate(
+        work_order,
+        allowed_buildings=allowed_buildings,
+        allowed_priorities=allowed_priorities,
+        allowed_required_skills=allowed_required_skills,
+        blocker_reason_prefix="rollout",
+    )
+
+
+def build_auto_reassign_rollout_gate(
+    work_order: WorkOrder,
+    *,
+    allowed_buildings: list[str] | tuple[str, ...] | set[str] | None = None,
+    allowed_priorities: list[str] | tuple[str, ...] | set[str] | None = None,
+    allowed_required_skills: list[str] | tuple[str, ...] | set[str] | None = None,
+) -> dict[str, Any]:
+    return _build_rollout_gate(
+        work_order,
+        allowed_buildings=allowed_buildings,
+        allowed_priorities=allowed_priorities,
+        allowed_required_skills=allowed_required_skills,
+        blocker_reason_prefix="reassign_rollout",
+    )
+
+
+def _build_rollout_gate(
+    work_order: WorkOrder,
+    *,
+    allowed_buildings: list[str] | tuple[str, ...] | set[str] | None = None,
+    allowed_priorities: list[str] | tuple[str, ...] | set[str] | None = None,
+    allowed_required_skills: list[str] | tuple[str, ...] | set[str] | None = None,
+    blocker_reason_prefix: str,
+) -> dict[str, Any]:
     requirement = _load_dispatch_requirement_snapshot(work_order)
     blockers: list[dict[str, Any]] = []
 
@@ -181,7 +217,7 @@ def build_auto_dispatch_rollout_gate(
     if normalized_buildings and building_id not in normalized_buildings:
         blockers.append(
             _blocker(
-                "rollout_building_not_allowed",
+                f"{blocker_reason_prefix}_building_not_allowed",
                 current_building=building_id,
                 allowed_buildings=sorted(normalized_buildings),
             )
@@ -189,7 +225,7 @@ def build_auto_dispatch_rollout_gate(
     if normalized_priorities and priority not in normalized_priorities:
         blockers.append(
             _blocker(
-                "rollout_priority_not_allowed",
+                f"{blocker_reason_prefix}_priority_not_allowed",
                 current_priority=priority,
                 allowed_priorities=sorted(normalized_priorities),
             )
@@ -197,7 +233,7 @@ def build_auto_dispatch_rollout_gate(
     if normalized_skills and not required_skills.intersection(normalized_skills):
         blockers.append(
             _blocker(
-                "rollout_skill_not_allowed",
+                f"{blocker_reason_prefix}_skill_not_allowed",
                 required_skills=sorted(required_skills),
                 allowed_required_skills=sorted(normalized_skills),
             )
@@ -675,6 +711,8 @@ async def build_auto_reassign_evaluation(
     require_on_duty: bool = True,
     require_overdue: bool = True,
     max_attempt_no: int = 3,
+    dispatch_workers: list[User] | None = None,
+    dispatch_active_counts: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     """
     Build a read-only auto-reassign decision payload.
@@ -731,7 +769,12 @@ async def build_auto_reassign_evaluation(
                 )
             )
 
-    candidate_payload = await list_dispatch_candidates(db, work_order=work_order)
+    candidate_payload = await list_dispatch_candidates(
+        db,
+        work_order=work_order,
+        workers=dispatch_workers,
+        active_counts=dispatch_active_counts,
+    )
     candidates = [
         candidate
         for candidate in candidate_payload["candidates"]
@@ -790,13 +833,18 @@ async def execute_auto_reassign(
     *,
     work_order: WorkOrder,
     current_dispatch: Any | None,
+    evaluation: dict[str, Any] | None = None,
     actor_id: str | None = None,
+    trigger_reason: str | None = None,
+    trigger_label: str | None = None,
     enabled: bool = False,
     min_score: int = 115,
     min_gap: int = 10,
     require_on_duty: bool = True,
     require_overdue: bool = True,
     max_attempt_no: int = 3,
+    dispatch_workers: list[User] | None = None,
+    dispatch_active_counts: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     """
     Execute auto reassign only when explicitly enabled and dry-run is eligible.
@@ -804,7 +852,7 @@ async def execute_auto_reassign(
     This function does not commit. Callers own commit/rollback and cache
     invalidation so API routes and future schedulers can compose it safely.
     """
-    evaluation = await build_auto_reassign_evaluation(
+    evaluation = evaluation or await build_auto_reassign_evaluation(
         db,
         work_order=work_order,
         current_dispatch=current_dispatch,
@@ -813,6 +861,8 @@ async def execute_auto_reassign(
         require_on_duty=require_on_duty,
         require_overdue=require_overdue,
         max_attempt_no=max_attempt_no,
+        dispatch_workers=dispatch_workers,
+        dispatch_active_counts=dispatch_active_counts,
     )
     if not enabled:
         return {
@@ -864,6 +914,8 @@ async def execute_auto_reassign(
         "current_assigned_to": evaluation["current_assigned_to"],
         "timeout_level": evaluation["timeout_level"],
         "triggered_by": actor_id,
+        "trigger_reason": trigger_reason,
+        "trigger_label": trigger_label,
     }
     new_dispatch = await reassign_dispatch_task(
         db,
@@ -892,6 +944,8 @@ async def execute_auto_reassign(
             "selection_reason": evaluation["selection_reason"],
             "rules": evaluation["rules"],
             "score_gap": evaluation["score_gap"],
+            "trigger_reason": trigger_reason,
+            "trigger_label": trigger_label,
         },
     )
 
@@ -906,5 +960,7 @@ async def execute_auto_reassign(
         "assigned_to": assigned_user.id,
         "assigned_to_name": assigned_user.username,
         "status": work_order.status,
+        "trigger_reason": trigger_reason,
+        "trigger_label": trigger_label,
         "evaluation": evaluation,
     }

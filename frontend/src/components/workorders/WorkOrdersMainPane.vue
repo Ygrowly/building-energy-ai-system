@@ -19,6 +19,18 @@
     :explain-error="autoDispatchInsightExplainError"
     :update-explain-question="updateAutoDispatchInsightQuestion"
     :explain="fetchAutoDispatchInsightExplanation"
+    :shadow-insights="autoReassignShadowInsights"
+    :shadow-filters="autoReassignShadowInsightFilters"
+    :shadow-loading="autoReassignShadowInsightLoading"
+    :shadow-error="autoReassignShadowInsightError"
+    :update-shadow-filter="updateAutoReassignShadowInsightFilter"
+    :refresh-shadow="fetchAutoReassignShadowInsights"
+    :run-health-insights="autoDispatchRunHealthInsights"
+    :run-health-filters="autoDispatchRunHealthFilters"
+    :run-health-loading="autoDispatchRunHealthLoading"
+    :run-health-error="autoDispatchRunHealthError"
+    :update-run-health-filter="updateAutoDispatchRunHealthFilter"
+    :refresh-run-health="fetchAutoDispatchRunHealthInsights"
   />
 
   <WorkOrdersHallList
@@ -274,6 +286,54 @@ defineProps({
     required: true,
   },
   fetchAutoDispatchInsightExplanation: {
+    type: Function as PropType<() => void>,
+    required: true,
+  },
+  autoReassignShadowInsights: {
+    type: Object as PropType<any | null>,
+    default: null,
+  },
+  autoReassignShadowInsightFilters: {
+    type: Object as PropType<Record<string, string>>,
+    required: true,
+  },
+  autoReassignShadowInsightLoading: {
+    type: Boolean,
+    required: true,
+  },
+  autoReassignShadowInsightError: {
+    type: String,
+    required: true,
+  },
+  updateAutoReassignShadowInsightFilter: {
+    type: Function as PropType<(key: string, value: string) => void>,
+    required: true,
+  },
+  fetchAutoReassignShadowInsights: {
+    type: Function as PropType<() => void>,
+    required: true,
+  },
+  autoDispatchRunHealthInsights: {
+    type: Object as PropType<any | null>,
+    default: null,
+  },
+  autoDispatchRunHealthFilters: {
+    type: Object as PropType<Record<string, string>>,
+    required: true,
+  },
+  autoDispatchRunHealthLoading: {
+    type: Boolean,
+    required: true,
+  },
+  autoDispatchRunHealthError: {
+    type: String,
+    required: true,
+  },
+  updateAutoDispatchRunHealthFilter: {
+    type: Function as PropType<(key: string, value: string) => void>,
+    required: true,
+  },
+  fetchAutoDispatchRunHealthInsights: {
     type: Function as PropType<() => void>,
     required: true,
   },

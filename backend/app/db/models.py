@@ -1314,3 +1314,46 @@ class WorkOrderAuditLog(Base):
         Index("idx_audit_wo", "work_order_id"),
         Index("idx_audit_time", created_at.desc()),
     )
+
+
+# ---------------------------------------------------------------------------
+# dispatch_operation_runs — 调度运行记录（运营洞察 / 运行健康）
+# ---------------------------------------------------------------------------
+
+class DispatchOperationRun(Base):
+    """
+    调度后台运行记录。
+    用于沉淀 SLA 扫描等自动调度任务的耗时、触发量和失败情况，服务运营洞察。
+    """
+    __tablename__ = "dispatch_operation_runs"
+
+    id: str = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    operation_type: str = Column(String(32), nullable=False)
+    trigger_source: str = Column(String(16), nullable=False)
+    run_status: str = Column(String(16), nullable=False, default="success")
+
+    scanned_count: int = Column(Integer, nullable=False, default=0)
+    updated_count: int = Column(Integer, nullable=False, default=0)
+    warning_events: int = Column(Integer, nullable=False, default=0)
+    overdue_events: int = Column(Integer, nullable=False, default=0)
+    auto_reassign_triggers: int = Column(Integer, nullable=False, default=0)
+    auto_reassign_executed: int = Column(Integer, nullable=False, default=0)
+    auto_reassign_hall_fallbacks: int = Column(Integer, nullable=False, default=0)
+    auto_reassign_shadow_evaluated: int = Column(Integer, nullable=False, default=0)
+    auto_reassign_shadow_would_execute: int = Column(Integer, nullable=False, default=0)
+    auto_reassign_shadow_would_hall_fallbacks: int = Column(Integer, nullable=False, default=0)
+
+    duration_ms: int = Column(Integer, nullable=False, default=0)
+    timings_json: str = Column(Text, nullable=True)
+    error_message: str = Column(Text, nullable=True)
+    started_at = Column(TIMESTAMP(timezone=True), nullable=False)
+    finished_at = Column(TIMESTAMP(timezone=True), nullable=False)
+    created_at = Column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        Index("idx_dispatch_operation_runs_type_time", "operation_type", started_at.desc()),
+        Index("idx_dispatch_operation_runs_status_time", "run_status", started_at.desc()),
+        Index("idx_dispatch_operation_runs_source_time", "trigger_source", started_at.desc()),
+    )

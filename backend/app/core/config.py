@@ -20,6 +20,9 @@ CSV_LIST_FIELDS = frozenset(
         "AUTO_DISPATCH_ALLOWED_BUILDINGS",
         "AUTO_DISPATCH_ALLOWED_PRIORITIES",
         "AUTO_DISPATCH_ALLOWED_REQUIRED_SKILLS",
+        "AUTO_REASSIGN_ALLOWED_BUILDINGS",
+        "AUTO_REASSIGN_ALLOWED_PRIORITIES",
+        "AUTO_REASSIGN_ALLOWED_REQUIRED_SKILLS",
     }
 )
 
@@ -154,6 +157,15 @@ class Settings(BaseSettings):
     AUTO_REASSIGN_REQUIRE_ON_DUTY: bool = True  # 自动重派是否要求新候选人为值班中
     AUTO_REASSIGN_REQUIRE_OVERDUE: bool = True  # 自动重派是否要求当前派工已超时
     AUTO_REASSIGN_MAX_ATTEMPT_NO: int = 3  # 自动重派允许的最大派工尝试次数
+    ENABLE_AUTO_REASSIGN_PHASE1_TRIGGER: bool = False  # 一期触发器：是否允许 SLA/责任人状态自动触发自动重派
+    ENABLE_AUTO_REASSIGN_SHADOW_MODE: bool = False  # 影子观察：只评估自动重派，不真正执行改派
+    AUTO_REASSIGN_ALLOWED_BUILDINGS: list[str] = []  # 灰度：允许自动重派自动执行的楼宇白名单；空表示不限
+    AUTO_REASSIGN_ALLOWED_PRIORITIES: list[str] = []  # 灰度：允许自动重派自动执行的优先级白名单；空表示不限
+    AUTO_REASSIGN_ALLOWED_REQUIRED_SKILLS: list[str] = []  # 灰度：允许自动重派自动执行的技能白名单；空表示不限
+    AUTO_REASSIGN_TRIGGER_ASSIGNED_OVERDUE: bool = True  # 一期触发器：未接单超时是否进入自动重派
+    AUTO_REASSIGN_TRIGGER_ACCEPTED_OVERDUE: bool = True  # 一期触发器：已接单未到场超时是否进入自动重派
+    AUTO_REASSIGN_ACCEPTED_MIN_PREVIOUS_REMINDERS: int = 1  # accepted->overdue 前至少已有几次提醒，才允许自动重派
+    AUTO_REASSIGN_TRIGGER_ASSIGNEE_UNAVAILABLE: bool = True  # 一期触发器：当前责任人客观不可用时是否进入自动重派
     ENABLE_CHAT_WORK_ORDERS: bool = False  # 对话开关：是否允许聊天链路直接生成工单草稿/工单流程
 
     # -----------------------------------------------------------------------
@@ -241,6 +253,9 @@ class Settings(BaseSettings):
         "AUTO_DISPATCH_ALLOWED_BUILDINGS",
         "AUTO_DISPATCH_ALLOWED_PRIORITIES",
         "AUTO_DISPATCH_ALLOWED_REQUIRED_SKILLS",
+        "AUTO_REASSIGN_ALLOWED_BUILDINGS",
+        "AUTO_REASSIGN_ALLOWED_PRIORITIES",
+        "AUTO_REASSIGN_ALLOWED_REQUIRED_SKILLS",
         mode="before",
     )
     @classmethod

@@ -12,6 +12,7 @@ from app.services import auto_dispatch_service
 from app.services.auto_dispatch_service import (
     build_auto_dispatch_evaluation,
     build_auto_dispatch_rollout_gate,
+    build_auto_reassign_rollout_gate,
 )
 
 
@@ -205,6 +206,34 @@ def test_auto_dispatch_rollout_gate_blocks_non_matching_dimensions() -> None:
     }
 
 
+def test_auto_reassign_rollout_gate_allows_matching_work_order() -> None:
+    gate = build_auto_reassign_rollout_gate(
+        _work_order(building_id="Fox_public_Henry", priority="high", dispatch_profile_json='{"required_skills":["hvac"]}'),
+        allowed_buildings=["Fox_public_Henry"],
+        allowed_priorities=["high"],
+        allowed_required_skills=["hvac", "electrical"],
+    )
+
+    assert gate["allowed"] is True
+    assert gate["blockers"] == []
+
+
+def test_auto_reassign_rollout_gate_blocks_non_matching_dimensions() -> None:
+    gate = build_auto_reassign_rollout_gate(
+        _work_order(building_id="Fox_office_Alice", priority="medium", dispatch_profile_json='{"required_skills":["plumbing"]}'),
+        allowed_buildings=["Fox_public_Henry"],
+        allowed_priorities=["high"],
+        allowed_required_skills=["hvac"],
+    )
+
+    assert gate["allowed"] is False
+    assert {item["reason"] for item in gate["blockers"]} == {
+        "reassign_rollout_building_not_allowed",
+        "reassign_rollout_priority_not_allowed",
+        "reassign_rollout_skill_not_allowed",
+    }
+
+
 @pytest.mark.asyncio
 async def test_execute_auto_dispatch_stays_readonly_when_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
     mock_assign = AsyncMock()
@@ -367,6 +396,36 @@ async def test_auto_reassign_evaluation_excludes_current_assignee(monkeypatch: p
     assert payload["top_candidate"]["user_id"] == "ops-2"
     assert payload["apply_payload"]["from_dispatch_id"] == "dispatch-1"
     assert payload["apply_payload"]["dispatch_mode"] == "reassigned"
+
+
+@pytest.mark.asyncio
+async def test_auto_reassign_evaluation_reuses_preloaded_candidate_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mock_candidates = AsyncMock(
+        return_value={
+            "requirement": {"required_skills": ["hvac"], "preferred_team_name": "暖通班"},
+            "candidates": [_candidate(user_id="ops-2", username="李工", score=132)],
+        }
+    )
+    monkeypatch.setattr(auto_dispatch_service, "list_dispatch_candidates", mock_candidates)
+
+    workers = [SimpleNamespace(id="ops-2", username="李工")]
+    active_counts = {"ops-2": 1}
+    payload = await auto_dispatch_service.build_auto_reassign_evaluation(
+        SimpleNamespace(),
+        work_order=_work_order(status="dispatched"),
+        current_dispatch=_dispatch_task(assigned_to="ops-1"),
+        min_score=110,
+        min_gap=10,
+        require_overdue=False,
+        dispatch_workers=workers,
+        dispatch_active_counts=active_counts,
+    )
+
+    assert payload["eligible"] is True
+    assert mock_candidates.await_args.kwargs["workers"] == workers
+    assert mock_candidates.await_args.kwargs["active_counts"] == active_counts
 
 
 @pytest.mark.asyncio

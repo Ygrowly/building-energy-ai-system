@@ -14,6 +14,7 @@ from sqlalchemy.orm import selectinload
 
 from app.core.config import get_settings
 from app.db.models import (
+    DispatchOperationRun,
     DispatchHallApplication,
     DispatchHallEntry,
     DispatchTask,
@@ -22,6 +23,10 @@ from app.db.models import (
     WorkOrderAuditLog,
     WorkerProfile,
     WorkerTeam,
+)
+from app.services.dispatch_operation_run_service import (
+    DISPATCH_RUN_TRIGGER_SOURCES,
+    DISPATCH_SLA_SCAN_OPERATION,
 )
 
 ACTIVE_DISPATCH_STATUSES = {"assigned", "accepted", "arrived", "processing", "waiting_support"}
@@ -39,6 +44,13 @@ AUTO_DISPATCH_REVIEW_AUDIT_ACTIONS = (
     "auto_dispatch_reviewed",
     "auto_dispatch_needs_reassign",
 )
+AUTO_REASSIGN_SHADOW_AUDIT_ACTION = "auto_reassign_shadow_evaluated"
+AUTO_REASSIGN_SHADOW_TRIGGER_REASONS = (
+    "assigned_overdue",
+    "accepted_overdue",
+    "assignee_unavailable",
+)
+AUTO_DISPATCH_RUN_HEALTH_SOURCES = DISPATCH_RUN_TRIGGER_SOURCES
 _LLM_TIMEOUT = 18
 _JSON_BLOCK_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
 logger = logging.getLogger(__name__)
@@ -138,6 +150,55 @@ def _hall_required_skills(entry: DispatchHallEntry, detail: dict[str, Any]) -> l
 
 def _matches_skill(required_skills: list[str], required_skill: str | None) -> bool:
     return required_skill is None or required_skill in set(required_skills)
+
+
+def _detail_required_skills(detail: dict[str, Any]) -> list[str]:
+    return _required_skills_from_payload(
+        detail,
+        detail.get("requirement") if isinstance(detail.get("requirement"), dict) else {},
+    )
+
+
+def _detail_blocker_reasons(detail: dict[str, Any]) -> list[str]:
+    blockers = detail.get("blockers")
+    if not isinstance(blockers, list):
+        return []
+    rows: list[str] = []
+    for blocker in blockers:
+        if isinstance(blocker, dict) and blocker.get("reason"):
+            rows.append(str(blocker["reason"]))
+    return rows
+
+
+def _detail_rollout_blocker_reasons(detail: dict[str, Any]) -> list[str]:
+    rollout_gate = detail.get("rollout_gate")
+    if not isinstance(rollout_gate, dict):
+        return []
+    blockers = rollout_gate.get("blockers")
+    if not isinstance(blockers, list):
+        return []
+    rows: list[str] = []
+    for blocker in blockers:
+        if isinstance(blocker, dict) and blocker.get("reason"):
+            rows.append(str(blocker["reason"]))
+    return rows
+
+
+def _safe_json_int_object(raw: str | None) -> dict[str, int]:
+    payload = _safe_json_object(raw)
+    values: dict[str, int] = {}
+    for key, value in payload.items():
+        try:
+            values[str(key)] = int(value or 0)
+        except (TypeError, ValueError):
+            continue
+    return values
+
+
+def _avg_int(values: list[int]) -> int | None:
+    if not values:
+        return None
+    return int(round(sum(values) / len(values)))
 
 
 def _counter_rows(counter: Counter[str], *, limit: int = 10) -> list[dict[str, Any]]:
@@ -823,6 +884,485 @@ async def build_auto_dispatch_operation_insights(
             "page": page,
             "page_size": page_size,
             "total": total_records,
+        },
+    }
+
+
+async def build_auto_reassign_shadow_insights(
+    db: AsyncSession,
+    *,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    building_id: str | None = None,
+    priority: str | None = None,
+    required_skill: str | None = None,
+    trigger_reason: str | None = None,
+    eligible: bool | None = None,
+    current_dispatch_status: str | None = None,
+    team_id: str | None = None,
+    assignee_id: str | None = None,
+    page: int = 1,
+    page_size: int = 20,
+) -> dict[str, Any]:
+    settings = get_settings()
+    start_at, end_at = _date_window(date_from, date_to)
+    building_filter = _normalize_filter(building_id)
+    priority_filter = _normalize_filter(priority)
+    skill_filter = _normalize_filter(required_skill)
+    trigger_filter = _normalize_filter(trigger_reason)
+    status_filter = _normalize_filter(current_dispatch_status)
+    team_filter = _normalize_filter(team_id)
+    assignee_filter = _normalize_filter(assignee_id)
+    page = max(int(page or 1), 1)
+    page_size = min(max(int(page_size or 20), 1), 100)
+
+    trigger_counts: Counter[str] = Counter()
+    building_counts: Counter[str] = Counter()
+    priority_counts: Counter[str] = Counter()
+    skill_counts: Counter[str] = Counter()
+    status_counts: Counter[str] = Counter()
+    team_counts: Counter[str] = Counter()
+    assignee_counts: Counter[str] = Counter()
+    decision_counts: Counter[str] = Counter()
+    blocker_counts: Counter[str] = Counter()
+    rollout_status_counts: Counter[str] = Counter()
+    rollout_blocker_counts: Counter[str] = Counter()
+    records: list[dict[str, Any]] = []
+    unique_work_order_ids: set[str] = set()
+    unique_dispatch_ids: set[str] = set()
+    eligible_total = 0
+    would_execute_total = 0
+    would_hall_fallback_total = 0
+    in_rollout_total = 0
+    out_of_rollout_total = 0
+    would_execute_in_rollout_total = 0
+
+    query = (
+        select(WorkOrderAuditLog, WorkOrder)
+        .join(WorkOrder, WorkOrder.id == WorkOrderAuditLog.work_order_id)
+        .where(
+            WorkOrderAuditLog.action == AUTO_REASSIGN_SHADOW_AUDIT_ACTION,
+            WorkOrderAuditLog.created_at >= start_at,
+            WorkOrderAuditLog.created_at < end_at,
+        )
+    )
+    if building_filter:
+        query = query.where(WorkOrder.building_id == building_filter)
+    if priority_filter:
+        query = query.where(WorkOrder.priority == priority_filter)
+
+    result = await db.execute(query.order_by(WorkOrderAuditLog.created_at.desc()).limit(5000))
+    for audit_log, work_order in result.all():
+        detail = _safe_json_object(audit_log.detail_json)
+        skills = _detail_required_skills(detail)
+        blockers = _detail_blocker_reasons(detail)
+        rollout_blockers = _detail_rollout_blocker_reasons(detail)
+        detail_trigger = str(detail.get("trigger_reason") or "unknown")
+        detail_status = str(detail.get("current_dispatch_status") or "unknown")
+        detail_team_id = str(detail.get("current_assignee_team_id") or "") or None
+        detail_assignee_id = str(detail.get("current_assigned_to") or "") or None
+        detail_eligible = detail.get("eligible")
+        within_live_rollout = detail.get("within_live_rollout")
+        if trigger_filter and detail_trigger != trigger_filter:
+            continue
+        if status_filter and detail_status != status_filter:
+            continue
+        if team_filter and detail_team_id != team_filter:
+            continue
+        if assignee_filter and detail_assignee_id != assignee_filter:
+            continue
+        if skill_filter and not _matches_skill(skills, skill_filter):
+            continue
+        if eligible is not None:
+            if not isinstance(detail_eligible, bool) or detail_eligible is not eligible:
+                continue
+
+        unique_work_order_ids.add(work_order.id)
+        dispatch_id = str(detail.get("current_dispatch_id") or "") or None
+        if dispatch_id:
+            unique_dispatch_ids.add(dispatch_id)
+
+        would_execute = bool(detail.get("would_execute"))
+        would_hall_fallback = bool(detail.get("would_hall_fallback"))
+        if detail_eligible is True:
+            eligible_total += 1
+        if would_execute:
+            would_execute_total += 1
+        if would_hall_fallback:
+            would_hall_fallback_total += 1
+        if within_live_rollout is True:
+            in_rollout_total += 1
+        elif within_live_rollout is False:
+            out_of_rollout_total += 1
+        if detail.get("would_execute_in_rollout"):
+            would_execute_in_rollout_total += 1
+
+        trigger_counts[detail_trigger] += 1
+        _increment_dimension(building_counts, work_order.building_id, "未标记楼宇")
+        _increment_dimension(priority_counts, work_order.priority, "未标记优先级")
+        _increment_dimension(status_counts, detail_status, "未标记阶段")
+        _increment_dimension(
+            team_counts,
+            detail.get("current_assignee_team_name") or detail_team_id,
+            "未分组",
+        )
+        _increment_dimension(
+            assignee_counts,
+            detail.get("current_assignee_name") or detail_assignee_id,
+            "未指定",
+        )
+        _increment_dimension(decision_counts, detail.get("decision"), "未判定")
+        _increment_dimension(
+            rollout_status_counts,
+            "in_rollout" if within_live_rollout is True else ("out_of_rollout" if within_live_rollout is False else None),
+            "未标记",
+        )
+        for skill in skills or ["未识别技能"]:
+            skill_counts[skill] += 1
+        for blocker in blockers:
+            blocker_counts[blocker] += 1
+        for blocker in rollout_blockers:
+            rollout_blocker_counts[blocker] += 1
+
+        records.append(
+            {
+                "ticket_id": work_order.ticket_id,
+                "work_order_id": work_order.id,
+                "building_id": work_order.building_id,
+                "priority": work_order.priority,
+                "created_at": _dt(audit_log.created_at),
+                "trigger_reason": detail_trigger,
+                "trigger_label": detail.get("trigger_label"),
+                "assignee_unavailable_reason": detail.get("assignee_unavailable_reason"),
+                "current_dispatch_id": dispatch_id,
+                "current_dispatch_status": detail_status,
+                "current_timeout_level": detail.get("current_timeout_level"),
+                "due_at": detail.get("due_at"),
+                "assignee_id": detail_assignee_id,
+                "assignee_name": detail.get("current_assignee_name"),
+                "team_id": detail_team_id,
+                "team_name": detail.get("current_assignee_team_name"),
+                "required_skills": skills,
+                "eligible": bool(detail_eligible),
+                "decision": detail.get("decision"),
+                "candidate_count": detail.get("candidate_count"),
+                "top_candidate": detail.get("top_candidate"),
+                "second_candidate": detail.get("second_candidate"),
+                "score_gap": detail.get("score_gap"),
+                "blocker_reasons": blockers,
+                "rollout_blocker_reasons": rollout_blockers,
+                "selection_reason": detail.get("selection_reason"),
+                "within_live_rollout": within_live_rollout,
+                "would_execute": would_execute,
+                "would_execute_in_rollout": bool(detail.get("would_execute_in_rollout")),
+                "would_hall_fallback": would_hall_fallback,
+            }
+        )
+
+    records.sort(key=lambda item: item.get("created_at") or "", reverse=True)
+    total_records = len(records)
+    offset = (page - 1) * page_size
+    page_records = records[offset: offset + page_size]
+
+    return {
+        "generated_at": _dt(datetime.now(timezone.utc)),
+        "readonly": True,
+        "settings": {
+            "phase1_trigger_enabled": settings.ENABLE_AUTO_REASSIGN_PHASE1_TRIGGER,
+            "shadow_enabled": (
+                settings.ENABLE_AUTO_REASSIGN_PHASE1_TRIGGER
+                and settings.ENABLE_AUTO_REASSIGN_SHADOW_MODE
+            ),
+            "execution_enabled": (
+                settings.ENABLE_AUTO_REASSIGN_PHASE1_TRIGGER
+                and settings.ENABLE_AUTO_REASSIGN_EXECUTION
+            ),
+            "rollout": {
+                "allowed_buildings": settings.AUTO_REASSIGN_ALLOWED_BUILDINGS,
+                "allowed_priorities": settings.AUTO_REASSIGN_ALLOWED_PRIORITIES,
+                "allowed_required_skills": settings.AUTO_REASSIGN_ALLOWED_REQUIRED_SKILLS,
+            },
+            "rules": {
+                "min_score": settings.AUTO_REASSIGN_MIN_SCORE,
+                "min_gap": settings.AUTO_REASSIGN_MIN_GAP,
+                "require_on_duty": settings.AUTO_REASSIGN_REQUIRE_ON_DUTY,
+                "require_overdue": settings.AUTO_REASSIGN_REQUIRE_OVERDUE,
+                "max_attempt_no": settings.AUTO_REASSIGN_MAX_ATTEMPT_NO,
+            },
+            "trigger_scope": {
+                "assigned_overdue": settings.AUTO_REASSIGN_TRIGGER_ASSIGNED_OVERDUE,
+                "accepted_overdue": settings.AUTO_REASSIGN_TRIGGER_ACCEPTED_OVERDUE,
+                "accepted_min_previous_reminders": settings.AUTO_REASSIGN_ACCEPTED_MIN_PREVIOUS_REMINDERS,
+                "assignee_unavailable": settings.AUTO_REASSIGN_TRIGGER_ASSIGNEE_UNAVAILABLE,
+            },
+        },
+        "window": {
+            "date_from": date_from.isoformat() if date_from else None,
+            "date_to": date_to.isoformat() if date_to else None,
+            "start_at": _dt(start_at),
+            "end_at": _dt(end_at),
+        },
+        "filters": {
+            "building_id": building_filter,
+            "priority": priority_filter,
+            "required_skill": skill_filter,
+            "trigger_reason": trigger_filter,
+            "eligible": eligible,
+            "current_dispatch_status": status_filter,
+            "team_id": team_filter,
+            "assignee_id": assignee_filter,
+        },
+        "summary": {
+            "total_evaluations": total_records,
+            "unique_work_orders": len(unique_work_order_ids),
+            "unique_dispatches": len(unique_dispatch_ids),
+            "eligible_total": eligible_total,
+            "blocked_total": max(total_records - eligible_total, 0),
+            "would_execute_total": would_execute_total,
+            "would_hall_fallback_total": would_hall_fallback_total,
+            "in_rollout_total": in_rollout_total,
+            "out_of_rollout_total": out_of_rollout_total,
+            "would_execute_in_rollout_total": would_execute_in_rollout_total,
+            "eligible_rate": _ratio(eligible_total, total_records),
+            "would_execute_rate": _ratio(would_execute_total, total_records),
+        },
+        "breakdowns": {
+            "by_trigger": _counter_rows(trigger_counts),
+            "by_building": _counter_rows(building_counts),
+            "by_priority": _counter_rows(priority_counts),
+            "by_skill": _counter_rows(skill_counts),
+            "by_status": _counter_rows(status_counts),
+            "by_team": _counter_rows(team_counts),
+            "by_assignee": _counter_rows(assignee_counts),
+            "by_decision": _counter_rows(decision_counts),
+            "by_blocker": _counter_rows(blocker_counts),
+            "by_rollout_status": _counter_rows(rollout_status_counts),
+            "by_rollout_blocker": _counter_rows(rollout_blocker_counts),
+        },
+        "records": page_records,
+        "pagination": {
+            "page": page,
+            "page_size": page_size,
+            "total": total_records,
+        },
+    }
+
+
+async def build_auto_dispatch_run_health_insights(
+    db: AsyncSession,
+    *,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    trigger_source: str | None = None,
+    slow_threshold_ms: int = 8000,
+    recent_limit: int = 12,
+    slow_limit: int = 10,
+) -> dict[str, Any]:
+    start_at, end_at = _date_window(date_from, date_to)
+    source_filter = _normalize_filter(trigger_source)
+    slow_threshold = max(int(slow_threshold_ms or 8000), 1000)
+    recent_limit = min(max(int(recent_limit or 12), 1), 50)
+    slow_limit = min(max(int(slow_limit or 10), 1), 50)
+
+    query = (
+        select(DispatchOperationRun)
+        .where(
+            DispatchOperationRun.operation_type == DISPATCH_SLA_SCAN_OPERATION,
+            DispatchOperationRun.started_at >= start_at,
+            DispatchOperationRun.started_at < end_at,
+        )
+        .order_by(DispatchOperationRun.started_at.desc())
+        .limit(5000)
+    )
+    if source_filter:
+        query = query.where(DispatchOperationRun.trigger_source == source_filter)
+
+    result = await db.execute(query)
+    runs = list(result.scalars().all())
+
+    source_counts: Counter[str] = Counter()
+    status_counts: Counter[str] = Counter()
+    timing_totals: Counter[str] = Counter()
+    daily_rows: dict[str, dict[str, Any]] = {}
+    recent_runs: list[dict[str, Any]] = []
+    slow_runs: list[dict[str, Any]] = []
+
+    success_runs = 0
+    failed_runs = 0
+    slow_runs_count = 0
+    duration_values: list[int] = []
+    success_duration_values: list[int] = []
+    success_records: list[dict[str, Any]] = []
+
+    for run in runs:
+        source_counts[str(run.trigger_source or "unknown")] += 1
+        status_counts[str(run.run_status or "unknown")] += 1
+        is_success = str(run.run_status or "") == "success"
+        is_slow = int(run.duration_ms or 0) >= slow_threshold
+        timings = _safe_json_int_object(run.timings_json)
+
+        if is_success:
+            success_runs += 1
+            success_duration_values.append(int(run.duration_ms or 0))
+        else:
+            failed_runs += 1
+        if is_slow:
+            slow_runs_count += 1
+
+        duration_values.append(int(run.duration_ms or 0))
+        for key, value in timings.items():
+            if key == "total":
+                continue
+            timing_totals[key] += int(value or 0)
+
+        started_at_value = getattr(run, "started_at", None)
+        day_key = started_at_value.astimezone(timezone.utc).date().isoformat() if started_at_value else "unknown"
+        day_row = daily_rows.setdefault(
+            day_key,
+            {
+                "day": day_key,
+                "run_count": 0,
+                "success_count": 0,
+                "failed_count": 0,
+                "duration_values": [],
+                "slow_run_count": 0,
+                "scanned_values": [],
+                "trigger_values": [],
+                "overdue_values": [],
+            },
+        )
+        day_row["run_count"] += 1
+        day_row["duration_values"].append(int(run.duration_ms or 0))
+        day_row["scanned_values"].append(int(run.scanned_count or 0))
+        day_row["trigger_values"].append(int(run.auto_reassign_triggers or 0))
+        day_row["overdue_values"].append(int(run.overdue_events or 0))
+        if is_success:
+            day_row["success_count"] += 1
+        else:
+            day_row["failed_count"] += 1
+        if is_slow:
+            day_row["slow_run_count"] += 1
+
+        record = {
+            "id": run.id,
+            "trigger_source": run.trigger_source,
+            "run_status": run.run_status,
+            "started_at": _dt(run.started_at),
+            "finished_at": _dt(run.finished_at),
+            "duration_ms": int(run.duration_ms or 0),
+            "scanned_count": int(run.scanned_count or 0),
+            "updated_count": int(run.updated_count or 0),
+            "warning_events": int(run.warning_events or 0),
+            "overdue_events": int(run.overdue_events or 0),
+            "auto_reassign_triggers": int(run.auto_reassign_triggers or 0),
+            "auto_reassign_executed": int(run.auto_reassign_executed or 0),
+            "auto_reassign_hall_fallbacks": int(run.auto_reassign_hall_fallbacks or 0),
+            "auto_reassign_shadow_evaluated": int(run.auto_reassign_shadow_evaluated or 0),
+            "auto_reassign_shadow_would_execute": int(run.auto_reassign_shadow_would_execute or 0),
+            "auto_reassign_shadow_would_hall_fallbacks": int(run.auto_reassign_shadow_would_hall_fallbacks or 0),
+            "timings_ms": timings,
+            "error_message": run.error_message,
+            "is_slow": is_slow,
+        }
+        if len(recent_runs) < recent_limit:
+            recent_runs.append(record)
+        if is_slow:
+            slow_runs.append(record)
+        if is_success:
+            success_records.append(record)
+
+    slow_runs.sort(key=lambda item: (-(item.get("duration_ms") or 0), item.get("started_at") or ""))
+    timing_total_ms = sum(timing_totals.values())
+    timing_share_rows = []
+    for key, total_ms in timing_totals.most_common():
+        timing_share_rows.append(
+            {
+                "key": key,
+                "label": key,
+                "total_ms": int(total_ms),
+                "avg_ms": int(round(total_ms / max(success_runs, 1))),
+                "share": round((total_ms / timing_total_ms), 4) if timing_total_ms else 0.0,
+            }
+        )
+
+    daily_trend = []
+    for item in sorted(daily_rows.values(), key=lambda row: row["day"]):
+        daily_trend.append(
+            {
+                "day": item["day"],
+                "run_count": item["run_count"],
+                "success_count": item["success_count"],
+                "failed_count": item["failed_count"],
+                "slow_run_count": item["slow_run_count"],
+                "avg_duration_ms": _avg_int(item["duration_values"]),
+                "avg_scanned_count": _avg_int(item["scanned_values"]),
+                "avg_auto_reassign_triggers": _avg_int(item["trigger_values"]),
+                "avg_overdue_events": _avg_int(item["overdue_values"]),
+            }
+        )
+
+    slow_success = [item for item in success_records if item["is_slow"]]
+    normal_success = [item for item in success_records if not item["is_slow"]]
+    slow_avg_triggers = _avg_int([int(item["auto_reassign_triggers"] or 0) for item in slow_success])
+    normal_avg_triggers = _avg_int([int(item["auto_reassign_triggers"] or 0) for item in normal_success])
+    slow_avg_scanned = _avg_int([int(item["scanned_count"] or 0) for item in slow_success])
+    normal_avg_scanned = _avg_int([int(item["scanned_count"] or 0) for item in normal_success])
+    slow_avg_overdue = _avg_int([int(item["overdue_events"] or 0) for item in slow_success])
+    normal_avg_overdue = _avg_int([int(item["overdue_events"] or 0) for item in normal_success])
+
+    return {
+        "generated_at": _dt(datetime.now(timezone.utc)),
+        "readonly": True,
+        "window": {
+            "date_from": date_from.isoformat() if date_from else None,
+            "date_to": date_to.isoformat() if date_to else None,
+            "start_at": _dt(start_at),
+            "end_at": _dt(end_at),
+        },
+        "filters": {
+            "trigger_source": source_filter,
+            "slow_threshold_ms": slow_threshold,
+            "recent_limit": recent_limit,
+            "slow_limit": slow_limit,
+        },
+        "summary": {
+            "total_runs": len(runs),
+            "success_runs": success_runs,
+            "failed_runs": failed_runs,
+            "slow_runs": slow_runs_count,
+            "slow_run_rate": _ratio(slow_runs_count, len(runs)),
+            "avg_duration_ms": _avg_int(duration_values),
+            "avg_success_duration_ms": _avg_int(success_duration_values),
+            "max_duration_ms": max(duration_values) if duration_values else 0,
+            "slow_threshold_ms": slow_threshold,
+        },
+        "breakdowns": {
+            "by_source": _counter_rows(source_counts),
+            "by_status": _counter_rows(status_counts),
+        },
+        "timing_shares": timing_share_rows,
+        "recent_runs": recent_runs,
+        "daily_trend": daily_trend,
+        "slow_runs": slow_runs[:slow_limit],
+        "slow_trigger_correlation": {
+            "slow_run_count": len(slow_success),
+            "normal_run_count": len(normal_success),
+            "slow_avg_auto_reassign_triggers": slow_avg_triggers,
+            "normal_avg_auto_reassign_triggers": normal_avg_triggers,
+            "slow_avg_scanned_count": slow_avg_scanned,
+            "normal_avg_scanned_count": normal_avg_scanned,
+            "slow_avg_overdue_events": slow_avg_overdue,
+            "normal_avg_overdue_events": normal_avg_overdue,
+            "slow_runs_have_higher_trigger_load": (
+                slow_avg_triggers is not None
+                and normal_avg_triggers is not None
+                and slow_avg_triggers > normal_avg_triggers
+            ),
+            "slow_runs_have_higher_scan_load": (
+                slow_avg_scanned is not None
+                and normal_avg_scanned is not None
+                and slow_avg_scanned > normal_avg_scanned
+            ),
         },
     }
 

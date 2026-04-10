@@ -258,3 +258,79 @@ async def ensure_daily_energy_summary_view() -> None:
         )
     except Exception as exc:
         logger.warning("创建/刷新 daily_energy_summary 失败，仍将使用工具降级。error=%s", exc)
+
+
+async def ensure_dispatch_operation_runs_table() -> None:
+    """
+    启动时确保 dispatch_operation_runs 表存在。
+
+    该表用于沉淀调度扫描运行记录，支撑运行健康洞察。
+    """
+
+    async def _op():
+        async with engine.begin() as conn:
+            result = await conn.execute(
+                text(
+                    """
+                    SELECT 1
+                    FROM information_schema.tables
+                    WHERE table_name = 'dispatch_operation_runs'
+                    """
+                )
+            )
+            if result.fetchone() is not None:
+                logger.info("dispatch_operation_runs 表已存在，跳过 CREATE TABLE")
+                return
+
+            logger.info("dispatch_operation_runs 表缺失，执行 CREATE TABLE ...")
+            await conn.execute(
+                text(
+                    """
+                    CREATE TABLE IF NOT EXISTS dispatch_operation_runs (
+                        id VARCHAR PRIMARY KEY,
+                        operation_type VARCHAR(32) NOT NULL,
+                        trigger_source VARCHAR(16) NOT NULL,
+                        run_status VARCHAR(16) NOT NULL DEFAULT 'success',
+                        scanned_count INTEGER NOT NULL DEFAULT 0,
+                        updated_count INTEGER NOT NULL DEFAULT 0,
+                        warning_events INTEGER NOT NULL DEFAULT 0,
+                        overdue_events INTEGER NOT NULL DEFAULT 0,
+                        auto_reassign_triggers INTEGER NOT NULL DEFAULT 0,
+                        auto_reassign_executed INTEGER NOT NULL DEFAULT 0,
+                        auto_reassign_hall_fallbacks INTEGER NOT NULL DEFAULT 0,
+                        auto_reassign_shadow_evaluated INTEGER NOT NULL DEFAULT 0,
+                        auto_reassign_shadow_would_execute INTEGER NOT NULL DEFAULT 0,
+                        auto_reassign_shadow_would_hall_fallbacks INTEGER NOT NULL DEFAULT 0,
+                        duration_ms INTEGER NOT NULL DEFAULT 0,
+                        timings_json TEXT NULL,
+                        error_message TEXT NULL,
+                        started_at TIMESTAMPTZ NOT NULL,
+                        finished_at TIMESTAMPTZ NOT NULL,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                    )
+                    """
+                )
+            )
+            await conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS idx_dispatch_operation_runs_type_time "
+                    "ON dispatch_operation_runs (operation_type, started_at DESC)"
+                )
+            )
+            await conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS idx_dispatch_operation_runs_status_time "
+                    "ON dispatch_operation_runs (run_status, started_at DESC)"
+                )
+            )
+            await conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS idx_dispatch_operation_runs_source_time "
+                    "ON dispatch_operation_runs (trigger_source, started_at DESC)"
+                )
+            )
+
+    try:
+        await _run_startup_db_op_with_retry("ensure_dispatch_operation_runs_table", _op)
+    except Exception as exc:
+        logger.warning("ensure_dispatch_operation_runs_table 失败，已跳过（不影响启动）: %s", exc)

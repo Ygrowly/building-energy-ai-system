@@ -11,7 +11,11 @@ from app.db.models import User
 from app.db.session import get_db_session
 from app.services.work_order_insights_service import (
     AUTO_DISPATCH_OPERATION_MODES,
+    AUTO_DISPATCH_RUN_HEALTH_SOURCES,
+    AUTO_REASSIGN_SHADOW_TRIGGER_REASONS,
     build_auto_dispatch_operation_insights,
+    build_auto_dispatch_run_health_insights,
+    build_auto_reassign_shadow_insights,
     build_work_order_insight_metrics,
     build_work_order_insight_query_response,
     explain_auto_dispatch_operation_insights,
@@ -105,6 +109,76 @@ async def explain_auto_dispatch_operations(
         dispatch_mode=req.dispatch_mode,
         team_id=req.team_id,
         assignee_id=req.assignee_id,
+    )
+
+
+@router.get("/auto-reassign-shadow", summary="获取自动重派一期影子观察洞察")
+async def get_auto_reassign_shadow_insights(
+    date_from: date | None = Query(None, description="统计开始日期，闭区间"),
+    date_to: date | None = Query(None, description="统计结束日期，闭区间"),
+    building_id: str | None = Query(None, description="楼宇 ID"),
+    priority: str | None = Query(None, description="优先级"),
+    required_skill: str | None = Query(None, description="派工技能标签"),
+    trigger_reason: str | None = Query(None, description="assigned_overdue / accepted_overdue / assignee_unavailable"),
+    eligible: bool | None = Query(None, description="是否具备安全执行条件"),
+    current_dispatch_status: str | None = Query(None, description="当前派工阶段"),
+    team_id: str | None = Query(None, description="当前责任班组 ID"),
+    assignee_id: str | None = Query(None, description="当前责任人 ID"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db_session),
+    user: User = Depends(get_current_user),
+):
+    _require_role(user, "admin", "manager")
+    if (
+        trigger_reason
+        and trigger_reason != "all"
+        and trigger_reason not in AUTO_REASSIGN_SHADOW_TRIGGER_REASONS
+    ):
+        raise HTTPException(status_code=400, detail="不支持的自动重派触发原因筛选")
+    return await build_auto_reassign_shadow_insights(
+        db,
+        date_from=date_from,
+        date_to=date_to,
+        building_id=building_id,
+        priority=priority,
+        required_skill=required_skill,
+        trigger_reason=trigger_reason,
+        eligible=eligible,
+        current_dispatch_status=current_dispatch_status,
+        team_id=team_id,
+        assignee_id=assignee_id,
+        page=page,
+        page_size=page_size,
+    )
+
+
+@router.get("/auto-dispatch-run-health", summary="获取自动调度运行健康洞察")
+async def get_auto_dispatch_run_health_insights(
+    date_from: date | None = Query(None, description="统计开始日期，闭区间"),
+    date_to: date | None = Query(None, description="统计结束日期，闭区间"),
+    trigger_source: str | None = Query(None, description="admin_api / scheduler"),
+    slow_threshold_ms: int = Query(8000, ge=1000, le=120000),
+    recent_limit: int = Query(12, ge=1, le=50),
+    slow_limit: int = Query(10, ge=1, le=50),
+    db: AsyncSession = Depends(get_db_session),
+    user: User = Depends(get_current_user),
+):
+    _require_role(user, "admin", "manager")
+    if (
+        trigger_source
+        and trigger_source != "all"
+        and trigger_source not in AUTO_DISPATCH_RUN_HEALTH_SOURCES
+    ):
+        raise HTTPException(status_code=400, detail="不支持的运行来源筛选")
+    return await build_auto_dispatch_run_health_insights(
+        db,
+        date_from=date_from,
+        date_to=date_to,
+        trigger_source=trigger_source,
+        slow_threshold_ms=slow_threshold_ms,
+        recent_limit=recent_limit,
+        slow_limit=slow_limit,
     )
 
 

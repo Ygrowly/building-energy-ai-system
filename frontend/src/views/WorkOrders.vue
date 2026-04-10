@@ -99,6 +99,8 @@ import { useReportExport } from '@/composables/useReportExport'
 type Candidate = any
 type PendingFocus = { ticketId: string; action: 'expand' | 'dispatch' | 'reassign' }
 type AutoDispatchInsightFilters = Record<string, string>
+type AutoReassignShadowFilters = Record<string, string>
+type AutoDispatchRunHealthFilters = Record<string, string>
 
 const chatStore = useChatStore()
 const buildingStore = useBuildingStore()
@@ -118,6 +120,12 @@ const autoDispatchInsightExplanationSource = ref('')
 const autoDispatchInsightQuestion = ref('请解释当前自动派工和大厅兜底是否稳定')
 const autoDispatchInsightExplainLoading = ref(false)
 const autoDispatchInsightExplainError = ref('')
+const autoReassignShadowInsights = ref<any | null>(null)
+const autoReassignShadowInsightLoading = ref(false)
+const autoReassignShadowInsightError = ref('')
+const autoDispatchRunHealthInsights = ref<any | null>(null)
+const autoDispatchRunHealthLoading = ref(false)
+const autoDispatchRunHealthError = ref('')
 
 function localDateInput(date: Date) {
   const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000)
@@ -134,6 +142,15 @@ const autoDispatchInsightFilters = ref<AutoDispatchInsightFilters>({
   priority: '',
   required_skill: '',
   dispatch_mode: '',
+})
+const autoReassignShadowInsightFilters = ref<AutoReassignShadowFilters>({
+  trigger_reason: '',
+  eligible: '',
+  current_dispatch_status: '',
+})
+const autoDispatchRunHealthFilters = ref<AutoDispatchRunHealthFilters>({
+  trigger_source: '',
+  slow_threshold_ms: '8000',
 })
 
 const autoDispatchInsightSkillOptions = [
@@ -311,6 +328,33 @@ function buildAutoDispatchInsightQuery() {
   return params.toString()
 }
 
+function buildAutoReassignShadowInsightQuery() {
+  const params = new URLSearchParams()
+  Object.entries(autoDispatchInsightFilters.value).forEach(([key, value]) => {
+    if (key === 'dispatch_mode') return
+    if (value) params.set(key, value)
+  })
+  Object.entries(autoReassignShadowInsightFilters.value).forEach(([key, value]) => {
+    if (value) params.set(key, value)
+  })
+  params.set('page', '1')
+  params.set('page_size', '20')
+  return params.toString()
+}
+
+function buildAutoDispatchRunHealthQuery() {
+  const params = new URLSearchParams()
+  const { date_from, date_to } = autoDispatchInsightFilters.value
+  if (date_from) params.set('date_from', date_from)
+  if (date_to) params.set('date_to', date_to)
+  Object.entries(autoDispatchRunHealthFilters.value).forEach(([key, value]) => {
+    if (value) params.set(key, value)
+  })
+  params.set('recent_limit', '12')
+  params.set('slow_limit', '10')
+  return params.toString()
+}
+
 async function fetchAutoDispatchInsights() {
   autoDispatchInsightLoading.value = true
   autoDispatchInsightError.value = ''
@@ -322,6 +366,34 @@ async function fetchAutoDispatchInsights() {
     autoDispatchInsightError.value = e.message || '自动派工洞察加载失败'
   } finally {
     autoDispatchInsightLoading.value = false
+  }
+}
+
+async function fetchAutoReassignShadowInsights() {
+  autoReassignShadowInsightLoading.value = true
+  autoReassignShadowInsightError.value = ''
+  try {
+    autoReassignShadowInsights.value = await apiFetch<any>(
+      `/api/work-order-insights/auto-reassign-shadow?${buildAutoReassignShadowInsightQuery()}`,
+    )
+  } catch (e: any) {
+    autoReassignShadowInsightError.value = e.message || '自动重派影子洞察加载失败'
+  } finally {
+    autoReassignShadowInsightLoading.value = false
+  }
+}
+
+async function fetchAutoDispatchRunHealthInsights() {
+  autoDispatchRunHealthLoading.value = true
+  autoDispatchRunHealthError.value = ''
+  try {
+    autoDispatchRunHealthInsights.value = await apiFetch<any>(
+      `/api/work-order-insights/auto-dispatch-run-health?${buildAutoDispatchRunHealthQuery()}`,
+    )
+  } catch (e: any) {
+    autoDispatchRunHealthError.value = e.message || '自动调度运行健康加载失败'
+  } finally {
+    autoDispatchRunHealthLoading.value = false
   }
 }
 
@@ -364,10 +436,28 @@ function updateAutoDispatchInsightFilter(key: string, value: string) {
   autoDispatchInsightExplanation.value = null
   autoDispatchInsightExplanationSource.value = ''
   void fetchAutoDispatchInsights()
+  void fetchAutoReassignShadowInsights()
+  void fetchAutoDispatchRunHealthInsights()
 }
 
 function updateAutoDispatchInsightQuestion(value: string) {
   autoDispatchInsightQuestion.value = value
+}
+
+function updateAutoReassignShadowInsightFilter(key: string, value: string) {
+  autoReassignShadowInsightFilters.value = {
+    ...autoReassignShadowInsightFilters.value,
+    [key]: value,
+  }
+  void fetchAutoReassignShadowInsights()
+}
+
+function updateAutoDispatchRunHealthFilter(key: string, value: string) {
+  autoDispatchRunHealthFilters.value = {
+    ...autoDispatchRunHealthFilters.value,
+    [key]: value,
+  }
+  void fetchAutoDispatchRunHealthInsights()
 }
 
 const mainPaneProps = computed(() => ({
@@ -417,6 +507,18 @@ const mainPaneProps = computed(() => ({
   autoDispatchInsightExplainError: autoDispatchInsightExplainError.value,
   updateAutoDispatchInsightQuestion,
   fetchAutoDispatchInsightExplanation,
+  autoReassignShadowInsights: autoReassignShadowInsights.value,
+  autoReassignShadowInsightFilters: autoReassignShadowInsightFilters.value,
+  autoReassignShadowInsightLoading: autoReassignShadowInsightLoading.value,
+  autoReassignShadowInsightError: autoReassignShadowInsightError.value,
+  updateAutoReassignShadowInsightFilter,
+  fetchAutoReassignShadowInsights,
+  autoDispatchRunHealthInsights: autoDispatchRunHealthInsights.value,
+  autoDispatchRunHealthFilters: autoDispatchRunHealthFilters.value,
+  autoDispatchRunHealthLoading: autoDispatchRunHealthLoading.value,
+  autoDispatchRunHealthError: autoDispatchRunHealthError.value,
+  updateAutoDispatchRunHealthFilter,
+  fetchAutoDispatchRunHealthInsights,
 }))
 
 function startReject(ticketId: string) {
@@ -569,6 +671,8 @@ onMounted(async () => {
   await fetchOrders()
   if (activeTab.value === 'auto_dispatch_insights') {
     await fetchAutoDispatchInsights()
+    await fetchAutoReassignShadowInsights()
+    await fetchAutoDispatchRunHealthInsights()
   }
 })
 
@@ -591,12 +695,16 @@ watch(workspaceMode, async () => {
   await fetchOrders()
   if (activeTab.value === 'auto_dispatch_insights') {
     await fetchAutoDispatchInsights()
+    await fetchAutoReassignShadowInsights()
+    await fetchAutoDispatchRunHealthInsights()
   }
 })
 
 watch(activeTab, (tab) => {
   if (tab === 'auto_dispatch_insights') {
     void fetchAutoDispatchInsights()
+    void fetchAutoReassignShadowInsights()
+    void fetchAutoDispatchRunHealthInsights()
   }
 })
 </script>

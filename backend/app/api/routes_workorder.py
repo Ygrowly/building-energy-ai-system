@@ -427,6 +427,8 @@ def _audit_log_label(action: str) -> str:
         "dispatch_cancel": "管理员取消当前派工",
         "auto_dispatch_reviewed": "自动派工复核通过",
         "auto_dispatch_needs_reassign": "自动派工需改派",
+        "auto_reassign_rollout_skipped": "自动重派灰度跳过",
+        "auto_reassign_shadow_evaluated": "自动重派影子评估",
         "auto_reassign_executed": "自动重派已执行",
         "worker_feedback": "维修结果已提交",
         "close": "工单已关闭",

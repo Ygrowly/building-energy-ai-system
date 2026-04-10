@@ -262,7 +262,7 @@
                 <!-- eslint-disable-next-line vue/no-v-for-template-key -->
                 <template v-for="(seg, sIdx) in buildInlineSegments(msg)">
                   <!-- 文字片段 -->
-                  <div v-if="seg.type === 'text'" :key="'t'+sIdx" class="md-block" v-html="formatMarkdown(seg.text || '')"></div>
+                  <div v-if="seg.type === 'html'" :key="'h'+sIdx" class="md-block" v-html="seg.html || ''"></div>
 
                   <!-- 流式阶段：anchor 已检测到但 artifact 尚未到达 → 骨架屏 -->
                   <div v-else-if="seg.type === 'placeholder'" :key="'p'+sIdx" class="inline-artifact-wrap placeholder-phase">
@@ -394,12 +394,6 @@
           :is-processing="store.isLoading"
           @approve="store.approveOrder(true)"
           @reject="(reason) => store.approveOrder(false, reason)"
-        />
-
-        <!-- Artifact：报表下载卡片（需有有效 download_url） -->
-        <ReportDownload
-          v-else-if="msg.role === 'artifact' && isReportDownload(msg.artifact) && msg.artifact?.download_url"
-          :artifact="ensureArtifact(msg.artifact)"
         />
 
         <!-- 错误消息 -->
@@ -608,7 +602,6 @@ import type { SessionInfo, ChatMessage } from '@/stores/chatStore'
 import ThinkingBubble from '@/generative-ui/ThinkingBubble.vue'
 import DynamicChart from '@/generative-ui/DynamicChart.vue'
 import WorkOrderCard from '@/generative-ui/WorkOrderCard.vue'
-import ReportDownload from '@/generative-ui/ReportDownload.vue'
 import ValueCard from '@/generative-ui/ValueCard.vue'
 import EvidenceLink from '@/generative-ui/EvidenceLink.vue'
 import ChartSkeleton from '@/generative-ui/ChartSkeleton.vue'
@@ -1229,25 +1222,26 @@ function isWorkOrder(artifact?: ArtifactEvent): boolean {
   return ['WorkOrderCard', 'work-order-card'].includes(t)
 }
 
-function isReportDownload(artifact?: ArtifactEvent): boolean {
-  if (!artifact) return false
-  const t = artifact.component_type ?? artifact.widget ?? ''
-  return ['ReportDownload', 'report-download'].includes(t)
-}
-
 function toSourceInfo(v: unknown): Record<string, unknown> {
   return v as Record<string, unknown>
 }
 
 // ── Markdown 渲染 ─────────────────────────────────────────────
-function formatMarkdown(text: string): string {
-  return sharedRenderMarkdown(text)
+function formatMarkdown(text: string, preservePlaceholders = false): string {
+  return sharedRenderMarkdown(
+    text,
+    preservePlaceholders ? { preservePlaceholders: true } : undefined,
+  )
+}
+
+function stripChartSlotMarkers(html: string): string {
+  return html.replace(HTML_CHART_SLOT_RE, '')
 }
 
 // ── 内嵌图表：占位符驱动 + stagger 动画 ──────────────────────────────────────
 // LLM 在文本中插入 <<CHART:锚点>> 占位符，前端据此精准插入图表
 
-const CHART_PLACEHOLDER_RE = /<<CHART:([^>]+)>>/g
+const HTML_CHART_SLOT_RE = /<div data-chart-slot="([^"]+)"><\/div>/g
 
 // ── 图表队列式逐个释放 ──────────────────────────────────────────────────────
 // readySet: 图表已就绪 → 渲染真实图表
@@ -1334,8 +1328,8 @@ watch(
 
 // ── 内嵌图表分片渲染（占位符驱动）─────────────────────────────────────────────
 interface InlineSegment {
-  type: 'text' | 'chart' | 'placeholder'
-  text?: string
+  type: 'html' | 'chart' | 'placeholder'
+  html?: string
   artifact?: ArtifactEvent
   artifactId?: string
   anchor?: string
@@ -1346,10 +1340,11 @@ function buildInlineSegments(msg: ChatMessage): InlineSegment[] {
   const inlineArtifacts = artifacts.filter((a: ArtifactEvent) => isChart(a) || isValueCard(a))
   const content = msg.content || ''
   const isStreaming = store.isLoading && msg.id === lastAiMsgId.value
+  const renderedHtml = formatMarkdown(content, true)
 
-  if (!content) return [{ type: 'text', text: '' }]
+  if (!content) return [{ type: 'html', html: '' }]
   if (inlineArtifacts.length === 0 && !isStreaming) {
-    return [{ type: 'text', text: content }]
+    return [{ type: 'html', html: stripChartSlotMarkers(renderedHtml) }]
   }
 
   // 按 anchor 建立图表索引（anchor → artifact）
@@ -1363,34 +1358,38 @@ function buildInlineSegments(msg: ChatMessage): InlineSegment[] {
   const usedAnchors = new Set<string>()
   let lastIndex = 0
 
-  // 逐个匹配占位符
-  const regex = new RegExp(CHART_PLACEHOLDER_RE.source, 'g')
+  // 逐个匹配插槽
+  const regex = new RegExp(HTML_CHART_SLOT_RE.source, 'g')
   let match: RegExpExecArray | null
-  while ((match = regex.exec(content)) !== null) {
-    const anchor = match[1]
-    const before = content.slice(lastIndex, match.index).trim()
+  while ((match = regex.exec(renderedHtml)) !== null) {
+    const anchor = decodeURIComponent(match[1] ?? '')
+    const before = renderedHtml.slice(lastIndex, match.index)
 
-    if (before) {
-      segments.push({ type: 'text', text: before })
+    if (before.trim()) {
+      segments.push({ type: 'html', html: before })
     }
 
     const art = anchorToArt.get(anchor)
+    const artId = art?.artifact_id ?? `_slot_${anchor || match.index}`
     if (art) {
-      const artId = art.artifact_id ?? `_art_${anchor}`
       usedAnchors.add(anchor)
       // 流式期间：只有轮到的图表（active 或 ready）才渲染，其余跳过
       if (!isStreaming || readySet.has(artId) || activeChartId.value === artId) {
         segments.push({ type: 'chart', artifact: art, artifactId: artId })
+      } else {
+        segments.push({ type: 'placeholder', artifactId: artId, anchor })
       }
+    } else if (isStreaming) {
+      segments.push({ type: 'placeholder', artifactId: artId, anchor })
     }
 
     lastIndex = match.index + match[0].length
   }
 
   // 占位符后面剩余的文本
-  const tail = content.slice(lastIndex).trim()
-  if (tail) {
-    segments.push({ type: 'text', text: tail })
+  const tail = renderedHtml.slice(lastIndex)
+  if (tail.trim()) {
+    segments.push({ type: 'html', html: tail })
   }
 
   // 兜底：没有被占位符匹配到的图表追加末尾（流式期间跳过 deferred）
@@ -1403,7 +1402,7 @@ function buildInlineSegments(msg: ChatMessage): InlineSegment[] {
 
   // 安全兜底：如果文本中完全没有占位符（旧消息/LLM未遵循格式），回退到整块文本+图表追加
   if (segments.length === 0) {
-    segments.push({ type: 'text', text: content })
+    segments.push({ type: 'html', html: stripChartSlotMarkers(renderedHtml) })
   }
 
   return segments

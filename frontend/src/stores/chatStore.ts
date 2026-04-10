@@ -68,9 +68,24 @@ const TAB_STORAGE_KEY = 'chat_open_tab_ids'
 // ── Artifact 持久化（localStorage，跨会话切换保留图表）────────────────────────
 const ARTIFACT_STORAGE_PREFIX = 'chat_art_'
 
+function artifactType(artifact?: ArtifactEvent): string {
+  return artifact?.component_type ?? artifact?.widget ?? ''
+}
+
+function isHiddenChatArtifact(artifact?: ArtifactEvent): boolean {
+  return ['ReportDownload', 'report-download'].includes(artifactType(artifact))
+}
+
+function isInlineArtifact(artifact?: ArtifactEvent): boolean {
+  return [
+    'LineChart', 'BarChart', 'Gauge', 'ValueCard',
+    'line-chart', 'bar-chart', 'gauge', 'value-card',
+  ].includes(artifactType(artifact))
+}
+
 /** 将单条 artifact 消息持久化到 localStorage（以 artifact_id 或 msg.id 去重） */
 function _saveArtifactToStorage(sessionId: string, msg: ChatMessage) {
-  if (!msg.artifact) return
+  if (!msg.artifact || isHiddenChatArtifact(msg.artifact)) return
   try {
     const key = `${ARTIFACT_STORAGE_PREFIX}${sessionId}`
     const existing: Record<string, unknown> = JSON.parse(localStorage.getItem(key) ?? '{}')
@@ -89,10 +104,12 @@ function _loadArtifactsFromStorage(sessionId: string): ChatMessage[] {
     const stored = localStorage.getItem(key)
     if (!stored) return []
     const parsed = JSON.parse(stored) as Record<string, Record<string, unknown>>
-    return Object.values(parsed).map(m => ({
-      ...(m as unknown as ChatMessage),
-      timestamp: new Date(m.timestamp as string),
-    }))
+    return Object.values(parsed)
+      .map(m => ({
+        ...(m as unknown as ChatMessage),
+        timestamp: new Date(m.timestamp as string),
+      }))
+      .filter(m => !isHiddenChatArtifact(m.artifact))
   } catch {
     return []
   }
@@ -182,8 +199,17 @@ export const useChatStore = defineStore('chat', () => {
     tool: '工具调用',
     web_search: '联网搜索',
   }
-  // 后端可通过 SSE display_label 覆盖此静态映射（意图驱动的动态标签）
-  const _dynamicLabelMap = new Map<string, string>()
+  function resolveThinkingLabel(agent: string, displayLabel?: string) {
+    if (displayLabel) return displayLabel
+    const fallbackMap: Record<string, string> = {
+      router: '需求理解',
+      data_agent: '数据采集',
+      diagnose_agent: '故障诊断',
+      tool: '工具调用',
+      web_search: '联网搜索',
+    }
+    return fallbackMap[agent] ?? agentLabelMap[agent] ?? agent
+  }
 
   // ── 加载会话列表 ───────────────────────────────────────────────────────────
   async function loadSessionList() {
@@ -265,16 +291,11 @@ export const useChatStore = defineStore('chat', () => {
       if (cachedArtifacts.length > 0) {
         cachedArtifacts.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime())
 
-        const INLINE_WIDGETS = new Set([
-          'LineChart', 'BarChart', 'Gauge', 'ValueCard',
-          'line-chart', 'bar-chart', 'gauge', 'value-card',
-        ])
         // 将内联类型 artifact 重新挂到包含对应 <<CHART:anchor>> 的 AI 消息上
         for (const artMsg of cachedArtifacts) {
           const art = artMsg.artifact
           if (!art) continue
-          const widget = art.widget ?? art.component_type ?? ''
-          if (!INLINE_WIDGETS.has(widget)) continue
+          if (!isInlineArtifact(art)) continue
           const anchor = art.anchor
           if (!anchor) continue
           for (let i = parsed.length - 1; i >= 0; i--) {
@@ -402,6 +423,7 @@ export const useChatStore = defineStore('chat', () => {
     const msg: ChatMessage = {
       id: crypto.randomUUID(), role, content, timestamp: new Date(), ...extra,
     }
+    if (role === 'artifact' && isHiddenChatArtifact(msg.artifact)) return
     const sid = targetSessionId ?? currentSessionId.value
     if (sid && sid === currentSessionId.value) {
       // ★ 当前会话：直接通过 messages.value（Reactive Proxy）push
@@ -482,19 +504,17 @@ export const useChatStore = defineStore('chat', () => {
       await sendChatMessage(userText, originSessionId, {
         onThinking(e) {
           // 如果后端传来了动态标签，缓存起来供后续步骤使用
-          if (e.display_label) {
-            _dynamicLabelMap.set(e.agent, e.display_label)
-          }
-          const label = _dynamicLabelMap.get(e.agent) ?? agentLabelMap[e.agent] ?? e.agent
+          const label = resolveThinkingLabel(e.agent, e.display_label)
           const m = findAiMsg()
           if (!m) return
           if (!m.thinkingSteps) m.thinkingSteps = []
 
-          const dynLabel = _dynamicLabelMap.get(e.agent)
+          const stepLabel = resolveThinkingLabel(e.agent, e.display_label)
           if (e.content) {
             _agentStatusBySession.value[originSessionId] = { name: e.agent, label, status: 'thinking', message: '正在推理...' }
             if (_streamStepIdx >= 0 && _streamStepAgent === e.agent && _streamStepIdx < m.thinkingSteps.length) {
               m.thinkingSteps[_streamStepIdx].streamContent = (m.thinkingSteps[_streamStepIdx].streamContent ?? '') + e.content
+              m.thinkingSteps[_streamStepIdx].displayLabel = stepLabel
             } else {
               _streamStepIdx = m.thinkingSteps.length
               _streamStepAgent = e.agent
@@ -503,14 +523,14 @@ export const useChatStore = defineStore('chat', () => {
                 agent: e.agent,
                 message: '正在推理...',
                 streamContent: e.content,
-                displayLabel: dynLabel,
+                displayLabel: stepLabel,
               })
             }
           } else {
             _streamStepIdx = -1
             _streamStepAgent = ''
             _agentStatusBySession.value[originSessionId] = { name: e.agent, label, status: 'thinking', message: e.message }
-            m.thinkingSteps.push({ id: crypto.randomUUID(), agent: e.agent, message: e.message, displayLabel: dynLabel })
+            m.thinkingSteps.push({ id: crypto.randomUUID(), agent: e.agent, message: e.message, displayLabel: stepLabel })
           }
         },
         onText(e) {
@@ -526,10 +546,7 @@ export const useChatStore = defineStore('chat', () => {
           if (e.is_final) _agentStatusBySession.value[originSessionId] = null
         },
         onArtifact(e) {
-          const isInline = ['LineChart', 'BarChart', 'Gauge', 'ValueCard',
-            'line-chart', 'bar-chart', 'gauge', 'value-card']
-            .includes(e.widget ?? e.component_type ?? '')
-          if (isInline) {
+          if (isInlineArtifact(e)) {
             const m = findAiMsg()
             if (m) {
               if (!m.attachedArtifacts) m.attachedArtifacts = []
@@ -537,6 +554,7 @@ export const useChatStore = defineStore('chat', () => {
             }
           }
           _addMsg('artifact', e.title ?? '生成式组件', { artifact: e }, originSessionId)
+          if (isHiddenChatArtifact(e)) return
           if (e.component_type === 'WorkOrderCard' || e.widget === 'WorkOrderCard') {
             pendingWorkOrder.value = e
           }
@@ -560,7 +578,6 @@ export const useChatStore = defineStore('chat', () => {
         onDone() {
           _loadingBySession.value[originSessionId] = false
           _agentStatusBySession.value[originSessionId] = null
-          _dynamicLabelMap.clear()
           const m = findAiMsg()
           if (m) {
             if (!m.thinkingFinished) m.thinkingFinished = true
@@ -654,15 +671,17 @@ export const useChatStore = defineStore('chat', () => {
     try {
       await sendChatMessage(userText, originSessionId, {
         onThinking(e) {
-          const label = agentLabelMap[e.agent] ?? e.agent
+          const label = resolveThinkingLabel(e.agent, e.display_label)
           const m = findAiMsg()
           if (!m) return
           if (!m.thinkingSteps) m.thinkingSteps = []
+          const stepLabel = resolveThinkingLabel(e.agent, e.display_label)
 
           if (e.content) {
             _agentStatusBySession.value[originSessionId] = { name: e.agent, label, status: 'thinking', message: '正在推理...' }
             if (_regenStreamIdx >= 0 && _regenStreamAgent === e.agent && _regenStreamIdx < m.thinkingSteps.length) {
               m.thinkingSteps[_regenStreamIdx].streamContent = (m.thinkingSteps[_regenStreamIdx].streamContent ?? '') + e.content
+              m.thinkingSteps[_regenStreamIdx].displayLabel = stepLabel
             } else {
               _regenStreamIdx = m.thinkingSteps.length
               _regenStreamAgent = e.agent
@@ -671,13 +690,14 @@ export const useChatStore = defineStore('chat', () => {
                 agent: e.agent,
                 message: '正在推理...',
                 streamContent: e.content,
+                displayLabel: stepLabel,
               })
             }
           } else {
             _regenStreamIdx = -1
             _regenStreamAgent = ''
             _agentStatusBySession.value[originSessionId] = { name: e.agent, label, status: 'thinking', message: e.message }
-            m.thinkingSteps.push({ id: crypto.randomUUID(), agent: e.agent, message: e.message })
+            m.thinkingSteps.push({ id: crypto.randomUUID(), agent: e.agent, message: e.message, displayLabel: stepLabel })
           }
         },
         onText(e) {
@@ -693,7 +713,15 @@ export const useChatStore = defineStore('chat', () => {
           if (e.is_final) _agentStatusBySession.value[originSessionId] = null
         },
         onArtifact(e) {
+          if (isInlineArtifact(e)) {
+            const m = findAiMsg()
+            if (m) {
+              if (!m.attachedArtifacts) m.attachedArtifacts = []
+              m.attachedArtifacts.push(e)
+            }
+          }
           _addMsg('artifact', e.title ?? '生成式组件', { artifact: e }, originSessionId)
+          if (isHiddenChatArtifact(e)) return
           if (e.component_type === 'WorkOrderCard' || e.widget === 'WorkOrderCard') {
             pendingWorkOrder.value = e
           }
@@ -794,7 +822,6 @@ export const useChatStore = defineStore('chat', () => {
       aiMsg.thinkingFinished = true
       if (!aiMsg.content) aiMsg.content = '（已终止生成）'
     }
-    _dynamicLabelMap.clear()
   }
 
   // ── 联网搜索开关（当前会话级别）──────────────────────────────────────────

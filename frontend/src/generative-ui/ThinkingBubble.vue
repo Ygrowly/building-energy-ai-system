@@ -248,7 +248,16 @@ function agentLabel(agent: string, stepIdx?: number): string {
     const step = props.steps[stepIdx]
     if (step?.displayLabel) return step.displayLabel
   }
-  return _agentLabelMap[agent] ?? agent
+  const fallbackMap: Record<string, string> = {
+    router: '需求理解',
+    data_agent: '数据采集',
+    diagnose_agent: '故障诊断',
+    tool: '工具调用',
+    tools: '工具调用',
+    agent: '推理',
+    web_search: '联网搜索',
+  }
+  return fallbackMap[agent] ?? _agentLabelMap[agent] ?? agent
 }
 </script>
 

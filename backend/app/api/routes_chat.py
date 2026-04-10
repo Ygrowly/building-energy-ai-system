@@ -224,6 +224,52 @@ def _thinking_event(
     return _sse(payload)
 
 
+_NODE_DISPLAY_LABELS: dict[str, str] = {
+    "router": "需求理解",
+    "data_agent": "数据采集",
+    "data_react": "数据采集",
+    "data_synthesis": "分析总结",
+    "diagnose_agent": "故障诊断",
+    "web_search": "联网搜索",
+}
+
+_DIAGNOSE_INTENT_LABELS: dict[str, str] = {
+    "fault_diagnosis": "故障诊断",
+    "knowledge_query": "知识顾问",
+    "work_order": "工单助手",
+}
+
+_TOOL_DISPLAY_LABELS: dict[str, str] = {
+    "query_energy_metrics": "能耗明细查询",
+    "query_daily_energy_summary": "能耗汇总查询",
+    "detect_energy_anomalies": "异常规则检测",
+    "get_building_rated_values": "额定值校验",
+    "rag_hybrid_search": "知识库检索",
+    "calculate_system_cop": "COP 诊断",
+    "get_device_live_status": "设备状态采集",
+    "create_work_order_draft": "工单草拟",
+    "generate_report": "报表生成",
+    "render_ui_component": "组件生成",
+    "list_available_buildings": "楼宇清单查询",
+    "compare_metric_across_buildings": "跨楼宇对比",
+    "compare_time_periods": "时段对比分析",
+    "web_search": "联网搜索",
+}
+
+
+def _thinking_display_label(
+    agent: str,
+    *,
+    intent: str | None = None,
+    tool_name: str | None = None,
+) -> str | None:
+    if agent == "tool" and tool_name:
+        return _TOOL_DISPLAY_LABELS.get(tool_name, "工具调用")
+    if agent == "diagnose_agent":
+        return _DIAGNOSE_INTENT_LABELS.get(intent or "", _NODE_DISPLAY_LABELS["diagnose_agent"])
+    return _NODE_DISPLAY_LABELS.get(agent)
+
+
 def _describe_tool_call(tool_name: str, tool_input: dict) -> str:
     """根据工具名 + 输入参数，生成人类可读的调用描述。"""
     bid = tool_input.get("building_id", "")
@@ -555,8 +601,14 @@ async def _stream_graph(
                     "data_synthesis": "数据收集完毕，正在撰写分析报告...",
                     "diagnose_agent": "正在启动故障诊断...",
                 }.get(name, "正在工作...")
+                current_intent = final_state_holder.get("intent") or state.get("intent")
                 display_agent = {"data_react": "data_agent", "data_synthesis": "data_agent"}.get(name, name)
-                yield _thinking_event(display_agent, chain_start_msg, hop_count=state.get("hop_count", 0))
+                yield _thinking_event(
+                    display_agent,
+                    chain_start_msg,
+                    hop_count=state.get("hop_count", 0),
+                    display_label=_thinking_display_label(display_agent, intent=current_intent),
+                )
 
             elif kind == "on_chat_model_start":
                 agent_name = event.get("metadata", {}).get("langgraph_node", "")
@@ -568,8 +620,14 @@ async def _stream_graph(
                         "data_synthesis": "正在基于图表和数据生成分析...",
                         "diagnose_agent": "正在推理...",
                     }.get(agent_name, "正在推理...")
+                    current_intent = final_state_holder.get("intent") or state.get("intent")
                     display_agent = {"data_react": "data_agent", "data_synthesis": "data_agent"}.get(agent_name, agent_name)
-                    yield _thinking_event(display_agent, llm_start_msg, hop_count=0)
+                    yield _thinking_event(
+                        display_agent,
+                        llm_start_msg,
+                        hop_count=0,
+                        display_label=_thinking_display_label(display_agent, intent=current_intent),
+                    )
 
             elif kind == "on_chat_model_stream":
                 # 流式推送 LLM 推理 token
@@ -604,12 +662,14 @@ async def _stream_graph(
                         if token:
                             effective_agent = _current_parent_agent if stream_agent == "agent" and _current_parent_agent else stream_agent
                             display_agent = {"data_react": "data_agent", "data_synthesis": "data_agent"}.get(effective_agent, effective_agent)
+                            current_intent = final_state_holder.get("intent") or state.get("intent")
                             yield _sse({
                                 "type": "thinking",
                                 "agent": display_agent,
                                 "message": "",
                                 "content": token,
                                 "hop_count": 0,
+                                "display_label": _thinking_display_label(display_agent, intent=current_intent),
                             })
 
                         # 3. 流式推送常规 content（最终回答文本），实现打字机效果
@@ -642,9 +702,19 @@ async def _stream_graph(
                 tool_input = data.get("input", {})
                 tool_purpose = _describe_tool_call(tool_name, tool_input)
                 if tool_name == "web_search":
-                    yield _thinking_event("web_search", f"\u6b63\u5728\u4f7f\u7528 Tavily \u8054\u7f51\u641c\u7d22\uff1a{tool_purpose}", hop_count=0)
+                    yield _thinking_event(
+                        "web_search",
+                        f"\u6b63\u5728\u4f7f\u7528 Tavily \u8054\u7f51\u641c\u7d22\uff1a{tool_purpose}",
+                        hop_count=0,
+                        display_label=_thinking_display_label("web_search", tool_name=tool_name),
+                    )
                 else:
-                    yield _thinking_event("tool", f"\u8c03\u7528MCP\u5de5\u5177\uff1a{tool_name}\u3002{tool_purpose}", hop_count=0)
+                    yield _thinking_event(
+                        "tool",
+                        f"\u8c03\u7528MCP\u5de5\u5177\uff1a{tool_name}\u3002{tool_purpose}",
+                        hop_count=0,
+                        display_label=_thinking_display_label("tool", tool_name=tool_name),
+                    )
 
             elif kind == "on_tool_end":
                 tool_key = f"tool_{name}_{_tool_count}"
@@ -663,7 +733,12 @@ async def _stream_graph(
                     output = str(raw_output) if raw_output else ""
                 if output:
                     if name == "web_search":
-                        yield _thinking_event("web_search", _web_search_done_message(output), hop_count=0)
+                        yield _thinking_event(
+                            "web_search",
+                            _web_search_done_message(output),
+                            hop_count=0,
+                            display_label=_thinking_display_label("web_search", tool_name=name),
+                        )
                 parsed = extract_tool_payload(raw_output)
                 if isinstance(parsed, dict):
                     raw_snapshot = _build_raw_data_snapshot_artifact(name, parsed)
@@ -699,13 +774,13 @@ async def _stream_graph(
                     if next_agent and next_agent != "router":
                         # 根据意图选择更精准的用户可见标签
                         _INTENT_LABEL_MAP = {
-                            "fault_diagnosis": "故障诊断专家",
-                            "knowledge_query": "知识库顾问",
-                            "work_order":      "工单助手",
+                            "fault_diagnosis": "故障诊断",
+                            "knowledge_query": "知识顾问",
+                            "work_order": "工单助手",
                         }
                         _AGENT_LABEL_FALLBACK = {
-                            "data_agent":      "数据分析师",
-                            "diagnose_agent":  "能效分析师",
+                            "data_agent": "数据采集",
+                            "diagnose_agent": "故障诊断",
                         }
                         next_label = _INTENT_LABEL_MAP.get(
                             resolved_intent,

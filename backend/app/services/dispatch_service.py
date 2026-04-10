@@ -52,6 +52,24 @@ _ACTIVE_SLA_DISPATCH_STATUSES = {
     "waiting_support",
 }
 
+_AUTO_DISPATCH_STRATEGY_LABELS = {
+    "high_confidence_dispatch": "高置信自动派工",
+    "low_confidence_fallback_dispatch": "低置信兜底派工",
+    "hall_fallback": "工单大厅兜底",
+}
+
+_AUTO_DISPATCH_CONFIDENCE_LABELS = {
+    "high": "高置信",
+    "medium": "中置信",
+    "low": "低置信",
+}
+
+_SHIFT_STATUS_LABELS = {
+    "on_duty": "值班中",
+    "standby": "待命",
+    "off_duty": "离岗",
+}
+
 
 def _dt_to_iso(value: datetime | None) -> str | None:
     return value.isoformat() if value else None
@@ -84,6 +102,76 @@ def _team_from_user(user: User | None) -> tuple[str | None, str | None]:
         getattr(team, "id", None) if team else None,
         getattr(team, "name", None) if team else None,
     )
+
+
+def _auto_dispatch_candidate_review(candidate: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(candidate, dict):
+        return None
+
+    shift_status = candidate.get("shift_status")
+    current_active_orders = candidate.get("current_active_orders")
+    max_active_orders = candidate.get("max_active_orders")
+    load_text = None
+    if current_active_orders is not None and max_active_orders is not None:
+        load_text = f"{current_active_orders}/{max_active_orders}"
+
+    return {
+        "user_id": candidate.get("user_id"),
+        "username": candidate.get("username"),
+        "team_name": candidate.get("team_name"),
+        "score": candidate.get("score"),
+        "shift_status": shift_status,
+        "shift_label": _SHIFT_STATUS_LABELS.get(str(shift_status), shift_status),
+        "current_active_orders": current_active_orders,
+        "max_active_orders": max_active_orders,
+        "load_text": load_text,
+        "matched_skill_names": candidate.get("matched_skill_names") or [],
+        "recommend_reason": candidate.get("recommend_reason"),
+    }
+
+
+def _build_auto_dispatch_review(dispatch_task: DispatchTask) -> dict[str, Any] | None:
+    snapshot = _json_loads(dispatch_task.candidate_snapshot_json)
+    if not snapshot:
+        return None
+
+    dispatch_mode = getattr(dispatch_task, "dispatch_mode", None)
+    is_auto_dispatch = bool(snapshot.get("auto_dispatch")) or dispatch_mode in {"auto", "auto_fallback"}
+    if not is_auto_dispatch:
+        return None
+
+    strategy = snapshot.get("strategy") or (
+        "low_confidence_fallback_dispatch"
+        if dispatch_mode == "auto_fallback"
+        else "high_confidence_dispatch"
+    )
+    confidence = snapshot.get("confidence")
+    top_candidate = _auto_dispatch_candidate_review(snapshot.get("top_candidate"))
+    second_candidate = _auto_dispatch_candidate_review(snapshot.get("second_candidate"))
+    fallback_candidate = _auto_dispatch_candidate_review(snapshot.get("fallback_candidate"))
+    selected_candidate = fallback_candidate if dispatch_mode == "auto_fallback" and fallback_candidate else top_candidate
+    review_level = "required" if dispatch_mode == "auto_fallback" else "sample"
+
+    return {
+        "dispatch_mode": dispatch_mode,
+        "strategy": strategy,
+        "strategy_label": _AUTO_DISPATCH_STRATEGY_LABELS.get(str(strategy), strategy),
+        "confidence": confidence,
+        "confidence_label": _AUTO_DISPATCH_CONFIDENCE_LABELS.get(str(confidence), confidence),
+        "review_level": review_level,
+        "review_hint": (
+            "低置信兜底派工，请管理员复核候选人、负载与现场响应情况"
+            if review_level == "required"
+            else "高置信自动派工，可抽查候选排序、分数与负载"
+        ),
+        "selection_reason": getattr(dispatch_task, "selection_reason", None),
+        "rules": snapshot.get("rules") if isinstance(snapshot.get("rules"), dict) else {},
+        "score_gap": snapshot.get("score_gap"),
+        "selected_candidate": selected_candidate,
+        "top_candidate": top_candidate,
+        "second_candidate": second_candidate,
+        "fallback_candidate": fallback_candidate,
+    }
 
 
 def _sync_work_order_dispatch_projection(
@@ -760,6 +848,7 @@ async def reassign_dispatch_task(
     actor_id: str | None = None,
     reason: str | None = None,
     dispatch_mode: str = "reassigned",
+    candidate_snapshot: dict[str, Any] | None = None,
     close_related_hall_entries: bool = True,
 ) -> DispatchTask:
     now = datetime.now(timezone.utc)
@@ -799,6 +888,7 @@ async def reassign_dispatch_task(
         actor_type=actor_type,
         dispatch_mode=dispatch_mode,
         selection_reason=reason,
+        candidate_snapshot=candidate_snapshot,
         transfer_from_dispatch_id=dispatch_task.id,
     )
     return new_dispatch
@@ -912,6 +1002,7 @@ def serialize_dispatch_task(
         "assigned_by": dispatch_task.assigned_by,
         "selection_reason": dispatch_task.selection_reason,
         "candidate_snapshot": _json_loads(dispatch_task.candidate_snapshot_json),
+        "auto_dispatch_review": _build_auto_dispatch_review(dispatch_task),
         "dispatch_profile_snapshot": _json_loads(dispatch_task.dispatch_profile_snapshot_json),
         "worker_result": dispatch_task.worker_result,
         "reject_reason": dispatch_task.reject_reason,

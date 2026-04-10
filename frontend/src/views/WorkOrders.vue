@@ -5,6 +5,7 @@
     :workspace-mode="workspaceMode"
     :tabs="tabs"
     :active-tab="activeTab"
+    :auto-dispatch-review-status="autoDispatchReviewStatus"
     :loading="loading"
     :batch-preview-loading="batchPreviewLoading"
     :all-orders-count="allOrders.length"
@@ -19,6 +20,7 @@
     :tab-count="tabCount"
     @switch-workspace="switchWorkspace"
     @switch-tab="switchTab"
+    @switch-auto-dispatch-review-status="switchAutoDispatchReviewStatus"
     @open-batch-dispatch="openBatchDispatchPanel"
     @refresh="fetchOrders"
   >
@@ -70,11 +72,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import WorkOrdersOverlayPane from '@/components/workorders/WorkOrdersOverlayPane.vue'
 import WorkOrdersShell from '@/components/workorders/WorkOrdersShell.vue'
-import WorkOrdersWorkspacePane from '@/components/workorders/WorkOrdersWorkspacePaneEnhanced.vue'
+import WorkOrdersWorkspacePane from '@/components/workorders/WorkOrdersWorkspacePane.vue'
 import { useBatchDispatch } from '@/composables/workorders/useBatchDispatch'
 import { useDispatchHallAdmin } from '@/composables/workorders/useDispatchHallAdmin'
 import { useWorkOrderActions } from '@/composables/workorders/useWorkOrderActions'
@@ -88,12 +90,15 @@ import {
   type WorkOrderTabKey,
   type WorkOrderWorkspaceMode,
 } from '@/constants/workOrders'
+import { apiFetch } from '@/api/http'
 import { cachedApiFetch, peekCachedApi, invalidateCachedApi } from '@/api/cached'
 import { useChatStore } from '@/stores/chatStore'
 import { useBuildingStore } from '@/stores/buildingStore'
 import { useReportExport } from '@/composables/useReportExport'
 
 type Candidate = any
+type PendingFocus = { ticketId: string; action: 'expand' | 'dispatch' | 'reassign' }
+type AutoDispatchInsightFilters = Record<string, string>
 
 const chatStore = useChatStore()
 const buildingStore = useBuildingStore()
@@ -105,6 +110,39 @@ const actionLoading = ref<string | null>(null)
 const rejectingId = ref<string | null>(null)
 const rejectReason = ref('')
 const actionResult = ref<Record<string, { type: 'success' | 'error'; message: string }>>({})
+const autoDispatchInsights = ref<any | null>(null)
+const autoDispatchInsightLoading = ref(false)
+const autoDispatchInsightError = ref('')
+const autoDispatchInsightExplanation = ref<any | null>(null)
+const autoDispatchInsightExplanationSource = ref('')
+const autoDispatchInsightQuestion = ref('请解释当前自动派工和大厅兜底是否稳定')
+const autoDispatchInsightExplainLoading = ref(false)
+const autoDispatchInsightExplainError = ref('')
+
+function localDateInput(date: Date) {
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000)
+  return local.toISOString().slice(0, 10)
+}
+
+const today = new Date()
+const sevenDaysAgo = new Date(today)
+sevenDaysAgo.setDate(today.getDate() - 6)
+const autoDispatchInsightFilters = ref<AutoDispatchInsightFilters>({
+  date_from: localDateInput(sevenDaysAgo),
+  date_to: localDateInput(today),
+  building_id: '',
+  priority: '',
+  required_skill: '',
+  dispatch_mode: '',
+})
+
+const autoDispatchInsightSkillOptions = [
+  { label: '暖通 hvac', value: 'hvac' },
+  { label: '给排水 plumbing', value: 'plumbing' },
+  { label: '电气 electrical', value: 'electrical' },
+  { label: '自控 controls', value: 'controls' },
+  { label: '巡检 inspection', value: 'inspection' },
+]
 
 const dispatchSubmitting = ref<string | null>(null)
 const dispatchPanel = ref({
@@ -115,7 +153,7 @@ const dispatchPanel = ref({
   requirement: null as any | null,
   candidates: [] as Candidate[],
 })
-const pendingFocus = ref<{ ticketId: string; action: 'dispatch' | 'reassign' } | null>(null)
+const pendingFocus = ref<PendingFocus | null>(null)
 
 const workspaceSwitchItems: Array<{ mode: WorkOrderWorkspaceMode; label: string; icon: string; path: string }> = [
   { mode: 'all', label: '总览', icon: 'mdi:view-dashboard-outline', path: '/workorders' },
@@ -138,6 +176,8 @@ const {
   loading,
   fetchError,
   allOrders,
+  autoDispatchReviewOrders,
+  autoDispatchReviewStatus,
   hallEntries,
   activeTab,
   expandedId,
@@ -149,6 +189,7 @@ const {
   tabCount,
   fetchOrders,
   switchTab,
+  switchAutoDispatchReviewStatus,
   toggleExpand,
   ensureTimeline,
   isTimelineLoading,
@@ -253,6 +294,82 @@ const {
   closeDispatchPanel,
 })
 
+const autoDispatchInsightBuildingOptions = computed(() => (
+  buildingStore.buildings.map(item => ({
+    value: item.building_id,
+    label: buildingStore.getBuildingName(item.building_id),
+  }))
+))
+
+function buildAutoDispatchInsightQuery() {
+  const params = new URLSearchParams()
+  Object.entries(autoDispatchInsightFilters.value).forEach(([key, value]) => {
+    if (value) params.set(key, value)
+  })
+  params.set('page', '1')
+  params.set('page_size', '20')
+  return params.toString()
+}
+
+async function fetchAutoDispatchInsights() {
+  autoDispatchInsightLoading.value = true
+  autoDispatchInsightError.value = ''
+  try {
+    autoDispatchInsights.value = await apiFetch<any>(
+      `/api/work-order-insights/auto-dispatch-operations?${buildAutoDispatchInsightQuery()}`,
+    )
+  } catch (e: any) {
+    autoDispatchInsightError.value = e.message || '自动派工洞察加载失败'
+  } finally {
+    autoDispatchInsightLoading.value = false
+  }
+}
+
+function buildAutoDispatchInsightRequestBody() {
+  const body: Record<string, any> = {
+    question: autoDispatchInsightQuestion.value,
+    use_llm: true,
+  }
+  Object.entries(autoDispatchInsightFilters.value).forEach(([key, value]) => {
+    if (value) body[key] = value
+  })
+  return body
+}
+
+async function fetchAutoDispatchInsightExplanation() {
+  autoDispatchInsightExplainLoading.value = true
+  autoDispatchInsightExplainError.value = ''
+  try {
+    const data = await apiFetch<any>('/api/work-order-insights/auto-dispatch-operations/explain', {
+      method: 'POST',
+      body: JSON.stringify(buildAutoDispatchInsightRequestBody()),
+    })
+    autoDispatchInsightExplanation.value = data?.explanation ?? null
+    autoDispatchInsightExplanationSource.value = data?.source ?? ''
+    if (data?.insights) {
+      autoDispatchInsights.value = data.insights
+    }
+  } catch (e: any) {
+    autoDispatchInsightExplainError.value = e.message || '自动派工解读生成失败'
+  } finally {
+    autoDispatchInsightExplainLoading.value = false
+  }
+}
+
+function updateAutoDispatchInsightFilter(key: string, value: string) {
+  autoDispatchInsightFilters.value = {
+    ...autoDispatchInsightFilters.value,
+    [key]: value,
+  }
+  autoDispatchInsightExplanation.value = null
+  autoDispatchInsightExplanationSource.value = ''
+  void fetchAutoDispatchInsights()
+}
+
+function updateAutoDispatchInsightQuestion(value: string) {
+  autoDispatchInsightQuestion.value = value
+}
+
 const mainPaneProps = computed(() => ({
   loading: loading.value,
   activeTab: activeTab.value,
@@ -285,6 +402,21 @@ const mainPaneProps = computed(() => ({
   isTimelineLoading,
   timelineError,
   actionsForOrder,
+  autoDispatchInsights: autoDispatchInsights.value,
+  autoDispatchInsightFilters: autoDispatchInsightFilters.value,
+  autoDispatchInsightLoading: autoDispatchInsightLoading.value,
+  autoDispatchInsightError: autoDispatchInsightError.value,
+  autoDispatchInsightBuildingOptions: autoDispatchInsightBuildingOptions.value,
+  autoDispatchInsightSkillOptions,
+  updateAutoDispatchInsightFilter,
+  fetchAutoDispatchInsights,
+  autoDispatchInsightExplanation: autoDispatchInsightExplanation.value,
+  autoDispatchInsightExplanationSource: autoDispatchInsightExplanationSource.value,
+  autoDispatchInsightQuestion: autoDispatchInsightQuestion.value,
+  autoDispatchInsightExplainLoading: autoDispatchInsightExplainLoading.value,
+  autoDispatchInsightExplainError: autoDispatchInsightExplainError.value,
+  updateAutoDispatchInsightQuestion,
+  fetchAutoDispatchInsightExplanation,
 }))
 
 function startReject(ticketId: string) {
@@ -316,21 +448,77 @@ function switchWorkspace(path: string) {
 
 async function maybeHandlePendingFocus() {
   if (!pendingFocus.value) return
-  const target = allOrders.value.find((item) => item.ticket_id === pendingFocus.value?.ticketId)
+  const target = [...allOrders.value, ...autoDispatchReviewOrders.value]
+    .find((item) => item.ticket_id === pendingFocus.value?.ticketId)
   if (!target) return
   const focus = pendingFocus.value
   pendingFocus.value = null
+  const targetTab = tabForWorkOrder(target)
+  if (targetTab && isVisibleTab(targetTab)) {
+    activeTab.value = targetTab
+  }
   expandedId.value = focus.ticketId
-  await ensureTimeline(focus.ticketId)
-  await openDispatchPanel(target, focus.action)
-  await router.replace({
-    path: route.path,
-    query: {
-      ...route.query,
-      focus_ticket: undefined,
-      focus_action: undefined,
-    },
+  if (focus.action === 'expand') {
+    void ensureTimeline(focus.ticketId)
+  } else {
+    await ensureTimeline(focus.ticketId)
+  }
+  await nextTick()
+  document.getElementById(`work-order-${focus.ticketId}`)?.scrollIntoView({
+    behavior: 'smooth',
+    block: 'center',
   })
+  if (focus.action !== 'expand') {
+    await openDispatchPanel(target, focus.action)
+    await router.replace({
+      path: route.path,
+      query: {
+        ...route.query,
+        focus_ticket: undefined,
+        focus_action: undefined,
+      },
+    })
+  }
+}
+
+function tabForWorkOrder(wo: any): WorkOrderTabKey | null {
+  if (wo.auto_dispatch_review_state?.status === 'pending') return 'auto_dispatch_review'
+  if (wo.status === 'closed') return 'closed'
+  if (['completed', 'false_alarm', 'escalated'].includes(wo.status)) return 'pending_close'
+  if (['pending_review', 'pending_dispatch', 'auto_rejected', 'dispatched'].includes(wo.status)) {
+    return wo.status
+  }
+  return null
+}
+
+function routeFocusFromQuery(): PendingFocus | null {
+  if (
+    typeof route.query.focus_ticket !== 'string'
+    || (
+      route.query.focus_action !== 'expand'
+      && route.query.focus_action !== 'dispatch'
+      && route.query.focus_action !== 'reassign'
+      && route.query.focus_action != null
+    )
+  ) {
+    return null
+  }
+  const action: PendingFocus['action'] = (
+    route.query.focus_action === 'dispatch' || route.query.focus_action === 'reassign'
+      ? route.query.focus_action
+      : 'expand'
+  )
+  return {
+    ticketId: route.query.focus_ticket,
+    action,
+  }
+}
+
+function captureRouteFocus() {
+  const focus = routeFocusFromQuery()
+  if (focus) {
+    pendingFocus.value = focus
+  }
 }
 
 watch(allOrders, (orders) => {
@@ -375,20 +563,41 @@ watch(allOrders, (orders) => {
 }, { deep: true })
 
 onMounted(async () => {
+  void buildingStore.fetchBuildings()
   applyRouteTabState()
-  if (typeof route.query.focus_ticket === 'string' && (route.query.focus_action === 'dispatch' || route.query.focus_action === 'reassign')) {
-    pendingFocus.value = {
-      ticketId: route.query.focus_ticket,
-      action: route.query.focus_action,
-    }
-    activeTab.value = 'dispatched'
-  }
+  captureRouteFocus()
   await fetchOrders()
+  if (activeTab.value === 'auto_dispatch_insights') {
+    await fetchAutoDispatchInsights()
+  }
 })
+
+watch(
+  () => [route.query.focus_ticket, route.query.focus_action],
+  async () => {
+    captureRouteFocus()
+    if (!pendingFocus.value) return
+    if (!allOrders.value.length) {
+      await fetchOrders()
+      return
+    }
+    await maybeHandlePendingFocus()
+  },
+)
 
 watch(workspaceMode, async () => {
   applyRouteTabState()
+  captureRouteFocus()
   await fetchOrders()
+  if (activeTab.value === 'auto_dispatch_insights') {
+    await fetchAutoDispatchInsights()
+  }
+})
+
+watch(activeTab, (tab) => {
+  if (tab === 'auto_dispatch_insights') {
+    void fetchAutoDispatchInsights()
+  }
 })
 </script>
 

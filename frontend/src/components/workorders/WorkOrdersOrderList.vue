@@ -4,6 +4,7 @@
       class="order-card"
       v-for="wo in orders"
       :key="wo.ticket_id"
+      :id="`work-order-${wo.ticket_id}`"
       :class="statusCardClassValue(wo)"
     >
       <div class="card-header" @click="$emit('toggle-expand', wo.ticket_id)">
@@ -29,7 +30,9 @@
           >
             {{ executionLabels[executionStatusForOrderValue(wo)] ?? executionStatusForOrderValue(wo) }}
           </span>
-          <span class="expand-btn">{{ expandedId === wo.ticket_id ? '▲' : '▼' }}</span>
+          <button class="expand-btn" type="button" @click.prevent.stop="$emit('toggle-expand', wo.ticket_id)">
+            {{ expandedId === wo.ticket_id ? '收起 ▲' : '展开 ▼' }}
+          </button>
         </div>
       </div>
 
@@ -41,6 +44,11 @@
               <span class="detail-val" :class="row.cls">{{ row.value }}</span>
             </div>
           </div>
+
+          <WorkOrdersAutoDispatchReview
+            v-if="autoDispatchReviewValue(wo)"
+            :review="autoDispatchReviewValue(wo)"
+          />
 
           <div class="timeline-block" v-if="timelineRowsValue(wo).length || isTimelineLoadingValue(wo.ticket_id) || timelineErrorValue(wo.ticket_id)">
             <p class="section-title">执行时间线</p>
@@ -105,6 +113,7 @@
 <script setup lang="ts">
 import { Icon } from '@iconify/vue'
 import { PropType } from 'vue'
+import WorkOrdersAutoDispatchReview from './WorkOrdersAutoDispatchReview.vue'
 
 defineEmits<{
   'toggle-expand': [ticketId: string]
@@ -208,6 +217,52 @@ const timelineRowsValue = (wo: any) => props.timelineRows(wo)
 const isTimelineLoadingValue = (ticketId: string) => props.isTimelineLoading(ticketId)
 const timelineErrorValue = (ticketId: string) => props.timelineError(ticketId)
 const actionsForOrderValue = (wo: any) => props.actionsForOrder(wo)
+
+function autoDispatchReviewValue(wo: any) {
+  const dispatch = wo.current_dispatch
+  if (!dispatch) return null
+  const reviewState = autoDispatchReviewStateValue(wo, dispatch)
+  if (dispatch.auto_dispatch_review) {
+    return {
+      ...dispatch.auto_dispatch_review,
+      review_state: dispatch.auto_dispatch_review.review_state || reviewState,
+    }
+  }
+
+  const snapshot = dispatch.candidate_snapshot
+  if (!snapshot?.auto_dispatch && !['auto', 'auto_fallback'].includes(dispatch.dispatch_mode)) return null
+
+  const isFallback = dispatch.dispatch_mode === 'auto_fallback'
+  return {
+    dispatch_mode: dispatch.dispatch_mode,
+    strategy: snapshot?.strategy || (isFallback ? 'low_confidence_fallback_dispatch' : 'high_confidence_dispatch'),
+    strategy_label: isFallback ? '低置信兜底派工' : '高置信自动派工',
+    confidence: snapshot?.confidence,
+    confidence_label: snapshot?.confidence === 'high' ? '高置信' : snapshot?.confidence,
+    review_state: reviewState,
+    review_hint: isFallback ? '低置信兜底派工，请管理员复核候选人、负载与现场响应情况' : '高置信自动派工，可抽查候选排序、分数与负载',
+    selection_reason: dispatch.selection_reason,
+    rules: snapshot?.rules || {},
+    score_gap: snapshot?.score_gap,
+    selected_candidate: isFallback && snapshot?.fallback_candidate ? snapshot.fallback_candidate : snapshot?.top_candidate,
+    top_candidate: snapshot?.top_candidate,
+    second_candidate: snapshot?.second_candidate,
+    fallback_candidate: snapshot?.fallback_candidate,
+  }
+}
+
+function autoDispatchReviewStateValue(wo: any, dispatch: any) {
+  if (dispatch.auto_dispatch_review_state || wo.auto_dispatch_review_state) {
+    return dispatch.auto_dispatch_review_state || wo.auto_dispatch_review_state
+  }
+  if (wo.admin_action === 'auto_dispatch_reviewed') {
+    return { status: 'reviewed', status_label: '已复核', notes: wo.admin_notes, reviewed_at: wo.admin_reviewed_at }
+  }
+  if (wo.admin_action === 'auto_dispatch_needs_reassign') {
+    return { status: 'needs_reassign', status_label: '需改派', notes: wo.admin_notes, reviewed_at: wo.admin_reviewed_at }
+  }
+  return { status: 'pending', status_label: '待复核' }
+}
 </script>
 
 <style scoped>
@@ -423,9 +478,20 @@ const actionsForOrderValue = (wo: any) => props.actionsForOrder(wo)
 }
 
 .expand-btn {
+  border: 1px solid var(--wo-border);
+  border-radius: 8px;
+  background: var(--wo-surface);
   color: var(--wo-text-subtle);
   font-size: 12px;
   font-weight: 700;
+  padding: 5px 10px;
+  cursor: pointer;
+}
+
+.expand-btn:hover {
+  color: var(--wo-chip-info-text);
+  border-color: var(--wo-chip-info-border);
+  background: var(--wo-chip-info-bg);
 }
 
 .card-body {

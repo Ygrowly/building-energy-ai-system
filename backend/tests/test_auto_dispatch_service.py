@@ -464,6 +464,204 @@ async def test_auto_reassign_evaluation_endpoint_returns_service_payload(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_execute_auto_reassign_stays_readonly_when_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    dispatch_task = _dispatch_task(id="dispatch-1", dispatch_status="assigned")
+    monkeypatch.setattr(
+        auto_dispatch_service,
+        "list_dispatch_candidates",
+        AsyncMock(
+            return_value={
+                "requirement": {"required_skills": ["hvac"], "preferred_team_name": "暖通班"},
+                "candidates": [_candidate(user_id="ops-2", username="李工", score=132)],
+            }
+        ),
+    )
+    mock_reassign = AsyncMock()
+    monkeypatch.setattr(auto_dispatch_service, "reassign_dispatch_task", mock_reassign)
+
+    payload = await auto_dispatch_service.execute_auto_reassign(
+        SimpleNamespace(),
+        work_order=_work_order(status="dispatched"),
+        current_dispatch=dispatch_task,
+        enabled=False,
+        require_overdue=False,
+    )
+
+    assert payload["executed"] is False
+    assert payload["action_taken"] is False
+    assert payload["reason"] == "auto_reassign_execution_disabled"
+    mock_reassign.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_execute_auto_reassign_reassigns_when_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    work_order = _work_order(status="dispatched", current_dispatch_id="dispatch-1")
+    current_dispatch = _dispatch_task(id="dispatch-1", assigned_to="ops-1", dispatch_status="assigned")
+    assigned_user = SimpleNamespace(id="ops-2", username="李工", role="ops", is_active=True)
+    new_dispatch = SimpleNamespace(id="dispatch-2")
+    monkeypatch.setattr(
+        auto_dispatch_service,
+        "list_dispatch_candidates",
+        AsyncMock(
+            return_value={
+                "requirement": {"required_skills": ["hvac"], "preferred_team_name": "暖通班"},
+                "candidates": [
+                    _candidate(user_id="ops-1", username="张工", score=140),
+                    _candidate(user_id="ops-2", username="李工", score=132),
+                    _candidate(user_id="ops-3", username="王工", score=110),
+                ],
+            }
+        ),
+    )
+    monkeypatch.setattr(auto_dispatch_service, "_load_auto_dispatch_assignee", AsyncMock(return_value=assigned_user))
+    mock_reassign = AsyncMock(return_value=new_dispatch)
+    mock_audit = AsyncMock()
+    monkeypatch.setattr(auto_dispatch_service, "reassign_dispatch_task", mock_reassign)
+    monkeypatch.setattr(auto_dispatch_service, "write_work_order_audit_log", mock_audit)
+
+    payload = await auto_dispatch_service.execute_auto_reassign(
+        SimpleNamespace(),
+        work_order=work_order,
+        current_dispatch=current_dispatch,
+        actor_id="admin-1",
+        enabled=True,
+        min_score=115,
+        min_gap=10,
+        require_overdue=False,
+    )
+
+    assert payload["executed"] is True
+    assert payload["reason"] == "auto_reassign_executed"
+    assert payload["dispatch_id"] == "dispatch-2"
+    assert payload["assigned_to"] == "ops-2"
+    assert mock_reassign.await_args.kwargs["actor_type"] == "system"
+    assert mock_reassign.await_args.kwargs["dispatch_mode"] == "reassigned"
+    assert mock_reassign.await_args.kwargs["candidate_snapshot"]["auto_reassign"] is True
+    assert mock_reassign.await_args.kwargs["candidate_snapshot"]["from_dispatch_id"] == "dispatch-1"
+    assert mock_audit.await_args.kwargs["action"] == "auto_reassign_executed"
+
+
+@pytest.mark.asyncio
+async def test_execute_auto_reassign_endpoint_commits_when_action_taken(monkeypatch: pytest.MonkeyPatch) -> None:
+    work_order = _work_order(status="dispatched")
+    dispatch_task = _dispatch_task()
+    db = SimpleNamespace(commit=AsyncMock(), rollback=AsyncMock())
+    mock_execute = AsyncMock(return_value={"executed": True, "action_taken": True, "dispatch_id": "dispatch-2"})
+    monkeypatch.setattr(routes_workorder, "get_work_order_by_ticket_id", AsyncMock(return_value=work_order))
+    monkeypatch.setattr(routes_workorder, "get_current_dispatch_task", AsyncMock(return_value=dispatch_task))
+    monkeypatch.setattr(routes_workorder, "execute_auto_reassign", mock_execute)
+    monkeypatch.setattr(routes_workorder, "_invalidate_related_cache", AsyncMock())
+
+    payload = await routes_workorder.execute_auto_reassign_endpoint(
+        ticket_id="WO-001",
+        db=db,
+        user=SimpleNamespace(id="admin-1", role="manager"),
+    )
+
+    assert payload["executed"] is True
+    db.commit.assert_awaited_once()
+    db.rollback.assert_not_awaited()
+    assert mock_execute.await_args.kwargs["actor_id"] == "admin-1"
+
+
+@pytest.mark.asyncio
+async def test_execute_auto_reassign_endpoint_rolls_back_when_no_action(monkeypatch: pytest.MonkeyPatch) -> None:
+    work_order = _work_order(status="dispatched")
+    dispatch_task = _dispatch_task()
+    db = SimpleNamespace(commit=AsyncMock(), rollback=AsyncMock())
+    mock_execute = AsyncMock(
+        return_value={
+            "executed": False,
+            "action_taken": False,
+            "reason": "auto_reassign_execution_disabled",
+        }
+    )
+    monkeypatch.setattr(routes_workorder, "get_work_order_by_ticket_id", AsyncMock(return_value=work_order))
+    monkeypatch.setattr(routes_workorder, "get_current_dispatch_task", AsyncMock(return_value=dispatch_task))
+    monkeypatch.setattr(routes_workorder, "execute_auto_reassign", mock_execute)
+    monkeypatch.setattr(routes_workorder, "_invalidate_related_cache", AsyncMock())
+
+    payload = await routes_workorder.execute_auto_reassign_endpoint(
+        ticket_id="WO-001",
+        db=db,
+        user=SimpleNamespace(id="admin-1", role="manager"),
+    )
+
+    assert payload["action_taken"] is False
+    db.rollback.assert_awaited_once()
+    db.commit.assert_not_awaited()
+    routes_workorder._invalidate_related_cache.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_mark_auto_dispatch_review_writes_audit(monkeypatch: pytest.MonkeyPatch) -> None:
+    work_order = _work_order(status="dispatched", current_dispatch_id="dispatch-1")
+    dispatch_task = _dispatch_task(
+        id="dispatch-1",
+        dispatch_mode="auto",
+        candidate_snapshot_json='{"auto_dispatch": true}',
+    )
+    now = datetime.now(timezone.utc)
+    log_entry = SimpleNamespace(
+        action="auto_dispatch_reviewed",
+        actor_id="admin-1",
+        detail_json='{"dispatch_id": "dispatch-1", "notes": null}',
+        created_at=now,
+    )
+    db = SimpleNamespace(flush=AsyncMock(), commit=AsyncMock())
+    mock_audit = AsyncMock(return_value=log_entry)
+    monkeypatch.setattr(routes_workorder, "get_work_order_by_ticket_id", AsyncMock(return_value=work_order))
+    monkeypatch.setattr(routes_workorder, "get_current_dispatch_task", AsyncMock(return_value=dispatch_task))
+    monkeypatch.setattr(routes_workorder, "write_work_order_audit_log", mock_audit)
+    monkeypatch.setattr(routes_workorder, "_invalidate_related_cache", AsyncMock())
+    monkeypatch.setattr(routes_workorder, "_load_users_by_ids", AsyncMock(return_value={}))
+    monkeypatch.setattr(
+        routes_workorder,
+        "serialize_work_order",
+        lambda *args, **kwargs: {"ticket_id": "WO-001", "current_dispatch": {"auto_dispatch_review": {}}},
+    )
+
+    payload = await routes_workorder.mark_auto_dispatch_review(
+        ticket_id="WO-001",
+        req=routes_workorder.AutoDispatchReviewRequest(action="reviewed"),
+        db=db,
+        user=SimpleNamespace(id="admin-1", role="admin"),
+    )
+
+    assert payload["review_state"]["status"] == "reviewed"
+    assert payload["work_order"]["current_dispatch"]["auto_dispatch_review_state"]["status"] == "reviewed"
+    assert work_order.admin_action == "auto_dispatch_reviewed"
+    assert mock_audit.await_args.kwargs["action"] == "auto_dispatch_reviewed"
+    assert mock_audit.await_args.kwargs["detail"]["dispatch_id"] == "dispatch-1"
+    db.flush.assert_awaited_once()
+    db.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_mark_auto_dispatch_review_rejects_manual_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
+    work_order = _work_order(status="dispatched", current_dispatch_id="dispatch-1")
+    dispatch_task = _dispatch_task(
+        id="dispatch-1",
+        dispatch_mode="manual",
+        candidate_snapshot_json="{}",
+    )
+    db = SimpleNamespace(flush=AsyncMock(), commit=AsyncMock())
+    monkeypatch.setattr(routes_workorder, "get_work_order_by_ticket_id", AsyncMock(return_value=work_order))
+    monkeypatch.setattr(routes_workorder, "get_current_dispatch_task", AsyncMock(return_value=dispatch_task))
+
+    with pytest.raises(HTTPException) as exc_info:
+        await routes_workorder.mark_auto_dispatch_review(
+            ticket_id="WO-001",
+            req=routes_workorder.AutoDispatchReviewRequest(action="reviewed"),
+            db=db,
+            user=SimpleNamespace(id="admin-1", role="manager"),
+        )
+
+    assert exc_info.value.status_code == 409
+    db.commit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_auto_dispatch_evaluation_endpoint_rejects_ops() -> None:
     with pytest.raises(HTTPException) as exc_info:
         await routes_workorder.get_auto_dispatch_evaluation(

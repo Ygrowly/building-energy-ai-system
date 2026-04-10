@@ -139,14 +139,21 @@ class Settings(BaseSettings):
     AUTO_DISPATCH_MIN_GAP: int = 10  # 自动派工第一候选人与第二候选人的最低分差
     AUTO_DISPATCH_REQUIRE_ON_DUTY: bool = True  # 自动派工是否要求第一候选人为值班中
     ENABLE_AUTO_DISPATCH_FALLBACK_EXECUTION: bool = False  # 是否允许低置信兜底派工
-    AUTO_DISPATCH_FALLBACK_MIN_SCORE: int = 80  # 低置信兜底派工最低推荐分
-    AUTO_DISPATCH_FALLBACK_ALLOW_STANDBY: bool = True  # 低置信兜底是否允许待命人员
+    AUTO_DISPATCH_FALLBACK_MIN_SCORE: int = 95  # 低置信兜底派工最低推荐分
+    AUTO_DISPATCH_FALLBACK_ALLOW_STANDBY: bool = False  # 低置信兜底是否允许待命人员
     ENABLE_AUTO_DISPATCH_HALL_FALLBACK: bool = False  # 无法指定个人时是否自动创建工单大厅接管入口
+    AUTO_DISPATCH_CREATE_HALL_ON_ROLLOUT_SKIP: bool = False  # 灰度外审批通过工单是否自动进大厅
     AUTO_DISPATCH_ALLOWED_BUILDINGS: list[str] = []  # 灰度：允许自动派工的楼宇白名单；空表示不限
     AUTO_DISPATCH_ALLOWED_PRIORITIES: list[str] = []  # 灰度：允许自动派工的优先级白名单；空表示不限
     AUTO_DISPATCH_ALLOWED_REQUIRED_SKILLS: list[str] = []  # 灰度：允许自动派工的技能白名单；空表示不限
     AUTO_DISPATCH_ALLOW_LOW_CONFIDENCE_IN_GREY: bool = False  # 灰度：是否允许低置信兜底派工
     AUTO_DISPATCH_ALLOW_HALL_FALLBACK_IN_GREY: bool = False  # 灰度：是否允许工单大厅兜底
+    ENABLE_AUTO_REASSIGN_EXECUTION: bool = False  # 业务开关：是否允许系统按自动重派评估结果执行改派
+    AUTO_REASSIGN_MIN_SCORE: int = 115  # 自动重派新候选人最低推荐分
+    AUTO_REASSIGN_MIN_GAP: int = 10  # 自动重派第一候选人与第二候选人的最低分差
+    AUTO_REASSIGN_REQUIRE_ON_DUTY: bool = True  # 自动重派是否要求新候选人为值班中
+    AUTO_REASSIGN_REQUIRE_OVERDUE: bool = True  # 自动重派是否要求当前派工已超时
+    AUTO_REASSIGN_MAX_ATTEMPT_NO: int = 3  # 自动重派允许的最大派工尝试次数
     ENABLE_CHAT_WORK_ORDERS: bool = False  # 对话开关：是否允许聊天链路直接生成工单草稿/工单流程
 
     # -----------------------------------------------------------------------

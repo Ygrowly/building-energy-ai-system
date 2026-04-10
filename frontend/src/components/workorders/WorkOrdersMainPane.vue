@@ -1,6 +1,28 @@
 <template>
+  <WorkOrdersAutoDispatchInsightsPanel
+    v-if="activeTab === 'auto_dispatch_insights'"
+    :insights="autoDispatchInsights"
+    :filters="autoDispatchInsightFilters"
+    :loading="autoDispatchInsightLoading"
+    :error="autoDispatchInsightError"
+    :priority-labels="priorityLabels"
+    :building-options="autoDispatchInsightBuildingOptions"
+    :skill-options="autoDispatchInsightSkillOptions"
+    :building-name="buildingName"
+    :format-time="formatTime"
+    :update-filter="updateAutoDispatchInsightFilter"
+    :refresh="fetchAutoDispatchInsights"
+    :explanation="autoDispatchInsightExplanation"
+    :explanation-source="autoDispatchInsightExplanationSource"
+    :explain-question="autoDispatchInsightQuestion"
+    :explain-loading="autoDispatchInsightExplainLoading"
+    :explain-error="autoDispatchInsightExplainError"
+    :update-explain-question="updateAutoDispatchInsightQuestion"
+    :explain="fetchAutoDispatchInsightExplanation"
+  />
+
   <WorkOrdersHallList
-    v-if="!loading && activeTab === 'shared_hall' && hallEntries.length > 0"
+    v-else-if="!loading && activeTab === 'shared_hall' && hallEntries.length > 0"
     :hall-entries="hallEntries"
     :action-loading="actionLoading"
     :priority-labels="priorityLabels"
@@ -53,6 +75,7 @@
 
 <script setup lang="ts">
 import { PropType } from 'vue'
+import WorkOrdersAutoDispatchInsightsPanel from './WorkOrdersAutoDispatchInsightsPanel.vue'
 import WorkOrdersHallList from './WorkOrdersHallList.vue'
 import WorkOrdersOrderList from './WorkOrdersOrderList.vue'
 
@@ -192,6 +215,66 @@ defineProps({
   },
   actionsForOrder: {
     type: Function as PropType<(wo: any) => Array<{ action: string; label: string; className: string }>>,
+    required: true,
+  },
+  autoDispatchInsights: {
+    type: Object as PropType<any | null>,
+    default: null,
+  },
+  autoDispatchInsightFilters: {
+    type: Object as PropType<Record<string, string>>,
+    required: true,
+  },
+  autoDispatchInsightLoading: {
+    type: Boolean,
+    required: true,
+  },
+  autoDispatchInsightError: {
+    type: String,
+    required: true,
+  },
+  autoDispatchInsightBuildingOptions: {
+    type: Array as PropType<Array<{ label: string; value: string }>>,
+    required: true,
+  },
+  autoDispatchInsightSkillOptions: {
+    type: Array as PropType<Array<{ label: string; value: string }>>,
+    required: true,
+  },
+  updateAutoDispatchInsightFilter: {
+    type: Function as PropType<(key: string, value: string) => void>,
+    required: true,
+  },
+  fetchAutoDispatchInsights: {
+    type: Function as PropType<() => void>,
+    required: true,
+  },
+  autoDispatchInsightExplanation: {
+    type: Object as PropType<any | null>,
+    default: null,
+  },
+  autoDispatchInsightExplanationSource: {
+    type: String,
+    default: '',
+  },
+  autoDispatchInsightQuestion: {
+    type: String,
+    required: true,
+  },
+  autoDispatchInsightExplainLoading: {
+    type: Boolean,
+    required: true,
+  },
+  autoDispatchInsightExplainError: {
+    type: String,
+    required: true,
+  },
+  updateAutoDispatchInsightQuestion: {
+    type: Function as PropType<(value: string) => void>,
+    required: true,
+  },
+  fetchAutoDispatchInsightExplanation: {
+    type: Function as PropType<() => void>,
     required: true,
   },
 })

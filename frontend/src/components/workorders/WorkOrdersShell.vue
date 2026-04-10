@@ -1,5 +1,5 @@
 <template>
-  <div class="workorders">
+  <div class="workorders notranslate" translate="no">
     <header class="page-header">
       <div class="header-copy">
         <h1><Icon icon="mdi:clipboard-list" width="22" class="page-icon" /> {{ workspaceConfig.title }}</h1>
@@ -33,6 +33,17 @@
         </button>
       </div>
       <div class="toolbar-actions">
+        <div v-if="activeTab === 'auto_dispatch_review'" class="inline-filter" aria-label="自动派工复核筛选">
+          <button
+            v-for="item in autoDispatchReviewStatusOptions"
+            :key="item.value"
+            class="filter-chip"
+            :class="{ active: autoDispatchReviewStatus === item.value }"
+            @click="$emit('switch-auto-dispatch-review-status', item.value)"
+          >
+            {{ item.label }}
+          </button>
+        </div>
         <button
           v-if="activeTab === 'pending_dispatch'"
           class="refresh-btn accent"
@@ -49,7 +60,7 @@
       </div>
     </div>
 
-    <div class="summary-strip" v-if="activeTab !== 'shared_hall' && allOrdersCount > 0">
+    <div class="summary-strip" v-if="activeTab !== 'shared_hall' && activeTab !== 'auto_dispatch_insights' && allOrdersCount > 0">
       <div class="summary-pill">
         <span class="summary-value">{{ allOrdersCount }}</span>
         <span class="summary-label">工单总数</span>
@@ -110,9 +121,17 @@ import type { WorkOrderTabKey, WorkOrderWorkspaceMode } from '@/constants/workOr
 defineEmits<{
   'switch-workspace': [path: string]
   'switch-tab': [tab: WorkOrderTabKey]
+  'switch-auto-dispatch-review-status': [status: 'pending' | 'reviewed' | 'needs_reassign' | 'all']
   'open-batch-dispatch': []
   refresh: []
 }>()
+
+const autoDispatchReviewStatusOptions = [
+  { label: '待复核', value: 'pending' },
+  { label: '已复核', value: 'reviewed' },
+  { label: '需改派', value: 'needs_reassign' },
+  { label: '全部', value: 'all' },
+] as const
 
 const props = defineProps({
   workspaceConfig: {
@@ -134,6 +153,10 @@ const props = defineProps({
   activeTab: {
     type: String as PropType<WorkOrderTabKey>,
     required: true,
+  },
+  autoDispatchReviewStatus: {
+    type: String as PropType<'pending' | 'reviewed' | 'needs_reassign' | 'all'>,
+    default: 'pending',
   },
   loading: {
     type: Boolean,
@@ -243,11 +266,14 @@ const tabCountValue = (tab: WorkOrderTabKey) => props.tabCount(tab)
   box-shadow: 0 6px 16px rgba(22, 163, 74, 0.12);
 }
 .toolbar { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 16px; }
-.toolbar-actions { display: flex; align-items: center; gap: 10px; }
+.toolbar-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
 .tab-group { display: flex; flex-wrap: wrap; gap: 6px; }
 .tab-btn, .refresh-btn, .link-btn { background: none; border: 1px solid var(--border); border-radius: 8px; color: var(--text-secondary); font-size: 13px; padding: 8px 14px; cursor: pointer; transition: all 0.2s; }
 .tab-btn { display: flex; align-items: center; gap: 6px; }
 .tab-btn.active { background: var(--accent-glow); border-color: var(--border-accent); color: var(--accent); font-weight: 600; }
+.inline-filter { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.filter-chip { border: 1px solid var(--border); border-radius: 8px; background: var(--bg-panel); color: var(--text-secondary); font-size: 12px; font-weight: 600; padding: 7px 10px; cursor: pointer; }
+.filter-chip.active { background: rgba(34, 197, 94, 0.12); border-color: rgba(34, 197, 94, 0.28); color: #166534; }
 .refresh-btn.accent { background: var(--accent); border-color: var(--accent); color: white; }
 .refresh-btn.inline { padding: 7px 12px; }
 .refresh-btn.warn { border-color: rgba(245, 158, 11, 0.24); color: #b45309; background: rgba(245, 158, 11, 0.08); }

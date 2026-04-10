@@ -2,6 +2,8 @@ import { computed, ref } from 'vue'
 import { apiFetch } from '@/api/http'
 import { WORK_ORDER_EMPTY_MESSAGES, type WorkOrderTabKey } from '@/constants/workOrders'
 
+type AutoDispatchReviewStatus = 'pending' | 'reviewed' | 'needs_reassign' | 'all'
+
 interface UseWorkOrdersDataOptions {
   route: {
     query: Record<string, unknown>
@@ -17,6 +19,7 @@ function hallPendingApplications(entry: any): any[] {
 
 function matchesTab(wo: any, tab: WorkOrderTabKey) {
   if (tab === 'all') return true
+  if (tab === 'auto_dispatch_insights') return false
   if (tab === 'pending_close') return ['completed', 'false_alarm', 'escalated'].includes(wo.status)
   if (tab === 'closed') return wo.status === 'closed'
   return wo.status === tab
@@ -34,20 +37,41 @@ export function useWorkOrdersData(options: UseWorkOrdersDataOptions) {
   const loading = ref(false)
   const fetchError = ref('')
   const allOrders = ref<any[]>([])
+  const autoDispatchReviewOrders = ref<any[]>([])
+  const autoDispatchReviewStatus = ref<AutoDispatchReviewStatus>('pending')
   const hallEntries = ref<any[]>([])
   const activeTab = ref<WorkOrderTabKey>(options.defaultTab ?? 'pending_dispatch')
   const expandedId = ref<string | null>(null)
+  const lastToggle = ref<{ ticketId: string; at: number }>({ ticketId: '', at: 0 })
   const orderTimelines = ref<Record<string, any>>({})
   const timelineLoadingState = ref<Record<string, boolean>>({})
   const timelineErrorState = ref<Record<string, string>>({})
 
-  const filteredOrders = computed(() => allOrders.value.filter(wo => matchesTab(wo, activeTab.value)))
+  const filteredOrders = computed(() => (
+    activeTab.value === 'auto_dispatch_review'
+      ? autoDispatchReviewOrders.value
+      : allOrders.value.filter(wo => matchesTab(wo, activeTab.value))
+  ))
   const overdueCount = computed(() => allOrders.value.filter(wo => currentExecutionStatus(wo) === 'overdue' || currentSlaStatus(wo) === 'overdue').length)
-  const isCurrentTabEmpty = computed(() => activeTab.value === 'shared_hall' ? hallEntries.value.length === 0 : filteredOrders.value.length === 0)
-  const emptyMessage = computed(() => WORK_ORDER_EMPTY_MESSAGES[activeTab.value])
+  const isCurrentTabEmpty = computed(() => {
+    if (activeTab.value === 'auto_dispatch_insights') return false
+    return activeTab.value === 'shared_hall' ? hallEntries.value.length === 0 : filteredOrders.value.length === 0
+  })
+  const emptyMessage = computed(() => {
+    if (activeTab.value !== 'auto_dispatch_review') return WORK_ORDER_EMPTY_MESSAGES[activeTab.value]
+    const messages: Record<AutoDispatchReviewStatus, string> = {
+      pending: '暂无待复核的自动派工单',
+      reviewed: '暂无已复核的自动派工单',
+      needs_reassign: '暂无标记需改派的自动派工单',
+      all: '暂无自动派工单',
+    }
+    return messages[autoDispatchReviewStatus.value]
+  })
 
   function tabCount(tab: WorkOrderTabKey) {
     if (tab === 'shared_hall') return hallEntries.value.length
+    if (tab === 'auto_dispatch_review') return autoDispatchReviewOrders.value.length
+    if (tab === 'auto_dispatch_insights') return 0
     return allOrders.value.filter(wo => matchesTab(wo, tab)).length
   }
 
@@ -81,6 +105,24 @@ export function useWorkOrdersData(options: UseWorkOrdersDataOptions) {
         return
       }
 
+      if (activeTab.value === 'auto_dispatch_insights') {
+        return
+      }
+
+      if (activeTab.value === 'auto_dispatch_review') {
+        const data = await apiFetch<any>('/api/work-orders/auto-dispatch-review?' + new URLSearchParams({
+          review_status: autoDispatchReviewStatus.value,
+          page: '1',
+          page_size: '100',
+        }).toString())
+        autoDispatchReviewOrders.value = data?.work_orders ?? []
+        if (expandedId.value && autoDispatchReviewOrders.value.some(wo => wo.ticket_id === expandedId.value)) {
+          void ensureTimeline(expandedId.value)
+        }
+        await options.onOrdersLoaded()
+        return
+      }
+
       const data = await apiFetch<any>('/api/work-orders')
       allOrders.value = data?.work_orders ?? []
       if (expandedId.value && allOrders.value.some(wo => wo.ticket_id === expandedId.value)) {
@@ -98,17 +140,30 @@ export function useWorkOrdersData(options: UseWorkOrdersDataOptions) {
     activeTab.value = tab
     expandedId.value = null
     options.onSelectionReset()
-    if (tab === 'shared_hall' || allOrders.value.length === 0) {
+    if (tab === 'shared_hall' || tab === 'auto_dispatch_review' || allOrders.value.length === 0) {
       void fetchOrders()
     }
   }
 
-  async function toggleExpand(ticketId: string) {
+  function switchAutoDispatchReviewStatus(status: AutoDispatchReviewStatus) {
+    autoDispatchReviewStatus.value = status
+    if (activeTab.value === 'auto_dispatch_review') {
+      void fetchOrders()
+    }
+  }
+
+  function toggleExpand(ticketId: string) {
+    const now = Date.now()
+    if (lastToggle.value.ticketId === ticketId && now - lastToggle.value.at < 120) {
+      return
+    }
+    lastToggle.value = { ticketId, at: now }
+
     const nextId = expandedId.value === ticketId ? null : ticketId
     expandedId.value = nextId
     options.onSelectionReset()
     if (nextId) {
-      await ensureTimeline(nextId)
+      void ensureTimeline(nextId)
     }
   }
 
@@ -141,6 +196,8 @@ export function useWorkOrdersData(options: UseWorkOrdersDataOptions) {
     loading,
     fetchError,
     allOrders,
+    autoDispatchReviewOrders,
+    autoDispatchReviewStatus,
     hallEntries,
     activeTab,
     expandedId,
@@ -152,6 +209,7 @@ export function useWorkOrdersData(options: UseWorkOrdersDataOptions) {
     tabCount,
     fetchOrders,
     switchTab,
+    switchAutoDispatchReviewStatus,
     toggleExpand,
     ensureTimeline,
     isTimelineLoading,

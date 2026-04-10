@@ -138,6 +138,19 @@ export function useWorkOrderPresentation(options: UseWorkOrderPresentationOption
       || '未派工'
   }
 
+  function executionStatusForOrder(wo: any) {
+    return currentDispatchForOrder(wo)?.execution_status || wo.execution_status || ''
+  }
+
+  function executionLabelForOrder(wo: any) {
+    const status = executionStatusForOrder(wo)
+    return status ? options.executionLabels[status] ?? status : '—'
+  }
+
+  function assigneeNameForOrder(wo: any) {
+    return assigneeName(wo, currentDispatchForOrder(wo))
+  }
+
   function formatSlaText(wo: any, currentDispatch: any) {
     const status = String(currentDispatch?.sla_status || wo.sla_status || '').trim()
     const minutesRaw = currentDispatch?.sla_minutes_left ?? wo.sla_minutes_left
@@ -162,6 +175,9 @@ export function useWorkOrderPresentation(options: UseWorkOrderPresentationOption
 
   function detailRows(wo: any) {
     const currentDispatch = currentDispatchForOrder(wo)
+    const autoDispatchReviewState = currentDispatch?.auto_dispatch_review?.review_state
+      || currentDispatch?.auto_dispatch_review_state
+      || wo.auto_dispatch_review_state
     const rows: Array<{ label: string; value: string; cls?: string }> = [
       { label: '工单 ID', value: wo.ticket_id, cls: 'mono accent' },
       { label: '楼宇', value: buildingName(wo.building_id) },
@@ -178,6 +194,13 @@ export function useWorkOrderPresentation(options: UseWorkOrderPresentationOption
 
     if (currentBlockReason(wo)) {
       rows.push({ label: '当前阻塞', value: currentBlockReason(wo), cls: 'wrap danger-text' })
+    }
+    if (currentDispatch?.auto_dispatch_review || currentDispatch?.candidate_snapshot?.auto_dispatch) {
+      rows.push({
+        label: '自动派工复核',
+        value: autoDispatchReviewState?.status_label || '待复核',
+        cls: autoDispatchReviewState?.status === 'needs_reassign' ? 'danger-text' : 'accent',
+      })
     }
     if (latestReassignReason(wo)) {
       rows.push({ label: '最近改派', value: latestReassignReason(wo), cls: 'wrap' })
@@ -265,6 +288,9 @@ export function useWorkOrderPresentation(options: UseWorkOrderPresentationOption
 
   return {
     currentDispatchForOrder,
+    executionStatusForOrder,
+    executionLabelForOrder,
+    assigneeNameForOrder,
     detailRows,
     timelineRows,
     buildingName,

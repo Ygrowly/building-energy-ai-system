@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -143,6 +144,102 @@ async def test_work_order_insight_metrics_endpoint_rejects_ops() -> None:
         )
 
     assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_auto_dispatch_operation_insights_endpoint_passes_filters(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mock_build = AsyncMock(return_value={"readonly": True, "summary": {"total_events": 0}})
+    monkeypatch.setattr(
+        routes_work_order_insights,
+        "build_auto_dispatch_operation_insights",
+        mock_build,
+    )
+
+    response = await routes_work_order_insights.get_auto_dispatch_operation_insights(
+        date_from=date(2026, 4, 1),
+        date_to=date(2026, 4, 9),
+        building_id="Fox_public_Henry",
+        priority="high",
+        required_skill="hvac",
+        dispatch_mode="hall_fallback",
+        team_id="team-1",
+        assignee_id="ops-1",
+        page=2,
+        page_size=10,
+        db=SimpleNamespace(),
+        user=SimpleNamespace(id="manager-1", role="manager"),
+    )
+
+    assert response["readonly"] is True
+    assert mock_build.await_args.kwargs == {
+        "date_from": date(2026, 4, 1),
+        "date_to": date(2026, 4, 9),
+        "building_id": "Fox_public_Henry",
+        "priority": "high",
+        "required_skill": "hvac",
+        "dispatch_mode": "hall_fallback",
+        "team_id": "team-1",
+        "assignee_id": "ops-1",
+        "page": 2,
+        "page_size": 10,
+    }
+
+
+@pytest.mark.asyncio
+async def test_auto_dispatch_operation_insights_endpoint_rejects_bad_mode() -> None:
+    with pytest.raises(HTTPException) as exc_info:
+        await routes_work_order_insights.get_auto_dispatch_operation_insights(
+            dispatch_mode="manual",
+            db=SimpleNamespace(),
+            user=SimpleNamespace(id="manager-1", role="manager"),
+        )
+
+    assert exc_info.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_auto_dispatch_operation_explain_endpoint_uses_service(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mock_explain = AsyncMock(return_value={"readonly": True, "source": "deterministic"})
+    monkeypatch.setattr(
+        routes_work_order_insights,
+        "explain_auto_dispatch_operation_insights",
+        mock_explain,
+    )
+
+    response = await routes_work_order_insights.explain_auto_dispatch_operations(
+        req=routes_work_order_insights.AutoDispatchOperationExplainRequest(
+            question="今天自动派工稳不稳",
+            use_llm=False,
+            date_from=date(2026, 4, 9),
+            date_to=date(2026, 4, 9),
+            dispatch_mode="auto",
+        ),
+        db=SimpleNamespace(),
+        user=SimpleNamespace(id="manager-1", role="manager"),
+    )
+
+    assert response["source"] == "deterministic"
+    assert mock_explain.await_args.kwargs["question"] == "今天自动派工稳不稳"
+    assert mock_explain.await_args.kwargs["use_llm"] is False
+    assert mock_explain.await_args.kwargs["dispatch_mode"] == "auto"
+
+
+@pytest.mark.asyncio
+async def test_auto_dispatch_operation_explain_endpoint_rejects_bad_mode() -> None:
+    with pytest.raises(HTTPException) as exc_info:
+        await routes_work_order_insights.explain_auto_dispatch_operations(
+            req=routes_work_order_insights.AutoDispatchOperationExplainRequest(
+                dispatch_mode="manual",
+            ),
+            db=SimpleNamespace(),
+            user=SimpleNamespace(id="manager-1", role="manager"),
+        )
+
+    assert exc_info.value.status_code == 400
 
 
 @pytest.mark.asyncio

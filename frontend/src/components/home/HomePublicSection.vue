@@ -28,7 +28,6 @@ const chartTaskRunner = createDeferredTaskRunner()
 
 const statusSnap  = ref<any>(null)
 const anomalies   = ref<any[]>([])
-const ratedSummary = ref<any>(null)
 
 // ── 舒适度评分（基于实时快照温湿度阈值规则）─────────────────────────────────
 const comfortScore = computed(() => {
@@ -351,20 +350,15 @@ async function loadAll() {
     const lpE = props.bundle.load_profile_electricity ?? { hourly_profile: [] }
     const lpT = props.bundle.load_profile_air_temp ?? { hourly_profile: [] }
     const lpH = props.bundle.load_profile_humidity ?? { hourly_profile: [] }
-    const ax = props.bundle.anomalies ?? { anomalies: [] }
-    const rv = props.bundle.rated_vs_actual_electricity ?? null
     const st = props.bundle.status ?? null
 
     statusSnap.value = st
-    anomalies.value = ax?.anomalies ?? []
-    ratedSummary.value = rv?.summary ?? null
 
     const hasChartPayload = Boolean(
       (en?.records?.length ?? 0) ||
       (lpE?.hourly_profile?.length ?? 0) ||
       (lpT?.hourly_profile?.length ?? 0) ||
-      (lpH?.hourly_profile?.length ?? 0) ||
-      (rv?.records?.length ?? 0),
+      (lpH?.hourly_profile?.length ?? 0),
     )
     if (props.chartBundlePending && !hasChartPayload) {
       finish('ok', { state: 'charts_pending' })
@@ -392,7 +386,7 @@ async function loadAll() {
         nextTick(() => instances.forEach((i) => i.resize()))
       },
     )
-    finish('ok', { anomalyCount: anomalies.value.length })
+    finish('ok')
     return
   }
 
@@ -406,25 +400,18 @@ async function loadAll() {
   startD.setUTCDate(startD.getUTCDate() - 29)
   const sd = isoDate(startD)
   const ed = isoDate(endD)
-  const shortStart = new Date(endD)
-  shortStart.setUTCDate(shortStart.getUTCDate() - 6)
-  const sds = isoDate(shortStart)
 
   try {
-    const [en, lpE, lpT, lpH, ax, rv] = await Promise.all([
+    const [en, lpE, lpT, lpH] = await Promise.all([
       cachedApiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/energy?start_date=${sd}&end_date=${ed}&include_water=true`, undefined, { signal: controller.signal }),
       cachedApiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/load-profile?metric=electricity&days=14`, undefined, { signal: controller.signal }),
       cachedApiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/load-profile?metric=air_temp&days=14`, undefined, { signal: controller.signal }).catch(() => ({ hourly_profile: [] })),
       cachedApiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/load-profile?metric=humidity&days=14`, undefined, { signal: controller.signal }).catch(() => ({ hourly_profile: [] })),
-      cachedApiFetch<any>(`/api/anomalies/recent?hours=168&building_type=${encodeURIComponent(BT)}`, undefined, { signal: controller.signal }),
-      cachedApiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/rated-vs-actual?start_date=${sds}&end_date=${ed}&metric=electricity`, undefined, { signal: controller.signal }).catch(() => null),
     ])
 
     const st = await cachedApiFetch<any>(`/api/buildings/${encodeURIComponent(BT)}/status`, undefined, { signal: controller.signal }).catch(() => null)
     if (loadController !== controller || controller.signal.aborted) return
     statusSnap.value  = st
-    anomalies.value   = ax?.anomalies ?? []
-    ratedSummary.value = rv?.summary ?? null
 
     const toHourly = (profile: any[]) =>
       Array.from({ length: 24 }, (_, h) => {
@@ -447,7 +434,7 @@ async function loadAll() {
         nextTick(() => instances.forEach((i) => i.resize()))
       },
     )
-    finish('ok', { anomalyCount: anomalies.value.length })
+    finish('ok')
   } catch (error) {
     if (isAbortError(error)) {
       finish('abort')
@@ -675,5 +662,84 @@ html[data-theme="light"] .tl-dot {
 }
 html[data-theme="light"] .tl-msg {
   color: #374151;
+}
+
+.home-public-section {
+  display: grid;
+  grid-template-columns: minmax(0, 0.94fr) minmax(0, 1.06fr);
+  gap: 14px;
+  align-items: start;
+  min-width: 0;
+}
+
+.home-public-section > .bento-row {
+  display: contents;
+}
+
+.home-public-section [data-pick-id="public-timeline-anomalies"] {
+  display: none !important;
+}
+
+.home-public-section [data-pick-id="public-kpi-comfort-score"] {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.home-public-section [data-pick-id="public-chart-comfort-trend"] {
+  grid-column: 1;
+  grid-row: 2;
+}
+
+.home-public-section [data-pick-id="public-chart-heatmap"] {
+  grid-column: 1;
+  grid-row: 3;
+}
+
+.home-public-section [data-pick-id="public-chart-dual-trend"] {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.home-public-section [data-pick-id="public-chart-hourly-profile"] {
+  grid-column: 2;
+  grid-row: 2;
+}
+
+@container (max-width: 699px) {
+  .home-public-section {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .home-public-section [data-pick-id="public-kpi-comfort-score"] {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .home-public-section [data-pick-id="public-chart-comfort-trend"] {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  .home-public-section [data-pick-id="public-chart-heatmap"] {
+    grid-column: 1;
+    grid-row: 3;
+  }
+
+  .home-public-section [data-pick-id="public-chart-dual-trend"] {
+    grid-column: 1;
+    grid-row: 4;
+  }
+
+  .home-public-section [data-pick-id="public-chart-hourly-profile"] {
+    grid-column: 1;
+    grid-row: 5;
+  }
+}
+
+@container (max-width: 399px) {
+  .home-public-section {
+    gap: 8px;
+  }
 }
 </style>

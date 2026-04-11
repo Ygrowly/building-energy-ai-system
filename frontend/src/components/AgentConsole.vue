@@ -406,6 +406,21 @@
       <div class="typing-indicator" v-if="store.isLoading">
         <span></span><span></span><span></span>
       </div>
+
+      <div v-if="showConversationExportCta" class="conversation-tail-action">
+        <button
+          class="conversation-export-btn"
+          :disabled="reportGenerating"
+          @click="onExportConversation()"
+        >
+          <Icon
+            :icon="reportGenerating ? 'mdi:loading' : 'mdi:file-chart-outline'"
+            width="15"
+            :class="{ spin: reportGenerating }"
+          />
+          <span>{{ reportGenerating ? '生成报表中...' : '导出对话报表' }}</span>
+        </button>
+      </div>
     </div>
 
     <!-- 输入框 -->
@@ -934,6 +949,21 @@ const lastAiMsg = computed(() => {
   return null
 })
 const lastAiMsgId = computed(() => lastAiMsg.value?.id ?? null)
+const showConversationExportCta = computed(() => {
+  if (!store.currentSessionId || store.isLoading) return false
+  for (let i = store.messages.length - 1; i >= 0; i--) {
+    const msg = store.messages[i]
+    if (msg.role === 'user') return false
+    if (msg.role === 'error') return true
+    if (msg.role === 'ai') {
+      return Boolean(msg.content || msg.attachedArtifacts?.length || msg.thinkingFinished)
+    }
+    if (msg.role === 'artifact' && !isArtifactInlined(msg, i) && !isRawDataSnapshot(msg.artifact)) {
+      return true
+    }
+  }
+  return false
+})
 
 const rawDataRows = computed(() => {
   const payload = rawDataPreview.value?.data_payload as Record<string, unknown> | undefined
@@ -1159,6 +1189,7 @@ function _scrollToBottom() {
 watch(
   [
     () => store.messages.length,
+    () => store.isLoading,
     () => {
       const last = store.messages[store.messages.length - 1]
       return last?.thinkingSteps?.length ?? 0
@@ -2548,6 +2579,46 @@ html[data-theme="light"] .tab.active .tab-close {
 @keyframes bounce { 0%, 80%, 100% { transform: translateY(0); } 40% { transform: translateY(-6px); } }
 
 /* ── 输入框 ─────────────────────────────────────────────────────────────── */
+.conversation-tail-action {
+  display: flex;
+  justify-content: flex-start;
+  padding: 2px 14px 8px;
+}
+
+.conversation-export-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: linear-gradient(180deg, rgba(108, 142, 245, 0.08), rgba(108, 142, 245, 0.04));
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, transform 0.15s, color 0.15s;
+}
+
+.conversation-export-btn:hover {
+  border-color: rgba(108, 142, 245, 0.4);
+  background: linear-gradient(180deg, rgba(108, 142, 245, 0.14), rgba(108, 142, 245, 0.08));
+  color: var(--accent);
+  transform: translateY(-1px);
+}
+
+.conversation-export-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.68;
+  transform: none;
+}
+
+.conversation-export-btn:disabled:hover {
+  color: var(--text-primary);
+  border-color: var(--border);
+  background: linear-gradient(180deg, rgba(108, 142, 245, 0.08), rgba(108, 142, 245, 0.04));
+}
+
 .input-area {
   padding: 0 12px 12px;
   flex-shrink: 0;

@@ -5,30 +5,26 @@
     <!-- 分组切换 -->
     <view class="tab-shell">
       <view class="tab-shell-head">
-        <text class="tab-shell-title">状态筛选</text>
-        <text class="tab-shell-hint">左右滑动切换</text>
+        <view>
+          <text class="tab-shell-title">流程状态</text>
+          <text class="tab-shell-subtitle">按当前处理阶段查看工单</text>
+        </view>
       </view>
-      <scroll-view
-        scroll-x
-        class="tab-switch-scroll"
-        :show-scrollbar="false"
-        :scroll-into-view="activeTabScrollId"
-        :scroll-with-animation="true"
-      >
-        <view class="tab-switch">
-          <view
-            v-for="(tab, index) in switchTabs"
-            :id="`operator-tab-${index}`"
-            :key="tab.value"
-            class="switch-item"
-            :class="{ active: activeTab === tab.value }"
-            @click="onSwitchTab(tab.value)"
-          >
-            <text class="switch-label">{{ tab.label }}</text>
-            <view v-if="tab.count > 0" class="count-dot">{{ formatTabCount(tab.count) }}</view>
+      <view class="status-grid">
+        <view
+          v-for="tab in switchTabs"
+          :key="tab.value"
+          class="status-card"
+          :class="{ active: activeTab === tab.value }"
+          @click="onSwitchTab(tab.value)"
+        >
+          <text class="status-name">{{ tab.label }}</text>
+          <view class="status-count-box">
+            <text class="status-count">{{ formatTabCount(tab.count) }}</text>
+            <text class="status-unit">条</text>
           </view>
         </view>
-      </scroll-view>
+      </view>
     </view>
 
     <scroll-view scroll-y class="list-area" @scrolltolower="loadMore">
@@ -782,11 +778,6 @@ const emptyText = computed(() => {
   }
   return map[activeTab.value] ?? '暂无工单'
 })
-const activeTabScrollId = computed(() => {
-  const index = switchTabs.value.findIndex(tab => tab.value === activeTab.value)
-  return index >= 0 ? `operator-tab-${index}` : ''
-})
-
 const activeTabLabel = computed(() => {
   return switchTabs.value.find(tab => tab.value === activeTab.value)?.label || '事件列表'
 })
@@ -1658,19 +1649,21 @@ onMounted(loadData)
   margin: 20rpx 24rpx 6rpx;
   position: relative;
   z-index: 1;
-  padding: 16rpx;
+  padding: 18rpx;
   border-radius: 28rpx;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(245, 248, 253, 0.88));
-  border: 1rpx solid rgba(225, 231, 240, 0.95);
+  background:
+    radial-gradient(circle at top right, rgba(34, 197, 94, 0.08), transparent 34%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(245, 250, 246, 0.94));
+  border: 1rpx solid rgba(214, 230, 220, 0.95);
   box-shadow: 0 12rpx 34rpx rgba(20, 32, 58, 0.08);
 }
 
 .tab-shell-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 16rpx;
-  padding: 0 6rpx 12rpx;
+  padding: 0 8rpx 16rpx;
 }
 
 .tab-shell-title {
@@ -1679,68 +1672,67 @@ onMounted(loadData)
   color: #1f2937;
 }
 
-.tab-shell-hint {
+.tab-shell-subtitle {
+  display: block;
+  margin-top: 6rpx;
   font-size: 20rpx;
-  color: #8a94a6;
+  color: #7d8797;
 }
 
-.tab-switch-scroll {
-  white-space: nowrap;
-}
-
-.tab-switch {
-  display: inline-flex;
+.status-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12rpx;
-  min-width: 100%;
-  box-sizing: border-box;
 }
 
-.switch-item {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 10rpx;
-  min-width: 144rpx;
-  height: 80rpx;
-  padding: 0 24rpx;
-  color: #6b7280;
-  position: relative;
-  flex-shrink: 0;
+.status-card {
+  min-width: 0;
+  padding: 18rpx 18rpx 16rpx;
   border-radius: 22rpx;
-  border: 1rpx solid rgba(214, 223, 235, 0.92);
+  border: 1rpx solid rgba(214, 230, 220, 0.95);
   background: rgba(255, 255, 255, 0.96);
   box-shadow: 0 8rpx 18rpx rgba(15, 23, 42, 0.04);
+  display: flex;
+  flex-direction: column;
+  gap: 10rpx;
+  transition: all 0.2s ease;
+
   &.active {
-    color: #ffffff;
-    font-weight: 700;
     border-color: transparent;
-    background: linear-gradient(135deg, #2563eb, #3b82f6);
-    box-shadow: 0 14rpx 28rpx rgba(37, 99, 235, 0.22);
+    background: linear-gradient(135deg, #22c55e, #16a34a);
+    box-shadow: 0 14rpx 28rpx rgba(34, 197, 94, 0.22);
   }
 }
 
-.switch-label {
+.status-name {
   font-size: 24rpx;
   font-weight: 700;
-  white-space: nowrap;
+  line-height: 1.3;
+  color: #475569;
 }
 
-.count-dot {
-  background: rgba(37, 99, 235, 0.1);
-  color: #2563eb;
-  border-radius: 999rpx;
-  font-size: 18rpx;
-  font-weight: 700;
+.status-count-box {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6rpx;
+}
+
+.status-count {
+  font-size: 30rpx;
+  font-weight: 800;
   line-height: 1;
-  padding: 6rpx 12rpx;
-  min-width: 40rpx;
-  text-align: center;
-  box-sizing: border-box;
+  color: #166534;
 }
 
-.switch-item.active .count-dot {
-  background: rgba(255, 255, 255, 0.18);
-  color: #ffffff;
+.status-unit {
+  font-size: 18rpx;
+  color: #94a3b8;
+}
+
+.status-card.active .status-name,
+.status-card.active .status-count,
+.status-card.active .status-unit {
+  color: #fff;
 }
 
 .list-area {
@@ -1766,11 +1758,11 @@ onMounted(loadData)
   line-height: 64rpx;
   border-radius: 999rpx;
   border: none;
-  background: linear-gradient(135deg, #2563eb, #3b82f6);
+  background: linear-gradient(135deg, #22c55e, #16a34a);
   color: #fff;
   font-size: 22rpx;
   font-weight: 700;
-  box-shadow: 0 12rpx 24rpx rgba(37, 99, 235, 0.16);
+  box-shadow: 0 12rpx 24rpx rgba(34, 197, 94, 0.18);
 }
 
 .section-title {
@@ -1825,10 +1817,10 @@ onMounted(loadData)
   flex-shrink: 0;
 
   &.active {
-    background: #eef4ff;
-    border-color: rgba(59, 130, 246, 0.22);
-    color: #2563eb;
-    box-shadow: 0 10rpx 20rpx rgba(59, 130, 246, 0.08);
+    background: #eefcf7;
+    border-color: rgba(34, 197, 94, 0.22);
+    color: #16a34a;
+    box-shadow: 0 10rpx 20rpx rgba(34, 197, 94, 0.08);
   }
 }
 
@@ -1845,9 +1837,10 @@ onMounted(loadData)
   min-width: 32rpx;
   padding: 2rpx 10rpx;
   border-radius: 999rpx;
-  background: rgba(59, 130, 246, 0.12);
+  background: rgba(34, 197, 94, 0.12);
   font-size: 18rpx;
   text-align: center;
+  color: #16a34a;
 }
 
 .summary-pill {

@@ -109,6 +109,15 @@ export function useWorkOrderPresentation(options: UseWorkOrderPresentationOption
     return wo.current_dispatch?.attempt_no || wo.dispatch_attempt_no || 0
   }
 
+  function executionStatusForOrder(wo: any) {
+    return currentDispatchForOrder(wo)?.execution_status || wo.execution_status || ''
+  }
+
+  function executionLabelForOrder(wo: any) {
+    const status = executionStatusForOrder(wo)
+    return status ? options.executionLabels[status] ?? status : ''
+  }
+
   function currentBlockReason(wo: any) {
     const currentDispatch = currentDispatchForOrder(wo)
     return wo.dispatch_blocked_reason
@@ -136,6 +145,10 @@ export function useWorkOrderPresentation(options: UseWorkOrderPresentationOption
       || wo.current_dispatch?.assigned_to_name
       || wo.assigned_to_name
       || '未派工'
+  }
+
+  function assigneeNameForOrder(wo: any) {
+    return assigneeName(wo, currentDispatchForOrder(wo))
   }
 
   function formatSlaText(wo: any, currentDispatch: any) {
@@ -265,6 +278,9 @@ export function useWorkOrderPresentation(options: UseWorkOrderPresentationOption
 
   return {
     currentDispatchForOrder,
+    executionStatusForOrder,
+    executionLabelForOrder,
+    assigneeNameForOrder,
     detailRows,
     timelineRows,
     buildingName,

@@ -134,6 +134,13 @@ async def close_redis_client() -> None:
             _redis_client = None
 
 
+async def get_redis_client():
+    """Return the initialized Redis client when available, otherwise ``None``."""
+    if _local_cache is None and _redis_client is None:
+        await init_redis_client()
+    return _redis_client
+
+
 def _bucket_seconds() -> int:
     return get_settings().CACHE_BUCKET_SECONDS
 
@@ -386,4 +393,3 @@ async def _local_key_lock(cache_key: str) -> asyncio.Lock:
             lock = asyncio.Lock()
             _local_key_locks[cache_key] = lock
         return lock
-

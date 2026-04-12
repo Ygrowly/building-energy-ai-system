@@ -1314,3 +1314,84 @@ class WorkOrderAuditLog(Base):
         Index("idx_audit_wo", "work_order_id"),
         Index("idx_audit_time", created_at.desc()),
     )
+
+
+# ---------------------------------------------------------------------------
+# notifications — 统一站内通知中心
+# ---------------------------------------------------------------------------
+
+class NotificationRecord(Base):
+    __tablename__ = "notification_records"
+
+    id: str = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    category: str = Column(String(32), nullable=False)
+    event_type: str = Column(String(64), nullable=False)
+    source_type: str = Column(String(64), nullable=False)
+    source_id: str = Column(String(128), nullable=False)
+    aggregate_type: str = Column(String(64), nullable=False)
+    aggregate_id: str = Column(String(128), nullable=False)
+    title: str = Column(String(255), nullable=False)
+    body: str = Column(Text, nullable=False)
+    severity: str = Column(String(16), nullable=False, server_default="info")
+    payload_json: str = Column(Text, nullable=True)
+    created_at = Column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    recipients = relationship(
+        "NotificationRecipient",
+        back_populates="notification",
+        cascade="all, delete-orphan",
+    )
+
+    __table_args__ = (
+        UniqueConstraint("source_type", "source_id", name="uq_notification_record_source"),
+        Index("idx_notification_record_category_time", "category", created_at.desc()),
+        Index("idx_notification_record_aggregate", "aggregate_type", "aggregate_id"),
+    )
+
+
+class NotificationRecipient(Base):
+    __tablename__ = "notification_recipients"
+
+    id: str = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    notification_id: str = Column(
+        String,
+        ForeignKey("notification_records.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    user_id: str = Column(
+        String,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    recipient_role: str = Column(String(20), nullable=False)
+    source_type: str = Column(String(64), nullable=False)
+    source_id: str = Column(String(128), nullable=False)
+    is_read: bool = Column(Boolean, nullable=False, server_default="false")
+    read_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    delivered_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    last_pushed_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    created_at = Column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    notification = relationship("NotificationRecord", back_populates="recipients")
+    user = relationship("User")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "source_type",
+            "source_id",
+            "user_id",
+            name="uq_notification_recipient_source_user",
+        ),
+        UniqueConstraint(
+            "notification_id",
+            "user_id",
+            name="uq_notification_recipient_notification_user",
+        ),
+        Index("idx_notification_recipient_user_time", "user_id", created_at.desc()),
+        Index("idx_notification_recipient_user_read", "user_id", "is_read"),
+        Index("idx_notification_recipient_notification", "notification_id"),
+    )

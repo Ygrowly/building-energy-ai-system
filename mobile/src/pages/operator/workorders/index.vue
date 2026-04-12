@@ -734,6 +734,7 @@ const batchDispatchPanel = ref<BatchDispatchPanelState>({
   result: null,
 })
 const pendingFocus = ref<{ ticketId: string; action: 'dispatch' | 'reassign' } | null>(null)
+const detailFocus = ref<{ ticketId: string; incidentId: string | null } | null>(null)
 const batchDispatchOptions = ref<BatchDispatchOptionsState>({
   sampleSize: 10,
   priority: 'all',
@@ -956,6 +957,7 @@ async function loadData() {
     if (res.incidents.length < PAGE_SIZE) noMore.value = true
     await loadCounts()
     await maybeHandlePendingFocus()
+    maybeHandleDetailFocus()
   } catch { /* handled */ }
   finally { loading.value = false }
 }
@@ -1360,6 +1362,17 @@ async function maybeHandlePendingFocus() {
   }
 }
 
+function maybeHandleDetailFocus() {
+  if (!detailFocus.value) return
+  const target = incidents.value.find(item => item.current_work_order?.ticket_id === detailFocus.value?.ticketId)
+  if (!target || !target.current_work_order?.ticket_id) return
+  const focus = detailFocus.value
+  detailFocus.value = null
+  uni.navigateTo({
+    url: `/pages/worker/workorder-detail/index?incident_id=${encodeURIComponent(String(focus.incidentId || target.incident_id || ''))}&ticket_id=${encodeURIComponent(target.current_work_order.ticket_id)}&readonly=1`,
+  })
+}
+
 async function confirmDispatch(candidate: DispatchCandidate) {
   if (!dispatchPanel.value.ticketId) return
   dispatchSubmitting.value = candidate.user_id
@@ -1627,6 +1640,11 @@ onLoad((query) => {
     pendingFocus.value = {
       ticketId: query.ticket_id,
       action: query.focus_action,
+    }
+  } else if (typeof query?.ticket_id === 'string') {
+    detailFocus.value = {
+      ticketId: query.ticket_id,
+      incidentId: typeof query?.incident_id === 'string' ? query.incident_id : null,
     }
   }
 })

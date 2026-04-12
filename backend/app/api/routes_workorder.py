@@ -308,6 +308,11 @@ def _dispatch_event_label(event_type: str) -> str:
         "completed": "处理完成",
         "escalated": "升级处理",
     }
+    labels.update({
+        "support_assigned": "鎸囨淳鍗忓悓浜哄憳",
+        "support_worker_accepted": "鍗忓悓浜哄憳鎺ュ崟",
+        "support_worker_rejected": "鍗忓悓浜哄憳鎷掑崟",
+    })
     return labels.get(event_type, event_type)
 
 

@@ -115,7 +115,8 @@ const dispatchPanel = ref({
   requirement: null as any | null,
   candidates: [] as Candidate[],
 })
-const pendingFocus = ref<{ ticketId: string; action: 'dispatch' | 'reassign' } | null>(null)
+const pendingFocus = ref<{ ticketId: string; action: 'dispatch' | 'reassign' | 'open' } | null>(null)
+const suppressRouteQuerySync = ref(false)
 
 const workspaceSwitchItems: Array<{ mode: WorkOrderWorkspaceMode; label: string; icon: string; path: string }> = [
   { mode: 'all', label: '总览', icon: 'mdi:view-dashboard-outline', path: '/workorders' },
@@ -309,6 +310,30 @@ function applyRouteTabState() {
   }
 }
 
+function syncPendingFocusFromRoute() {
+  if (typeof route.query.focus_ticket !== 'string') {
+    pendingFocus.value = null
+    return
+  }
+
+  if (route.query.focus_action === 'dispatch' || route.query.focus_action === 'reassign') {
+    pendingFocus.value = {
+      ticketId: route.query.focus_ticket,
+      action: route.query.focus_action,
+    }
+    activeTab.value = 'dispatched'
+    return
+  }
+
+  pendingFocus.value = {
+    ticketId: route.query.focus_ticket,
+    action: 'open',
+  }
+  if (isVisibleTab('all')) {
+    activeTab.value = 'all'
+  }
+}
+
 function switchWorkspace(path: string) {
   if (route.path === path) return
   router.push({ path })
@@ -322,7 +347,10 @@ async function maybeHandlePendingFocus() {
   pendingFocus.value = null
   expandedId.value = focus.ticketId
   await ensureTimeline(focus.ticketId)
-  await openDispatchPanel(target, focus.action)
+  if (focus.action === 'dispatch' || focus.action === 'reassign') {
+    await openDispatchPanel(target, focus.action)
+  }
+  suppressRouteQuerySync.value = true
   await router.replace({
     path: route.path,
     query: {
@@ -376,13 +404,7 @@ watch(allOrders, (orders) => {
 
 onMounted(async () => {
   applyRouteTabState()
-  if (typeof route.query.focus_ticket === 'string' && (route.query.focus_action === 'dispatch' || route.query.focus_action === 'reassign')) {
-    pendingFocus.value = {
-      ticketId: route.query.focus_ticket,
-      action: route.query.focus_action,
-    }
-    activeTab.value = 'dispatched'
-  }
+  syncPendingFocusFromRoute()
   await fetchOrders()
 })
 
@@ -390,6 +412,24 @@ watch(workspaceMode, async () => {
   applyRouteTabState()
   await fetchOrders()
 })
+
+watch(
+  () => [
+    route.query.active_tab,
+    route.query.focus_ticket,
+    route.query.focus_action,
+    route.query.hall_entry_id,
+  ] as const,
+  async () => {
+    if (suppressRouteQuerySync.value) {
+      suppressRouteQuerySync.value = false
+      return
+    }
+    applyRouteTabState()
+    syncPendingFocusFromRoute()
+    await fetchOrders()
+  },
+)
 </script>
 
 <style scoped>

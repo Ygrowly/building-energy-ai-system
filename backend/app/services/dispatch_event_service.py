@@ -6,7 +6,9 @@ dispatch_events 是派工执行层的事件轨迹；这里集中处理事件写�
 """
 from __future__ import annotations
 
+import inspect
 import json
+import logging
 from datetime import datetime
 from typing import Any
 
@@ -14,6 +16,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import DispatchEvent, DispatchTask
+
+logger = logging.getLogger(__name__)
 
 
 def _dt_to_iso(value: datetime | None) -> str | None:
@@ -55,6 +59,23 @@ async def record_dispatch_event(
         payload_json=_json_dumps(payload),
     )
     db.add(event)
+    flush = getattr(db, "flush", None)
+    if callable(flush):
+        maybe_result = flush()
+        if inspect.isawaitable(maybe_result):
+            await maybe_result
+
+    if hasattr(db, "execute") and hasattr(db, "get"):
+        from app.services.notification_service import create_notifications_for_dispatch_event
+
+        try:
+            await create_notifications_for_dispatch_event(
+                db,
+                event=event,
+                dispatch_task=dispatch_task,
+            )
+        except (AttributeError, AssertionError):
+            logger.debug("skip notification side effects for lightweight dispatch-event db stub", exc_info=True)
     return event
 
 

@@ -12,17 +12,24 @@
       :class="{ active: current === tab.name }"
       @click="onTab(tab)"
     >
-      <image
-        class="tab-icon"
-        :src="current === tab.name ? tab.iconActive || tab.icon : tab.icon"
-        mode="aspectFit"
-      />
+      <view class="tab-icon-wrap">
+        <image
+          class="tab-icon"
+          :src="current === tab.name ? tab.iconActive || tab.icon : tab.icon"
+          mode="aspectFit"
+        />
+        <view v-if="badgeForTab(tab.name) > 0" class="tab-badge">
+          <text>{{ badgeForTab(tab.name) > 99 ? '99+' : badgeForTab(tab.name) }}</text>
+        </view>
+      </view>
       <text class="tab-label">{{ tab.label }}</text>
     </view>
   </view>
 </template>
 
 <script setup lang="ts">
+import { useNotificationStore } from '../stores/notification'
+
 export interface TabItem {
   name: string
   label: string
@@ -37,9 +44,15 @@ const props = defineProps<{
   theme?: 'operator' | 'worker'
 }>()
 
+const notificationStore = useNotificationStore()
+
 function onTab(tab: TabItem) {
   if (tab.name === props.current) return
   uni.reLaunch({ url: tab.path })
+}
+
+function badgeForTab(name: string) {
+  return ['alerts', 'messages'].includes(name) ? notificationStore.unreadCount : 0
 }
 </script>
 
@@ -70,10 +83,36 @@ function onTab(tab: TabItem) {
   cursor: pointer;
 }
 
+.tab-icon-wrap {
+  position: relative;
+}
+
 .tab-icon {
   width: 44rpx;
   height: 44rpx;
   transition: transform 0.2s;
+}
+
+.tab-badge {
+  position: absolute;
+  top: -8rpx;
+  right: -16rpx;
+  min-width: 32rpx;
+  height: 32rpx;
+  padding: 0 8rpx;
+  border-radius: 16rpx;
+  background: #ef4444;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4rpx 14rpx rgba(239, 68, 68, 0.28);
+
+  text {
+    color: #fff;
+    font-size: 18rpx;
+    font-weight: 700;
+    line-height: 1;
+  }
 }
 
 .tab-label {

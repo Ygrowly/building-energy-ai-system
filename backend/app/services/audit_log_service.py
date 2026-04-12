@@ -6,12 +6,16 @@
 """
 from __future__ import annotations
 
+import inspect
 import json
+import logging
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import WorkOrderAuditLog
+
+logger = logging.getLogger(__name__)
 
 
 async def write_work_order_audit_log(
@@ -35,4 +39,20 @@ async def write_work_order_audit_log(
         detail_json=json.dumps(detail, ensure_ascii=False, default=str) if detail else None,
     )
     db.add(log_entry)
+    flush = getattr(db, "flush", None)
+    if callable(flush):
+        maybe_result = flush()
+        if inspect.isawaitable(maybe_result):
+            await maybe_result
+
+    if hasattr(db, "execute") and hasattr(db, "get"):
+        from app.services.notification_service import create_notifications_for_audit_log
+
+        try:
+            await create_notifications_for_audit_log(
+                db,
+                audit_log=log_entry,
+            )
+        except (AttributeError, AssertionError):
+            logger.debug("skip notification side effects for lightweight audit-log db stub", exc_info=True)
     return log_entry

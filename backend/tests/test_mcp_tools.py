@@ -23,7 +23,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 import pytest_asyncio
 
-from app.db.models import OperationStatusEnum
 from app.mcp.tools.physics_calc import (
     calculate_system_cop,
     detect_energy_anomalies,
@@ -68,7 +67,7 @@ def make_energy_row(
     ambient_temp_c: float = 25.0,
     humidity_rh_pct: float = 60.0,
     occupancy_density: float = 1.5,
-    status: OperationStatusEnum = OperationStatusEnum.Normal,
+    status: OperationStatus = OperationStatus.NORMAL,
     hour_offset: int = 10,         # 用于控制时间戳的小时
 ) -> MagicMock:
     """创建一行模拟的 EnergyData ORM 对象。"""
@@ -283,7 +282,7 @@ class TestDetectEnergyAnomalies:
             electricity_kwh=450.0,
             hour_offset=3,            # 凌晨 3 点
             occupancy_density=0.0,
-            status=OperationStatusEnum.Anomaly,
+            status=OperationStatus.ANOMALY,
         )
         mock_result = MagicMock()
         mock_result.scalars.return_value.all.return_value = [anomaly_row]

@@ -30,6 +30,15 @@ function currentSlaStatus(wo: any) {
   return wo.current_dispatch?.sla_status || wo.sla_status || ''
 }
 
+function prioritizeFocusedOrders(orders: any[], focusedTicketId = '') {
+  if (!focusedTicketId) return orders
+  return [...orders].sort((a, b) => {
+    if (a.ticket_id === focusedTicketId) return -1
+    if (b.ticket_id === focusedTicketId) return 1
+    return 0
+  })
+}
+
 export function useWorkOrdersData(options: UseWorkOrdersDataOptions) {
   const loading = ref(false)
   const fetchError = ref('')
@@ -82,7 +91,8 @@ export function useWorkOrdersData(options: UseWorkOrdersDataOptions) {
       }
 
       const data = await apiFetch<any>('/api/work-orders')
-      allOrders.value = data?.work_orders ?? []
+      const focusTicketId = typeof options.route.query.focus_ticket === 'string' ? options.route.query.focus_ticket : ''
+      allOrders.value = prioritizeFocusedOrders(data?.work_orders ?? [], focusTicketId)
       if (expandedId.value && allOrders.value.some(wo => wo.ticket_id === expandedId.value)) {
         void ensureTimeline(expandedId.value)
       }

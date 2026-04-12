@@ -576,6 +576,11 @@ function getDispatchEventLabel(event: DispatchEvent) {
     completed: '执行完成',
     escalated: '升级处理',
   }
+  Object.assign(labels, {
+    support_assigned: '协同已指派',
+    support_worker_accepted: '协同已确认',
+    support_worker_rejected: '协同被拒绝',
+  })
   return labels[event.event_type] || '状态更新'
 }
 

@@ -25,6 +25,7 @@ from app.api.routes_worker_profiles import router as worker_profiles_router
 from app.api.routes_context_events import router as context_events_router
 from app.api.routes_work_order_insights import router as work_order_insights_router
 from app.api.routes_admin import router as admin_router
+from app.api.routes_notifications import router as notifications_router
 from app.core.config import get_settings
 
 settings = get_settings()
@@ -369,6 +370,7 @@ app.include_router(worker_profiles_router, prefix="/api")
 app.include_router(context_events_router, prefix="/api")
 app.include_router(work_order_insights_router, prefix="/api")
 app.include_router(report_router, prefix="/api")
+app.include_router(notifications_router, prefix="/api")
 app.include_router(admin_router)
 
 

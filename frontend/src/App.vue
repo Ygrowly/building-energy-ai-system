@@ -171,7 +171,7 @@ import { Icon } from '@iconify/vue'
 import { useBuildingStore } from '@/stores/buildingStore'
 import { useAuthStore } from '@/stores/authStore'
 import { useElementPickerStore } from '@/stores/elementPickerStore'
-import { useNotificationStore } from '@/stores/notificationStore'
+import { useNotificationStore } from '@/stores/notificationCenterStore'
 import { useReportStore } from '@/stores/reportStore'
 
 const AgentConsole = defineAsyncComponent(() => import('@/components/AgentConsole.vue'))

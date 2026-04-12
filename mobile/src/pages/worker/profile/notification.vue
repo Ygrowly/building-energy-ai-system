@@ -3,6 +3,15 @@
     <NavBar title="消息通知" bg-color="#E4EDB8" text-color="#5f7137" :show-back="true" />
 
     <view class="section">
+      <view class="section-title">通知说明</view>
+      <view class="card note-card">
+        <text class="note-title">应用内通知已统一接入工单消息中心</text>
+        <text class="note-desc">当前版本默认开启站内通知，不再单独维护本地开关。派单、协同、催办和超时会通过统一通知中心实时同步。</text>
+        <text class="note-desc secondary">后续如果支持个人通知偏好，会在这里补充可配置项。</text>
+      </view>
+    </view>
+
+    <view v-if="false" class="section">
       <view class="section-title">推送设置</view>
       <view class="card">
         <view class="switch-item">
@@ -85,6 +94,29 @@ function onAlertChange(e: any) {
   background: #fff;
   border-radius: 16rpx;
   overflow: hidden;
+}
+
+.note-card {
+  padding: 32rpx 28rpx;
+}
+
+.note-title {
+  display: block;
+  font-size: 30rpx;
+  color: #1a1a2e;
+  font-weight: 700;
+}
+
+.note-desc {
+  display: block;
+  margin-top: 16rpx;
+  font-size: 24rpx;
+  line-height: 1.7;
+  color: #667085;
+}
+
+.note-desc.secondary {
+  color: #98a2b3;
 }
 
 .switch-item {

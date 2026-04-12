@@ -6,7 +6,9 @@
       </template>
     </NavBar>
 
-    <scroll-view scroll-y class="page-scroll">
+    <WorkerNotificationFeed />
+
+    <scroll-view v-if="false" scroll-y class="page-scroll">
       <view class="card-grid">
         <view
           v-for="card in messageCards"
@@ -47,7 +49,7 @@
       </view>
     </scroll-view>
 
-    <TabBar :tabs="WORKER_TABS" current="messages" theme="worker" />
+    <TabBar v-if="false" :tabs="WORKER_TABS" current="messages" theme="worker" />
   </view>
 </template>
 
@@ -56,11 +58,13 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { onShow } from '@dcloudio/uni-app'
 import NavBar from '../../../components/NavBar.vue'
 import TabBar from '../../../components/TabBar.vue'
+import WorkerNotificationFeed from '../../../components/WorkerNotificationFeed.vue'
 import { incidentApi, type Incident } from '../../../api/incident'
 import { useRouteGuard } from '../../../utils/route-guard'
 import { WORKER_ROLES } from '../../../constants/roles'
 import { WORKER_TABS } from '../../../constants/tabs'
 import { getCache, setCache } from '../../../utils/cache'
+import { useNotificationStore } from '../../../stores/notification'
 import { getWorkerMessageCards, getWorkerMessageItems, type WorkerMessageItem } from '../../../utils/worker-ui'
 import { subscribeWorkerOrdersUpdated } from '../../../utils/worker-sync'
 
@@ -69,12 +73,14 @@ useRouteGuard(WORKER_ROLES)
 const incidents = ref<Incident[]>([])
 const loading = ref(false)
 const hasLoadedOnce = ref(false)
+const notificationStore = useNotificationStore()
 let unsubscribeWorkerSync: (() => void) | null = null
 
 const messageCards = computed(() => getWorkerMessageCards(incidents.value))
 const messageItems = computed(() => getWorkerMessageItems(incidents.value))
 
 async function loadData() {
+  void notificationStore.refresh({ page_size: 50 })
   const cached = getCache<Incident[]>('worker_messages')
   if (cached) incidents.value = cached
   loading.value = !cached

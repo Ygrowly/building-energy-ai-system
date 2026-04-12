@@ -131,6 +131,11 @@ export function useWorkOrderPresentation(options: UseWorkOrderPresentationOption
       completed: '处理完成',
       escalated: '升级处理',
     }
+    Object.assign(labels, {
+      support_assigned: '指派协同人员',
+      support_worker_accepted: '协同人员接单',
+      support_worker_rejected: '协同人员拒单',
+    })
     return labels[eventType] || eventType
   }
 

@@ -148,7 +148,8 @@ import { WORKER_ROLES } from '../../../constants/roles'
 import { WORKER_TABS } from '../../../constants/tabs'
 import { getCache, setCache } from '../../../utils/cache'
 import { useAuthStore } from '../../../stores/auth'
-import { getWorkerDashboardStats, getWorkerFeatureOrder, getWorkerMessageCards } from '../../../utils/worker-ui'
+import { useNotificationStore } from '../../../stores/notification'
+import { getWorkerDashboardStats, getWorkerFeatureOrder } from '../../../utils/worker-ui'
 import { subscribeWorkerOrdersUpdated } from '../../../utils/worker-sync'
 import { sanitizeDisplayText, formatBuildingLabel, formatDeviceLabel } from '../../../utils/display'
 import { formatDateTime } from '../../../utils/format'
@@ -156,6 +157,7 @@ import { formatDateTime } from '../../../utils/format'
 useRouteGuard(WORKER_ROLES)
 
 const authStore = useAuthStore()
+const notificationStore = useNotificationStore()
 const incidents = ref<Incident[]>([])
 const supportEntries = ref<DispatchHallEntry[]>([])
 const hallEntries = ref<DispatchHallEntry[]>([])
@@ -198,10 +200,7 @@ const featuredOrder = computed(() => {
   const incidentTarget = getWorkerFeatureOrder(incidents.value)
   return incidentTarget ? { ...incidentTarget, kind: 'incident' as const } : null
 })
-const messageCards = computed(() => getWorkerMessageCards(incidents.value))
-const unreadCount = computed(() => messageCards.value
-  .filter(card => card.key !== 'bulletin')
-  .reduce((sum, card) => sum + card.count, 0))
+const unreadCount = computed(() => notificationStore.unreadCount)
 
 const tips = [
   { title: '到场前确认现场信息', desc: '优先核对建筑、设备与建议措施，减少二次往返。' },

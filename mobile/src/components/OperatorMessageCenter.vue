@@ -8,7 +8,7 @@
           @click="switchTab('workorder')"
         >
           <text>工单动态</text>
-          <view v-if="workorderCount > 0" class="capsule-dot ok">{{ workorderCount }}</view>
+          <view v-if="notificationStore.unreadCount > 0" class="capsule-dot ok">{{ notificationStore.unreadCount }}</view>
         </view>
         <view
           class="capsule-btn"
@@ -29,7 +29,7 @@
       </view>
     </view>
 
-    <view class="filter-bar">
+    <view v-if="msgTab !== 'workorder'" class="filter-bar">
       <view class="filter-fields">
         <view class="filter-pill" :class="{ active: filterBuilding !== 'all', open: showBuildingPicker }" @click.stop="toggleBuildingPicker">
           <view class="pill-inner">
@@ -77,7 +77,9 @@
       </view>
     </view>
 
-    <scroll-view v-if="msgTab === 'workorder'" scroll-y class="list-area" :style="listAreaStyle">
+    <OperatorWorkorderNotifications v-if="msgTab === 'workorder'" :with-tab-bar="withTabBar" />
+
+    <scroll-view v-if="false && msgTab === 'workorder'" scroll-y class="list-area" :style="listAreaStyle">
       <view class="block-label-row">
         <text class="block-label">工单动态</text>
         <view v-if="filteredWorkorderItems.length > 0" class="count-badge">{{ filteredWorkorderItems.length }}</view>
@@ -308,9 +310,11 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { RULE_LABEL } from '../constants/status'
+import { useNotificationStore } from '../stores/notification'
 import { dataApi, type AnomalyItem, type PredictionItem } from '../api/data'
 import { incidentApi, type Incident } from '../api/incident'
 import { workOrderApi, type DispatchHallEntry } from '../api/workorder'
+import OperatorWorkorderNotifications from './OperatorWorkorderNotifications.vue'
 import { ALL_BUILDING_FILTER_OPTIONS } from '../constants/buildings'
 import { formatRelativeTime, formatServerDateTime } from '../utils/format'
 import { getCache, setCache } from '../utils/cache'
@@ -327,6 +331,8 @@ const props = withDefaults(defineProps<{
 }>(), {
   withTabBar: false,
 })
+
+const notificationStore = useNotificationStore()
 
 const RULE_EMOJI: Record<string, string> = {
   electricity_overload: '⚡',

@@ -169,7 +169,6 @@ const workerProfile = computed(() => user.value?.worker_profile ?? null)
 const avatarChar = computed(() => user.value?.username?.[0]?.toUpperCase() ?? '?')
 const avatarUrl = ref('')
 const incidents = ref<Incident[]>([])
-const notificationPrefs = ref({ workorder: true, alert: true })
 
 const stats = computed(() => getWorkerDashboardStats(incidents.value))
 const teamName = computed(() => workerProfile.value?.team?.name || '综合运维班')
@@ -187,12 +186,7 @@ const dispatchStatusText = computed(() => {
   if (!workerProfile.value) return '未配置'
   return workerProfile.value.dispatch_enabled ? '可接派工' : '暂停接单'
 })
-const notificationText = computed(() => {
-  const labels = []
-  if (notificationPrefs.value.workorder) labels.push('工单')
-  if (notificationPrefs.value.alert) labels.push('告警')
-  return labels.length ? `${labels.join(' / ')}提醒已开启` : '通知已关闭'
-})
+const notificationText = computed(() => '站内通知已开启')
 
 const SUB_PAGES: Record<string, string> = {
   info: '/pages/worker/profile/info',
@@ -205,20 +199,6 @@ const SUB_PAGES: Record<string, string> = {
 function loadAvatar() {
   const uid = user.value?.id ?? 'guest'
   avatarUrl.value = uni.getStorageSync(`avatar_${uid}`) || ''
-}
-
-function loadNotificationPrefs() {
-  try {
-    const raw = uni.getStorageSync('notify_prefs')
-    if (!raw) return
-    const prefs = typeof raw === 'string' ? JSON.parse(raw) : raw
-    notificationPrefs.value = {
-      workorder: prefs.workorder ?? true,
-      alert: prefs.alert ?? true,
-    }
-  } catch {
-    notificationPrefs.value = { workorder: true, alert: true }
-  }
 }
 
 async function loadStats() {
@@ -286,7 +266,6 @@ function handleLogout() {
 onMounted(loadStats)
 onShow(() => {
   loadAvatar()
-  loadNotificationPrefs()
 })
 </script>
 

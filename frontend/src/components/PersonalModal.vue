@@ -242,7 +242,7 @@
                   >
                     <Icon icon="mdi:clipboard-clock-outline" width="13" />
                     工单动态
-                    <span v-if="workorderItems.length > 0" class="capsule-dot ok">{{ workorderItems.length }}</span>
+                    <span v-if="notificationStore.unreadCount > 0" class="capsule-dot ok">{{ notificationStore.unreadCount }}</span>
                   </button>
                   <button
                     class="capsule-btn"
@@ -266,7 +266,7 @@
               </div>
 
               <!-- ── 筛选栏 ── -->
-              <div class="msg-filter-bar" @click.self="closeDropdowns">
+              <div v-if="msgTab !== 'workorder'" class="msg-filter-bar" @click.self="closeDropdowns">
                 <div class="filter-fields">
                   <!-- 建筑下拉 -->
                   <div class="filter-pill" :class="{ 'filter-pill--active': filterBuilding !== 'all', 'filter-pill--open': dropdownBuildingOpen }" @click.stop="dropdownBuildingOpen = !dropdownBuildingOpen; dropdownTimeOpen = false">
@@ -346,6 +346,9 @@
 
               <!-- ── Tab: 工单动态 ── -->
               <div v-if="msgTab === 'workorder'" class="msg-tab-content">
+                <WorkorderNotificationPanel />
+              </div>
+              <div v-if="false && msgTab === 'workorder'" class="msg-tab-content">
                 <div class="msg-block">
                   <p class="block-label">
                     <Icon icon="mdi:clipboard-clock-outline" width="13" />
@@ -612,7 +615,8 @@ import { useRouter } from 'vue-router'
 import { Icon } from '@iconify/vue'
 import { useAuthStore } from '@/stores/authStore'
 import { useChatStore } from '@/stores/chatStore'
-import { useNotificationStore } from '@/stores/notificationStore'
+import { useNotificationStore } from '@/stores/notificationCenterStore'
+import WorkorderNotificationPanel from '@/components/notifications/WorkorderNotificationPanel.vue'
 import { apiChangePassword, apiUpdateProfile } from '@/api/auth'
 import { apiFetch } from '@/api/http'
 import { ALL_BUILDING_FILTER_OPTIONS, getBuildingLabel } from '@/constants/buildings'

@@ -15,8 +15,9 @@ import math
 from datetime import datetime, timezone
 
 import numpy as np
-import pandas as pd
 import pytest
+
+pd = pytest.importorskip("pandas", exc_type=ImportError)
 
 
 # ---------------------------------------------------------------------------

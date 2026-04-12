@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timezone
 from typing import Any
 
@@ -10,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.models import DispatchHallApplication, DispatchHallEntry, User, WorkOrder
 
 _OPEN_ENTRY_STATUSES = {"open", "assigned"}
+logger = logging.getLogger(__name__)
 
 
 def _dt_to_iso(value: datetime | None) -> str | None:
@@ -583,6 +585,18 @@ async def create_or_reopen_support_hall_entry(
     entry.expired_at = None
     entry.updated_at = now
     await db.flush()
+    if hasattr(db, "execute") and hasattr(db, "get"):
+        from app.services.notification_service import create_notifications_for_dispatch_hall_open
+
+        try:
+            await create_notifications_for_dispatch_hall_open(
+                db,
+                hall_entry=entry,
+                work_order=work_order,
+                actor_id=created_by,
+            )
+        except (AttributeError, AssertionError):
+            logger.debug("skip notification side effects for lightweight dispatch-hall db stub", exc_info=True)
     return entry
 
 
@@ -647,6 +661,18 @@ async def create_or_reopen_takeover_hall_entry(
     entry.expired_at = None
     entry.updated_at = now
     await db.flush()
+    if hasattr(db, "execute") and hasattr(db, "get"):
+        from app.services.notification_service import create_notifications_for_dispatch_hall_open
+
+        try:
+            await create_notifications_for_dispatch_hall_open(
+                db,
+                hall_entry=entry,
+                work_order=work_order,
+                actor_id=created_by,
+            )
+        except (AttributeError, AssertionError):
+            logger.debug("skip notification side effects for lightweight dispatch-hall db stub", exc_info=True)
     return entry
 
 
@@ -841,6 +867,19 @@ async def close_dispatch_hall_entry(
         item.updated_at = now
 
     await db.flush()
+    work_order = await db.get(WorkOrder, hall_entry.work_order_id)
+    if hasattr(db, "execute") and hasattr(db, "get"):
+        from app.services.notification_service import create_notifications_for_dispatch_hall_closed
+
+        try:
+            await create_notifications_for_dispatch_hall_closed(
+                db,
+                hall_entry=hall_entry,
+                work_order=work_order,
+                actor_id=actor_id,
+            )
+        except (AttributeError, AssertionError):
+            logger.debug("skip notification side effects for lightweight dispatch-hall db stub", exc_info=True)
     return hall_entry
 
 

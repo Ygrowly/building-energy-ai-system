@@ -334,3 +334,111 @@ async def ensure_dispatch_operation_runs_table() -> None:
         await _run_startup_db_op_with_retry("ensure_dispatch_operation_runs_table", _op)
     except Exception as exc:
         logger.warning("ensure_dispatch_operation_runs_table 失败，已跳过（不影响启动）: %s", exc)
+
+
+async def ensure_ai_assistant_tables() -> None:
+    """
+    启动时确保维小修 / 运小维 Phase 1 会话与动作审计表存在。
+    """
+
+    async def _op():
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    """
+                    CREATE TABLE IF NOT EXISTS ai_assistant_sessions (
+                        id VARCHAR(128) PRIMARY KEY,
+                        assistant_name VARCHAR(32) NOT NULL,
+                        user_id VARCHAR NULL REFERENCES users(id) ON DELETE SET NULL,
+                        role VARCHAR(32) NULL,
+                        work_order_id VARCHAR NULL REFERENCES work_orders(id) ON DELETE SET NULL,
+                        session_state_json TEXT NULL,
+                        readonly BOOLEAN NOT NULL DEFAULT false,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                        updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                    )
+                    """
+                )
+            )
+            await conn.execute(
+                text(
+                    """
+                    CREATE TABLE IF NOT EXISTS ai_assistant_messages (
+                        id VARCHAR PRIMARY KEY,
+                        session_id VARCHAR(128) NOT NULL REFERENCES ai_assistant_sessions(id) ON DELETE CASCADE,
+                        role VARCHAR(16) NOT NULL,
+                        content TEXT NOT NULL,
+                        content_type VARCHAR(24) NOT NULL DEFAULT 'text',
+                        model_provider VARCHAR(32) NULL,
+                        model_name VARCHAR(64) NULL,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                    )
+                    """
+                )
+            )
+            await conn.execute(
+                text(
+                    """
+                    CREATE TABLE IF NOT EXISTS ai_assistant_action_audits (
+                        id VARCHAR PRIMARY KEY,
+                        session_id VARCHAR(128) NULL REFERENCES ai_assistant_sessions(id) ON DELETE SET NULL,
+                        work_order_id VARCHAR NULL REFERENCES work_orders(id) ON DELETE SET NULL,
+                        dispatch_id VARCHAR NULL REFERENCES dispatch_tasks(id) ON DELETE SET NULL,
+                        hall_entry_id VARCHAR NULL REFERENCES dispatch_hall_entries(id) ON DELETE SET NULL,
+                        proposed_action VARCHAR(32) NOT NULL,
+                        confirmation_text TEXT NULL,
+                        execution_status VARCHAR(16) NOT NULL DEFAULT 'pending',
+                        backend_action_ref TEXT NULL,
+                        error_message TEXT NULL,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                    )
+                    """
+                )
+            )
+            await conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS idx_ai_assistant_session_user "
+                    "ON ai_assistant_sessions (user_id, updated_at DESC)"
+                )
+            )
+            await conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS idx_ai_assistant_session_work_order "
+                    "ON ai_assistant_sessions (work_order_id, updated_at DESC)"
+                )
+            )
+            await conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS idx_ai_assistant_session_name "
+                    "ON ai_assistant_sessions (assistant_name, updated_at DESC)"
+                )
+            )
+            await conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS idx_ai_assistant_message_session_time "
+                    "ON ai_assistant_messages (session_id, created_at ASC)"
+                )
+            )
+            await conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS idx_ai_assistant_action_session "
+                    "ON ai_assistant_action_audits (session_id, created_at DESC)"
+                )
+            )
+            await conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS idx_ai_assistant_action_work_order "
+                    "ON ai_assistant_action_audits (work_order_id, created_at DESC)"
+                )
+            )
+            await conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS idx_ai_assistant_action_status "
+                    "ON ai_assistant_action_audits (execution_status, created_at DESC)"
+                )
+            )
+
+    try:
+        await _run_startup_db_op_with_retry("ensure_ai_assistant_tables", _op)
+    except Exception as exc:
+        logger.warning("ensure_ai_assistant_tables 失败，已跳过（不影响启动）: %s", exc)

@@ -124,7 +124,12 @@
 
             <view class="section-card" v-if="!readonly">
               <text class="section-title">AI辅助维修</text>
-              <AiChat :order="order" />
+              <AiChat
+                :order="order"
+                mode="worker"
+                :dispatch-id="order.current_dispatch?.id || order.dispatch_id || null"
+                :hall-entry-id="hallEntry?.id || null"
+              />
             </view>
           </view>
         </view>

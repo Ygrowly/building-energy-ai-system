@@ -3,6 +3,8 @@ import { apiFetch } from '@/api/http'
 import { WORK_ORDER_EMPTY_MESSAGES, type WorkOrderTabKey } from '@/constants/workOrders'
 
 type AutoDispatchReviewStatus = 'pending' | 'reviewed' | 'needs_reassign' | 'all'
+const ACTIVE_DISPATCH_SUMMARY_STATUSES = new Set(['assigned', 'accepted', 'arrived', 'processing', 'waiting_support', 'overdue'])
+const PENDING_CLOSE_WORK_RESULTS = new Set(['fixed', 'false_alarm', 'escalated'])
 
 interface UseWorkOrdersDataOptions {
   route: {
@@ -17,10 +19,45 @@ function hallPendingApplications(entry: any): any[] {
   return (entry.applications || []).filter((application: any) => application.status === 'pending')
 }
 
+function approvalStatus(wo: any) {
+  if (wo.approval_status) return wo.approval_status
+  if (wo.status === 'pending_review') return 'pending_review'
+  if (['auto_rejected', 'admin_override_rejected'].includes(wo.status)) return 'rejected'
+  return 'approved'
+}
+
+function dispatchSummaryStatus(wo: any) {
+  if (wo.dispatch_summary_status) return wo.dispatch_summary_status
+  if (wo.status === 'pending_dispatch') return 'pending_dispatch'
+  if (wo.status === 'dispatched') return currentExecutionStatus(wo) === 'pending_dispatch' ? 'pending_dispatch' : currentExecutionStatus(wo) || 'assigned'
+  if (['completed', 'false_alarm', 'closed'].includes(wo.status)) return 'completed'
+  if (wo.status === 'escalated') return 'escalated'
+  return ''
+}
+
+function workResult(wo: any) {
+  if (wo.work_result) return wo.work_result
+  if (wo.status === 'completed') return 'fixed'
+  if (wo.status === 'false_alarm') return 'false_alarm'
+  if (wo.status === 'escalated') return 'escalated'
+  return ''
+}
+
+function isPendingClose(wo: any) {
+  return wo.status !== 'closed' && (
+    PENDING_CLOSE_WORK_RESULTS.has(workResult(wo))
+    || ['completed', 'false_alarm', 'escalated'].includes(wo.status)
+  )
+}
+
 function matchesTab(wo: any, tab: WorkOrderTabKey) {
   if (tab === 'all') return true
   if (tab === 'auto_dispatch_insights') return false
-  if (tab === 'pending_close') return ['completed', 'false_alarm', 'escalated'].includes(wo.status)
+  if (tab === 'pending_review') return approvalStatus(wo) === 'pending_review'
+  if (tab === 'auto_rejected') return approvalStatus(wo) === 'rejected' && wo.status !== 'closed'
+  if (tab === 'pending_dispatch') return dispatchSummaryStatus(wo) === 'pending_dispatch'
+  if (tab === 'dispatched') return ACTIVE_DISPATCH_SUMMARY_STATUSES.has(dispatchSummaryStatus(wo))
+  if (tab === 'pending_close') return isPendingClose(wo)
   if (tab === 'closed') return wo.status === 'closed'
   return wo.status === tab
 }

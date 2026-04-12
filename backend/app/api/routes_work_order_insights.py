@@ -18,6 +18,7 @@ from app.services.work_order_insights_service import (
     build_auto_reassign_shadow_insights,
     build_work_order_insight_metrics,
     build_work_order_insight_query_response,
+    build_work_order_operation_insights,
     explain_auto_dispatch_operation_insights,
 )
 
@@ -53,6 +54,41 @@ async def get_work_order_insight_metrics(
 ):
     _require_role(user, "admin", "manager")
     return await build_work_order_insight_metrics(db)
+
+
+@router.get("/operations", summary="获取通用工单运营洞察")
+async def get_work_order_operation_insights(
+    date_from: date | None = Query(None, description="统计开始日期，闭区间"),
+    date_to: date | None = Query(None, description="统计结束日期，闭区间"),
+    building_id: str | None = Query(None, description="楼宇 ID"),
+    priority: str | None = Query(None, description="优先级"),
+    required_skill: str | None = Query(None, description="派工技能标签"),
+    status: str | None = Query(None, description="工单主状态"),
+    dispatch_status: str | None = Query(None, description="当前派工阶段"),
+    timeout_level: str | None = Query(None, description="当前超时等级"),
+    team_id: str | None = Query(None, description="当前责任班组 ID"),
+    assignee_id: str | None = Query(None, description="当前责任人 ID"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db_session),
+    user: User = Depends(get_current_user),
+):
+    _require_role(user, "admin", "manager")
+    return await build_work_order_operation_insights(
+        db,
+        date_from=date_from,
+        date_to=date_to,
+        building_id=building_id,
+        priority=priority,
+        required_skill=required_skill,
+        status=status,
+        dispatch_status=dispatch_status,
+        timeout_level=timeout_level,
+        team_id=team_id,
+        assignee_id=assignee_id,
+        page=page,
+        page_size=page_size,
+    )
 
 
 @router.get("/auto-dispatch-operations", summary="获取自动派工与大厅兜底运营洞察")

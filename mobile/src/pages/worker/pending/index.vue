@@ -274,15 +274,17 @@ function shortTicket(ticketId: string) {
 function openFeatureOrder() {
   if (!featuredOrder.value) return
   if (featuredOrder.value.kind === 'support') {
+    const dispatchId = supportEntries.value.find(item => item.id === featuredOrder.value?.hallEntryId)?.source_dispatch_id
     uni.navigateTo({
-      url: `/pages/worker/workorder-detail/index?hall_entry_id=${featuredOrder.value.hallEntryId}&incident_id=${featuredOrder.value.incidentId || ''}&ticket_id=${featuredOrder.value.ticketId}`,
+      url: `/pages/worker/ai-workorder/index?hall_entry_id=${featuredOrder.value.hallEntryId}&incident_id=${featuredOrder.value.incidentId || ''}&ticket_id=${featuredOrder.value.ticketId}${dispatchId ? `&dispatch_id=${dispatchId}` : ''}`,
     })
     return
   }
   const target = incidents.value.find(item => (item.current_work_order?.ticket_id || item.incident_id) === featuredOrder.value?.ticketId)
   if (!target?.current_work_order?.ticket_id) return
+  const dispatchId = target.current_dispatch?.id || target.current_work_order.dispatch_id
   uni.navigateTo({
-    url: `/pages/worker/workorder-detail/index?incident_id=${target.incident_id}&ticket_id=${target.current_work_order.ticket_id}`,
+    url: `/pages/worker/ai-workorder/index?incident_id=${target.incident_id}&ticket_id=${target.current_work_order.ticket_id}${dispatchId ? `&dispatch_id=${dispatchId}` : ''}`,
   })
 }
 

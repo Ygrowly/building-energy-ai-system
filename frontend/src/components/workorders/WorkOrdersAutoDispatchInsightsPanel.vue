@@ -54,6 +54,99 @@
     <div v-else-if="error" class="state-line error">{{ error }}</div>
 
     <template v-else>
+      <div class="shadow-box operation-box">
+        <div class="shadow-head">
+          <div>
+            <p class="eyebrow">通用运营洞察</p>
+            <h3>工单、SLA、人员和楼宇</h3>
+            <p class="head-note">同一组日期、楼宇、优先级和技能筛选下，看完整工单运营。</p>
+          </div>
+          <button class="refresh-btn secondary" type="button" :disabled="operationLoading" @click="refreshOperationValue">
+            {{ operationLoading ? '刷新中...' : '刷新通用洞察' }}
+          </button>
+        </div>
+
+        <div class="shadow-filter-grid">
+          <label class="filter-field">
+            <span>工单状态</span>
+            <select :value="operationFilters.status || ''" @change="onOperationFilterInput('status', $event)">
+              <option v-for="item in operationStatusOptions" :key="item.value || 'all'" :value="item.value">{{ item.label }}</option>
+            </select>
+          </label>
+          <label class="filter-field">
+            <span>派工阶段</span>
+            <select :value="operationFilters.dispatch_status || ''" @change="onOperationFilterInput('dispatch_status', $event)">
+              <option v-for="item in operationDispatchStatusOptions" :key="item.value || 'all'" :value="item.value">{{ item.label }}</option>
+            </select>
+          </label>
+          <label class="filter-field">
+            <span>SLA 状态</span>
+            <select :value="operationFilters.timeout_level || ''" @change="onOperationFilterInput('timeout_level', $event)">
+              <option v-for="item in operationTimeoutOptions" :key="item.value || 'all'" :value="item.value">{{ item.label }}</option>
+            </select>
+          </label>
+        </div>
+
+        <div v-if="operationLoading" class="state-line">正在读取通用运营洞察...</div>
+        <div v-else-if="operationError" class="state-line error">{{ operationError }}</div>
+        <template v-else>
+          <div class="metric-grid">
+            <div v-for="item in operationSummaryCards" :key="item.label" class="metric-tile">
+              <span>{{ item.label }}</span>
+              <strong>{{ item.value }}</strong>
+              <small>{{ item.hint }}</small>
+            </div>
+          </div>
+
+          <div class="breakdown-grid">
+            <div v-for="group in operationBreakdownGroups" :key="group.title" class="breakdown-block">
+              <div class="breakdown-title">{{ group.title }}</div>
+              <div v-if="group.rows.length" class="breakdown-list">
+                <div v-for="row in group.rows" :key="`${group.title}-${row.key}`" class="breakdown-row">
+                  <span>{{ displayOperationBreakdownLabel(group.key, row.label) }}</span>
+                  <strong>{{ row.count }}</strong>
+                </div>
+              </div>
+              <p v-else class="empty-hint">暂无记录</p>
+            </div>
+          </div>
+
+          <div v-if="operationWatchlist.length" class="health-correlation">
+            <strong>关注项</strong>
+            <p>{{ operationWatchlistText }}</p>
+          </div>
+
+          <div class="records-head">
+            <h3>最近工单样本</h3>
+            <span>{{ operationPagination.total || 0 }} 条</span>
+          </div>
+          <div v-if="operationRecords.length" class="record-list">
+            <article v-for="record in operationRecords" :key="operationRecordKey(record)" class="record-row" :class="{ 'record-row-warn': record.is_overdue }">
+              <div class="record-main">
+                <div class="record-title-line">
+                  <span class="mode-chip" :class="{ warn: record.is_overdue }">{{ operationStatusLabel(record.status) }}</span>
+                  <strong>{{ record.ticket_id || '未命名工单' }}</strong>
+                  <span>{{ buildingNameValue(record.building_id || '') }}</span>
+                </div>
+                <p>{{ record.issue_description || '暂无问题描述' }}</p>
+                <div class="record-tags">
+                  <span>{{ priorityLabel(record.priority) }}</span>
+                  <span>{{ operationDispatchStatusLabel(record.current_dispatch_status) }}</span>
+                  <span>{{ operationTimeoutLabel(record.timeout_level) }}</span>
+                  <span>{{ (record.required_skills || []).join(' / ') || '未识别技能' }}</span>
+                  <span>{{ record.assignee_name || record.team_name || '未指定责任人' }}</span>
+                </div>
+              </div>
+              <div class="record-side">
+                <span>{{ formatTimeValue(record.created_at) }}</span>
+                <strong>{{ record.is_overdue ? '已超时' : operationTimeoutLabel(record.timeout_level) }}</strong>
+              </div>
+            </article>
+          </div>
+          <p v-else class="empty-hint wide">当前筛选下暂无工单记录。</p>
+        </template>
+      </div>
+
       <div class="explain-box">
         <div class="explain-head">
           <div>
@@ -475,6 +568,30 @@ const props = defineProps({
     type: Function as PropType<() => void>,
     required: true,
   },
+  operationInsights: {
+    type: Object as PropType<any | null>,
+    default: null,
+  },
+  operationFilters: {
+    type: Object as PropType<Record<string, string>>,
+    required: true,
+  },
+  operationLoading: {
+    type: Boolean,
+    required: true,
+  },
+  operationError: {
+    type: String,
+    required: true,
+  },
+  updateOperationFilter: {
+    type: Function as PropType<(key: string, value: string) => void>,
+    required: true,
+  },
+  refreshOperation: {
+    type: Function as PropType<() => void>,
+    required: true,
+  },
   explanation: {
     type: Object as PropType<any | null>,
     default: null,
@@ -566,6 +683,64 @@ const modeLabels: Record<string, string> = {
   hall_fallback: '大厅兜底',
   rollout_hall_fallback: '灰度外进大厅',
 }
+const operationStatusOptions = [
+  { label: '全部工单', value: '' },
+  { label: '待审', value: 'pending_review' },
+  { label: '待派工', value: 'pending_dispatch' },
+  { label: '执行中', value: 'dispatched' },
+  { label: '待关闭', value: 'completed' },
+  { label: '误报待关闭', value: 'false_alarm' },
+  { label: '升级待关闭', value: 'escalated' },
+  { label: '已关闭', value: 'closed' },
+]
+const operationDispatchStatusOptions = [
+  { label: '全部阶段', value: '' },
+  { label: '未派工', value: 'not_dispatched' },
+  { label: '未接单', value: 'assigned' },
+  { label: '已接单', value: 'accepted' },
+  { label: '已到场', value: 'arrived' },
+  { label: '处理中', value: 'processing' },
+  { label: '待协同', value: 'waiting_support' },
+  { label: '已完成', value: 'completed' },
+  { label: '已转派', value: 'transferred' },
+  { label: '已拒单', value: 'rejected' },
+  { label: '已取消', value: 'cancelled' },
+]
+const operationTimeoutOptions = [
+  { label: '全部 SLA', value: '' },
+  { label: '无派工 SLA', value: 'none' },
+  { label: '正常', value: 'normal' },
+  { label: '临期', value: 'warning' },
+  { label: '超时', value: 'overdue' },
+]
+const operationStatusLabels: Record<string, string> = {
+  pending_review: '待审',
+  pending_dispatch: '待派工',
+  auto_rejected: 'AI拒绝',
+  dispatched: '执行中',
+  completed: '待关闭',
+  false_alarm: '误报待关闭',
+  escalated: '升级待关闭',
+  closed: '已关闭',
+}
+const operationDispatchStatusLabels: Record<string, string> = {
+  not_dispatched: '未派工',
+  assigned: '未接单',
+  accepted: '已接单',
+  arrived: '已到场',
+  processing: '处理中',
+  waiting_support: '待协同',
+  completed: '已完成',
+  transferred: '已转派',
+  rejected: '已拒单',
+  cancelled: '已取消',
+}
+const operationTimeoutLabels: Record<string, string> = {
+  none: '无派工 SLA',
+  normal: '正常',
+  warning: '临期',
+  overdue: '超时',
+}
 const shadowTriggerOptions = [
   { label: '全部触发', value: '' },
   { label: '未接单超时', value: 'assigned_overdue' },
@@ -641,6 +816,17 @@ const summary = computed(() => props.insights?.summary || {})
 const breakdowns = computed(() => props.insights?.breakdowns || {})
 const records = computed(() => props.insights?.records || [])
 const pagination = computed(() => props.insights?.pagination || {})
+const operationSummary = computed(() => props.operationInsights?.summary || {})
+const operationBreakdowns = computed(() => props.operationInsights?.breakdowns || {})
+const operationRecords = computed(() => props.operationInsights?.records || [])
+const operationPagination = computed(() => props.operationInsights?.pagination || {})
+const operationWatchlist = computed(() => props.operationInsights?.watchlist || [])
+const operationWatchlistText = computed(() => (
+  operationWatchlist.value
+    .map((item: any) => item.message)
+    .filter(Boolean)
+    .join(' ')
+))
 const shadowSummary = computed(() => props.shadowInsights?.summary || {})
 const shadowBreakdowns = computed(() => props.shadowInsights?.breakdowns || {})
 const shadowRecords = computed(() => props.shadowInsights?.records || [])
@@ -662,6 +848,36 @@ const summaryCards = computed(() => [
   { label: '直接派工', value: summary.value.direct_dispatch_total ?? 0, hint: `高置信 ${summary.value.high_confidence_auto ?? 0} · 低置信 ${summary.value.low_confidence_auto_fallback ?? 0}` },
   { label: '大厅兜底', value: summary.value.hall_fallback_total ?? 0, hint: `打开 ${summary.value.open_hall_fallback ?? 0} · 灰度外 ${summary.value.rollout_hall_fallback ?? 0}` },
   { label: '需改派率', value: `${Math.round((summary.value.needs_reassign_rate ?? 0) * 100)}%`, hint: `已复核 ${summary.value.reviewed ?? 0} · 需改派 ${summary.value.needs_reassign ?? 0}` },
+])
+
+const operationSummaryCards = computed(() => [
+  {
+    label: '工单总数',
+    value: operationSummary.value.total_work_orders ?? 0,
+    hint: `执行中 ${operationSummary.value.dispatched ?? 0} · 待派 ${operationSummary.value.pending_dispatch ?? 0}`,
+  },
+  {
+    label: 'SLA 风险',
+    value: operationSummary.value.overdue_dispatches ?? 0,
+    hint: `临期 ${operationSummary.value.warning_dispatches ?? 0} · 待协同 ${operationSummary.value.waiting_support_dispatches ?? 0}`,
+  },
+  {
+    label: '闭环率',
+    value: `${Math.round((operationSummary.value.completion_rate ?? 0) * 100)}%`,
+    hint: `关闭率 ${Math.round((operationSummary.value.close_rate ?? 0) * 100)}% · 待关闭 ${operationSummary.value.pending_close ?? 0}`,
+  },
+  {
+    label: '平均完成',
+    value: formatMinutes(operationSummary.value.avg_complete_minutes),
+    hint: `接单 ${formatMinutes(operationSummary.value.avg_accept_minutes)} · 到场 ${formatMinutes(operationSummary.value.avg_arrive_minutes)}`,
+  },
+])
+
+const operationBreakdownGroups = computed(() => [
+  { key: 'status', title: '工单状态', rows: operationBreakdowns.value.by_status || [] },
+  { key: 'timeout', title: 'SLA 状态', rows: operationBreakdowns.value.by_timeout || [] },
+  { key: 'building', title: '楼宇热点', rows: operationBreakdowns.value.by_building || [] },
+  { key: 'assignee', title: '人员分布', rows: operationBreakdowns.value.by_assignee || [] },
 ])
 
 const breakdownGroups = computed(() => [
@@ -732,6 +948,10 @@ function refreshValue() {
   props.refresh()
 }
 
+function refreshOperationValue() {
+  props.refreshOperation()
+}
+
 function explainValue() {
   props.explain()
 }
@@ -746,6 +966,11 @@ function refreshRunHealthValue() {
 
 function onQuestionInput(event: Event) {
   props.updateExplainQuestion((event.target as HTMLInputElement).value)
+}
+
+function onOperationFilterInput(key: string, event: Event) {
+  const target = event.target as HTMLInputElement | HTMLSelectElement
+  props.updateOperationFilter(key, target.value)
 }
 
 function onShadowFilterInput(key: string, event: Event) {
@@ -782,6 +1007,15 @@ function displayBreakdownLabel(groupKey: string, value?: string) {
   return value || '未标记'
 }
 
+function displayOperationBreakdownLabel(groupKey: string, value?: string) {
+  if (groupKey === 'status') return operationStatusLabel(value)
+  if (groupKey === 'timeout') return operationTimeoutLabel(value)
+  if (groupKey === 'dispatch_status') return operationDispatchStatusLabel(value)
+  if (groupKey === 'building') return buildingNameValue(value || '')
+  if (groupKey === 'priority') return priorityLabel(value)
+  return value || '未标记'
+}
+
 function displayRunHealthBreakdownLabel(groupKey: string, value?: string) {
   if (groupKey === 'source') return runHealthSourceLabel(value)
   if (groupKey === 'run_status') return runHealthStatusLabel(value)
@@ -807,6 +1041,15 @@ function formatDuration(value?: number | null) {
   return `${Math.round(duration)}ms`
 }
 
+function formatMinutes(value?: number | null) {
+  if (value === null || value === undefined) return '暂无'
+  const minutes = Number(value || 0)
+  if (!minutes) return '0 分钟'
+  if (minutes >= 1440) return `${(minutes / 1440).toFixed(1)} 天`
+  if (minutes >= 60) return `${(minutes / 60).toFixed(1)} 小时`
+  return `${Math.round(minutes)} 分钟`
+}
+
 function formatShare(value?: number | null) {
   const share = Number(value || 0)
   return `${Math.round(share * 100)}%`
@@ -818,6 +1061,22 @@ function recordKey(record: any) {
 
 function shadowRecordKey(record: any) {
   return `${record.current_dispatch_id || record.work_order_id}-${record.created_at || ''}`
+}
+
+function operationRecordKey(record: any) {
+  return `${record.work_order_id || record.ticket_id}-${record.created_at || ''}`
+}
+
+function operationStatusLabel(value?: string) {
+  return operationStatusLabels[value || ''] || value || '未标记'
+}
+
+function operationDispatchStatusLabel(value?: string) {
+  return operationDispatchStatusLabels[value || ''] || value || '未派工'
+}
+
+function operationTimeoutLabel(value?: string) {
+  return operationTimeoutLabels[value || ''] || value || '无派工 SLA'
 }
 
 function shadowTriggerLabel(value?: string) {

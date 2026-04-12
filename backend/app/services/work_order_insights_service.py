@@ -148,6 +148,14 @@ def _hall_required_skills(entry: DispatchHallEntry, detail: dict[str, Any]) -> l
     return _required_skills_from_payload(requirement)
 
 
+def _operation_required_skills(work_order: WorkOrder, task: DispatchTask | None) -> list[str]:
+    payloads: list[dict[str, Any]] = []
+    if task is not None:
+        payloads.append(_safe_json_object(getattr(task, "dispatch_profile_snapshot_json", None)))
+    payloads.append(_safe_json_object(getattr(work_order, "dispatch_profile_json", None)))
+    return _required_skills_from_payload(*payloads)
+
+
 def _matches_skill(required_skills: list[str], required_skill: str | None) -> bool:
     return required_skill is None or required_skill in set(required_skills)
 
@@ -879,6 +887,300 @@ async def build_auto_dispatch_operation_insights(
             "hall_by_strategy": _counter_rows(hall_strategy_counts),
             "review_by_status": _counter_rows(review_counts),
         },
+        "records": page_records,
+        "pagination": {
+            "page": page,
+            "page_size": page_size,
+            "total": total_records,
+        },
+    }
+
+
+async def build_work_order_operation_insights(
+    db: AsyncSession,
+    *,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    building_id: str | None = None,
+    priority: str | None = None,
+    required_skill: str | None = None,
+    status: str | None = None,
+    dispatch_status: str | None = None,
+    timeout_level: str | None = None,
+    team_id: str | None = None,
+    assignee_id: str | None = None,
+    page: int = 1,
+    page_size: int = 20,
+) -> dict[str, Any]:
+    start_at, end_at = _date_window(date_from, date_to)
+    building_filter = _normalize_filter(building_id)
+    priority_filter = _normalize_filter(priority)
+    skill_filter = _normalize_filter(required_skill)
+    status_filter = _normalize_filter(status)
+    dispatch_status_filter = _normalize_filter(dispatch_status)
+    timeout_filter = _normalize_filter(timeout_level)
+    team_filter = _normalize_filter(team_id)
+    assignee_filter = _normalize_filter(assignee_id)
+    page = max(int(page or 1), 1)
+    page_size = min(max(int(page_size or 20), 1), 100)
+
+    query = (
+        select(WorkOrder, DispatchTask, User.username, WorkerTeam.name)
+        .outerjoin(DispatchTask, DispatchTask.id == WorkOrder.current_dispatch_id)
+        .outerjoin(User, User.id == DispatchTask.assigned_to)
+        .outerjoin(WorkerTeam, WorkerTeam.id == DispatchTask.assigned_team_id)
+        .where(
+            WorkOrder.created_at >= start_at,
+            WorkOrder.created_at < end_at,
+        )
+    )
+    if building_filter:
+        query = query.where(WorkOrder.building_id == building_filter)
+    if priority_filter:
+        query = query.where(WorkOrder.priority == priority_filter)
+    if status_filter:
+        query = query.where(WorkOrder.status == status_filter)
+    if dispatch_status_filter:
+        query = query.where(DispatchTask.dispatch_status == dispatch_status_filter)
+    if timeout_filter:
+        query = query.where(DispatchTask.timeout_level == timeout_filter)
+    if team_filter:
+        query = query.where(DispatchTask.assigned_team_id == team_filter)
+    if assignee_filter:
+        query = query.where(DispatchTask.assigned_to == assignee_filter)
+
+    result = await db.execute(query.order_by(WorkOrder.created_at.desc()).limit(5000))
+
+    status_counts: Counter[str] = Counter()
+    approval_counts: Counter[str] = Counter()
+    dispatch_summary_counts: Counter[str] = Counter()
+    work_result_counts: Counter[str] = Counter()
+    dispatch_status_counts: Counter[str] = Counter()
+    timeout_counts: Counter[str] = Counter()
+    priority_counts: Counter[str] = Counter()
+    building_counts: Counter[str] = Counter()
+    skill_counts: Counter[str] = Counter()
+    team_counts: Counter[str] = Counter()
+    assignee_counts: Counter[str] = Counter()
+    day_counts: Counter[str] = Counter()
+    team_stats: dict[str, dict[str, Any]] = {}
+    assignee_stats: dict[str, dict[str, Any]] = {}
+    building_stats: dict[str, dict[str, Any]] = {}
+    accept_minutes: list[float] = []
+    arrive_minutes: list[float] = []
+    complete_minutes: list[float] = []
+    records: list[dict[str, Any]] = []
+
+    for work_order, task, username, team_name in result.all():
+        skills = _operation_required_skills(work_order, task)
+        if not _matches_skill(skills, skill_filter):
+            continue
+
+        work_order_status = str(work_order.status or "unknown")
+        dispatch_status_value = str(getattr(task, "dispatch_status", None) or "not_dispatched")
+        timeout_value = str(getattr(task, "timeout_level", None) or "none")
+        team_key = str(getattr(task, "assigned_team_id", None) or "unassigned")
+        team_label = str(team_name or getattr(task, "assigned_team_id", None) or "未分组")
+        assignee_key = str(getattr(task, "assigned_to", None) or "unassigned")
+        assignee_label = str(username or getattr(task, "assigned_to", None) or "未指定")
+        building_key = str(work_order.building_id or "unknown")
+        created_day = work_order.created_at.date().isoformat() if work_order.created_at else "unknown"
+        is_active_work_order = work_order_status in ACTIVE_WORK_ORDER_STATUSES
+        is_completed = work_order_status in {"completed", "closed"}
+        is_closed = work_order_status in CLOSED_WORK_ORDER_STATUSES
+        is_pending_close = work_order_status in PENDING_CLOSE_STATUSES
+        is_overdue = timeout_value == "overdue"
+
+        status_counts[work_order_status] += 1
+        _increment_dimension(approval_counts, work_order.approval_status, "未标记审批")
+        _increment_dimension(dispatch_summary_counts, work_order.dispatch_summary_status, "未标记派工")
+        _increment_dimension(work_result_counts, work_order.work_result, "未标记结果")
+        dispatch_status_counts[dispatch_status_value] += 1
+        timeout_counts[timeout_value] += 1
+        _increment_dimension(priority_counts, work_order.priority, "未标记优先级")
+        _increment_dimension(building_counts, work_order.building_id, "未标记楼宇")
+        for skill in skills or ["未识别技能"]:
+            skill_counts[skill] += 1
+        team_counts[team_label] += 1
+        assignee_counts[assignee_label] += 1
+        day_counts[created_day] += 1
+
+        team_row = team_stats.setdefault(
+            team_key,
+            {
+                "team_id": None if team_key == "unassigned" else team_key,
+                "team_name": team_label,
+                "total_work_orders": 0,
+                "active_work_orders": 0,
+                "completed_work_orders": 0,
+                "closed_work_orders": 0,
+                "overdue_dispatches": 0,
+            },
+        )
+        team_row["total_work_orders"] += 1
+        team_row["active_work_orders"] += 1 if is_active_work_order else 0
+        team_row["completed_work_orders"] += 1 if is_completed else 0
+        team_row["closed_work_orders"] += 1 if is_closed else 0
+        team_row["overdue_dispatches"] += 1 if is_overdue else 0
+
+        assignee_row = assignee_stats.setdefault(
+            assignee_key,
+            {
+                "assignee_id": None if assignee_key == "unassigned" else assignee_key,
+                "assignee_name": assignee_label,
+                "total_work_orders": 0,
+                "active_work_orders": 0,
+                "completed_work_orders": 0,
+                "overdue_dispatches": 0,
+            },
+        )
+        assignee_row["total_work_orders"] += 1
+        assignee_row["active_work_orders"] += 1 if is_active_work_order else 0
+        assignee_row["completed_work_orders"] += 1 if is_completed else 0
+        assignee_row["overdue_dispatches"] += 1 if is_overdue else 0
+
+        building_row = building_stats.setdefault(
+            building_key,
+            {
+                "building_id": building_key,
+                "total_work_orders": 0,
+                "active_work_orders": 0,
+                "pending_dispatch": 0,
+                "overdue_dispatches": 0,
+                "closed_work_orders": 0,
+            },
+        )
+        building_row["total_work_orders"] += 1
+        building_row["active_work_orders"] += 1 if is_active_work_order else 0
+        building_row["pending_dispatch"] += 1 if work_order_status == "pending_dispatch" else 0
+        building_row["overdue_dispatches"] += 1 if is_overdue else 0
+        building_row["closed_work_orders"] += 1 if is_closed else 0
+
+        if task is not None:
+            accept_delta = _minutes_between(task.assigned_at, task.accepted_at)
+            arrive_delta = _minutes_between(task.accepted_at or task.assigned_at, task.arrived_at)
+            complete_delta = _minutes_between(task.assigned_at, task.completed_at)
+            if accept_delta is not None:
+                accept_minutes.append(accept_delta)
+            if arrive_delta is not None:
+                arrive_minutes.append(arrive_delta)
+            if complete_delta is not None:
+                complete_minutes.append(complete_delta)
+
+        records.append(
+            {
+                "ticket_id": work_order.ticket_id,
+                "work_order_id": work_order.id,
+                "building_id": work_order.building_id,
+                "priority": work_order.priority,
+                "required_skills": skills,
+                "status": work_order_status,
+                "approval_status": work_order.approval_status,
+                "dispatch_summary_status": work_order.dispatch_summary_status,
+                "work_result": work_order.work_result,
+                "issue_description": work_order.issue_description,
+                "created_at": _dt(work_order.created_at),
+                "updated_at": _dt(work_order.updated_at),
+                "closed_at": _dt(work_order.closed_at),
+                "current_dispatch_id": getattr(task, "id", None),
+                "current_dispatch_status": dispatch_status_value,
+                "timeout_level": timeout_value,
+                "assignee_id": getattr(task, "assigned_to", None),
+                "assignee_name": username,
+                "team_id": getattr(task, "assigned_team_id", None),
+                "team_name": team_name,
+                "is_active_work_order": is_active_work_order,
+                "is_pending_close": is_pending_close,
+                "is_overdue": is_overdue,
+            }
+        )
+
+    total_records = len(records)
+    offset = (page - 1) * page_size
+    page_records = records[offset: offset + page_size]
+    active_total = _count_value(status_counts, *ACTIVE_WORK_ORDER_STATUSES)
+    pending_close_total = _count_value(status_counts, *PENDING_CLOSE_STATUSES)
+    closed_total = _count_value(status_counts, *CLOSED_WORK_ORDER_STATUSES)
+    completed_total = _count_value(status_counts, "completed", "closed")
+    overdue_total = int(timeout_counts.get("overdue", 0) or 0)
+    warning_total = int(timeout_counts.get("warning", 0) or 0)
+    waiting_support_total = int(dispatch_status_counts.get("waiting_support", 0) or 0)
+
+    watchlist: list[dict[str, Any]] = []
+    if overdue_total:
+        watchlist.append({"level": "high", "code": "overdue", "message": f"当前筛选内有 {overdue_total} 个当前派工已超时。"})
+    if int(status_counts.get("pending_dispatch", 0) or 0):
+        watchlist.append({"level": "medium", "code": "pending_dispatch", "message": f"当前筛选内有 {int(status_counts.get('pending_dispatch', 0) or 0)} 张工单待派工。"})
+    if waiting_support_total:
+        watchlist.append({"level": "medium", "code": "waiting_support", "message": f"当前筛选内有 {waiting_support_total} 个派工等待协同。"})
+    if not watchlist:
+        watchlist.append({"level": "normal", "code": "normal", "message": "当前筛选内没有明显超时、待派工或待协同堆积。"})
+
+    return {
+        "generated_at": _dt(datetime.now(timezone.utc)),
+        "readonly": True,
+        "window": {
+            "date_from": date_from.isoformat() if date_from else None,
+            "date_to": date_to.isoformat() if date_to else None,
+            "start_at": _dt(start_at),
+            "end_at": _dt(end_at),
+            "basis": "work_order.created_at",
+        },
+        "filters": {
+            "building_id": building_filter,
+            "priority": priority_filter,
+            "required_skill": skill_filter,
+            "status": status_filter,
+            "dispatch_status": dispatch_status_filter,
+            "timeout_level": timeout_filter,
+            "team_id": team_filter,
+            "assignee_id": assignee_filter,
+        },
+        "summary": {
+            "total_work_orders": total_records,
+            "active_work_orders": active_total,
+            "pending_review": int(status_counts.get("pending_review", 0) or 0),
+            "pending_dispatch": int(status_counts.get("pending_dispatch", 0) or 0),
+            "dispatched": int(status_counts.get("dispatched", 0) or 0),
+            "pending_close": pending_close_total,
+            "closed": closed_total,
+            "completed_or_closed": completed_total,
+            "completion_rate": _ratio(completed_total, total_records),
+            "close_rate": _ratio(closed_total, total_records),
+            "warning_dispatches": warning_total,
+            "overdue_dispatches": overdue_total,
+            "waiting_support_dispatches": waiting_support_total,
+            "avg_accept_minutes": _average(accept_minutes),
+            "avg_arrive_minutes": _average(arrive_minutes),
+            "avg_complete_minutes": _average(complete_minutes),
+        },
+        "breakdowns": {
+            "by_status": _counter_rows(status_counts),
+            "by_approval_status": _counter_rows(approval_counts),
+            "by_dispatch_summary_status": _counter_rows(dispatch_summary_counts),
+            "by_work_result": _counter_rows(work_result_counts),
+            "by_dispatch_status": _counter_rows(dispatch_status_counts),
+            "by_timeout": _counter_rows(timeout_counts),
+            "by_priority": _counter_rows(priority_counts),
+            "by_building": _counter_rows(building_counts),
+            "by_skill": _counter_rows(skill_counts),
+            "by_team": _counter_rows(team_counts),
+            "by_assignee": _counter_rows(assignee_counts),
+            "by_day": _counter_rows(day_counts, limit=14),
+        },
+        "team_efficiency": sorted(
+            team_stats.values(),
+            key=lambda item: (-int(item["active_work_orders"]), -int(item["overdue_dispatches"]), item["team_name"]),
+        )[:10],
+        "worker_loads": sorted(
+            assignee_stats.values(),
+            key=lambda item: (-int(item["active_work_orders"]), -int(item["overdue_dispatches"]), item["assignee_name"]),
+        )[:10],
+        "building_hotspots": sorted(
+            building_stats.values(),
+            key=lambda item: (-int(item["active_work_orders"]), -int(item["overdue_dispatches"]), item["building_id"]),
+        )[:10],
+        "watchlist": watchlist,
         "records": page_records,
         "pagination": {
             "page": page,

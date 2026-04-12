@@ -101,6 +101,7 @@ type PendingFocus = { ticketId: string; action: 'expand' | 'dispatch' | 'reassig
 type AutoDispatchInsightFilters = Record<string, string>
 type AutoReassignShadowFilters = Record<string, string>
 type AutoDispatchRunHealthFilters = Record<string, string>
+type WorkOrderOperationInsightFilters = Record<string, string>
 
 const chatStore = useChatStore()
 const buildingStore = useBuildingStore()
@@ -112,6 +113,9 @@ const actionLoading = ref<string | null>(null)
 const rejectingId = ref<string | null>(null)
 const rejectReason = ref('')
 const actionResult = ref<Record<string, { type: 'success' | 'error'; message: string }>>({})
+const workOrderOperationInsights = ref<any | null>(null)
+const workOrderOperationInsightLoading = ref(false)
+const workOrderOperationInsightError = ref('')
 const autoDispatchInsights = ref<any | null>(null)
 const autoDispatchInsightLoading = ref(false)
 const autoDispatchInsightError = ref('')
@@ -142,6 +146,11 @@ const autoDispatchInsightFilters = ref<AutoDispatchInsightFilters>({
   priority: '',
   required_skill: '',
   dispatch_mode: '',
+})
+const workOrderOperationInsightFilters = ref<WorkOrderOperationInsightFilters>({
+  status: '',
+  dispatch_status: '',
+  timeout_level: '',
 })
 const autoReassignShadowInsightFilters = ref<AutoReassignShadowFilters>({
   trigger_reason: '',
@@ -222,6 +231,7 @@ const {
   currentDispatchForOrder,
   executionStatusForOrder,
   executionLabelForOrder,
+  statusLabelForOrder,
   assigneeNameForOrder,
   detailRows,
   timelineRows,
@@ -328,6 +338,22 @@ function buildAutoDispatchInsightQuery() {
   return params.toString()
 }
 
+function buildWorkOrderOperationInsightQuery() {
+  const params = new URLSearchParams()
+  const sharedFilters = autoDispatchInsightFilters.value
+  const sharedKeys = ['date_from', 'date_to', 'building_id', 'priority', 'required_skill'] as const
+  sharedKeys.forEach((key) => {
+    const value = sharedFilters[key]
+    if (value) params.set(key, value)
+  })
+  Object.entries(workOrderOperationInsightFilters.value).forEach(([key, value]) => {
+    if (value) params.set(key, value)
+  })
+  params.set('page', '1')
+  params.set('page_size', '20')
+  return params.toString()
+}
+
 function buildAutoReassignShadowInsightQuery() {
   const params = new URLSearchParams()
   Object.entries(autoDispatchInsightFilters.value).forEach(([key, value]) => {
@@ -353,6 +379,20 @@ function buildAutoDispatchRunHealthQuery() {
   params.set('recent_limit', '12')
   params.set('slow_limit', '10')
   return params.toString()
+}
+
+async function fetchWorkOrderOperationInsights() {
+  workOrderOperationInsightLoading.value = true
+  workOrderOperationInsightError.value = ''
+  try {
+    workOrderOperationInsights.value = await apiFetch<any>(
+      `/api/work-order-insights/operations?${buildWorkOrderOperationInsightQuery()}`,
+    )
+  } catch (e: any) {
+    workOrderOperationInsightError.value = e.message || '通用运营洞察加载失败'
+  } finally {
+    workOrderOperationInsightLoading.value = false
+  }
 }
 
 async function fetchAutoDispatchInsights() {
@@ -436,6 +476,7 @@ function updateAutoDispatchInsightFilter(key: string, value: string) {
   autoDispatchInsightExplanation.value = null
   autoDispatchInsightExplanationSource.value = ''
   void fetchAutoDispatchInsights()
+  void fetchWorkOrderOperationInsights()
   void fetchAutoReassignShadowInsights()
   void fetchAutoDispatchRunHealthInsights()
 }
@@ -450,6 +491,14 @@ function updateAutoReassignShadowInsightFilter(key: string, value: string) {
     [key]: value,
   }
   void fetchAutoReassignShadowInsights()
+}
+
+function updateWorkOrderOperationInsightFilter(key: string, value: string) {
+  workOrderOperationInsightFilters.value = {
+    ...workOrderOperationInsightFilters.value,
+    [key]: value,
+  }
+  void fetchWorkOrderOperationInsights()
 }
 
 function updateAutoDispatchRunHealthFilter(key: string, value: string) {
@@ -492,6 +541,12 @@ const mainPaneProps = computed(() => ({
   isTimelineLoading,
   timelineError,
   actionsForOrder,
+  workOrderOperationInsights: workOrderOperationInsights.value,
+  workOrderOperationInsightFilters: workOrderOperationInsightFilters.value,
+  workOrderOperationInsightLoading: workOrderOperationInsightLoading.value,
+  workOrderOperationInsightError: workOrderOperationInsightError.value,
+  updateWorkOrderOperationInsightFilter,
+  fetchWorkOrderOperationInsights,
   autoDispatchInsights: autoDispatchInsights.value,
   autoDispatchInsightFilters: autoDispatchInsightFilters.value,
   autoDispatchInsightLoading: autoDispatchInsightLoading.value,
@@ -586,7 +641,11 @@ async function maybeHandlePendingFocus() {
 function tabForWorkOrder(wo: any): WorkOrderTabKey | null {
   if (wo.auto_dispatch_review_state?.status === 'pending') return 'auto_dispatch_review'
   if (wo.status === 'closed') return 'closed'
-  if (['completed', 'false_alarm', 'escalated'].includes(wo.status)) return 'pending_close'
+  if (wo.work_result || ['completed', 'false_alarm', 'escalated'].includes(wo.status)) return 'pending_close'
+  if (wo.approval_status === 'pending_review') return 'pending_review'
+  if (wo.approval_status === 'rejected') return 'auto_rejected'
+  if (wo.dispatch_summary_status === 'pending_dispatch') return 'pending_dispatch'
+  if (['assigned', 'accepted', 'arrived', 'processing', 'waiting_support', 'overdue'].includes(wo.dispatch_summary_status)) return 'dispatched'
   if (['pending_review', 'pending_dispatch', 'auto_rejected', 'dispatched'].includes(wo.status)) {
     return wo.status
   }
@@ -656,7 +715,7 @@ watch(allOrders, (orders) => {
       ticket_id: wo.ticket_id,
       building: buildingName(wo.building_id),
       priority: PRIORITY_LABELS[wo.priority] ?? wo.priority ?? '—',
-      status: STATUS_LABELS[wo.status] ?? wo.status,
+      status: statusLabelForOrder(wo),
       execution: executionLabelForOrder(wo),
       assignee: assigneeNameForOrder(wo) || '未派工',
       created_at: formatTime(wo.created_at),
@@ -670,6 +729,7 @@ onMounted(async () => {
   captureRouteFocus()
   await fetchOrders()
   if (activeTab.value === 'auto_dispatch_insights') {
+    await fetchWorkOrderOperationInsights()
     await fetchAutoDispatchInsights()
     await fetchAutoReassignShadowInsights()
     await fetchAutoDispatchRunHealthInsights()
@@ -694,6 +754,7 @@ watch(workspaceMode, async () => {
   captureRouteFocus()
   await fetchOrders()
   if (activeTab.value === 'auto_dispatch_insights') {
+    await fetchWorkOrderOperationInsights()
     await fetchAutoDispatchInsights()
     await fetchAutoReassignShadowInsights()
     await fetchAutoDispatchRunHealthInsights()
@@ -702,6 +763,7 @@ watch(workspaceMode, async () => {
 
 watch(activeTab, (tab) => {
   if (tab === 'auto_dispatch_insights') {
+    void fetchWorkOrderOperationInsights()
     void fetchAutoDispatchInsights()
     void fetchAutoReassignShadowInsights()
     void fetchAutoDispatchRunHealthInsights()

@@ -12,6 +12,12 @@
     :format-time="formatTime"
     :update-filter="updateAutoDispatchInsightFilter"
     :refresh="fetchAutoDispatchInsights"
+    :operation-insights="workOrderOperationInsights"
+    :operation-filters="workOrderOperationInsightFilters"
+    :operation-loading="workOrderOperationInsightLoading"
+    :operation-error="workOrderOperationInsightError"
+    :update-operation-filter="updateWorkOrderOperationInsightFilter"
+    :refresh-operation="fetchWorkOrderOperationInsights"
     :explanation="autoDispatchInsightExplanation"
     :explanation-source="autoDispatchInsightExplanationSource"
     :explain-question="autoDispatchInsightQuestion"
@@ -258,6 +264,30 @@ defineProps({
     required: true,
   },
   fetchAutoDispatchInsights: {
+    type: Function as PropType<() => void>,
+    required: true,
+  },
+  workOrderOperationInsights: {
+    type: Object as PropType<any | null>,
+    default: null,
+  },
+  workOrderOperationInsightFilters: {
+    type: Object as PropType<Record<string, string>>,
+    required: true,
+  },
+  workOrderOperationInsightLoading: {
+    type: Boolean,
+    required: true,
+  },
+  workOrderOperationInsightError: {
+    type: String,
+    required: true,
+  },
+  updateWorkOrderOperationInsightFilter: {
+    type: Function as PropType<(key: string, value: string) => void>,
+    required: true,
+  },
+  fetchWorkOrderOperationInsights: {
     type: Function as PropType<() => void>,
     required: true,
   },

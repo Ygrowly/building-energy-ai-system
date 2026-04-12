@@ -1317,6 +1317,73 @@ class WorkOrderAuditLog(Base):
 
 
 # ---------------------------------------------------------------------------
+# ai_assistant_* — 维小修 / 运小维会话与动作审计（AI Phase 1）
+# ---------------------------------------------------------------------------
+
+class AiAssistantSession(Base):
+    __tablename__ = "ai_assistant_sessions"
+
+    id: str = Column(String(128), primary_key=True)
+    assistant_name: str = Column(String(32), nullable=False)
+    user_id: str = Column(String, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    role: str = Column(String(32), nullable=True)
+    work_order_id: str = Column(String, ForeignKey("work_orders.id", ondelete="SET NULL"), nullable=True)
+    session_state_json: str = Column(Text, nullable=True)
+    readonly: bool = Column(Boolean, nullable=False, default=False)
+    created_at = Column(TIMESTAMP(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(TIMESTAMP(timezone=True), nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        Index("idx_ai_assistant_session_user", "user_id", updated_at.desc()),
+        Index("idx_ai_assistant_session_work_order", "work_order_id", updated_at.desc()),
+        Index("idx_ai_assistant_session_name", "assistant_name", updated_at.desc()),
+    )
+
+
+class AiAssistantMessage(Base):
+    __tablename__ = "ai_assistant_messages"
+
+    id: str = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    session_id: str = Column(
+        String(128), ForeignKey("ai_assistant_sessions.id", ondelete="CASCADE"), nullable=False
+    )
+    role: str = Column(String(16), nullable=False)
+    content: str = Column(Text, nullable=False)
+    content_type: str = Column(String(24), nullable=False, default="text")
+    model_provider: str = Column(String(32), nullable=True)
+    model_name: str = Column(String(64), nullable=True)
+    created_at = Column(TIMESTAMP(timezone=True), nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        Index("idx_ai_assistant_message_session_time", "session_id", created_at.asc()),
+    )
+
+
+class AiAssistantActionAudit(Base):
+    __tablename__ = "ai_assistant_action_audits"
+
+    id: str = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    session_id: str = Column(
+        String(128), ForeignKey("ai_assistant_sessions.id", ondelete="SET NULL"), nullable=True
+    )
+    work_order_id: str = Column(String, ForeignKey("work_orders.id", ondelete="SET NULL"), nullable=True)
+    dispatch_id: str = Column(String, ForeignKey("dispatch_tasks.id", ondelete="SET NULL"), nullable=True)
+    hall_entry_id: str = Column(String, ForeignKey("dispatch_hall_entries.id", ondelete="SET NULL"), nullable=True)
+    proposed_action: str = Column(String(32), nullable=False)
+    confirmation_text: str = Column(Text, nullable=True)
+    execution_status: str = Column(String(16), nullable=False, default="pending")
+    backend_action_ref: str = Column(Text, nullable=True)
+    error_message: str = Column(Text, nullable=True)
+    created_at = Column(TIMESTAMP(timezone=True), nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        Index("idx_ai_assistant_action_session", "session_id", created_at.desc()),
+        Index("idx_ai_assistant_action_work_order", "work_order_id", created_at.desc()),
+        Index("idx_ai_assistant_action_status", "execution_status", created_at.desc()),
+    )
+
+
+# ---------------------------------------------------------------------------
 # dispatch_operation_runs — 调度运行记录（运营洞察 / 运行健康）
 # ---------------------------------------------------------------------------
 

@@ -24,6 +24,8 @@ from app.api.routes_dispatch_hall import router as dispatch_hall_router
 from app.api.routes_worker_profiles import router as worker_profiles_router
 from app.api.routes_context_events import router as context_events_router
 from app.api.routes_work_order_insights import router as work_order_insights_router
+from app.api.routes_worker_ai import router as worker_ai_router
+from app.api.routes_operator_ai import router as operator_ai_router
 from app.api.routes_admin import router as admin_router
 from app.core.config import get_settings
 
@@ -68,6 +70,7 @@ async def lifespan(app: FastAPI):
     import app.db.chat_models  # noqa: F401
     import app.db.models  # noqa: F401  — 触发 User/RefreshToken metadata 注册
     from app.db.session import (
+        ensure_ai_assistant_tables,
         ensure_auth_schema_compat,
         ensure_daily_energy_summary_view,
         ensure_dispatch_operation_runs_table,
@@ -78,6 +81,7 @@ async def lifespan(app: FastAPI):
 
     # 兼容历史数据库结构，避免 users.role 缺失导致登录 500
     await ensure_auth_schema_compat()
+    await ensure_ai_assistant_tables()
 
     # P2：确保 Tool 4 的物化视图可用，避免日粒度查询抛 UndefinedTableError
     await ensure_daily_energy_summary_view()
@@ -408,6 +412,8 @@ app.include_router(dispatch_hall_router, prefix="/api")
 app.include_router(worker_profiles_router, prefix="/api")
 app.include_router(context_events_router, prefix="/api")
 app.include_router(work_order_insights_router, prefix="/api")
+app.include_router(worker_ai_router, prefix="/api")
+app.include_router(operator_ai_router, prefix="/api")
 app.include_router(report_router, prefix="/api")
 app.include_router(admin_router)
 

@@ -89,6 +89,16 @@ class Settings(BaseSettings):
     LLM_MODEL_DEEP: str = ""
 
     # -----------------------------------------------------------------------
+    # 双端 AI Provider（维小修 / 运小维）
+    # -----------------------------------------------------------------------
+    AI_PROVIDER: str = "qwen_dashscope"
+    AI_API_KEY: str = ""  # 可统一填 Qwen / OpenAI 兼容 Key；留空时回退 DASHSCOPE_API_KEY
+    DASHSCOPE_API_KEY: str = ""
+    AI_BASE_URL: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    AI_TEXT_MODEL: str = "qwen-plus"
+    AI_STRUCTURED_OUTPUT_STRICT: bool = True
+
+    # -----------------------------------------------------------------------
     # RAGFlow 知识库 API
     # -----------------------------------------------------------------------
     RAGFLOW_API_URL: str = "http://localhost:9380"
@@ -165,7 +175,7 @@ class Settings(BaseSettings):
     AUTO_REASSIGN_TRIGGER_ASSIGNED_OVERDUE: bool = True  # 一期触发器：未接单超时是否进入自动重派
     AUTO_REASSIGN_TRIGGER_ACCEPTED_OVERDUE: bool = True  # 一期触发器：已接单未到场超时是否进入自动重派
     AUTO_REASSIGN_ACCEPTED_MIN_PREVIOUS_REMINDERS: int = 1  # accepted->overdue 前至少已有几次提醒，才允许自动重派
-    AUTO_REASSIGN_TRIGGER_ASSIGNEE_UNAVAILABLE: bool = True  # 一期触发器：当前责任人客观不可用时是否进入自动重派
+    AUTO_REASSIGN_TRIGGER_ASSIGNEE_UNAVAILABLE: bool = False  # 一期触发器：当前责任人客观不可用时是否进入自动重派
     ENABLE_CHAT_WORK_ORDERS: bool = False  # 对话开关：是否允许聊天链路直接生成工单草稿/工单流程
 
     # -----------------------------------------------------------------------

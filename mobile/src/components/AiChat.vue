@@ -5,8 +5,8 @@
 <template>
   <view class="ai-chat">
     <view class="chat-header">
-      <text class="chat-title">AI 辅助维修</text>
-      <text class="chat-hint">基于当前工单自动提供诊断建议</text>
+      <text class="chat-title">{{ chatTitle }}</text>
+      <text class="chat-hint">{{ chatHint }}</text>
     </view>
 
     <!-- 消息列表 -->
@@ -19,9 +19,9 @@
       <!-- 欢迎消息 -->
       <view class="msg ai-msg">
         <view class="msg-bubble ai">
-          <text>您好！我已了解当前工单情况：</text>
-          <text class="bold">{{ order.building_id }} — {{ order.issue_description?.slice(0, 60) }}</text>
-          <text>请描述您的现场情况，我将提供针对性的维修指导。</text>
+          <text>{{ welcomeLead }}</text>
+          <text v-if="orderIntro" class="bold">{{ orderIntro }}</text>
+          <text>{{ welcomeBody }}</text>
         </view>
       </view>
 
@@ -78,7 +78,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, nextTick } from 'vue'
+import { ref, nextTick, computed } from 'vue'
 import type { WorkOrder } from '../api/workorder'
 import {
   sendChatMessage,
@@ -86,6 +86,7 @@ import {
   type ThinkingEvent,
   type TextEvent,
 } from '../api/chat'
+import { operatorAiApi, workerAiApi } from '../api/ai-assistant'
 
 interface ChatMsg {
   role: 'user' | 'ai'
@@ -93,7 +94,21 @@ interface ChatMsg {
   thinking?: boolean
 }
 
-const props = defineProps<{ order: WorkOrder }>()
+const props = withDefaults(defineProps<{
+  order?: WorkOrder | null
+  title?: string
+  hint?: string
+  mode?: 'general' | 'operator' | 'worker'
+  dispatchId?: string | null
+  hallEntryId?: string | null
+}>(), {
+  order: null,
+  title: 'AI 辅助维修',
+  hint: '',
+  mode: 'general',
+  dispatchId: null,
+  hallEntryId: null,
+})
 
 const messages = ref<ChatMsg[]>([])
 const inputText = ref('')
@@ -102,6 +117,24 @@ const streamingText = ref('')
 const sessionId = ref<string | null>(null)
 const scrollTop = ref(0)
 const isFirstMessage = ref(true)
+
+const chatTitle = computed(() => props.title)
+const chatHint = computed(() => props.hint || (
+  props.order
+    ? '基于当前工单自动提供诊断建议'
+    : '可以咨询能耗、工单、派工和现场处置问题'
+))
+const orderIntro = computed(() => {
+  if (!props.order) return ''
+  const issue = props.order.issue_description?.slice(0, 60) || '现场情况待补充'
+  return `${props.order.building_id} - ${issue}`
+})
+const welcomeLead = computed(() => props.order ? '您好！我已了解当前工单情况：' : '您好，我是楼宇运维 AI 助手。')
+const welcomeBody = computed(() => (
+  props.order
+    ? '请描述您的现场情况，我将提供针对性的维修指导。'
+    : '可以直接咨询能耗分析、派工处理、维修流程或现场处置问题。'
+))
 
 function scrollToBottom() {
   nextTick(() => { scrollTop.value = 99999 })
@@ -112,7 +145,7 @@ async function sendMessage() {
   if (!text || sending.value) return
 
   // 首次发送时拼接工单上下文到 message 中
-  const actualMessage = isFirstMessage.value
+  const actualMessage = props.mode === 'general' && isFirstMessage.value && props.order
     ? buildContextMessage(props.order, text)
     : text
 
@@ -125,6 +158,11 @@ async function sendMessage() {
 
   // 思考占位
   messages.value.push({ role: 'ai', content: '', thinking: true })
+
+  if (props.mode !== 'general') {
+    await sendAssistantMessage(actualMessage)
+    return
+  }
 
   try {
     const newSessionId = await sendChatMessage(actualMessage, sessionId.value, {
@@ -172,6 +210,38 @@ async function sendMessage() {
     sessionId.value = newSessionId
   } catch {
     sending.value = false
+  }
+}
+
+async function sendAssistantMessage(text: string) {
+  try {
+    const response = props.mode === 'operator'
+      ? await operatorAiApi.chat({
+          message: text,
+          session_id: sessionId.value,
+          include_evidence: true,
+        })
+      : await workerAiApi.chat({
+          message: text,
+          session_id: sessionId.value,
+          ticket_id: props.order?.ticket_id || null,
+          dispatch_id: props.dispatchId || props.order?.current_dispatch?.id || props.order?.dispatch_id || null,
+          hall_entry_id: props.hallEntryId || null,
+          client_context: {
+            source_component: 'AiChat',
+            work_order_status: props.order?.status || null,
+            execution_status: props.order?.current_dispatch?.execution_status || props.order?.execution_status || null,
+          },
+        })
+    sessionId.value = response.session_id
+    removePendingThinking()
+    messages.value.push({ role: 'ai', content: response.answer })
+  } catch (err) {
+    removePendingThinking()
+    messages.value.push({ role: 'ai', content: err instanceof Error ? err.message : '请求失败，请重试' })
+  } finally {
+    sending.value = false
+    scrollToBottom()
   }
 }
 

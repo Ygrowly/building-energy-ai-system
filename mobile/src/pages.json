@@ -21,6 +21,15 @@
       }
     },
     {
+      "path": "pages/ai/chat/index",
+      "style": {
+        "navigationBarTitleText": "AI 对话",
+        "navigationBarBackgroundColor": "#ffffff",
+        "navigationBarTextStyle": "black",
+        "navigationStyle": "custom"
+      }
+    },
+    {
       "path": "pages/operator/overview/index",
       "style": {
         "navigationBarTitleText": "能耗总览",
@@ -123,6 +132,15 @@
       "path": "pages/worker/workorder-detail/index",
       "style": {
         "navigationBarTitleText": "工单详情",
+        "navigationBarBackgroundColor": "#E4EDB8",
+        "navigationBarTextStyle": "white",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/worker/ai-workorder/index",
+      "style": {
+        "navigationBarTitleText": "维小修",
         "navigationBarBackgroundColor": "#E4EDB8",
         "navigationBarTextStyle": "white",
         "navigationStyle": "custom"

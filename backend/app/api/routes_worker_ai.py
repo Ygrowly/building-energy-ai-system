@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -12,6 +13,7 @@ from app.db.session import get_db_session
 from app.services.ai_media_service import (
     analyze_worker_image,
     build_tts_response,
+    get_tts_cache_path,
     transcribe_worker_audio,
 )
 from app.services.maintenance_guidance_service import (
@@ -174,4 +176,16 @@ async def worker_ai_tts(
     req: WorkerAiTtsRequest,
     user: User = Depends(get_current_user),
 ):
-    return build_tts_response(text=req.text, voice=req.voice)
+    return await build_tts_response(text=req.text, voice=req.voice)
+
+
+@router.get("/tts/cache/{filename}", summary="获取维小修 TTS 缓存音频")
+async def worker_ai_tts_cache(
+    filename: str,
+    user: User = Depends(get_current_user),
+):
+    cache_key = filename.removesuffix(".mp3")
+    path = get_tts_cache_path(cache_key)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="音频缓存不存在")
+    return FileResponse(path, media_type="audio/mpeg", filename=path.name)

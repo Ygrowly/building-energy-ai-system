@@ -1,5 +1,11 @@
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
+from pathlib import Path
 
+import pytest
+
+from app.core.config import get_settings
+from app.services import ai_media_service
 from app.services.ai_media_service import build_tts_response, normalize_transcript
 from app.services.maintenance_guidance_service import (
     _fallback_guidance_reply,
@@ -63,12 +69,43 @@ def test_worker_ai_phase2_normalize_drops_invalid_model_steps():
     assert normalized["steps"][0]["status"] == "pending"
 
 
-def test_worker_ai_phase2_tts_response_uses_client_native_fallback():
-    response = build_tts_response(text="下一步请检查供水阀门开度。")
+@pytest.mark.asyncio
+async def test_worker_ai_phase2_tts_response_uses_client_native_fallback(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("AI_TTS_MODE", "client_native")
+    get_settings.cache_clear()
+    try:
+        response = await build_tts_response(text="下一步请检查供水阀门开度。")
+    finally:
+        get_settings.cache_clear()
 
     assert response["playback_mode"] == "client_native"
     assert response["audio_url"] is None
     assert "下一步" in response["text"]
+
+
+@pytest.mark.asyncio
+async def test_worker_ai_phase2_tts_response_returns_server_audio(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("AI_TTS_MODE", "dashscope_cosyvoice")
+    monkeypatch.setenv("AI_API_KEY", "test-key")
+    monkeypatch.setenv("AI_TTS_MODEL", "cosyvoice-v2")
+    monkeypatch.setenv("AI_TTS_VOICE", "longxiaochun_v2")
+    cache_root = Path("backend/tests/.tmp/tts")
+    cache_root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(ai_media_service, "TTS_CACHE_ROOT", cache_root)
+    monkeypatch.setattr(
+        ai_media_service,
+        "_synthesize_dashscope_tts",
+        AsyncMock(return_value=b"fake-audio"),
+    )
+    get_settings.cache_clear()
+    try:
+        response = await build_tts_response(text="请按步骤继续检查供水传感器。")
+    finally:
+        get_settings.cache_clear()
+
+    assert response["playback_mode"] == "server_audio"
+    assert response["audio_url"] == f"/api/worker-ai/tts/cache/{response['cache_key']}.mp3"
+    assert (cache_root / f"{response['cache_key']}.mp3").read_bytes() == b"fake-audio"
 
 
 def test_worker_ai_phase2_transcript_filters_fillers():

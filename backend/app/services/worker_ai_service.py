@@ -383,6 +383,105 @@ def _assert_worker_permission(
         raise HTTPException(status_code=403, detail="只能操作派发给自己的工单")
 
 
+def _validate_worker_action_availability(
+    *,
+    action: str,
+    work_order: WorkOrder | None,
+    dispatch_task: DispatchTask | None,
+    hall_entry: DispatchHallEntry | None,
+) -> str | None:
+    if action in {"accept_support", "reject_support"}:
+        return None if hall_entry is not None else "当前缺少协同任务。"
+
+    if action not in _ACTION_LABELS:
+        return "未知动作。"
+    if work_order is None or dispatch_task is None:
+        return "当前工单缺少有效派工任务。"
+
+    status = (dispatch_task.dispatch_status or "").strip().lower()
+    if not status:
+        return None
+
+    if action == "accept":
+        if status == "assigned":
+            return None
+        if status in {"accepted", "arrived"}:
+            return "当前工单已接单，无需重复确认接单。"
+        if status in {"processing", "waiting_support", "supporting"}:
+            return "当前工单已进入处理阶段，无需重复确认接单。"
+        if status in {"completed", "closed"}:
+            return "当前工单已结束，不能再确认接单。"
+        return "当前派工阶段不支持确认接单。"
+
+    if action == "arrive":
+        if status == "accepted":
+            return None
+        if status == "assigned":
+            return "当前还未接单，请先确认接单。"
+        if status == "arrived":
+            return "当前工单已到场，无需重复确认到场。"
+        if status in {"processing", "waiting_support", "supporting"}:
+            return "当前工单已开始处理，无需重复确认到场。"
+        if status in {"completed", "closed"}:
+            return "当前工单已结束，不能再确认到场。"
+        return "当前派工阶段不支持确认到场。"
+
+    if action == "start":
+        if status in {"accepted", "arrived"}:
+            return None
+        if status == "assigned":
+            return "当前还未接单，请先确认接单。"
+        if status in {"processing", "waiting_support", "supporting"}:
+            return "当前工单已开始处理，无需重复开始。"
+        if status in {"completed", "closed"}:
+            return "当前工单已结束，不能再开始处理。"
+        return "当前派工阶段不支持开始处理。"
+
+    if action == "request_support":
+        if status in {"arrived", "processing"}:
+            return None
+        if status == "waiting_support":
+            return "当前工单已在协同处理中，无需重复申请协同。"
+        if status == "assigned":
+            return "当前还未接单，请先确认接单。"
+        if status == "accepted":
+            return "当前还未到场，请先确认到场。"
+        if status in {"completed", "closed"}:
+            return "当前工单已结束，不能再申请协同。"
+        return "当前派工阶段不支持申请协同。"
+
+    if action == "support_resolved":
+        if status == "waiting_support":
+            return None
+        if status in {"processing", "arrived", "accepted", "assigned"}:
+            return "当前工单不在待协同状态，无需标记协同已解决。"
+        if status in {"completed", "closed"}:
+            return "当前工单已结束，不能再标记协同已解决。"
+        return "当前派工阶段不支持标记协同已解决。"
+
+    if action == "reject":
+        if status in {"assigned", "accepted"}:
+            return None
+        if status in {"arrived", "processing", "waiting_support", "supporting"}:
+            return "当前工单已进入现场处理阶段，不能再退回改派。"
+        if status in {"completed", "closed"}:
+            return "当前工单已结束，不能再退回改派。"
+        return "当前派工阶段不支持退回改派。"
+
+    if action == "complete":
+        if status in {"arrived", "processing", "waiting_support", "supporting"}:
+            return None
+        if status == "assigned":
+            return "当前还未接单，请先确认接单。"
+        if status == "accepted":
+            return "当前还未开始处理，请先确认到场或开始处理。"
+        if status in {"completed", "closed"}:
+            return "当前工单已结束，无需重复提交处理完成。"
+        return "当前派工阶段不支持提交处理完成。"
+
+    return None
+
+
 def _build_pending_action(
     *,
     intent: WorkerIntent,
@@ -442,116 +541,127 @@ async def _execute_pending_action(
     _assert_worker_permission(user, work_order, dispatch_task, hall_entry)
 
     action = pending["action"]
+    invalid_message = _validate_worker_action_availability(
+        action=action,
+        work_order=work_order,
+        dispatch_task=dispatch_task,
+        hall_entry=hall_entry,
+    )
+    if invalid_message:
+        raise HTTPException(status_code=409, detail=invalid_message)
     reason = _clean_text(pending.get("reason")) or None
     if action in _REASON_REQUIRED and not reason:
         raise HTTPException(status_code=400, detail="当前动作需要原因")
 
-    if action in _DIRECT_ACTIONS:
-        assert work_order is not None
-        await record_worker_dispatch_action(
-            db,
-            work_order=work_order,
-            action=action,
-            actor_id=user.id,
-            notes=reason,
-            support_team_id=pending.get("support_team_id"),
-        )
-        backend_ref = f"work_orders/{work_order.ticket_id}/worker-action:{action}"
-        dispatch_id = getattr(dispatch_task, "id", None)
-    elif action == "reject":
-        if work_order is None or dispatch_task is None:
-            raise HTTPException(status_code=409, detail="当前工单缺少有效派工任务")
-        await reject_dispatch_task(
-            db,
-            work_order=work_order,
-            dispatch_task=dispatch_task,
-            actor_type="worker" if user.role == "ops" else "admin",
-            actor_id=user.id,
-            reason=reason,
-        )
-        work_order.dispatch_blocked_reason = reason
-        await transition_status(
-            db,
-            work_order=work_order,
-            new_status="pending_dispatch",
-            action="dispatch_reject",
-            actor_type="worker" if user.role == "ops" else "admin",
-            actor_id=user.id,
-            detail={"dispatch_id": dispatch_task.id, "reason": reason, "source": "worker_ai"},
-        )
-        backend_ref = f"dispatch_tasks/{dispatch_task.id}/reject"
-        dispatch_id = dispatch_task.id
-    elif action == "complete":
-        if work_order is None or dispatch_task is None:
-            raise HTTPException(status_code=409, detail="当前工单缺少有效派工任务")
-        result = pending.get("result") or "fixed"
-        await complete_dispatch_task(
-            db,
-            work_order=work_order,
-            dispatch_task=dispatch_task,
-            actor_type="worker" if user.role == "ops" else "admin",
-            actor_id=user.id,
-            result=result,
-            notes=reason,
-        )
-        work_order.worker_result = result
-        work_order.worker_notes = reason
-        work_order.worker_feedback_at = datetime.now(timezone.utc)
-        if result != "needs_parts":
-            status_map = {
-                "fixed": "completed",
-                "false_alarm": "false_alarm",
-                "escalated": "escalated",
-            }
+    try:
+        if action in _DIRECT_ACTIONS:
+            assert work_order is not None
+            await record_worker_dispatch_action(
+                db,
+                work_order=work_order,
+                action=action,
+                actor_id=user.id,
+                notes=reason,
+                support_team_id=pending.get("support_team_id"),
+            )
+            backend_ref = f"work_orders/{work_order.ticket_id}/worker-action:{action}"
+            dispatch_id = getattr(dispatch_task, "id", None)
+        elif action == "reject":
+            if work_order is None or dispatch_task is None:
+                raise HTTPException(status_code=409, detail="当前工单缺少有效派工任务")
+            await reject_dispatch_task(
+                db,
+                work_order=work_order,
+                dispatch_task=dispatch_task,
+                actor_type="worker" if user.role == "ops" else "admin",
+                actor_id=user.id,
+                reason=reason,
+            )
+            work_order.dispatch_blocked_reason = reason
             await transition_status(
                 db,
                 work_order=work_order,
-                new_status=status_map[result],
-                action="worker_feedback",
+                new_status="pending_dispatch",
+                action="dispatch_reject",
                 actor_type="worker" if user.role == "ops" else "admin",
                 actor_id=user.id,
-                detail={"dispatch_id": dispatch_task.id, "result": result, "notes": reason, "source": "worker_ai"},
+                detail={"dispatch_id": dispatch_task.id, "reason": reason, "source": "worker_ai"},
             )
-        backend_ref = f"dispatch_tasks/{dispatch_task.id}/complete"
-        dispatch_id = dispatch_task.id
-    elif action in {"accept_support", "reject_support"}:
-        if hall_entry is None:
-            raise HTTPException(status_code=409, detail="当前缺少协同任务")
-        if action == "accept_support":
-            await accept_assigned_support_hall_entry(db, hall_entry=hall_entry, actor_id=user.id)
-            event_type = "support_worker_accepted"
-            audit_action = "dispatch_hall_support_accept"
-        else:
-            await reject_assigned_support_hall_entry(db, hall_entry=hall_entry, actor_id=user.id, note=reason)
-            event_type = "support_worker_rejected"
-            audit_action = "dispatch_hall_support_reject"
-        work_order = await db.get(WorkOrder, hall_entry.work_order_id)
-        if hall_entry.source_dispatch_id:
-            source_dispatch = await get_dispatch_task_by_id(db, hall_entry.source_dispatch_id)
-            if source_dispatch is not None:
-                await record_dispatch_event(
+            backend_ref = f"dispatch_tasks/{dispatch_task.id}/reject"
+            dispatch_id = dispatch_task.id
+        elif action == "complete":
+            if work_order is None or dispatch_task is None:
+                raise HTTPException(status_code=409, detail="当前工单缺少有效派工任务")
+            result = pending.get("result") or "fixed"
+            await complete_dispatch_task(
+                db,
+                work_order=work_order,
+                dispatch_task=dispatch_task,
+                actor_type="worker" if user.role == "ops" else "admin",
+                actor_id=user.id,
+                result=result,
+                notes=reason,
+            )
+            work_order.worker_result = result
+            work_order.worker_notes = reason
+            work_order.worker_feedback_at = datetime.now(timezone.utc)
+            if result != "needs_parts":
+                status_map = {
+                    "fixed": "completed",
+                    "false_alarm": "false_alarm",
+                    "escalated": "escalated",
+                }
+                await transition_status(
                     db,
-                    dispatch_task=source_dispatch,
-                    event_type=event_type,
+                    work_order=work_order,
+                    new_status=status_map[result],
+                    action="worker_feedback",
+                    actor_type="worker" if user.role == "ops" else "admin",
+                    actor_id=user.id,
+                    detail={"dispatch_id": dispatch_task.id, "result": result, "notes": reason, "source": "worker_ai"},
+                )
+            backend_ref = f"dispatch_tasks/{dispatch_task.id}/complete"
+            dispatch_id = dispatch_task.id
+        elif action in {"accept_support", "reject_support"}:
+            if hall_entry is None:
+                raise HTTPException(status_code=409, detail="当前缺少协同任务")
+            if action == "accept_support":
+                await accept_assigned_support_hall_entry(db, hall_entry=hall_entry, actor_id=user.id)
+                event_type = "support_worker_accepted"
+                audit_action = "dispatch_hall_support_accept"
+            else:
+                await reject_assigned_support_hall_entry(db, hall_entry=hall_entry, actor_id=user.id, note=reason)
+                event_type = "support_worker_rejected"
+                audit_action = "dispatch_hall_support_reject"
+            work_order = await db.get(WorkOrder, hall_entry.work_order_id)
+            if hall_entry.source_dispatch_id:
+                source_dispatch = await get_dispatch_task_by_id(db, hall_entry.source_dispatch_id)
+                if source_dispatch is not None:
+                    await record_dispatch_event(
+                        db,
+                        dispatch_task=source_dispatch,
+                        event_type=event_type,
+                        actor_type="worker",
+                        actor_id=user.id,
+                        payload={"hall_entry_id": hall_entry.id, "note": reason, "source": "worker_ai"},
+                    )
+            if work_order is not None:
+                await write_work_order_audit_log(
+                    db,
+                    work_order_id=work_order.id,
+                    action=audit_action,
+                    old_status=work_order.status,
+                    new_status=work_order.status,
                     actor_type="worker",
                     actor_id=user.id,
-                    payload={"hall_entry_id": hall_entry.id, "note": reason, "source": "worker_ai"},
+                    detail={"hall_entry_id": hall_entry.id, "note": reason, "source": "worker_ai"},
                 )
-        if work_order is not None:
-            await write_work_order_audit_log(
-                db,
-                work_order_id=work_order.id,
-                action=audit_action,
-                old_status=work_order.status,
-                new_status=work_order.status,
-                actor_type="worker",
-                actor_id=user.id,
-                detail={"hall_entry_id": hall_entry.id, "note": reason, "source": "worker_ai"},
-            )
-        backend_ref = f"dispatch_hall/{hall_entry.id}/{action}"
-        dispatch_id = hall_entry.source_dispatch_id
-    else:
-        raise HTTPException(status_code=400, detail="未知动作")
+            backend_ref = f"dispatch_hall/{hall_entry.id}/{action}"
+            dispatch_id = hall_entry.source_dispatch_id
+        else:
+            raise HTTPException(status_code=400, detail="未知动作")
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     if work_order is not None and dispatch_task is not None:
         sync_work_order_status_dimensions(work_order, dispatch_task=dispatch_task)
@@ -657,6 +767,33 @@ async def handle_worker_ai_chat(
                     user=user,
                     confirmation_text=text,
                 )
+            except HTTPException as exc:
+                _PENDING_ACTIONS.pop(session_id, None)
+                if exc.status_code >= 500:
+                    raise
+                answer = str(exc.detail or "当前动作执行失败，请稍后重试")
+                await _record_action_audit(
+                    db,
+                    session_id=session_id,
+                    work_order=work_order,
+                    action=pending.get("action") or "unknown",
+                    user=user,
+                    dispatch_id=pending.get("dispatch_id"),
+                    hall_entry_id=pending.get("hall_entry_id"),
+                    confirmation_text=text,
+                    execution_status="failed",
+                    error_message=answer,
+                )
+                await _append_message(db, session_id=session_id, role="assistant", content=answer, content_type="tool_result")
+                await db.commit()
+                return {
+                    "assistant": "维小修",
+                    "session_id": session_id,
+                    "message_type": "chat",
+                    "answer": answer,
+                    "pending_action": None,
+                    "executed": False,
+                }
             except Exception:
                 _PENDING_ACTIONS.pop(session_id, None)
                 raise
@@ -714,6 +851,24 @@ async def handle_worker_ai_chat(
             "session_id": session_id,
             "message_type": "chat",
             "answer": answer,
+            "pending_action": None,
+            "executed": False,
+        }
+
+    invalid_message = _validate_worker_action_availability(
+        action=intent.action,
+        work_order=work_order,
+        dispatch_task=dispatch_task,
+        hall_entry=hall_entry,
+    )
+    if invalid_message:
+        await _append_message(db, session_id=session_id, role="assistant", content=invalid_message)
+        await db.commit()
+        return {
+            "assistant": "维小修",
+            "session_id": session_id,
+            "message_type": "chat",
+            "answer": invalid_message,
             "pending_action": None,
             "executed": False,
         }

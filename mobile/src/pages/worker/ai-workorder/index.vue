@@ -25,6 +25,7 @@
           mode="worker"
           :dispatch-id="dispatchId || order.current_dispatch?.id || order.dispatch_id || null"
           :hall-entry-id="hallEntryId"
+          @order-updated="handleOrderUpdated"
         />
       </view>
 
@@ -54,6 +55,10 @@ const hallEntryId = currentPage?.options?.hall_entry_id || ''
 
 const loading = ref(false)
 const order = ref<WorkOrder | null>(null)
+
+function handleOrderUpdated(nextOrder: WorkOrder) {
+  order.value = nextOrder
+}
 
 async function loadOrder() {
   if (!ticketId) return

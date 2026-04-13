@@ -891,11 +891,16 @@ async def update_worker_step_status(
 
     steps = _json_loads(plan.steps_json, [])
     found = False
+    current_status: str | None = None
+    event_type = status
     for step in steps:
         if step.get("id") == step_id:
+            current_status = str(step.get("status") or "pending")
             step["status"] = status
             if note:
                 step["note"] = note
+            if note and status == current_status:
+                event_type = "note"
             found = True
             break
     if not found:
@@ -910,7 +915,7 @@ async def update_worker_step_status(
             plan_id=plan.id,
             step_id=step_id,
             user_id=user.id,
-            event_type=status,
+            event_type=event_type,
             note=note,
             payload_json=json.dumps({"client_version": client_version}, ensure_ascii=False),
         )
@@ -918,7 +923,9 @@ async def update_worker_step_status(
     await db.commit()
 
     next_step = next((step for step in steps if step.get("status") == "pending"), None)
-    if status == "needs_support":
+    if event_type == "note":
+        next_suggestion = "已记录这一步的备注。你可以继续当前步骤，或继续告诉我新的现场情况。"
+    elif status == "needs_support":
         next_suggestion = "这一步已标记为需要协同。你可以直接对维小修说“请求协同，因为...”来走原后端流程。"
     elif next_step:
         next_suggestion = f"下一步建议：{next_step.get('title')}。{next_step.get('instruction')}"

@@ -57,6 +57,30 @@
       <view style="height: 20rpx" />
     </scroll-view>
 
+    <view v-if="isWorkerMode && stepPlan?.guidance_ready && currentStep" class="step-panel">
+      <view class="step-panel-head">
+        <text class="step-panel-tag">当前步骤</text>
+        <text class="step-panel-index">第 {{ stepIndex(currentStep.id) + 1 }} 步</text>
+      </view>
+      <text class="step-panel-title">{{ currentStep.title }}</text>
+      <text class="step-panel-text">{{ currentStep.instruction }}</text>
+      <text v-if="currentStep.expected_result" class="step-panel-sub">预期：{{ currentStep.expected_result }}</text>
+      <text v-if="currentStep.risk_note" class="step-panel-sub warn">注意：{{ currentStep.risk_note }}</text>
+      <textarea
+        v-model="stepNote"
+        class="step-note-input"
+        maxlength="300"
+        auto-height
+        placeholder="记录这一步的现场读数、发现或备注"
+      />
+      <view class="step-actions">
+        <text class="step-btn note" :class="{ disabled: updatingStepId || !stepNote.trim() }" @click="saveCurrentStepNote">备注</text>
+        <text class="step-btn done" :class="{ disabled: updatingStepId }" @click="markCurrentStep('completed')">完成</text>
+        <text class="step-btn skip" :class="{ disabled: updatingStepId }" @click="markCurrentStep('skipped')">跳过</text>
+        <text class="step-btn support" :class="{ disabled: updatingStepId }" @click="markCurrentStep('needs_support')">协同</text>
+      </view>
+    </view>
+
     <!-- 输入区 -->
     <view class="chat-input-area">
       <view v-if="isWorkerMode" class="media-tools">
@@ -87,7 +111,7 @@
 
 <script setup lang="ts">
 import { ref, nextTick, computed, onBeforeUnmount, onMounted, watch } from 'vue'
-import type { WorkOrder } from '../api/workorder'
+import { workOrderApi, type WorkOrder } from '../api/workorder'
 import {
   sendChatMessage,
   buildContextMessage,
@@ -109,6 +133,10 @@ interface ChatMsg {
   thinking?: boolean
   stepId?: string
 }
+
+const emit = defineEmits<{
+  (e: 'order-updated', order: WorkOrder): void
+}>()
 
 const props = withDefaults(defineProps<{
   order?: WorkOrder | null
@@ -138,6 +166,7 @@ const guidanceLoading = ref(false)
 const updatingStepId = ref<string | null>(null)
 const mediaBusy = ref(false)
 const recording = ref(false)
+const stepNote = ref('')
 const componentReady = ref(false)
 const workflowBootstrapping = ref(false)
 const lastWorkflowPromptKey = ref('')
@@ -174,8 +203,29 @@ const currentStep = computed<WorkerAiStep | null>(() => {
     || null
 })
 
+function getErrorMessage(err: unknown, fallback: string) {
+  if (err instanceof Error && err.message) return err.message
+  if (typeof err === 'object' && err) {
+    const message = (err as any).errMsg || (err as any).message || (err as any).detail
+    if (typeof message === 'string' && message.trim()) return message.trim()
+  }
+  return fallback
+}
+
 function currentDispatchId() {
   return props.dispatchId || props.order?.current_dispatch?.id || props.order?.dispatch_id || null
+}
+
+async function refreshOrderState() {
+  if (!props.order?.ticket_id) return null
+  try {
+    const latest = await workOrderApi.detail(props.order.ticket_id)
+    emit('order-updated', latest)
+    return latest
+  } catch (err) {
+    console.warn('[AiChat] 工单刷新失败', err)
+    return null
+  }
 }
 
 function currentWorkflowPrompt(): { key: string; message: string } | null {
@@ -252,7 +302,7 @@ async function loadStepPlan(autoGenerate = true) {
       introduceStepPlanIfReady()
     }
   } catch (err) {
-    messages.value.push({ role: 'ai', content: err instanceof Error ? err.message : '步骤卡片加载失败' })
+    messages.value.push({ role: 'ai', content: getErrorMessage(err, '步骤卡片加载失败') })
   } finally {
     guidanceLoading.value = false
   }
@@ -342,15 +392,17 @@ async function bootstrapWorkflowPrompt(force = false) {
 async function updateStep(
   stepId: string,
   status: WorkerAiStepStatus,
-  options: { echoUser?: boolean } = {},
+  options: { echoUser?: boolean; note?: string | null; noteOnly?: boolean } = {},
 ) {
   if (!props.order?.ticket_id || !stepPlan.value?.plan_id || updatingStepId.value) return
   updatingStepId.value = stepId
   const oldStep = stepPlan.value.steps.find(step => step.id === stepId)
+  const note = options.note?.trim() || null
   try {
     const response = await workerAiApi.updateStep(props.order.ticket_id, stepId, {
       plan_id: stepPlan.value.plan_id,
       status,
+      note,
       client_version: stepPlan.value.plan_version,
     })
     stepPlan.value = {
@@ -358,6 +410,8 @@ async function updateStep(
       plan_version: response.plan_version,
       steps: response.steps,
     }
+    const updatedStep = response.steps.find(step => step.id === stepId)
+    if (updatedStep) stepNote.value = updatedStep.note || ''
     const actionLabel: Record<WorkerAiStepStatus, string> = {
       completed: '完成',
       skipped: '跳过',
@@ -365,6 +419,14 @@ async function updateStep(
       uncertain: '不确定',
       pending: '重新打开',
     }[status]
+    if (options.noteOnly) {
+      if (note) {
+        messages.value.push({ role: 'user', content: `备注：${note}` })
+      }
+      messages.value.push({ role: 'ai', content: response.next_suggestion })
+      scrollToBottom()
+      return
+    }
     if (options.echoUser !== false) {
       messages.value.push({ role: 'user', content: `${actionLabel}：${oldStep?.title || '当前步骤'}` })
     }
@@ -383,10 +445,28 @@ async function updateStep(
     }
     scrollToBottom()
   } catch (err) {
-    messages.value.push({ role: 'ai', content: err instanceof Error ? err.message : '步骤状态更新失败' })
+    messages.value.push({ role: 'ai', content: getErrorMessage(err, '步骤状态更新失败') })
   } finally {
     updatingStepId.value = null
   }
+}
+
+async function markCurrentStep(status: WorkerAiStepStatus) {
+  if (!currentStep.value) return
+  await updateStep(currentStep.value.id, status, { note: stepNote.value })
+}
+
+async function saveCurrentStepNote() {
+  if (!currentStep.value) return
+  if (!stepNote.value.trim()) {
+    uni.showToast({ title: '请先输入备注内容', icon: 'none' })
+    return
+  }
+  await updateStep(currentStep.value.id, currentStep.value.status, {
+    echoUser: false,
+    note: stepNote.value,
+    noteOnly: true,
+  })
 }
 
 async function handleStepStatusText(text: string): Promise<boolean> {
@@ -550,14 +630,14 @@ async function sendAssistantMessage(
     sessionId.value = response.session_id
     removePendingThinking()
     messages.value.push({ role: 'ai', content: response.answer })
-    if (
-      props.mode === 'worker'
-      && response.message_type === 'action_result'
-      && response.action_result?.action === 'start'
-    ) {
-      void loadStepPlan(true)
-    }
     if (props.mode === 'worker' && response.message_type === 'action_result') {
+      const latestOrder = await refreshOrderState()
+      if (latestOrder) {
+        await nextTick()
+      }
+      if (response.action_result?.action === 'start') {
+        await loadStepPlan(true)
+      }
       if (response.action_result?.action === 'accept') {
         nextWorkflowPromptOverride.value = { key: 'arrive', message: '确认到场' }
         lastWorkflowPromptKey.value = ''
@@ -574,7 +654,7 @@ async function sendAssistantMessage(
     }
   } catch (err) {
     removePendingThinking()
-    messages.value.push({ role: 'ai', content: err instanceof Error ? err.message : '请求失败，请重试' })
+    messages.value.push({ role: 'ai', content: getErrorMessage(err, '请求失败，请重试') })
   } finally {
     sending.value = false
     scrollToBottom()
@@ -828,6 +908,14 @@ async function speakText(text: string) {
 }
 
 watch(
+  () => currentStep.value?.id,
+  () => {
+    stepNote.value = currentStep.value?.note || ''
+  },
+  { immediate: true },
+)
+
+watch(
   () => [props.mode, props.order?.ticket_id, props.dispatchId],
   () => {
     if (isWorkerMode.value) void loadStepPlan(true)
@@ -960,6 +1048,63 @@ onBeforeUnmount(() => {
   font-weight: 700;
 }
 
+.step-panel {
+  margin: 0 20rpx 16rpx;
+  padding: 20rpx;
+  border-radius: 18rpx;
+  background: linear-gradient(180deg, #fbfcf5 0%, #f4f8e5 100%);
+  border: 1rpx solid #dfe8b8;
+}
+
+.step-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16rpx;
+}
+
+.step-panel-tag,
+.step-panel-index {
+  font-size: 22rpx;
+  color: #6b7d3f;
+  font-weight: 700;
+}
+
+.step-panel-title {
+  display: block;
+  margin-top: 12rpx;
+  font-size: 28rpx;
+  line-height: 1.45;
+  color: #273012;
+  font-weight: 800;
+}
+
+.step-panel-text,
+.step-panel-sub {
+  display: block;
+  margin-top: 10rpx;
+  font-size: 23rpx;
+  line-height: 1.6;
+  color: #565f3d;
+}
+
+.step-panel-sub.warn {
+  color: #9b5c2a;
+}
+
+.step-note-input {
+  width: 100%;
+  min-height: 120rpx;
+  margin-top: 16rpx;
+  padding: 16rpx 18rpx;
+  box-sizing: border-box;
+  border-radius: 14rpx;
+  background: #ffffff;
+  color: #1a1a2e;
+  font-size: 24rpx;
+  line-height: 1.6;
+}
+
 .guide-panel {
   padding: 18rpx 20rpx 8rpx;
   border-top: 1rpx solid #f0f0f0;
@@ -1053,6 +1198,43 @@ onBeforeUnmount(() => {
   gap: 12rpx;
   margin-top: 14rpx;
   flex-wrap: wrap;
+}
+
+.step-btn {
+  min-width: 96rpx;
+  height: 52rpx;
+  padding: 0 18rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999rpx;
+  font-size: 22rpx;
+  font-weight: 700;
+  color: #273012;
+  background: #eef4ce;
+
+  &.done {
+    background: #d6e29f;
+  }
+
+  &.skip {
+    background: #f2ecd0;
+    color: #7a6534;
+  }
+
+  &.support {
+    background: #f6d4b6;
+    color: #8a4a22;
+  }
+
+  &.note {
+    background: #e6efe8;
+    color: #42624d;
+  }
+
+  &.disabled {
+    opacity: 0.45;
+  }
 }
 
 .step-action {

@@ -29,6 +29,7 @@ from app.api.routes_operator_ai import router as operator_ai_router
 from app.api.routes_admin import router as admin_router
 from app.api.routes_notifications import router as notifications_router
 from app.core.config import get_settings
+from app.db.notification_schema import ensure_notification_tables
 
 settings = get_settings()
 
@@ -85,6 +86,7 @@ async def lifespan(app: FastAPI):
     await ensure_auth_schema_compat()
     await ensure_ai_assistant_tables()
     await ensure_worker_ai_phase2_tables()
+    await ensure_notification_tables()
 
     # P2：确保 Tool 4 的物化视图可用，避免日粒度查询抛 UndefinedTableError
     await ensure_daily_energy_summary_view()
@@ -394,7 +396,11 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"] if settings.APP_ENV == "development" else [
         "http://localhost:5173",   # Vite dev server
+        "http://localhost:5174",   # Uni H5 / alternate Vite port
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:5174",
         "http://localhost:3000",
+        "http://127.0.0.1:3000",
     ],
     allow_credentials=True,
     allow_methods=["*"],

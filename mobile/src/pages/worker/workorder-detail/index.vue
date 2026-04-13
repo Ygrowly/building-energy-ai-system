@@ -129,6 +129,7 @@
                 mode="worker"
                 :dispatch-id="order.current_dispatch?.id || order.dispatch_id || null"
                 :hall-entry-id="hallEntry?.id || null"
+                @order-updated="handleOrderUpdated"
               />
             </view>
           </view>
@@ -237,6 +238,10 @@ const activeTab = ref<'order' | 'customer' | 'service'>('order')
 const hasLoadedOnce = ref(false)
 const detailVisible = ref(true)
 let detailSyncTimer: ReturnType<typeof setTimeout> | null = null
+
+function handleOrderUpdated(nextOrder: WorkOrder) {
+  order.value = nextOrder
+}
 
 const ACTIVE_SYNC_EXECUTION_STATUSES = new Set([
   'pending_accept',

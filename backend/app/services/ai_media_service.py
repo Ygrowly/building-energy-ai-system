@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import json
@@ -21,6 +22,7 @@ from app.services.worker_ai_service import _assert_worker_permission, _resolve_w
 logger = logging.getLogger(__name__)
 
 MEDIA_ROOT = Path("uploads/worker_ai_media")
+TTS_CACHE_ROOT = MEDIA_ROOT / "tts_cache"
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
 MAX_AUDIO_BYTES = 10 * 1024 * 1024
 FILLER_TRANSCRIPTS = {"嗯", "嗯。", "呃", "呃。", "啊", "啊。", "唔", "唔。"}
@@ -107,6 +109,53 @@ def normalize_transcript(text: str) -> str:
     if transcript in FILLER_TRANSCRIPTS:
         return ""
     return transcript
+
+
+def get_tts_cache_path(cache_key: str) -> Path:
+    safe_key = re.sub(r"[^A-Za-z0-9_-]+", "", cache_key or "").strip()
+    if not safe_key:
+        raise HTTPException(status_code=400, detail="无效的音频缓存标识")
+    return TTS_CACHE_ROOT / f"{safe_key}.mp3"
+
+
+def _dashscope_websocket_url(base_url: str) -> str:
+    normalized = (base_url or "").strip().lower()
+    if "dashscope-intl.aliyuncs.com" in normalized:
+        return "wss://dashscope-intl.aliyuncs.com/api-ws/v1/inference"
+    return "wss://dashscope.aliyuncs.com/api-ws/v1/inference"
+
+
+def _synthesize_dashscope_tts_sync(*, text: str, model: str, voice: str, api_key: str, base_url: str) -> bytes:
+    try:
+        import dashscope
+        from dashscope.audio.tts_v2 import SpeechSynthesizer
+    except ImportError as exc:
+        raise RuntimeError("未安装 dashscope SDK，无法启用服务端 TTS") from exc
+
+    dashscope.api_key = api_key
+    dashscope.base_websocket_api_url = _dashscope_websocket_url(base_url)
+    synthesizer = SpeechSynthesizer(model=model, voice=voice)
+    try:
+        audio = synthesizer.call(text)
+    finally:
+        duplex = getattr(synthesizer, "get_duplex_api", lambda: None)()
+        if duplex is not None:
+            try:
+                duplex.close(1000, "bye")
+            except Exception:
+                logger.debug("关闭 DashScope TTS WebSocket 失败", exc_info=True)
+    return bytes(audio or b"")
+
+
+async def _synthesize_dashscope_tts(*, text: str, model: str, voice: str, api_key: str, base_url: str) -> bytes:
+    return await asyncio.to_thread(
+        _synthesize_dashscope_tts_sync,
+        text=text,
+        model=model,
+        voice=voice,
+        api_key=api_key,
+        base_url=base_url,
+    )
 
 
 async def _analyze_image_with_model(
@@ -359,28 +408,75 @@ async def transcribe_worker_audio(
     }
 
 
-def build_tts_response(*, text: str, voice: str | None = None) -> dict[str, Any]:
+async def build_tts_response(*, text: str, voice: str | None = None) -> dict[str, Any]:
     cleaned = " ".join((text or "").split())
     if not cleaned:
         raise HTTPException(status_code=400, detail="播报文本不能为空")
     cleaned = cleaned[:500]
     settings = get_settings()
-    digest = hashlib.sha256(f"{settings.AI_TTS_MODEL}:{voice or settings.AI_TTS_VOICE}:{cleaned}".encode("utf-8")).hexdigest()[:24]
+    selected_voice = voice or settings.AI_TTS_VOICE
+    digest = hashlib.sha256(f"{settings.AI_TTS_MODEL}:{selected_voice}:{cleaned}".encode("utf-8")).hexdigest()[:24]
+    cache_path = get_tts_cache_path(digest)
+    if cache_path.exists():
+        return {
+            "audio_url": f"/api/worker-ai/tts/cache/{digest}.mp3",
+            "cache_hit": True,
+            "playback_mode": "server_audio",
+            "text": cleaned,
+            "voice": selected_voice,
+            "cache_key": digest,
+        }
+
     if settings.AI_TTS_MODE != "dashscope_cosyvoice":
         return {
             "audio_url": None,
             "cache_hit": False,
             "playback_mode": "client_native",
             "text": cleaned,
-            "voice": voice or settings.AI_TTS_VOICE,
+            "voice": selected_voice,
             "cache_key": digest,
         }
-    return {
-        "audio_url": None,
-        "cache_hit": False,
-        "playback_mode": "client_native",
-        "text": cleaned,
-        "voice": voice or settings.AI_TTS_VOICE,
-        "cache_key": digest,
-        "warning": "服务端 CosyVoice WebSocket TTS 尚未启用，当前回退到客户端本机播报。",
-    }
+
+    api_key = settings.AI_API_KEY or settings.DASHSCOPE_API_KEY
+    if not api_key:
+        return {
+            "audio_url": None,
+            "cache_hit": False,
+            "playback_mode": "client_native",
+            "text": cleaned,
+            "voice": selected_voice,
+            "cache_key": digest,
+            "warning": "未配置 DashScope API Key，当前回退到客户端本机播报。",
+        }
+
+    try:
+        audio_bytes = await _synthesize_dashscope_tts(
+            text=cleaned,
+            model=settings.AI_TTS_MODEL,
+            voice=selected_voice,
+            api_key=api_key,
+            base_url=settings.AI_BASE_URL,
+        )
+        if not audio_bytes:
+            raise RuntimeError("DashScope TTS 未返回音频数据")
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_bytes(audio_bytes)
+        return {
+            "audio_url": f"/api/worker-ai/tts/cache/{digest}.mp3",
+            "cache_hit": False,
+            "playback_mode": "server_audio",
+            "text": cleaned,
+            "voice": selected_voice,
+            "cache_key": digest,
+        }
+    except Exception as exc:
+        logger.warning("服务端 TTS 合成失败，回退客户端播报: %s", exc)
+        return {
+            "audio_url": None,
+            "cache_hit": False,
+            "playback_mode": "client_native",
+            "text": cleaned,
+            "voice": selected_voice,
+            "cache_key": digest,
+            "warning": f"服务端 TTS 暂时不可用，已回退客户端播报：{exc}",
+        }

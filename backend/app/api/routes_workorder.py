@@ -21,6 +21,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
+from sqlalchemy import func as sa_func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
@@ -28,8 +29,9 @@ from sqlalchemy.orm import selectinload
 from app.core.cache import delete_cache_by_prefix, get_or_compute_json
 from app.core.config import get_settings
 from app.core.security import get_current_user, get_current_user_optional
-from app.db.models import WorkOrder, WorkOrderAuditLog, User, WorkerProfile, WorkerProfileSkill
+from app.db.models import DispatchTask, WorkOrder, WorkOrderAuditLog, User, WorkerProfile, WorkerProfileSkill
 from app.db.session import get_db_session, AsyncSessionLocal
+from app.services.audit_log_service import write_work_order_audit_log
 from app.services.dispatch_service import (
     complete_dispatch_task,
     get_current_dispatch_task,
@@ -42,6 +44,7 @@ from app.services.auto_dispatch_service import (
     build_auto_dispatch_evaluation,
     build_auto_reassign_evaluation,
     execute_auto_dispatch,
+    execute_auto_reassign,
 )
 from app.services.work_order_service import (
     DISPATCHABLE_WORK_ORDER_STATUSES,
@@ -63,6 +66,26 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 router = APIRouter(prefix="/work-orders", tags=["工单"])
+
+AUTO_DISPATCH_REVIEW_AUDIT_ACTIONS = (
+    "auto_dispatch_reviewed",
+    "auto_dispatch_needs_reassign",
+)
+
+AUTO_DISPATCH_REVIEW_STATUS_TO_AUDIT_ACTION = {
+    "reviewed": "auto_dispatch_reviewed",
+    "needs_reassign": "auto_dispatch_needs_reassign",
+}
+
+AUTO_DISPATCH_REVIEW_AUDIT_ACTION_TO_STATUS = {
+    value: key for key, value in AUTO_DISPATCH_REVIEW_STATUS_TO_AUDIT_ACTION.items()
+}
+
+AUTO_DISPATCH_REVIEW_STATUS_LABELS = {
+    "pending": "待复核",
+    "reviewed": "已复核",
+    "needs_reassign": "需改派",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -248,6 +271,11 @@ class AdminReviewRequest(BaseModel):
     notes: str | None = None
 
 
+class AutoDispatchReviewRequest(BaseModel):
+    action: str = Field(..., pattern=r"^(reviewed|needs_reassign)$")
+    notes: str | None = None
+
+
 async def _load_users_by_ids(
     db: AsyncSession,
     user_ids: list[str | None],
@@ -288,6 +316,73 @@ def _serialize_audit_log(log_item: WorkOrderAuditLog) -> dict[str, Any]:
         "detail": _safe_load_json(log_item.detail_json),
         "created_at": log_item.created_at.isoformat() if log_item.created_at else None,
     }
+
+
+def _serialize_auto_dispatch_review_state(
+    log_item: WorkOrderAuditLog | None,
+) -> dict[str, Any]:
+    if log_item is None:
+        return {
+            "status": "pending",
+            "status_label": AUTO_DISPATCH_REVIEW_STATUS_LABELS["pending"],
+            "action": None,
+            "reviewed_by": None,
+            "reviewed_at": None,
+            "notes": None,
+            "dispatch_id": None,
+        }
+
+    status = AUTO_DISPATCH_REVIEW_AUDIT_ACTION_TO_STATUS.get(
+        log_item.action,
+        "pending",
+    )
+    detail = _safe_load_json(log_item.detail_json) or {}
+    return {
+        "status": status,
+        "status_label": AUTO_DISPATCH_REVIEW_STATUS_LABELS.get(status, status),
+        "action": log_item.action,
+        "reviewed_by": log_item.actor_id,
+        "reviewed_at": log_item.created_at.isoformat() if log_item.created_at else None,
+        "notes": detail.get("notes"),
+        "dispatch_id": detail.get("dispatch_id"),
+    }
+
+
+def _attach_auto_dispatch_review_state(
+    work_order_data: dict[str, Any],
+    review_state: dict[str, Any],
+) -> dict[str, Any]:
+    work_order_data["auto_dispatch_review_state"] = review_state
+    current_dispatch = work_order_data.get("current_dispatch")
+    if isinstance(current_dispatch, dict):
+        current_dispatch["auto_dispatch_review_state"] = review_state
+        auto_dispatch_review = current_dispatch.get("auto_dispatch_review")
+        if isinstance(auto_dispatch_review, dict):
+            auto_dispatch_review["review_state"] = review_state
+    return work_order_data
+
+
+def _is_auto_dispatch_task(dispatch_task: DispatchTask | None) -> bool:
+    if dispatch_task is None:
+        return False
+    dispatch_mode = getattr(dispatch_task, "dispatch_mode", None)
+    if dispatch_mode in {"auto", "auto_fallback"}:
+        return True
+    snapshot = _safe_load_json(getattr(dispatch_task, "candidate_snapshot_json", None))
+    return bool(isinstance(snapshot, dict) and snapshot.get("auto_dispatch"))
+
+
+def _auto_dispatch_review_exists(action: str | None = None):
+    review_query = select(WorkOrderAuditLog.id).where(
+        WorkOrderAuditLog.work_order_id == WorkOrder.id,
+    )
+    if action:
+        review_query = review_query.where(WorkOrderAuditLog.action == action)
+    else:
+        review_query = review_query.where(
+            WorkOrderAuditLog.action.in_(AUTO_DISPATCH_REVIEW_AUDIT_ACTIONS),
+        )
+    return review_query.exists()
 
 
 def _dispatch_event_label(event_type: str) -> str:
@@ -335,6 +430,11 @@ def _audit_log_label(action: str) -> str:
         "dispatch_reject": "维修人员拒单，工单回到待派工",
         "dispatch_reassign": "管理员改派",
         "dispatch_cancel": "管理员取消当前派工",
+        "auto_dispatch_reviewed": "自动派工复核通过",
+        "auto_dispatch_needs_reassign": "自动派工需改派",
+        "auto_reassign_rollout_skipped": "自动重派灰度跳过",
+        "auto_reassign_shadow_evaluated": "自动重派影子评估",
+        "auto_reassign_executed": "自动重派已执行",
         "worker_feedback": "维修结果已提交",
         "close": "工单已关闭",
     }
@@ -666,6 +766,109 @@ async def batch_dispatch_work_orders(
         "failed_count": len(failed),
         "applied": applied,
         "failed": failed,
+    }
+
+
+# ---------------------------------------------------------------------------
+# GET /api/work-orders/auto-dispatch-review — 自动派工复核队列
+# ---------------------------------------------------------------------------
+@router.get("/auto-dispatch-review", summary="获取自动派工复核队列")
+async def list_auto_dispatch_review_queue(
+    review_status: str = Query(default="pending", pattern=r"^(all|pending|reviewed|needs_reassign)$"),
+    dispatch_mode: str | None = Query(default=None, pattern=r"^(auto|auto_fallback)$"),
+    building_id: str | None = Query(None),
+    priority: str | None = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=100),
+    db: AsyncSession = Depends(get_db_session),
+    user: User = Depends(get_current_user),
+):
+    _require_role(user, "admin", "manager")
+
+    dispatch_modes = [dispatch_mode] if dispatch_mode else ["auto", "auto_fallback"]
+    base_conditions = [
+        WorkOrder.current_dispatch_id == DispatchTask.id,
+        DispatchTask.is_current == True,  # noqa: E712
+        DispatchTask.dispatch_mode.in_(dispatch_modes),
+    ]
+    if building_id:
+        base_conditions.append(WorkOrder.building_id == building_id)
+    if priority:
+        base_conditions.append(WorkOrder.priority == priority)
+
+    if review_status == "pending":
+        base_conditions.append(~_auto_dispatch_review_exists())
+    elif review_status in AUTO_DISPATCH_REVIEW_STATUS_TO_AUDIT_ACTION:
+        base_conditions.append(
+            _auto_dispatch_review_exists(
+                AUTO_DISPATCH_REVIEW_STATUS_TO_AUDIT_ACTION[review_status],
+            )
+        )
+
+    query = (
+        select(WorkOrder, DispatchTask)
+        .join(DispatchTask, WorkOrder.current_dispatch_id == DispatchTask.id)
+        .options(selectinload(WorkOrder.anomaly_links))
+        .where(*base_conditions)
+        .order_by(DispatchTask.assigned_at.desc(), WorkOrder.created_at.desc())
+    )
+    count_query = (
+        select(sa_func.count(WorkOrder.id))
+        .join(DispatchTask, WorkOrder.current_dispatch_id == DispatchTask.id)
+        .where(*base_conditions)
+    )
+
+    total = (await db.execute(count_query)).scalar() or 0
+    offset = (page - 1) * page_size
+    rows = list((await db.execute(query.offset(offset).limit(page_size))).all())
+    work_orders = [row[0] for row in rows]
+    dispatch_tasks = [row[1] for row in rows]
+
+    latest_review_logs_by_work_order_id: dict[str, WorkOrderAuditLog] = {}
+    if work_orders:
+        logs_result = await db.execute(
+            select(WorkOrderAuditLog)
+            .where(
+                WorkOrderAuditLog.work_order_id.in_([item.id for item in work_orders]),
+                WorkOrderAuditLog.action.in_(AUTO_DISPATCH_REVIEW_AUDIT_ACTIONS),
+            )
+            .order_by(WorkOrderAuditLog.created_at.desc())
+        )
+        for log_item in logs_result.scalars().all():
+            latest_review_logs_by_work_order_id.setdefault(log_item.work_order_id, log_item)
+
+    assigned_users_by_id = await _load_users_by_ids(
+        db,
+        [item.assigned_to for item in dispatch_tasks],
+    )
+
+    serialized_orders = []
+    for work_order, dispatch_task in rows:
+        review_state = _serialize_auto_dispatch_review_state(
+            latest_review_logs_by_work_order_id.get(work_order.id),
+        )
+        serialized_orders.append(
+            _attach_auto_dispatch_review_state(
+                serialize_work_order(
+                    work_order,
+                    assigned_user=assigned_users_by_id.get(dispatch_task.assigned_to or ""),
+                    current_dispatch=dispatch_task,
+                ),
+                review_state,
+            )
+        )
+
+    return {
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "filters": {
+            "review_status": review_status,
+            "dispatch_mode": dispatch_mode,
+            "building_id": building_id,
+            "priority": priority,
+        },
+        "work_orders": serialized_orders,
     }
 
 
@@ -1047,6 +1250,42 @@ async def get_auto_reassign_evaluation(
 
 
 # ---------------------------------------------------------------------------
+# POST /api/work-orders/{ticket_id}/auto-reassign — 自动重派执行（默认关闭）
+# ---------------------------------------------------------------------------
+@router.post("/{ticket_id}/auto-reassign", summary="自动重派执行（feature flag 控制）")
+async def execute_auto_reassign_endpoint(
+    ticket_id: str,
+    db: AsyncSession = Depends(get_db_session),
+    user: User = Depends(get_current_user),
+):
+    _require_role(user, "admin", "manager")
+
+    wo = await get_work_order_by_ticket_id(db, ticket_id)
+    if not wo:
+        raise HTTPException(status_code=404, detail="工单不存在")
+    current_dispatch = await get_current_dispatch_task(db, work_order=wo)
+
+    result = await execute_auto_reassign(
+        db,
+        work_order=wo,
+        current_dispatch=current_dispatch,
+        actor_id=user.id,
+        enabled=settings.ENABLE_AUTO_REASSIGN_EXECUTION,
+        min_score=settings.AUTO_REASSIGN_MIN_SCORE,
+        min_gap=settings.AUTO_REASSIGN_MIN_GAP,
+        require_on_duty=settings.AUTO_REASSIGN_REQUIRE_ON_DUTY,
+        require_overdue=settings.AUTO_REASSIGN_REQUIRE_OVERDUE,
+        max_attempt_no=settings.AUTO_REASSIGN_MAX_ATTEMPT_NO,
+    )
+    if result.get("action_taken"):
+        await db.commit()
+        await _invalidate_related_cache()
+    else:
+        await db.rollback()
+    return result
+
+
+# ---------------------------------------------------------------------------
 # POST /api/work-orders/{ticket_id}/dispatch — 派工
 # ---------------------------------------------------------------------------
 @router.post("/{ticket_id}/dispatch", summary="派工")
@@ -1214,6 +1453,89 @@ async def worker_feedback(
         "status": wo.status,
         "ticket_id": ticket_id,
         "message": f"反馈已记录：{req.result}",
+    }
+
+
+# ---------------------------------------------------------------------------
+# POST /api/work-orders/{ticket_id}/auto-dispatch-review — 自动派工复核标记
+# ---------------------------------------------------------------------------
+@router.post("/{ticket_id}/auto-dispatch-review", summary="标记自动派工复核结果")
+async def mark_auto_dispatch_review(
+    ticket_id: str,
+    req: AutoDispatchReviewRequest,
+    db: AsyncSession = Depends(get_db_session),
+    user: User = Depends(get_current_user),
+):
+    _require_role(user, "admin", "manager")
+
+    wo = await get_work_order_by_ticket_id(db, ticket_id)
+    if not wo:
+        raise HTTPException(status_code=404, detail="工单不存在")
+
+    current_dispatch = await get_current_dispatch_task(db, work_order=wo)
+    if not _is_auto_dispatch_task(current_dispatch):
+        raise HTTPException(status_code=409, detail="当前工单没有可复核的自动派工任务")
+
+    audit_action = AUTO_DISPATCH_REVIEW_STATUS_TO_AUDIT_ACTION[req.action]
+    now = datetime.now(timezone.utc)
+    wo.admin_action = audit_action
+    wo.admin_notes = req.notes
+    wo.admin_reviewed_by = user.id
+    wo.admin_reviewed_at = now
+    wo.updated_at = now
+
+    log_entry = await write_work_order_audit_log(
+        db,
+        work_order_id=wo.id,
+        action=audit_action,
+        old_status=wo.status,
+        new_status=wo.status,
+        actor_type="admin",
+        actor_id=user.id,
+        detail={
+            "dispatch_id": current_dispatch.id if current_dispatch else None,
+            "dispatch_mode": getattr(current_dispatch, "dispatch_mode", None),
+            "review_status": req.action,
+            "notes": req.notes,
+        },
+    )
+    await db.flush()
+    await db.commit()
+    await _invalidate_related_cache()
+
+    assigned_users_by_id = await _load_users_by_ids(
+        db,
+        [
+            _resolve_work_order_assigned_user_id(
+                work_order=wo,
+                current_dispatch=current_dispatch,
+            )
+        ],
+    )
+    review_state = _serialize_auto_dispatch_review_state(log_entry)
+    if review_state["reviewed_at"] is None:
+        review_state["reviewed_at"] = now.isoformat()
+
+    work_order_data = _attach_auto_dispatch_review_state(
+        serialize_work_order(
+            wo,
+            assigned_user=assigned_users_by_id.get(
+                _resolve_work_order_assigned_user_id(
+                    work_order=wo,
+                    current_dispatch=current_dispatch,
+                )
+                or ""
+            ),
+            current_dispatch=current_dispatch,
+        ),
+        review_state,
+    )
+
+    return {
+        "ticket_id": ticket_id,
+        "review_state": review_state,
+        "work_order": work_order_data,
+        "message": f"自动派工复核已标记为：{review_state['status_label']}",
     }
 
 

@@ -24,6 +24,8 @@ from app.api.routes_dispatch_hall import router as dispatch_hall_router
 from app.api.routes_worker_profiles import router as worker_profiles_router
 from app.api.routes_context_events import router as context_events_router
 from app.api.routes_work_order_insights import router as work_order_insights_router
+from app.api.routes_worker_ai import router as worker_ai_router
+from app.api.routes_operator_ai import router as operator_ai_router
 from app.api.routes_admin import router as admin_router
 from app.api.routes_notifications import router as notifications_router
 from app.core.config import get_settings
@@ -68,16 +70,25 @@ async def lifespan(app: FastAPI):
     # 注册会话管理 ORM 模型（触发 SQLAlchemy metadata 注册，供 session_store 使用）
     import app.db.chat_models  # noqa: F401
     import app.db.models  # noqa: F401  — 触发 User/RefreshToken metadata 注册
-    from app.db.session import ensure_auth_schema_compat, ensure_daily_energy_summary_view
+    from app.db.session import (
+        ensure_ai_assistant_tables,
+        ensure_auth_schema_compat,
+        ensure_daily_energy_summary_view,
+        ensure_dispatch_operation_runs_table,
+        ensure_worker_ai_phase2_tables,
+    )
 
     # 初始化缓存层（Redis 不可用时会自动降级到本地缓存）
     await init_redis_client()
 
     # 兼容历史数据库结构，避免 users.role 缺失导致登录 500
     await ensure_auth_schema_compat()
+    await ensure_ai_assistant_tables()
+    await ensure_worker_ai_phase2_tables()
 
     # P2：确保 Tool 4 的物化视图可用，避免日粒度查询抛 UndefinedTableError
     await ensure_daily_energy_summary_view()
+    await ensure_dispatch_operation_runs_table()
 
     # 预编译 LangGraph 图（避免首次请求延迟）
     from app.graph.workflow import get_graph
@@ -308,27 +319,62 @@ async def _periodic_dispatch_sla_scan(interval_seconds: int = 60) -> None:
     from app.core.cache import delete_cache_by_prefix
     from app.db.session import AsyncSessionLocal
     from app.services.dispatch_service import scan_dispatch_sla_states
+    from app.services.dispatch_operation_run_service import (
+        DISPATCH_SLA_SCAN_OPERATION,
+        record_dispatch_operation_run,
+    )
+    from datetime import datetime, timezone
 
     log = logging.getLogger(__name__)
 
     await _wait_until_next_minute(offset_seconds=5)
 
     while True:
+        started_at = datetime.now(timezone.utc)
         try:
             async with AsyncSessionLocal() as db:
                 summary = await scan_dispatch_sla_states(db)
                 await db.commit()
+            await record_dispatch_operation_run(
+                operation_type=DISPATCH_SLA_SCAN_OPERATION,
+                trigger_source="scheduler",
+                run_status="success",
+                started_at=started_at,
+                finished_at=datetime.now(timezone.utc),
+                summary=summary,
+            )
             if summary.get("updated", 0) > 0:
                 await delete_cache_by_prefix("workorders:")
                 await delete_cache_by_prefix("incidents:")
+            timings = summary.get("timings_ms") or {}
             log.info(
-                "dispatch SLA 扫描完成: scanned=%d updated=%d warnings=%d overdue=%d",
+                "dispatch SLA 扫描完成: scanned=%d updated=%d warnings=%d overdue=%d auto_reassign_triggers=%d auto_reassign_executed=%d hall_fallbacks=%d shadow_evaluated=%d shadow_would_execute=%d shadow_would_hall=%d timings_ms(total=%s load_dispatch=%s load_work_orders=%s load_assignees=%s prepare_candidates=%s process_loop=%s)",
                 summary.get("scanned", 0),
                 summary.get("updated", 0),
                 summary.get("warning_events", 0),
                 summary.get("overdue_events", 0),
+                summary.get("auto_reassign_triggers", 0),
+                summary.get("auto_reassign_executed", 0),
+                summary.get("auto_reassign_hall_fallbacks", 0),
+                summary.get("auto_reassign_shadow_evaluated", 0),
+                summary.get("auto_reassign_shadow_would_execute", 0),
+                summary.get("auto_reassign_shadow_would_hall_fallbacks", 0),
+                timings.get("total", 0),
+                timings.get("load_dispatch_tasks", 0),
+                timings.get("load_work_orders", 0),
+                timings.get("load_current_assignees", 0),
+                timings.get("prepare_candidate_context", 0),
+                timings.get("process_loop", 0),
             )
-        except Exception:
+        except Exception as exc:
+            await record_dispatch_operation_run(
+                operation_type=DISPATCH_SLA_SCAN_OPERATION,
+                trigger_source="scheduler",
+                run_status="failed",
+                started_at=started_at,
+                finished_at=datetime.now(timezone.utc),
+                error_message=str(exc),
+            )
             log.exception("dispatch SLA 扫描任务异常")
 
         await asyncio.sleep(interval_seconds)
@@ -369,6 +415,8 @@ app.include_router(dispatch_hall_router, prefix="/api")
 app.include_router(worker_profiles_router, prefix="/api")
 app.include_router(context_events_router, prefix="/api")
 app.include_router(work_order_insights_router, prefix="/api")
+app.include_router(worker_ai_router, prefix="/api")
+app.include_router(operator_ai_router, prefix="/api")
 app.include_router(report_router, prefix="/api")
 app.include_router(notifications_router, prefix="/api")
 app.include_router(admin_router)

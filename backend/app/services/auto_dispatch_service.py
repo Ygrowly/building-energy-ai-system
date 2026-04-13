@@ -18,7 +18,7 @@ from sqlalchemy.orm import selectinload
 
 from app.db.models import User, WorkOrder, WorkerProfile, WorkerProfileSkill
 from app.services.audit_log_service import write_work_order_audit_log
-from app.services.dispatch_service import derive_dispatch_timeout_level
+from app.services.dispatch_service import derive_dispatch_timeout_level, reassign_dispatch_task
 from app.services.dispatch_hall_service import create_or_reopen_takeover_hall_entry
 from app.services.work_order_service import (
     DISPATCHABLE_WORK_ORDER_STATUSES,
@@ -48,6 +48,9 @@ AUTO_DISPATCH_SKIP_LABELS: dict[str, str] = {
     "rollout_building_not_allowed": "当前楼宇不在自动派工灰度范围内",
     "rollout_priority_not_allowed": "当前优先级不在自动派工灰度范围内",
     "rollout_skill_not_allowed": "当前工单技能类型不在自动派工灰度范围内",
+    "reassign_rollout_building_not_allowed": "当前楼宇不在自动重派灰度范围内",
+    "reassign_rollout_priority_not_allowed": "当前优先级不在自动重派灰度范围内",
+    "reassign_rollout_skill_not_allowed": "当前工单技能类型不在自动重派灰度范围内",
     "assignee_unavailable": "自动派工候选人已不可用",
     "no_current_dispatch": "当前工单没有有效派工任务",
     "dispatch_stage_not_reassignable": "当前派工阶段不适合自动重派",
@@ -163,6 +166,39 @@ def build_auto_dispatch_rollout_gate(
     allowed_priorities: list[str] | tuple[str, ...] | set[str] | None = None,
     allowed_required_skills: list[str] | tuple[str, ...] | set[str] | None = None,
 ) -> dict[str, Any]:
+    return _build_rollout_gate(
+        work_order,
+        allowed_buildings=allowed_buildings,
+        allowed_priorities=allowed_priorities,
+        allowed_required_skills=allowed_required_skills,
+        blocker_reason_prefix="rollout",
+    )
+
+
+def build_auto_reassign_rollout_gate(
+    work_order: WorkOrder,
+    *,
+    allowed_buildings: list[str] | tuple[str, ...] | set[str] | None = None,
+    allowed_priorities: list[str] | tuple[str, ...] | set[str] | None = None,
+    allowed_required_skills: list[str] | tuple[str, ...] | set[str] | None = None,
+) -> dict[str, Any]:
+    return _build_rollout_gate(
+        work_order,
+        allowed_buildings=allowed_buildings,
+        allowed_priorities=allowed_priorities,
+        allowed_required_skills=allowed_required_skills,
+        blocker_reason_prefix="reassign_rollout",
+    )
+
+
+def _build_rollout_gate(
+    work_order: WorkOrder,
+    *,
+    allowed_buildings: list[str] | tuple[str, ...] | set[str] | None = None,
+    allowed_priorities: list[str] | tuple[str, ...] | set[str] | None = None,
+    allowed_required_skills: list[str] | tuple[str, ...] | set[str] | None = None,
+    blocker_reason_prefix: str,
+) -> dict[str, Any]:
     requirement = _load_dispatch_requirement_snapshot(work_order)
     blockers: list[dict[str, Any]] = []
 
@@ -181,7 +217,7 @@ def build_auto_dispatch_rollout_gate(
     if normalized_buildings and building_id not in normalized_buildings:
         blockers.append(
             _blocker(
-                "rollout_building_not_allowed",
+                f"{blocker_reason_prefix}_building_not_allowed",
                 current_building=building_id,
                 allowed_buildings=sorted(normalized_buildings),
             )
@@ -189,7 +225,7 @@ def build_auto_dispatch_rollout_gate(
     if normalized_priorities and priority not in normalized_priorities:
         blockers.append(
             _blocker(
-                "rollout_priority_not_allowed",
+                f"{blocker_reason_prefix}_priority_not_allowed",
                 current_priority=priority,
                 allowed_priorities=sorted(normalized_priorities),
             )
@@ -197,7 +233,7 @@ def build_auto_dispatch_rollout_gate(
     if normalized_skills and not required_skills.intersection(normalized_skills):
         blockers.append(
             _blocker(
-                "rollout_skill_not_allowed",
+                f"{blocker_reason_prefix}_skill_not_allowed",
                 required_skills=sorted(required_skills),
                 allowed_required_skills=sorted(normalized_skills),
             )
@@ -675,6 +711,8 @@ async def build_auto_reassign_evaluation(
     require_on_duty: bool = True,
     require_overdue: bool = True,
     max_attempt_no: int = 3,
+    dispatch_workers: list[User] | None = None,
+    dispatch_active_counts: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     """
     Build a read-only auto-reassign decision payload.
@@ -731,7 +769,12 @@ async def build_auto_reassign_evaluation(
                 )
             )
 
-    candidate_payload = await list_dispatch_candidates(db, work_order=work_order)
+    candidate_payload = await list_dispatch_candidates(
+        db,
+        work_order=work_order,
+        workers=dispatch_workers,
+        active_counts=dispatch_active_counts,
+    )
     candidates = [
         candidate
         for candidate in candidate_payload["candidates"]
@@ -782,4 +825,142 @@ async def build_auto_reassign_evaluation(
         "blockers": blockers,
         "selection_reason": selection_reason,
         "apply_payload": apply_payload,
+    }
+
+
+async def execute_auto_reassign(
+    db: AsyncSession,
+    *,
+    work_order: WorkOrder,
+    current_dispatch: Any | None,
+    evaluation: dict[str, Any] | None = None,
+    actor_id: str | None = None,
+    trigger_reason: str | None = None,
+    trigger_label: str | None = None,
+    enabled: bool = False,
+    min_score: int = 115,
+    min_gap: int = 10,
+    require_on_duty: bool = True,
+    require_overdue: bool = True,
+    max_attempt_no: int = 3,
+    dispatch_workers: list[User] | None = None,
+    dispatch_active_counts: dict[str, int] | None = None,
+) -> dict[str, Any]:
+    """
+    Execute auto reassign only when explicitly enabled and dry-run is eligible.
+
+    This function does not commit. Callers own commit/rollback and cache
+    invalidation so API routes and future schedulers can compose it safely.
+    """
+    evaluation = evaluation or await build_auto_reassign_evaluation(
+        db,
+        work_order=work_order,
+        current_dispatch=current_dispatch,
+        min_score=min_score,
+        min_gap=min_gap,
+        require_on_duty=require_on_duty,
+        require_overdue=require_overdue,
+        max_attempt_no=max_attempt_no,
+        dispatch_workers=dispatch_workers,
+        dispatch_active_counts=dispatch_active_counts,
+    )
+    if not enabled:
+        return {
+            "executed": False,
+            "action_taken": False,
+            "reason": "auto_reassign_execution_disabled",
+            "message": "自动重派执行开关未开启，本次只返回评估结果",
+            "evaluation": evaluation,
+        }
+    if not evaluation["eligible"] or not evaluation["apply_payload"]:
+        return {
+            "executed": False,
+            "action_taken": False,
+            "reason": "auto_reassign_not_eligible",
+            "message": "当前工单不满足自动重派条件",
+            "evaluation": evaluation,
+        }
+    if current_dispatch is None:
+        return {
+            "executed": False,
+            "action_taken": False,
+            "reason": "no_current_dispatch",
+            "message": "当前工单没有有效派工任务",
+            "evaluation": evaluation,
+        }
+
+    assigned_to = evaluation["apply_payload"]["assigned_to"]
+    assigned_user = await _load_auto_dispatch_assignee(db, assigned_to)
+    if not assigned_user or assigned_user.role != "ops" or not assigned_user.is_active:
+        evaluation["blockers"].append(_blocker("assignee_unavailable"))
+        evaluation["eligible"] = False
+        evaluation["decision"] = "manual_review"
+        evaluation["apply_payload"] = None
+        return {
+            "executed": False,
+            "action_taken": False,
+            "reason": "assignee_unavailable",
+            "message": "自动重派候选人已不可用",
+            "evaluation": evaluation,
+        }
+
+    candidate_snapshot = {
+        "auto_reassign": True,
+        "rules": evaluation["rules"],
+        "top_candidate": evaluation["top_candidate"],
+        "second_candidate": evaluation["second_candidate"],
+        "score_gap": evaluation["score_gap"],
+        "from_dispatch_id": evaluation["current_dispatch_id"],
+        "current_assigned_to": evaluation["current_assigned_to"],
+        "timeout_level": evaluation["timeout_level"],
+        "triggered_by": actor_id,
+        "trigger_reason": trigger_reason,
+        "trigger_label": trigger_label,
+    }
+    new_dispatch = await reassign_dispatch_task(
+        db,
+        work_order=work_order,
+        dispatch_task=current_dispatch,
+        assigned_user=assigned_user,
+        actor_type="system",
+        actor_id=actor_id,
+        reason=evaluation["selection_reason"],
+        dispatch_mode=evaluation["apply_payload"]["dispatch_mode"],
+        candidate_snapshot=candidate_snapshot,
+    )
+    await write_work_order_audit_log(
+        db,
+        work_order_id=work_order.id,
+        action="auto_reassign_executed",
+        old_status=work_order.status,
+        new_status=work_order.status,
+        actor_type="system",
+        actor_id=actor_id,
+        detail={
+            "from_dispatch_id": evaluation["current_dispatch_id"],
+            "to_dispatch_id": new_dispatch.id,
+            "assigned_to": assigned_user.id,
+            "assigned_to_name": assigned_user.username,
+            "selection_reason": evaluation["selection_reason"],
+            "rules": evaluation["rules"],
+            "score_gap": evaluation["score_gap"],
+            "trigger_reason": trigger_reason,
+            "trigger_label": trigger_label,
+        },
+    )
+
+    return {
+        "executed": True,
+        "action_taken": True,
+        "reason": "auto_reassign_executed",
+        "message": f"工单已自动改派给 {assigned_user.username}",
+        "ticket_id": work_order.ticket_id,
+        "from_dispatch_id": evaluation["current_dispatch_id"],
+        "dispatch_id": new_dispatch.id,
+        "assigned_to": assigned_user.id,
+        "assigned_to_name": assigned_user.username,
+        "status": work_order.status,
+        "trigger_reason": trigger_reason,
+        "trigger_label": trigger_label,
+        "evaluation": evaluation,
     }

@@ -11,7 +11,7 @@
 开发模式下不要求 JWT 认证，方便调试和测试。
 """
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends
@@ -23,6 +23,10 @@ from app.core.cache import delete_cache_by_prefix
 from app.db.models import Building
 from app.db.session import get_db_session as get_db, AsyncSessionLocal
 from app.services.dispatch_service import scan_dispatch_sla_states
+from app.services.dispatch_operation_run_service import (
+    DISPATCH_SLA_SCAN_OPERATION,
+    record_dispatch_operation_run,
+)
 from app.services.kpi_expected_service import compute_and_store_all_buildings
 from app.services.anomaly_detection_service import detect_and_store_all_buildings
 from app.schemas.mcp_schemas import MCPError
@@ -374,12 +378,47 @@ async def scan_dispatch_sla(db: AsyncSession = Depends(get_db)):
     - 写入 dispatch_events: timeout_warning / timeout_overdue
     - 刷新 incident/work_order 读模型
     """
-    summary = await scan_dispatch_sla_states(db)
-    await db.commit()
-    if summary.get("updated", 0) > 0:
-        await delete_cache_by_prefix("workorders:")
-        await delete_cache_by_prefix("incidents:")
-    return {
-        "status": "ok",
-        **summary,
-    }
+    started_at = datetime.now(timezone.utc)
+    try:
+        summary = await scan_dispatch_sla_states(db)
+        await db.commit()
+        if summary.get("updated", 0) > 0:
+            await delete_cache_by_prefix("workorders:")
+            await delete_cache_by_prefix("incidents:")
+        await record_dispatch_operation_run(
+            operation_type=DISPATCH_SLA_SCAN_OPERATION,
+            trigger_source="admin_api",
+            run_status="success",
+            started_at=started_at,
+            finished_at=datetime.now(timezone.utc),
+            summary=summary,
+        )
+        timings = summary.get("timings_ms") or {}
+        logger.info(
+            "admin: scan-dispatch-sla 完成 scanned=%d updated=%d warnings=%d overdue=%d timings_ms(total=%s load_dispatch=%s load_work_orders=%s load_assignees=%s prepare_candidates=%s process_loop=%s)",
+            summary.get("scanned", 0),
+            summary.get("updated", 0),
+            summary.get("warning_events", 0),
+            summary.get("overdue_events", 0),
+            timings.get("total", 0),
+            timings.get("load_dispatch_tasks", 0),
+            timings.get("load_work_orders", 0),
+            timings.get("load_current_assignees", 0),
+            timings.get("prepare_candidate_context", 0),
+            timings.get("process_loop", 0),
+        )
+        return {
+            "status": "ok",
+            **summary,
+        }
+    except Exception as exc:
+        await db.rollback()
+        await record_dispatch_operation_run(
+            operation_type=DISPATCH_SLA_SCAN_OPERATION,
+            trigger_source="admin_api",
+            run_status="failed",
+            started_at=started_at,
+            finished_at=datetime.now(timezone.utc),
+            error_message=str(exc),
+        )
+        raise

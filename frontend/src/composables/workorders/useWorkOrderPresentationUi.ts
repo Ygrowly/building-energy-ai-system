@@ -92,6 +92,30 @@ function buildTimelineItem(input: {
   }
 }
 
+const approvalStatusLabels: Record<string, string> = {
+  pending_review: '待AI审阅',
+  approved: '已批准',
+  rejected: '已驳回',
+}
+
+const dispatchSummaryStatusLabels: Record<string, string> = {
+  pending_dispatch: '待派工',
+  assigned: '待接单',
+  accepted: '已接单',
+  arrived: '已到场',
+  processing: '处理中',
+  waiting_support: '待协同',
+  completed: '处理完成',
+  cancelled: '已取消',
+  escalated: '已升级',
+}
+
+const workResultLabels: Record<string, string> = {
+  fixed: '已修复',
+  false_alarm: '误报',
+  escalated: '已升级',
+}
+
 export function useWorkOrderPresentation(options: UseWorkOrderPresentationOptions) {
   function timelineData(wo: any) {
     return options.orderTimelines.value[wo.ticket_id] ?? null
@@ -152,6 +176,32 @@ export function useWorkOrderPresentation(options: UseWorkOrderPresentationOption
       || '未派工'
   }
 
+  function executionStatusForOrder(wo: any) {
+    return currentDispatchForOrder(wo)?.execution_status || wo.execution_status || ''
+  }
+
+  function executionLabelForOrder(wo: any) {
+    const status = executionStatusForOrder(wo)
+    return status ? options.executionLabels[status] ?? status : '—'
+  }
+
+  function statusLabelForOrder(wo: any) {
+    if (wo.status === 'closed') return options.statusLabels.closed ?? '已关闭'
+    if (wo.approval_status === 'pending_review') return approvalStatusLabels.pending_review
+    if (wo.approval_status === 'rejected') return approvalStatusLabels.rejected
+    if (wo.work_result && wo.status !== 'closed') {
+      return workResultLabels[wo.work_result] ? `${workResultLabels[wo.work_result]}待关闭` : wo.work_result
+    }
+    if (wo.dispatch_summary_status) {
+      return dispatchSummaryStatusLabels[wo.dispatch_summary_status] ?? wo.dispatch_summary_status
+    }
+    return options.statusLabels[wo.status] ?? wo.status
+  }
+
+  function assigneeNameForOrder(wo: any) {
+    return assigneeName(wo, currentDispatchForOrder(wo))
+  }
+
   function assigneeNameForOrder(wo: any) {
     return assigneeName(wo, currentDispatchForOrder(wo))
   }
@@ -180,10 +230,13 @@ export function useWorkOrderPresentation(options: UseWorkOrderPresentationOption
 
   function detailRows(wo: any) {
     const currentDispatch = currentDispatchForOrder(wo)
+    const autoDispatchReviewState = currentDispatch?.auto_dispatch_review?.review_state
+      || currentDispatch?.auto_dispatch_review_state
+      || wo.auto_dispatch_review_state
     const rows: Array<{ label: string; value: string; cls?: string }> = [
       { label: '工单 ID', value: wo.ticket_id, cls: 'mono accent' },
       { label: '楼宇', value: buildingName(wo.building_id) },
-      { label: '当前状态', value: options.statusLabels[wo.status] ?? wo.status },
+      { label: '当前状态', value: statusLabelForOrder(wo) },
       { label: '执行进度', value: options.executionLabels[currentDispatch?.execution_status || wo.execution_status] ?? currentDispatch?.execution_status ?? wo.execution_status ?? '—' },
       { label: '责任人', value: assigneeName(wo, currentDispatch) },
       { label: '责任班组', value: currentDispatch?.assigned_team_name || wo.assigned_team_name || '—' },
@@ -196,6 +249,24 @@ export function useWorkOrderPresentation(options: UseWorkOrderPresentationOption
 
     if (currentBlockReason(wo)) {
       rows.push({ label: '当前阻塞', value: currentBlockReason(wo), cls: 'wrap danger-text' })
+    }
+    if (wo.approval_status || wo.dispatch_summary_status || wo.work_result) {
+      rows.push({
+        label: '状态投影',
+        value: [
+          approvalStatusLabels[wo.approval_status] || wo.approval_status,
+          dispatchSummaryStatusLabels[wo.dispatch_summary_status] || wo.dispatch_summary_status,
+          workResultLabels[wo.work_result] || wo.work_result,
+        ].filter(Boolean).join(' / ') || '—',
+        cls: 'wrap',
+      })
+    }
+    if (currentDispatch?.auto_dispatch_review || currentDispatch?.candidate_snapshot?.auto_dispatch) {
+      rows.push({
+        label: '自动派工复核',
+        value: autoDispatchReviewState?.status_label || '待复核',
+        cls: autoDispatchReviewState?.status === 'needs_reassign' ? 'danger-text' : 'accent',
+      })
     }
     if (latestReassignReason(wo)) {
       rows.push({ label: '最近改派', value: latestReassignReason(wo), cls: 'wrap' })
@@ -283,6 +354,10 @@ export function useWorkOrderPresentation(options: UseWorkOrderPresentationOption
 
   return {
     currentDispatchForOrder,
+    executionStatusForOrder,
+    executionLabelForOrder,
+    statusLabelForOrder,
+    assigneeNameForOrder,
     executionStatusForOrder,
     executionLabelForOrder,
     assigneeNameForOrder,

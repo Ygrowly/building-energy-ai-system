@@ -20,6 +20,9 @@ CSV_LIST_FIELDS = frozenset(
         "AUTO_DISPATCH_ALLOWED_BUILDINGS",
         "AUTO_DISPATCH_ALLOWED_PRIORITIES",
         "AUTO_DISPATCH_ALLOWED_REQUIRED_SKILLS",
+        "AUTO_REASSIGN_ALLOWED_BUILDINGS",
+        "AUTO_REASSIGN_ALLOWED_PRIORITIES",
+        "AUTO_REASSIGN_ALLOWED_REQUIRED_SKILLS",
     }
 )
 
@@ -86,6 +89,22 @@ class Settings(BaseSettings):
     LLM_MODEL_DEEP: str = ""
 
     # -----------------------------------------------------------------------
+    # 双端 AI Provider（维小修 / 运小维）
+    # -----------------------------------------------------------------------
+    AI_PROVIDER: str = "qwen_dashscope"
+    AI_API_KEY: str = ""  # 可统一填 Qwen / OpenAI 兼容 Key；留空时回退 DASHSCOPE_API_KEY
+    DASHSCOPE_API_KEY: str = ""
+    AI_BASE_URL: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    AI_TEXT_MODEL: str = "qwen-plus"
+    AI_VISION_MODEL: str = "qwen3-vl-flash"
+    AI_ASR_MODEL: str = "qwen3-asr-flash"
+    AI_TTS_MODE: str = "client_native"  # client_native | dashscope_cosyvoice
+    AI_TTS_MODEL: str = "cosyvoice-v2"
+    AI_TTS_VOICE: str = "longxiaochun_v2"
+    AI_REQUEST_TIMEOUT_SECONDS: float = 90.0
+    AI_STRUCTURED_OUTPUT_STRICT: bool = True
+
+    # -----------------------------------------------------------------------
     # RAGFlow 知识库 API
     # -----------------------------------------------------------------------
     RAGFLOW_API_URL: str = "http://localhost:9380"
@@ -139,14 +158,30 @@ class Settings(BaseSettings):
     AUTO_DISPATCH_MIN_GAP: int = 10  # 自动派工第一候选人与第二候选人的最低分差
     AUTO_DISPATCH_REQUIRE_ON_DUTY: bool = True  # 自动派工是否要求第一候选人为值班中
     ENABLE_AUTO_DISPATCH_FALLBACK_EXECUTION: bool = False  # 是否允许低置信兜底派工
-    AUTO_DISPATCH_FALLBACK_MIN_SCORE: int = 80  # 低置信兜底派工最低推荐分
-    AUTO_DISPATCH_FALLBACK_ALLOW_STANDBY: bool = True  # 低置信兜底是否允许待命人员
+    AUTO_DISPATCH_FALLBACK_MIN_SCORE: int = 95  # 低置信兜底派工最低推荐分
+    AUTO_DISPATCH_FALLBACK_ALLOW_STANDBY: bool = False  # 低置信兜底是否允许待命人员
     ENABLE_AUTO_DISPATCH_HALL_FALLBACK: bool = False  # 无法指定个人时是否自动创建工单大厅接管入口
+    AUTO_DISPATCH_CREATE_HALL_ON_ROLLOUT_SKIP: bool = False  # 灰度外审批通过工单是否自动进大厅
     AUTO_DISPATCH_ALLOWED_BUILDINGS: list[str] = []  # 灰度：允许自动派工的楼宇白名单；空表示不限
     AUTO_DISPATCH_ALLOWED_PRIORITIES: list[str] = []  # 灰度：允许自动派工的优先级白名单；空表示不限
     AUTO_DISPATCH_ALLOWED_REQUIRED_SKILLS: list[str] = []  # 灰度：允许自动派工的技能白名单；空表示不限
     AUTO_DISPATCH_ALLOW_LOW_CONFIDENCE_IN_GREY: bool = False  # 灰度：是否允许低置信兜底派工
     AUTO_DISPATCH_ALLOW_HALL_FALLBACK_IN_GREY: bool = False  # 灰度：是否允许工单大厅兜底
+    ENABLE_AUTO_REASSIGN_EXECUTION: bool = False  # 业务开关：是否允许系统按自动重派评估结果执行改派
+    AUTO_REASSIGN_MIN_SCORE: int = 115  # 自动重派新候选人最低推荐分
+    AUTO_REASSIGN_MIN_GAP: int = 10  # 自动重派第一候选人与第二候选人的最低分差
+    AUTO_REASSIGN_REQUIRE_ON_DUTY: bool = True  # 自动重派是否要求新候选人为值班中
+    AUTO_REASSIGN_REQUIRE_OVERDUE: bool = True  # 自动重派是否要求当前派工已超时
+    AUTO_REASSIGN_MAX_ATTEMPT_NO: int = 3  # 自动重派允许的最大派工尝试次数
+    ENABLE_AUTO_REASSIGN_PHASE1_TRIGGER: bool = False  # 一期触发器：是否允许 SLA/责任人状态自动触发自动重派
+    ENABLE_AUTO_REASSIGN_SHADOW_MODE: bool = False  # 影子观察：只评估自动重派，不真正执行改派
+    AUTO_REASSIGN_ALLOWED_BUILDINGS: list[str] = []  # 灰度：允许自动重派自动执行的楼宇白名单；空表示不限
+    AUTO_REASSIGN_ALLOWED_PRIORITIES: list[str] = []  # 灰度：允许自动重派自动执行的优先级白名单；空表示不限
+    AUTO_REASSIGN_ALLOWED_REQUIRED_SKILLS: list[str] = []  # 灰度：允许自动重派自动执行的技能白名单；空表示不限
+    AUTO_REASSIGN_TRIGGER_ASSIGNED_OVERDUE: bool = True  # 一期触发器：未接单超时是否进入自动重派
+    AUTO_REASSIGN_TRIGGER_ACCEPTED_OVERDUE: bool = True  # 一期触发器：已接单未到场超时是否进入自动重派
+    AUTO_REASSIGN_ACCEPTED_MIN_PREVIOUS_REMINDERS: int = 1  # accepted->overdue 前至少已有几次提醒，才允许自动重派
+    AUTO_REASSIGN_TRIGGER_ASSIGNEE_UNAVAILABLE: bool = False  # 一期触发器：当前责任人客观不可用时是否进入自动重派
     ENABLE_CHAT_WORK_ORDERS: bool = False  # 对话开关：是否允许聊天链路直接生成工单草稿/工单流程
 
     # -----------------------------------------------------------------------
@@ -234,6 +269,9 @@ class Settings(BaseSettings):
         "AUTO_DISPATCH_ALLOWED_BUILDINGS",
         "AUTO_DISPATCH_ALLOWED_PRIORITIES",
         "AUTO_DISPATCH_ALLOWED_REQUIRED_SKILLS",
+        "AUTO_REASSIGN_ALLOWED_BUILDINGS",
+        "AUTO_REASSIGN_ALLOWED_PRIORITIES",
+        "AUTO_REASSIGN_ALLOWED_REQUIRED_SKILLS",
         mode="before",
     )
     @classmethod

@@ -30,7 +30,8 @@ from app.services.auto_dispatch_service import (
     build_auto_dispatch_rollout_gate,
     execute_auto_dispatch,
 )
-from app.services.work_order_service import apply_ai_review
+from app.services.dispatch_hall_service import create_or_reopen_takeover_hall_entry
+from app.services.work_order_service import DISPATCHABLE_WORK_ORDER_STATUSES, apply_ai_review
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -180,6 +181,7 @@ async def execute_auto_dispatch_after_ai_approval(
         )
         if not rollout_gate["allowed"]:
             blocker_labels = "、".join(item["label"] for item in rollout_gate["blockers"][:3])
+            hall_entry = None
             await write_work_order_audit_log(
                 db,
                 work_order_id=work_order_id_value,
@@ -194,6 +196,49 @@ async def execute_auto_dispatch_after_ai_approval(
                     "message": blocker_labels,
                 },
             )
+            is_dispatchable_for_hall = (
+                work_order.status in set(DISPATCHABLE_WORK_ORDER_STATUSES)
+                and getattr(work_order, "approval_status", None) in (None, "approved")
+                and getattr(work_order, "dispatch_summary_status", None) in (None, "pending_dispatch")
+                and not getattr(work_order, "current_dispatch_id", None)
+            )
+            if (
+                settings.ENABLE_AUTO_DISPATCH_EXECUTION
+                and settings.ENABLE_AUTO_DISPATCH_HALL_FALLBACK
+                and settings.AUTO_DISPATCH_CREATE_HALL_ON_ROLLOUT_SKIP
+                and is_dispatchable_for_hall
+            ):
+                hall_reason = (
+                    "AI 审批已通过，但当前工单不在自动派人灰度范围内，"
+                    f"进入工单大厅待调度；灰度原因：{blocker_labels}"
+                )
+                hall_entry = await create_or_reopen_takeover_hall_entry(
+                    db,
+                    work_order=work_order,
+                    source_dispatch_id=None,
+                    source_assignee_id=None,
+                    created_by=None,
+                    reason=hall_reason,
+                    sla_stage="pending_dispatch",
+                    overdue_level="fallback",
+                )
+                await write_work_order_audit_log(
+                    db,
+                    work_order_id=work_order_id_value,
+                    action="auto_dispatch_hall_fallback",
+                    old_status=work_order_status,
+                    new_status=work_order_status,
+                    actor_type="system",
+                    actor_id=None,
+                    detail={
+                        "trigger_source": trigger_source,
+                        "reason": "auto_dispatch_rollout_hall_fallback_created",
+                        "message": hall_reason,
+                        "hall_entry_id": hall_entry.id,
+                        "rollout_gate": rollout_gate,
+                        "strategy": "rollout_hall_fallback",
+                    },
+                )
             await db.commit()
             logger.info(
                 "AI 审批后自动派工被灰度拦截: ticket=%s trigger=%s blockers=%s",
@@ -201,7 +246,7 @@ async def execute_auto_dispatch_after_ai_approval(
                 trigger_source,
                 blocker_labels,
             )
-            return {
+            result = {
                 "executed": False,
                 "action_taken": False,
                 "observation_recorded": True,
@@ -210,6 +255,16 @@ async def execute_auto_dispatch_after_ai_approval(
                 "ticket_id": work_order_ticket_id,
                 "rollout_gate": rollout_gate,
             }
+            if hall_entry is not None:
+                result.update(
+                    {
+                        "action_taken": True,
+                        "reason": "auto_dispatch_rollout_hall_fallback_created",
+                        "message": "自动派工灰度未覆盖当前工单，已进入工单大厅待调度",
+                        "hall_entry_id": hall_entry.id,
+                    }
+                )
+            return result
 
         result = await execute_auto_dispatch(
             db,

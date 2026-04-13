@@ -1,6 +1,46 @@
 <template>
+  <WorkOrdersAutoDispatchInsightsPanel
+    v-if="activeTab === 'auto_dispatch_insights'"
+    :insights="autoDispatchInsights"
+    :filters="autoDispatchInsightFilters"
+    :loading="autoDispatchInsightLoading"
+    :error="autoDispatchInsightError"
+    :priority-labels="priorityLabels"
+    :building-options="autoDispatchInsightBuildingOptions"
+    :skill-options="autoDispatchInsightSkillOptions"
+    :building-name="buildingName"
+    :format-time="formatTime"
+    :update-filter="updateAutoDispatchInsightFilter"
+    :refresh="fetchAutoDispatchInsights"
+    :operation-insights="workOrderOperationInsights"
+    :operation-filters="workOrderOperationInsightFilters"
+    :operation-loading="workOrderOperationInsightLoading"
+    :operation-error="workOrderOperationInsightError"
+    :update-operation-filter="updateWorkOrderOperationInsightFilter"
+    :refresh-operation="fetchWorkOrderOperationInsights"
+    :explanation="autoDispatchInsightExplanation"
+    :explanation-source="autoDispatchInsightExplanationSource"
+    :explain-question="autoDispatchInsightQuestion"
+    :explain-loading="autoDispatchInsightExplainLoading"
+    :explain-error="autoDispatchInsightExplainError"
+    :update-explain-question="updateAutoDispatchInsightQuestion"
+    :explain="fetchAutoDispatchInsightExplanation"
+    :shadow-insights="autoReassignShadowInsights"
+    :shadow-filters="autoReassignShadowInsightFilters"
+    :shadow-loading="autoReassignShadowInsightLoading"
+    :shadow-error="autoReassignShadowInsightError"
+    :update-shadow-filter="updateAutoReassignShadowInsightFilter"
+    :refresh-shadow="fetchAutoReassignShadowInsights"
+    :run-health-insights="autoDispatchRunHealthInsights"
+    :run-health-filters="autoDispatchRunHealthFilters"
+    :run-health-loading="autoDispatchRunHealthLoading"
+    :run-health-error="autoDispatchRunHealthError"
+    :update-run-health-filter="updateAutoDispatchRunHealthFilter"
+    :refresh-run-health="fetchAutoDispatchRunHealthInsights"
+  />
+
   <WorkOrdersHallList
-    v-if="!loading && activeTab === 'shared_hall' && hallEntries.length > 0"
+    v-else-if="!loading && activeTab === 'shared_hall' && hallEntries.length > 0"
     :hall-entries="hallEntries"
     :action-loading="actionLoading"
     :priority-labels="priorityLabels"
@@ -53,6 +93,7 @@
 
 <script setup lang="ts">
 import { PropType } from 'vue'
+import WorkOrdersAutoDispatchInsightsPanel from './WorkOrdersAutoDispatchInsightsPanel.vue'
 import WorkOrdersHallList from './WorkOrdersHallList.vue'
 import WorkOrdersOrderList from './WorkOrdersOrderList.vue'
 
@@ -192,6 +233,138 @@ defineProps({
   },
   actionsForOrder: {
     type: Function as PropType<(wo: any) => Array<{ action: string; label: string; className: string }>>,
+    required: true,
+  },
+  autoDispatchInsights: {
+    type: Object as PropType<any | null>,
+    default: null,
+  },
+  autoDispatchInsightFilters: {
+    type: Object as PropType<Record<string, string>>,
+    required: true,
+  },
+  autoDispatchInsightLoading: {
+    type: Boolean,
+    required: true,
+  },
+  autoDispatchInsightError: {
+    type: String,
+    required: true,
+  },
+  autoDispatchInsightBuildingOptions: {
+    type: Array as PropType<Array<{ label: string; value: string }>>,
+    required: true,
+  },
+  autoDispatchInsightSkillOptions: {
+    type: Array as PropType<Array<{ label: string; value: string }>>,
+    required: true,
+  },
+  updateAutoDispatchInsightFilter: {
+    type: Function as PropType<(key: string, value: string) => void>,
+    required: true,
+  },
+  fetchAutoDispatchInsights: {
+    type: Function as PropType<() => void>,
+    required: true,
+  },
+  workOrderOperationInsights: {
+    type: Object as PropType<any | null>,
+    default: null,
+  },
+  workOrderOperationInsightFilters: {
+    type: Object as PropType<Record<string, string>>,
+    required: true,
+  },
+  workOrderOperationInsightLoading: {
+    type: Boolean,
+    required: true,
+  },
+  workOrderOperationInsightError: {
+    type: String,
+    required: true,
+  },
+  updateWorkOrderOperationInsightFilter: {
+    type: Function as PropType<(key: string, value: string) => void>,
+    required: true,
+  },
+  fetchWorkOrderOperationInsights: {
+    type: Function as PropType<() => void>,
+    required: true,
+  },
+  autoDispatchInsightExplanation: {
+    type: Object as PropType<any | null>,
+    default: null,
+  },
+  autoDispatchInsightExplanationSource: {
+    type: String,
+    default: '',
+  },
+  autoDispatchInsightQuestion: {
+    type: String,
+    required: true,
+  },
+  autoDispatchInsightExplainLoading: {
+    type: Boolean,
+    required: true,
+  },
+  autoDispatchInsightExplainError: {
+    type: String,
+    required: true,
+  },
+  updateAutoDispatchInsightQuestion: {
+    type: Function as PropType<(value: string) => void>,
+    required: true,
+  },
+  fetchAutoDispatchInsightExplanation: {
+    type: Function as PropType<() => void>,
+    required: true,
+  },
+  autoReassignShadowInsights: {
+    type: Object as PropType<any | null>,
+    default: null,
+  },
+  autoReassignShadowInsightFilters: {
+    type: Object as PropType<Record<string, string>>,
+    required: true,
+  },
+  autoReassignShadowInsightLoading: {
+    type: Boolean,
+    required: true,
+  },
+  autoReassignShadowInsightError: {
+    type: String,
+    required: true,
+  },
+  updateAutoReassignShadowInsightFilter: {
+    type: Function as PropType<(key: string, value: string) => void>,
+    required: true,
+  },
+  fetchAutoReassignShadowInsights: {
+    type: Function as PropType<() => void>,
+    required: true,
+  },
+  autoDispatchRunHealthInsights: {
+    type: Object as PropType<any | null>,
+    default: null,
+  },
+  autoDispatchRunHealthFilters: {
+    type: Object as PropType<Record<string, string>>,
+    required: true,
+  },
+  autoDispatchRunHealthLoading: {
+    type: Boolean,
+    required: true,
+  },
+  autoDispatchRunHealthError: {
+    type: String,
+    required: true,
+  },
+  updateAutoDispatchRunHealthFilter: {
+    type: Function as PropType<(key: string, value: string) => void>,
+    required: true,
+  },
+  fetchAutoDispatchRunHealthInsights: {
+    type: Function as PropType<() => void>,
     required: true,
   },
 })

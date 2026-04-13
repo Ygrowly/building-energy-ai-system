@@ -126,6 +126,7 @@ async def test_execute_auto_dispatch_after_ai_approval_records_rollout_skip(
     monkeypatch.setattr(ai_review_service.settings, "AUTO_DISPATCH_ALLOWED_BUILDINGS", ["Fox_public_Henry"])
     monkeypatch.setattr(ai_review_service.settings, "AUTO_DISPATCH_ALLOWED_PRIORITIES", ["high"])
     monkeypatch.setattr(ai_review_service.settings, "AUTO_DISPATCH_ALLOWED_REQUIRED_SKILLS", [])
+    monkeypatch.setattr(ai_review_service.settings, "AUTO_DISPATCH_CREATE_HALL_ON_ROLLOUT_SKIP", False)
     mock_audit = AsyncMock()
     monkeypatch.setattr(ai_review_service, "write_work_order_audit_log", mock_audit)
     mock_execute = AsyncMock()
@@ -146,6 +147,96 @@ async def test_execute_auto_dispatch_after_ai_approval_records_rollout_skip(
     assert {item["reason"] for item in result["rollout_gate"]["blockers"]} == {
         "rollout_priority_not_allowed",
     }
+
+
+@pytest.mark.asyncio
+async def test_execute_auto_dispatch_after_ai_approval_creates_hall_on_rollout_skip(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    work_order = _work_order(
+        status="pending_dispatch",
+        ai_decision="approve",
+        priority="medium",
+        dispatch_profile_json='{"required_skills":["hvac"]}',
+    )
+    db = SimpleNamespace(
+        get=AsyncMock(return_value=work_order),
+        commit=AsyncMock(),
+        rollback=AsyncMock(),
+    )
+    monkeypatch.setattr(ai_review_service.settings, "ENABLE_AUTO_DISPATCH_EXECUTION", True)
+    monkeypatch.setattr(ai_review_service.settings, "ENABLE_AUTO_DISPATCH_HALL_FALLBACK", True)
+    monkeypatch.setattr(ai_review_service.settings, "AUTO_DISPATCH_CREATE_HALL_ON_ROLLOUT_SKIP", True)
+    monkeypatch.setattr(ai_review_service.settings, "AUTO_DISPATCH_ALLOWED_BUILDINGS", ["Fox_public_Henry"])
+    monkeypatch.setattr(ai_review_service.settings, "AUTO_DISPATCH_ALLOWED_PRIORITIES", ["high"])
+    monkeypatch.setattr(ai_review_service.settings, "AUTO_DISPATCH_ALLOWED_REQUIRED_SKILLS", [])
+    mock_audit = AsyncMock()
+    mock_hall = AsyncMock(return_value=SimpleNamespace(id="hall-1"))
+    mock_execute = AsyncMock()
+    monkeypatch.setattr(ai_review_service, "write_work_order_audit_log", mock_audit)
+    monkeypatch.setattr(ai_review_service, "create_or_reopen_takeover_hall_entry", mock_hall)
+    monkeypatch.setattr(ai_review_service, "execute_auto_dispatch", mock_execute)
+
+    result = await ai_review_service.execute_auto_dispatch_after_ai_approval(
+        db,
+        work_order_id=work_order.id,
+        trigger_source="test_case",
+    )
+
+    assert result["action_taken"] is True
+    assert result["executed"] is False
+    assert result["reason"] == "auto_dispatch_rollout_hall_fallback_created"
+    assert result["hall_entry_id"] == "hall-1"
+    db.commit.assert_awaited_once()
+    db.rollback.assert_not_awaited()
+    assert mock_audit.await_count == 2
+    mock_hall.assert_awaited_once()
+    mock_execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_execute_auto_dispatch_after_ai_approval_does_not_create_hall_for_non_dispatchable_rollout_skip(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    work_order = _work_order(
+        status="dispatched",
+        approval_status="approved",
+        dispatch_summary_status="assigned",
+        current_dispatch_id="dispatch-1",
+        priority="medium",
+        dispatch_profile_json='{"required_skills":["hvac"]}',
+    )
+    db = SimpleNamespace(
+        get=AsyncMock(return_value=work_order),
+        commit=AsyncMock(),
+        rollback=AsyncMock(),
+    )
+    monkeypatch.setattr(ai_review_service.settings, "ENABLE_AUTO_DISPATCH_EXECUTION", True)
+    monkeypatch.setattr(ai_review_service.settings, "ENABLE_AUTO_DISPATCH_HALL_FALLBACK", True)
+    monkeypatch.setattr(ai_review_service.settings, "AUTO_DISPATCH_CREATE_HALL_ON_ROLLOUT_SKIP", True)
+    monkeypatch.setattr(ai_review_service.settings, "AUTO_DISPATCH_ALLOWED_BUILDINGS", ["Fox_public_Henry"])
+    monkeypatch.setattr(ai_review_service.settings, "AUTO_DISPATCH_ALLOWED_PRIORITIES", ["high"])
+    monkeypatch.setattr(ai_review_service.settings, "AUTO_DISPATCH_ALLOWED_REQUIRED_SKILLS", [])
+    mock_audit = AsyncMock()
+    mock_hall = AsyncMock(return_value=SimpleNamespace(id="hall-1"))
+    mock_execute = AsyncMock()
+    monkeypatch.setattr(ai_review_service, "write_work_order_audit_log", mock_audit)
+    monkeypatch.setattr(ai_review_service, "create_or_reopen_takeover_hall_entry", mock_hall)
+    monkeypatch.setattr(ai_review_service, "execute_auto_dispatch", mock_execute)
+
+    result = await ai_review_service.execute_auto_dispatch_after_ai_approval(
+        db,
+        work_order_id=work_order.id,
+        trigger_source="test_case",
+    )
+
+    assert result["action_taken"] is False
+    assert result["reason"] == "auto_dispatch_rollout_filtered"
+    db.commit.assert_awaited_once()
+    db.rollback.assert_not_awaited()
+    mock_audit.assert_awaited_once()
+    mock_hall.assert_not_awaited()
+    mock_execute.assert_not_awaited()
 
 
 @pytest.mark.asyncio

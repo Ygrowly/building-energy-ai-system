@@ -612,6 +612,10 @@ function actionLabel(card: WorkerTaskCard) {
 }
 
 function openDetail(card: WorkerTaskCard, readonly = false) {
+  if (!readonly) {
+    openAiWorkorder(card)
+    return
+  }
   if (card.kind === 'support') {
     const ticketId = card.hallEntry.work_order?.ticket_id
     if (!ticketId) return
@@ -633,6 +637,31 @@ function openDetail(card: WorkerTaskCard, readonly = false) {
   const readonlyQuery = readonly ? '&readonly=1' : ''
   uni.navigateTo({
     url: `/pages/worker/workorder-detail/index?incident_id=${card.incident.incident_id}&ticket_id=${ticketId}${readonlyQuery}`,
+  })
+}
+
+function openAiWorkorder(card: WorkerTaskCard) {
+  if (card.kind === 'support') {
+    const ticketId = card.hallEntry.work_order?.ticket_id
+    if (!ticketId) return
+    const dispatchId = card.hallEntry.source_dispatch_id ? `&dispatch_id=${card.hallEntry.source_dispatch_id}` : ''
+    uni.navigateTo({
+      url: `/pages/worker/ai-workorder/index?hall_entry_id=${card.hallEntry.id}&ticket_id=${ticketId}${dispatchId}`,
+    })
+    return
+  }
+  if (card.kind === 'work_order') {
+    const dispatchId = card.workOrder.current_dispatch?.id || card.workOrder.dispatch_id
+    uni.navigateTo({
+      url: `/pages/worker/ai-workorder/index?ticket_id=${card.workOrder.ticket_id}${dispatchId ? `&dispatch_id=${dispatchId}` : ''}`,
+    })
+    return
+  }
+  const ticketId = card.incident.current_work_order?.ticket_id
+  if (!ticketId) return
+  const dispatchId = card.incident.current_dispatch?.id || card.incident.current_work_order?.dispatch_id
+  uni.navigateTo({
+    url: `/pages/worker/ai-workorder/index?incident_id=${card.incident.incident_id}&ticket_id=${ticketId}${dispatchId ? `&dispatch_id=${dispatchId}` : ''}`,
   })
 }
 

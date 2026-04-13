@@ -1317,6 +1317,192 @@ class WorkOrderAuditLog(Base):
 
 
 # ---------------------------------------------------------------------------
+# ai_assistant_* — 维小修 / 运小维会话与动作审计（AI Phase 1）
+# ---------------------------------------------------------------------------
+
+class AiAssistantSession(Base):
+    __tablename__ = "ai_assistant_sessions"
+
+    id: str = Column(String(128), primary_key=True)
+    assistant_name: str = Column(String(32), nullable=False)
+    user_id: str = Column(String, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    role: str = Column(String(32), nullable=True)
+    work_order_id: str = Column(String, ForeignKey("work_orders.id", ondelete="SET NULL"), nullable=True)
+    session_state_json: str = Column(Text, nullable=True)
+    readonly: bool = Column(Boolean, nullable=False, default=False)
+    created_at = Column(TIMESTAMP(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(TIMESTAMP(timezone=True), nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        Index("idx_ai_assistant_session_user", "user_id", updated_at.desc()),
+        Index("idx_ai_assistant_session_work_order", "work_order_id", updated_at.desc()),
+        Index("idx_ai_assistant_session_name", "assistant_name", updated_at.desc()),
+    )
+
+
+class AiAssistantMessage(Base):
+    __tablename__ = "ai_assistant_messages"
+
+    id: str = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    session_id: str = Column(
+        String(128), ForeignKey("ai_assistant_sessions.id", ondelete="CASCADE"), nullable=False
+    )
+    role: str = Column(String(16), nullable=False)
+    content: str = Column(Text, nullable=False)
+    content_type: str = Column(String(24), nullable=False, default="text")
+    model_provider: str = Column(String(32), nullable=True)
+    model_name: str = Column(String(64), nullable=True)
+    created_at = Column(TIMESTAMP(timezone=True), nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        Index("idx_ai_assistant_message_session_time", "session_id", created_at.asc()),
+    )
+
+
+class AiAssistantActionAudit(Base):
+    __tablename__ = "ai_assistant_action_audits"
+
+    id: str = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    session_id: str = Column(
+        String(128), ForeignKey("ai_assistant_sessions.id", ondelete="SET NULL"), nullable=True
+    )
+    work_order_id: str = Column(String, ForeignKey("work_orders.id", ondelete="SET NULL"), nullable=True)
+    dispatch_id: str = Column(String, ForeignKey("dispatch_tasks.id", ondelete="SET NULL"), nullable=True)
+    hall_entry_id: str = Column(String, ForeignKey("dispatch_hall_entries.id", ondelete="SET NULL"), nullable=True)
+    proposed_action: str = Column(String(32), nullable=False)
+    confirmation_text: str = Column(Text, nullable=True)
+    execution_status: str = Column(String(16), nullable=False, default="pending")
+    backend_action_ref: str = Column(Text, nullable=True)
+    error_message: str = Column(Text, nullable=True)
+    created_at = Column(TIMESTAMP(timezone=True), nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        Index("idx_ai_assistant_action_session", "session_id", created_at.desc()),
+        Index("idx_ai_assistant_action_work_order", "work_order_id", created_at.desc()),
+        Index("idx_ai_assistant_action_status", "execution_status", created_at.desc()),
+    )
+
+
+# ---------------------------------------------------------------------------
+# worker_ai_* — 维小修 Phase 2 维修指导、步骤事件与现场媒体
+# ---------------------------------------------------------------------------
+
+class WorkerAiStepPlan(Base):
+    __tablename__ = "worker_ai_step_plans"
+
+    id: str = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    work_order_id: str = Column(String, ForeignKey("work_orders.id", ondelete="CASCADE"), nullable=False)
+    dispatch_id: str = Column(String, ForeignKey("dispatch_tasks.id", ondelete="SET NULL"), nullable=True)
+    generated_from_json: str = Column(Text, nullable=True)
+    root_cause_candidates_json: str = Column(Text, nullable=True)
+    summary: str = Column(Text, nullable=False)
+    steps_json: str = Column(Text, nullable=False)
+    safety_notes_json: str = Column(Text, nullable=True)
+    status: str = Column(String(24), nullable=False, default="active")
+    version: int = Column(Integer, nullable=False, default=1)
+    model_provider: str = Column(String(32), nullable=True)
+    model_name: str = Column(String(64), nullable=True)
+    created_by: str = Column(String, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at = Column(TIMESTAMP(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(TIMESTAMP(timezone=True), nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        Index("idx_worker_ai_step_plan_wo_status", "work_order_id", "status", updated_at.desc()),
+        Index("idx_worker_ai_step_plan_dispatch", "dispatch_id", updated_at.desc()),
+        Index("idx_worker_ai_step_plan_created_by", "created_by", updated_at.desc()),
+    )
+
+
+class WorkerAiStepEvent(Base):
+    __tablename__ = "worker_ai_step_events"
+
+    id: str = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    plan_id: str = Column(String, ForeignKey("worker_ai_step_plans.id", ondelete="CASCADE"), nullable=False)
+    step_id: str = Column(String(64), nullable=False)
+    user_id: str = Column(String, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    event_type: str = Column(String(32), nullable=False)
+    note: str = Column(Text, nullable=True)
+    payload_json: str = Column(Text, nullable=True)
+    created_at = Column(TIMESTAMP(timezone=True), nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        Index("idx_worker_ai_step_event_plan_time", "plan_id", created_at.desc()),
+        Index("idx_worker_ai_step_event_step_time", "plan_id", "step_id", created_at.desc()),
+        Index("idx_worker_ai_step_event_user_time", "user_id", created_at.desc()),
+    )
+
+
+class AiMediaAsset(Base):
+    __tablename__ = "ai_media_assets"
+
+    id: str = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    owner_user_id: str = Column(String, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    work_order_id: str = Column(String, ForeignKey("work_orders.id", ondelete="CASCADE"), nullable=False)
+    dispatch_id: str = Column(String, ForeignKey("dispatch_tasks.id", ondelete="SET NULL"), nullable=True)
+    step_id: str = Column(String(64), nullable=True)
+    media_type: str = Column(String(16), nullable=False)
+    original_name: str = Column(String(255), nullable=True)
+    mime_type: str = Column(String(96), nullable=True)
+    file_size: int = Column(Integer, nullable=False, default=0)
+    storage_url: str = Column(Text, nullable=False)
+    transcript: str = Column(Text, nullable=True)
+    analysis_json: str = Column(Text, nullable=True)
+    model_provider: str = Column(String(32), nullable=True)
+    model_name: str = Column(String(64), nullable=True)
+    created_at = Column(TIMESTAMP(timezone=True), nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        Index("idx_ai_media_asset_wo_time", "work_order_id", created_at.desc()),
+        Index("idx_ai_media_asset_owner_time", "owner_user_id", created_at.desc()),
+        Index("idx_ai_media_asset_step_time", "work_order_id", "step_id", created_at.desc()),
+        Index("idx_ai_media_asset_type_time", "media_type", created_at.desc()),
+    )
+
+
+# ---------------------------------------------------------------------------
+# dispatch_operation_runs — 调度运行记录（运营洞察 / 运行健康）
+# ---------------------------------------------------------------------------
+
+class DispatchOperationRun(Base):
+    """
+    调度后台运行记录。
+    用于沉淀 SLA 扫描等自动调度任务的耗时、触发量和失败情况，服务运营洞察。
+    """
+    __tablename__ = "dispatch_operation_runs"
+
+    id: str = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    operation_type: str = Column(String(32), nullable=False)
+    trigger_source: str = Column(String(16), nullable=False)
+    run_status: str = Column(String(16), nullable=False, default="success")
+
+    scanned_count: int = Column(Integer, nullable=False, default=0)
+    updated_count: int = Column(Integer, nullable=False, default=0)
+    warning_events: int = Column(Integer, nullable=False, default=0)
+    overdue_events: int = Column(Integer, nullable=False, default=0)
+    auto_reassign_triggers: int = Column(Integer, nullable=False, default=0)
+    auto_reassign_executed: int = Column(Integer, nullable=False, default=0)
+    auto_reassign_hall_fallbacks: int = Column(Integer, nullable=False, default=0)
+    auto_reassign_shadow_evaluated: int = Column(Integer, nullable=False, default=0)
+    auto_reassign_shadow_would_execute: int = Column(Integer, nullable=False, default=0)
+    auto_reassign_shadow_would_hall_fallbacks: int = Column(Integer, nullable=False, default=0)
+
+    duration_ms: int = Column(Integer, nullable=False, default=0)
+    timings_json: str = Column(Text, nullable=True)
+    error_message: str = Column(Text, nullable=True)
+    started_at = Column(TIMESTAMP(timezone=True), nullable=False)
+    finished_at = Column(TIMESTAMP(timezone=True), nullable=False)
+    created_at = Column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        Index("idx_dispatch_operation_runs_type_time", "operation_type", started_at.desc()),
+        Index("idx_dispatch_operation_runs_status_time", "run_status", started_at.desc()),
+        Index("idx_dispatch_operation_runs_source_time", "trigger_source", started_at.desc()),
+    )
+
+
+# ---------------------------------------------------------------------------
 # notifications — 统一站内通知中心
 # ---------------------------------------------------------------------------
 

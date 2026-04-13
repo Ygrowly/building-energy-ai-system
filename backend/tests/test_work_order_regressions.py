@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -10,6 +11,7 @@ from app.api import routes_workorder
 from app.db.models import WorkOrder, WorkOrderAuditLog
 from app.db import session as db_session_module
 from app.db.session import _build_connect_args
+from app.services.dispatch_service import serialize_dispatch_task
 from app.services.work_order_service import (
     assign_work_order,
     build_batch_dispatch_preview,
@@ -458,6 +460,89 @@ def test_serialize_work_order_prefers_current_dispatch_projection_for_top_level_
     assert payload["assigned_to"] == "ops-current"
     assert payload["current_dispatch"]["assigned_to"] == "ops-current"
     assert payload["assigned_to_name"] == "张工"
+
+
+def test_serialize_dispatch_task_includes_auto_dispatch_review() -> None:
+    now = datetime.now(timezone.utc)
+    dispatch_task = SimpleNamespace(
+        id="dispatch-auto-1",
+        work_order_id="wo-1",
+        incident_id=None,
+        attempt_no=1,
+        is_current=True,
+        dispatch_mode="auto",
+        dispatch_status="assigned",
+        assigned_team_id="team-hvac",
+        assigned_to="ops-1",
+        assigned_by=None,
+        selection_reason="自动派工：test2 推荐分 113，领先第二候选人 11 分",
+        candidate_snapshot_json=json.dumps({
+            "auto_dispatch": True,
+            "strategy": "high_confidence_dispatch",
+            "confidence": "high",
+            "rules": {"min_score": 105, "min_gap": 10, "require_on_duty": True},
+            "top_candidate": {
+                "user_id": "ops-1",
+                "username": "test2",
+                "team_name": "暖通班",
+                "score": 113,
+                "shift_status": "on_duty",
+                "current_active_orders": 0,
+                "max_active_orders": 6,
+                "matched_skill_names": ["暖通"],
+                "recommend_reason": "技能贴合，当前值班中",
+            },
+            "second_candidate": {
+                "user_id": "ops-2",
+                "username": "ops_plumbing_01",
+                "score": 102,
+                "shift_status": "on_duty",
+                "current_active_orders": 1,
+                "max_active_orders": 4,
+            },
+            "fallback_candidate": None,
+            "score_gap": 11,
+        }, ensure_ascii=False),
+        dispatch_profile_snapshot_json=None,
+        worker_result=None,
+        reject_reason=None,
+        cancel_reason=None,
+        support_reason=None,
+        support_team_id=None,
+        transfer_from_dispatch_id=None,
+        assigned_at=now,
+        accept_deadline_at=None,
+        accepted_at=None,
+        arrive_deadline_at=None,
+        arrived_at=None,
+        start_deadline_at=None,
+        processing_started_at=None,
+        finish_deadline_at=None,
+        completed_at=None,
+        closed_at=None,
+        reminder_count=0,
+        last_reminded_at=None,
+        timeout_level="normal",
+        latest_note=None,
+        created_at=now,
+        updated_at=now,
+    )
+    assigned_user = SimpleNamespace(
+        id="ops-1",
+        username="test2",
+        phone="13800000002",
+        worker_profile=SimpleNamespace(team=SimpleNamespace(id="team-hvac", name="暖通班")),
+    )
+
+    payload = serialize_dispatch_task(dispatch_task, assigned_user=assigned_user)
+
+    review = payload["auto_dispatch_review"]
+    assert review["strategy"] == "high_confidence_dispatch"
+    assert review["strategy_label"] == "高置信自动派工"
+    assert review["selected_candidate"]["username"] == "test2"
+    assert review["selected_candidate"]["shift_label"] == "值班中"
+    assert review["score_gap"] == 11
+    assert review["rules"]["min_score"] == 105
 
 
 @pytest.mark.asyncio

@@ -36,6 +36,11 @@ export function setAuthProvider(provider: AuthProvider) {
 // 请求拿着已被吊销的旧 RT 去刷新，后端会判定为重放攻击并清除所有 token。
 let _refreshingPromise: Promise<void> | null = null
 
+type ApiFetchInit = RequestInit & {
+  skipAuthRefresh?: boolean
+  suppressUnauthorizedRedirect?: boolean
+}
+
 function _getMethod(init?: RequestInit): string {
   return (init?.method ?? 'GET').toUpperCase()
 }
@@ -43,7 +48,7 @@ function _getMethod(init?: RequestInit): string {
 // ── 核心请求函数 ──────────────────────────────────────────
 export async function apiFetch<T = unknown>(
   path: string,
-  init?: RequestInit,
+  init?: ApiFetchInit,
 ): Promise<T> {
   const finish = startPerfSpan('api.fetch', {
     path,
@@ -54,6 +59,10 @@ export async function apiFetch<T = unknown>(
     const res = await _doFetch(path, init)
 
     if (res.status === 401) {
+      if (init?.skipAuthRefresh) {
+        finish('error', { reason: 'auth_refresh_skipped', status: 401 })
+        throw new Error('登录已过期，请重新登录')
+      }
       // 多个并发请求同时 401 时，复用同一个 refresh Promise
       if (!_refreshingPromise) {
         _refreshingPromise = _auth.refreshToken().finally(() => {
@@ -64,14 +73,18 @@ export async function apiFetch<T = unknown>(
         await _refreshingPromise
       } catch {
         finish('error', { reason: 'refresh_failed', status: 401 })
-        _auth.onUnauthorized()
+        if (!init?.suppressUnauthorizedRedirect) {
+          _auth.onUnauthorized()
+        }
         throw new Error('登录已过期，请重新登录')
       }
       // 用刷新后的新 token 重试原请求
       const retryRes = await _doFetch(path, init)
       if (retryRes.status === 401) {
         finish('error', { reason: 'retry_unauthorized', status: 401 })
-        _auth.onUnauthorized()
+        if (!init?.suppressUnauthorizedRedirect) {
+          _auth.onUnauthorized()
+        }
         throw new Error('登录已过期，请重新登录')
       }
       if (!retryRes.ok) await _throwFromResponse(retryRes)
@@ -90,7 +103,7 @@ export async function apiFetch<T = unknown>(
   }
 }
 
-function _doFetch(path: string, init?: RequestInit): Promise<Response> {
+function _doFetch(path: string, init?: ApiFetchInit): Promise<Response> {
   const token = _auth.getAccessToken()
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -98,7 +111,12 @@ function _doFetch(path: string, init?: RequestInit): Promise<Response> {
   }
   if (token) headers['Authorization'] = `Bearer ${token}`
 
-  return fetch(`${API_BASE}${path}`, { ...init, headers })
+  const {
+    skipAuthRefresh: _skipAuthRefresh,
+    suppressUnauthorizedRedirect: _suppressUnauthorizedRedirect,
+    ...fetchInit
+  } = init ?? {}
+  return fetch(`${API_BASE}${path}`, { ...fetchInit, headers })
 }
 
 async function _throwFromResponse(res: Response): Promise<never> {

@@ -34,13 +34,19 @@ export const useNotificationStore = defineStore('notification', () => {
       const [incidentData, hallData, anomalyData, predictionData] = await Promise.all([
         apiFetch<{ incidents?: WorkorderNotificationIncident[] }>(
           '/api/incidents?workflow_status=pending_review,pending_dispatch,dispatched,completed,false_alarm,escalated&page=1&page_size=100',
+          { skipAuthRefresh: true, suppressUnauthorizedRedirect: true },
         ),
         apiFetch<{ hall_entries?: WorkorderNotificationHallEntry[] }>(
           '/api/dispatch-hall?status=open&entry_type=support_request,takeover_candidate&include_applications=true&page=1&page_size=50',
+          { skipAuthRefresh: true, suppressUnauthorizedRedirect: true },
         ),
-        apiFetch<{ total?: number; anomalies?: unknown[] }>('/api/anomalies/recent?hours=168'),
+        apiFetch<{ total?: number; anomalies?: unknown[] }>(
+          '/api/anomalies/recent?hours=168',
+          { skipAuthRefresh: true, suppressUnauthorizedRedirect: true },
+        ),
         apiFetch<{ predictions?: Array<{ risk_level?: string | null; as_of_timestamp?: string | null; created_at?: string | null }> }>(
           '/api/predictions/recent?hours=168',
+          { skipAuthRefresh: true, suppressUnauthorizedRedirect: true },
         ),
       ])
 

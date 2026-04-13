@@ -1,7 +1,9 @@
 export type WorkOrderTabKey =
   | 'all'
   | 'pending_review'
+  | 'auto_dispatch_review'
   | 'pending_dispatch'
+  | 'auto_dispatch_insights'
   | 'auto_rejected'
   | 'dispatched'
   | 'pending_close'
@@ -25,7 +27,9 @@ export interface WorkOrderWorkspaceConfig {
 const TAB_MAP: Record<WorkOrderTabKey, WorkOrderTab> = {
   all: { label: '全部', value: 'all' },
   pending_review: { label: '待AI审阅', value: 'pending_review' },
+  auto_dispatch_review: { label: '自动派工复核', value: 'auto_dispatch_review' },
   pending_dispatch: { label: '待派工', value: 'pending_dispatch' },
+  auto_dispatch_insights: { label: '派工洞察', value: 'auto_dispatch_insights' },
   auto_rejected: { label: 'AI已驳回', value: 'auto_rejected' },
   dispatched: { label: '执行中', value: 'dispatched' },
   pending_close: { label: '待关闭', value: 'pending_close' },
@@ -53,15 +57,15 @@ export const WORK_ORDER_WORKSPACE_CONFIG: Record<WorkOrderWorkspaceMode, WorkOrd
   },
   review: {
     title: '工单审阅',
-    subtitle: 'AI 生成工单的人工复核与驳回处理',
+    subtitle: 'AI 审阅与自动派工结果复核',
     defaultTab: 'pending_review',
-    tabs: [TAB_MAP.pending_review, TAB_MAP.auto_rejected],
+    tabs: [TAB_MAP.pending_review, TAB_MAP.auto_dispatch_review, TAB_MAP.auto_rejected],
   },
   dispatch: {
     title: '派工中心',
     subtitle: '待派工、批量派工与工单大厅申请处理',
     defaultTab: 'pending_dispatch',
-    tabs: [TAB_MAP.pending_dispatch, TAB_MAP.shared_hall],
+    tabs: [TAB_MAP.pending_dispatch, TAB_MAP.shared_hall, TAB_MAP.auto_dispatch_insights],
   },
   tracking: {
     title: '执行跟踪',
@@ -104,7 +108,9 @@ export const PRIORITY_LABELS: Record<string, string> = {
 export const WORK_ORDER_EMPTY_MESSAGES: Record<WorkOrderTabKey, string> = {
   all: '暂无工单记录',
   pending_review: '暂无待AI审阅工单',
+  auto_dispatch_review: '暂无待复核的自动派工单',
   pending_dispatch: '暂无待派工工单',
+  auto_dispatch_insights: '暂无自动派工洞察数据',
   auto_rejected: '暂无 AI 驳回工单',
   dispatched: '暂无执行中的工单',
   pending_close: '暂无待关闭工单',

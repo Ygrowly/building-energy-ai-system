@@ -772,6 +772,20 @@ async def _load_dispatch_active_counts(
     return {row[0]: int(row[1]) for row in load_result.all()}
 
 
+async def prepare_dispatch_candidate_context(
+    db: AsyncSession,
+) -> dict[str, Any]:
+    workers = await _load_dispatch_workers(db)
+    active_counts = await _load_dispatch_active_counts(
+        db,
+        worker_ids=[worker.id for worker in workers],
+    )
+    return {
+        "workers": workers,
+        "active_counts": active_counts,
+    }
+
+
 def _rank_dispatch_candidates(
     *,
     workers: list[User],
@@ -1145,24 +1159,30 @@ async def list_dispatch_candidates(
     db: AsyncSession,
     *,
     work_order: WorkOrder,
+    workers: list[User] | None = None,
+    active_counts: dict[str, int] | None = None,
 ) -> dict[str, Any]:
-    workers = await _load_dispatch_workers(db)
-    if not workers:
+    dispatch_workers = workers if workers is not None else await _load_dispatch_workers(db)
+    if not dispatch_workers:
         return {
             "requirement": derive_dispatch_requirement(work_order),
             "candidates": [],
         }
 
-    active_counts = await _load_dispatch_active_counts(
-        db,
-        worker_ids=[worker.id for worker in workers],
+    dispatch_active_counts = (
+        active_counts
+        if active_counts is not None else
+        await _load_dispatch_active_counts(
+            db,
+            worker_ids=[worker.id for worker in dispatch_workers],
+        )
     )
     requirement = derive_dispatch_requirement(work_order)
     ranked = _rank_dispatch_candidates(
-        workers=workers,
+        workers=dispatch_workers,
         work_order=work_order,
         requirement=requirement,
-        active_counts=active_counts,
+        active_counts=dispatch_active_counts,
     )
     return {
         "requirement": requirement,

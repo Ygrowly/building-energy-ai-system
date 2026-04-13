@@ -258,3 +258,323 @@ async def ensure_daily_energy_summary_view() -> None:
         )
     except Exception as exc:
         logger.warning("创建/刷新 daily_energy_summary 失败，仍将使用工具降级。error=%s", exc)
+
+
+async def ensure_dispatch_operation_runs_table() -> None:
+    """
+    启动时确保 dispatch_operation_runs 表存在。
+
+    该表用于沉淀调度扫描运行记录，支撑运行健康洞察。
+    """
+
+    async def _op():
+        async with engine.begin() as conn:
+            result = await conn.execute(
+                text(
+                    """
+                    SELECT 1
+                    FROM information_schema.tables
+                    WHERE table_name = 'dispatch_operation_runs'
+                    """
+                )
+            )
+            if result.fetchone() is not None:
+                logger.info("dispatch_operation_runs 表已存在，跳过 CREATE TABLE")
+                return
+
+            logger.info("dispatch_operation_runs 表缺失，执行 CREATE TABLE ...")
+            await conn.execute(
+                text(
+                    """
+                    CREATE TABLE IF NOT EXISTS dispatch_operation_runs (
+                        id VARCHAR PRIMARY KEY,
+                        operation_type VARCHAR(32) NOT NULL,
+                        trigger_source VARCHAR(16) NOT NULL,
+                        run_status VARCHAR(16) NOT NULL DEFAULT 'success',
+                        scanned_count INTEGER NOT NULL DEFAULT 0,
+                        updated_count INTEGER NOT NULL DEFAULT 0,
+                        warning_events INTEGER NOT NULL DEFAULT 0,
+                        overdue_events INTEGER NOT NULL DEFAULT 0,
+                        auto_reassign_triggers INTEGER NOT NULL DEFAULT 0,
+                        auto_reassign_executed INTEGER NOT NULL DEFAULT 0,
+                        auto_reassign_hall_fallbacks INTEGER NOT NULL DEFAULT 0,
+                        auto_reassign_shadow_evaluated INTEGER NOT NULL DEFAULT 0,
+                        auto_reassign_shadow_would_execute INTEGER NOT NULL DEFAULT 0,
+                        auto_reassign_shadow_would_hall_fallbacks INTEGER NOT NULL DEFAULT 0,
+                        duration_ms INTEGER NOT NULL DEFAULT 0,
+                        timings_json TEXT NULL,
+                        error_message TEXT NULL,
+                        started_at TIMESTAMPTZ NOT NULL,
+                        finished_at TIMESTAMPTZ NOT NULL,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                    )
+                    """
+                )
+            )
+            await conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS idx_dispatch_operation_runs_type_time "
+                    "ON dispatch_operation_runs (operation_type, started_at DESC)"
+                )
+            )
+            await conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS idx_dispatch_operation_runs_status_time "
+                    "ON dispatch_operation_runs (run_status, started_at DESC)"
+                )
+            )
+            await conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS idx_dispatch_operation_runs_source_time "
+                    "ON dispatch_operation_runs (trigger_source, started_at DESC)"
+                )
+            )
+
+    try:
+        await _run_startup_db_op_with_retry("ensure_dispatch_operation_runs_table", _op)
+    except Exception as exc:
+        logger.warning("ensure_dispatch_operation_runs_table 失败，已跳过（不影响启动）: %s", exc)
+
+
+async def ensure_ai_assistant_tables() -> None:
+    """
+    启动时确保维小修 / 运小维 Phase 1 会话与动作审计表存在。
+    """
+
+    async def _op():
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    """
+                    CREATE TABLE IF NOT EXISTS ai_assistant_sessions (
+                        id VARCHAR(128) PRIMARY KEY,
+                        assistant_name VARCHAR(32) NOT NULL,
+                        user_id VARCHAR NULL REFERENCES users(id) ON DELETE SET NULL,
+                        role VARCHAR(32) NULL,
+                        work_order_id VARCHAR NULL REFERENCES work_orders(id) ON DELETE SET NULL,
+                        session_state_json TEXT NULL,
+                        readonly BOOLEAN NOT NULL DEFAULT false,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                        updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                    )
+                    """
+                )
+            )
+            await conn.execute(
+                text(
+                    """
+                    CREATE TABLE IF NOT EXISTS ai_assistant_messages (
+                        id VARCHAR PRIMARY KEY,
+                        session_id VARCHAR(128) NOT NULL REFERENCES ai_assistant_sessions(id) ON DELETE CASCADE,
+                        role VARCHAR(16) NOT NULL,
+                        content TEXT NOT NULL,
+                        content_type VARCHAR(24) NOT NULL DEFAULT 'text',
+                        model_provider VARCHAR(32) NULL,
+                        model_name VARCHAR(64) NULL,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                    )
+                    """
+                )
+            )
+            await conn.execute(
+                text(
+                    """
+                    CREATE TABLE IF NOT EXISTS ai_assistant_action_audits (
+                        id VARCHAR PRIMARY KEY,
+                        session_id VARCHAR(128) NULL REFERENCES ai_assistant_sessions(id) ON DELETE SET NULL,
+                        work_order_id VARCHAR NULL REFERENCES work_orders(id) ON DELETE SET NULL,
+                        dispatch_id VARCHAR NULL REFERENCES dispatch_tasks(id) ON DELETE SET NULL,
+                        hall_entry_id VARCHAR NULL REFERENCES dispatch_hall_entries(id) ON DELETE SET NULL,
+                        proposed_action VARCHAR(32) NOT NULL,
+                        confirmation_text TEXT NULL,
+                        execution_status VARCHAR(16) NOT NULL DEFAULT 'pending',
+                        backend_action_ref TEXT NULL,
+                        error_message TEXT NULL,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                    )
+                    """
+                )
+            )
+            await conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS idx_ai_assistant_session_user "
+                    "ON ai_assistant_sessions (user_id, updated_at DESC)"
+                )
+            )
+            await conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS idx_ai_assistant_session_work_order "
+                    "ON ai_assistant_sessions (work_order_id, updated_at DESC)"
+                )
+            )
+            await conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS idx_ai_assistant_session_name "
+                    "ON ai_assistant_sessions (assistant_name, updated_at DESC)"
+                )
+            )
+            await conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS idx_ai_assistant_message_session_time "
+                    "ON ai_assistant_messages (session_id, created_at ASC)"
+                )
+            )
+            await conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS idx_ai_assistant_action_session "
+                    "ON ai_assistant_action_audits (session_id, created_at DESC)"
+                )
+            )
+            await conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS idx_ai_assistant_action_work_order "
+                    "ON ai_assistant_action_audits (work_order_id, created_at DESC)"
+                )
+            )
+            await conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS idx_ai_assistant_action_status "
+                    "ON ai_assistant_action_audits (execution_status, created_at DESC)"
+                )
+            )
+
+    try:
+        await _run_startup_db_op_with_retry("ensure_ai_assistant_tables", _op)
+    except Exception as exc:
+        logger.warning("ensure_ai_assistant_tables 失败，已跳过（不影响启动）: %s", exc)
+
+
+async def ensure_worker_ai_phase2_tables() -> None:
+    """
+    启动时确保维小修 Phase 2 维修指导、步骤事件与现场媒体表存在。
+    """
+
+    async def _op():
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    """
+                    CREATE TABLE IF NOT EXISTS worker_ai_step_plans (
+                        id VARCHAR PRIMARY KEY,
+                        work_order_id VARCHAR NOT NULL REFERENCES work_orders(id) ON DELETE CASCADE,
+                        dispatch_id VARCHAR NULL REFERENCES dispatch_tasks(id) ON DELETE SET NULL,
+                        generated_from_json TEXT NULL,
+                        root_cause_candidates_json TEXT NULL,
+                        summary TEXT NOT NULL,
+                        steps_json TEXT NOT NULL,
+                        safety_notes_json TEXT NULL,
+                        status VARCHAR(24) NOT NULL DEFAULT 'active',
+                        version INTEGER NOT NULL DEFAULT 1,
+                        model_provider VARCHAR(32) NULL,
+                        model_name VARCHAR(64) NULL,
+                        created_by VARCHAR NULL REFERENCES users(id) ON DELETE SET NULL,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                        updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                    )
+                    """
+                )
+            )
+            await conn.execute(
+                text(
+                    """
+                    CREATE TABLE IF NOT EXISTS worker_ai_step_events (
+                        id VARCHAR PRIMARY KEY,
+                        plan_id VARCHAR NOT NULL REFERENCES worker_ai_step_plans(id) ON DELETE CASCADE,
+                        step_id VARCHAR(64) NOT NULL,
+                        user_id VARCHAR NULL REFERENCES users(id) ON DELETE SET NULL,
+                        event_type VARCHAR(32) NOT NULL,
+                        note TEXT NULL,
+                        payload_json TEXT NULL,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                    )
+                    """
+                )
+            )
+            await conn.execute(
+                text(
+                    """
+                    CREATE TABLE IF NOT EXISTS ai_media_assets (
+                        id VARCHAR PRIMARY KEY,
+                        owner_user_id VARCHAR NULL REFERENCES users(id) ON DELETE SET NULL,
+                        work_order_id VARCHAR NOT NULL REFERENCES work_orders(id) ON DELETE CASCADE,
+                        dispatch_id VARCHAR NULL REFERENCES dispatch_tasks(id) ON DELETE SET NULL,
+                        step_id VARCHAR(64) NULL,
+                        media_type VARCHAR(16) NOT NULL,
+                        original_name VARCHAR(255) NULL,
+                        mime_type VARCHAR(96) NULL,
+                        file_size INTEGER NOT NULL DEFAULT 0,
+                        storage_url TEXT NOT NULL,
+                        transcript TEXT NULL,
+                        analysis_json TEXT NULL,
+                        model_provider VARCHAR(32) NULL,
+                        model_name VARCHAR(64) NULL,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                    )
+                    """
+                )
+            )
+            await conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS idx_worker_ai_step_plan_wo_status "
+                    "ON worker_ai_step_plans (work_order_id, status, updated_at DESC)"
+                )
+            )
+            await conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS idx_worker_ai_step_plan_dispatch "
+                    "ON worker_ai_step_plans (dispatch_id, updated_at DESC)"
+                )
+            )
+            await conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS idx_worker_ai_step_plan_created_by "
+                    "ON worker_ai_step_plans (created_by, updated_at DESC)"
+                )
+            )
+            await conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS idx_worker_ai_step_event_plan_time "
+                    "ON worker_ai_step_events (plan_id, created_at DESC)"
+                )
+            )
+            await conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS idx_worker_ai_step_event_step_time "
+                    "ON worker_ai_step_events (plan_id, step_id, created_at DESC)"
+                )
+            )
+            await conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS idx_worker_ai_step_event_user_time "
+                    "ON worker_ai_step_events (user_id, created_at DESC)"
+                )
+            )
+            await conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS idx_ai_media_asset_wo_time "
+                    "ON ai_media_assets (work_order_id, created_at DESC)"
+                )
+            )
+            await conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS idx_ai_media_asset_owner_time "
+                    "ON ai_media_assets (owner_user_id, created_at DESC)"
+                )
+            )
+            await conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS idx_ai_media_asset_step_time "
+                    "ON ai_media_assets (work_order_id, step_id, created_at DESC)"
+                )
+            )
+            await conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS idx_ai_media_asset_type_time "
+                    "ON ai_media_assets (media_type, created_at DESC)"
+                )
+            )
+
+    try:
+        await _run_startup_db_op_with_retry("ensure_worker_ai_phase2_tables", _op)
+    except Exception as exc:
+        logger.warning("ensure_worker_ai_phase2_tables 失败，已跳过（不影响启动）: %s", exc)

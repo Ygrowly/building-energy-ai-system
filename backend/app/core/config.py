@@ -96,6 +96,12 @@ class Settings(BaseSettings):
     DASHSCOPE_API_KEY: str = ""
     AI_BASE_URL: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     AI_TEXT_MODEL: str = "qwen-plus"
+    AI_VISION_MODEL: str = "qwen3-vl-flash"
+    AI_ASR_MODEL: str = "qwen3-asr-flash"
+    AI_TTS_MODE: str = "client_native"  # client_native | dashscope_cosyvoice
+    AI_TTS_MODEL: str = "cosyvoice-v2"
+    AI_TTS_VOICE: str = "longxiaochun_v2"
+    AI_REQUEST_TIMEOUT_SECONDS: float = 90.0
     AI_STRUCTURED_OUTPUT_STRICT: bool = True
 
     # -----------------------------------------------------------------------

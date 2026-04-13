@@ -187,7 +187,9 @@ async def classify_worker_intent(message: str, *, context_summary: str = "") -> 
         "只能从 accept, arrive, start, request_support, support_resolved, "
         "accept_support, reject_support, reject, complete 中选择 action；"
         "如果用户不是要执行工单状态动作，action 返回 null。"
-        "只输出 JSON，不要输出解释。"
+        "必须只输出合法 JSON 对象，不要输出 Markdown，不要解释。"
+        "reason 只填写用户明确说出的现场原因或备注，不要写你的分析过程；没有明确原因就返回 null。"
+        "reply 只能是简短澄清语，不要说已记录、已提交、已执行或已完成，因为真正执行前还需要二次确认。"
     )
     user_prompt = {
         "context": context_summary,

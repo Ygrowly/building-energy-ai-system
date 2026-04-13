@@ -74,6 +74,7 @@ async def lifespan(app: FastAPI):
         ensure_auth_schema_compat,
         ensure_daily_energy_summary_view,
         ensure_dispatch_operation_runs_table,
+        ensure_worker_ai_phase2_tables,
     )
 
     # 初始化缓存层（Redis 不可用时会自动降级到本地缓存）
@@ -82,6 +83,7 @@ async def lifespan(app: FastAPI):
     # 兼容历史数据库结构，避免 users.role 缺失导致登录 500
     await ensure_auth_schema_compat()
     await ensure_ai_assistant_tables()
+    await ensure_worker_ai_phase2_tables()
 
     # P2：确保 Tool 4 的物化视图可用，避免日粒度查询抛 UndefinedTableError
     await ensure_daily_energy_summary_view()

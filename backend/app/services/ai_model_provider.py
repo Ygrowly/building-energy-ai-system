@@ -18,9 +18,11 @@ class ModelProviderError(RuntimeError):
 class ModelProvider:
     async def chat(
         self,
-        messages: list[dict[str, str]],
+        messages: list[dict[str, Any]],
         *,
+        model: str | None = None,
         response_schema: dict[str, Any] | None = None,
+        extra_body: dict[str, Any] | None = None,
         temperature: float = 0.2,
     ) -> str:
         raise NotImplementedError
@@ -51,21 +53,25 @@ class OpenAICompatibleProvider(ModelProvider):
 
     async def chat(
         self,
-        messages: list[dict[str, str]],
+        messages: list[dict[str, Any]],
         *,
+        model: str | None = None,
         response_schema: dict[str, Any] | None = None,
+        extra_body: dict[str, Any] | None = None,
         temperature: float = 0.2,
     ) -> str:
         if not self.api_key:
             raise ModelProviderError(f"{self.provider_name} API key 未配置")
 
         payload: dict[str, Any] = {
-            "model": self.model,
+            "model": model or self.model,
             "messages": messages,
             "temperature": temperature,
         }
         if response_schema:
             payload["response_format"] = {"type": "json_object"}
+        if extra_body:
+            payload.update(extra_body)
 
         try:
             async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
@@ -101,6 +107,7 @@ def get_model_provider() -> ModelProvider | None:
             base_url=settings.AI_BASE_URL,
             model=settings.AI_TEXT_MODEL,
             provider_name="qwen_dashscope",
+            timeout_seconds=settings.AI_REQUEST_TIMEOUT_SECONDS,
         )
 
     if provider in {"openai", "deepseek", "openai_compatible"}:
@@ -112,6 +119,7 @@ def get_model_provider() -> ModelProvider | None:
             base_url=settings.AI_BASE_URL or settings.LLM_BASE_URL,
             model=settings.AI_TEXT_MODEL or settings.LLM_MODEL,
             provider_name=provider,
+            timeout_seconds=settings.AI_REQUEST_TIMEOUT_SECONDS,
         )
 
     return None

@@ -1463,6 +1463,97 @@ class AiMediaAsset(Base):
 # dispatch_operation_runs — 调度运行记录（运营洞察 / 运行健康）
 # ---------------------------------------------------------------------------
 
+class MaintenanceExperience(Base):
+    __tablename__ = "maintenance_experiences"
+
+    id: str = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    source_type: str = Column(String(32), nullable=False)
+    source_work_order_id: str = Column(String(64), nullable=True)
+    source_dispatch_id: str = Column(String, nullable=True)
+    source_step_plan_id: str = Column(String, nullable=True)
+    contributor_user_id: str = Column(String, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    contributor_role: str = Column(String(32), nullable=True)
+    building_id: str = Column(String, ForeignKey("buildings.building_id", ondelete="SET NULL"), nullable=True)
+    device_id: str = Column(String(128), nullable=True)
+    device_type: str = Column(String(64), nullable=True)
+    fault_type: str = Column(String(128), nullable=True)
+    fault_keywords_json: str = Column(Text, nullable=True)
+    symptom_tags_json: str = Column(Text, nullable=True)
+    source_text: str = Column(Text, nullable=False)
+    organized_text: str = Column(Text, nullable=True)
+    suggested_steps_json: str = Column(Text, nullable=True)
+    safety_notes_json: str = Column(Text, nullable=True)
+    applicable_conditions_json: str = Column(Text, nullable=True)
+    conflict_flags_json: str = Column(Text, nullable=True)
+    model_provider: str = Column(String(32), nullable=True)
+    model_name: str = Column(String(64), nullable=True)
+    vector_index_status: str = Column(String(24), nullable=False, default="pending")
+    vector_ref: str = Column(Text, nullable=True)
+    usage_count: int = Column(Integer, nullable=False, default=0)
+    helpful_count: int = Column(Integer, nullable=False, default=0)
+    unhelpful_count: int = Column(Integer, nullable=False, default=0)
+    incorrect_count: int = Column(Integer, nullable=False, default=0)
+    is_active: bool = Column(Boolean, nullable=False, default=True)
+    deactivated_by: str = Column(String, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    deactivated_reason: str = Column(Text, nullable=True)
+    deactivated_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    created_at = Column(TIMESTAMP(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(TIMESTAMP(timezone=True), nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        Index("idx_maintenance_experience_active_time", "is_active", created_at.desc()),
+        Index("idx_maintenance_experience_building_time", "building_id", created_at.desc()),
+        Index("idx_maintenance_experience_device_type_time", "device_type", created_at.desc()),
+        Index("idx_maintenance_experience_fault_time", "fault_type", created_at.desc()),
+        Index("idx_maintenance_experience_source_work_order", "source_work_order_id", created_at.desc()),
+        Index("idx_maintenance_experience_vector_status", "vector_index_status", updated_at.desc()),
+    )
+
+
+class MaintenanceExperienceUsageLog(Base):
+    __tablename__ = "maintenance_experience_usage_logs"
+
+    id: str = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    experience_id: str = Column(
+        String,
+        ForeignKey("maintenance_experiences.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    work_order_id: str = Column(String(64), nullable=True)
+    dispatch_id: str = Column(String, nullable=True)
+    assistant_session_id: str = Column(String(128), nullable=True)
+    usage_type: str = Column(String(24), nullable=False)
+    created_at = Column(TIMESTAMP(timezone=True), nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        Index("idx_maintenance_experience_usage_exp_time", "experience_id", created_at.desc()),
+        Index("idx_maintenance_experience_usage_work_order", "work_order_id", created_at.desc()),
+        Index("idx_maintenance_experience_usage_session", "assistant_session_id", created_at.desc()),
+    )
+
+
+class MaintenanceExperienceFeedback(Base):
+    __tablename__ = "maintenance_experience_feedback"
+
+    id: str = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    experience_id: str = Column(
+        String,
+        ForeignKey("maintenance_experiences.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    user_id: str = Column(String, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    work_order_id: str = Column(String(64), nullable=True)
+    feedback: str = Column(String(24), nullable=False)
+    note: str = Column(Text, nullable=True)
+    created_at = Column(TIMESTAMP(timezone=True), nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        Index("idx_maintenance_experience_feedback_exp_time", "experience_id", created_at.desc()),
+        Index("idx_maintenance_experience_feedback_user_time", "user_id", created_at.desc()),
+        Index("idx_maintenance_experience_feedback_work_order", "work_order_id", created_at.desc()),
+    )
+
+
 class DispatchOperationRun(Base):
     """
     调度后台运行记录。

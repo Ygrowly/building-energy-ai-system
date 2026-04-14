@@ -33,15 +33,15 @@
 
             <view class="portal-side">
               <view class="portal-mini portal-blue" @click="goTo('/pages/worker/active/index')">
-                <view class="portal-mini-copy">
-                  <view class="portal-header">
-                    <text class="portal-title small">执行列表</text>
-                    <view class="portal-arrow blue">
-                      <view class="arrow-icon"></view>
-                    </view>
+              <view class="portal-mini-copy">
+                <view class="portal-header">
+                  <text class="portal-title small">执行列表</text>
+                  <view class="portal-arrow blue">
+                    <view class="arrow-icon"></view>
                   </view>
-                  <text class="portal-subtitle">共计{{ todoCount }}项正式任务待推进</text>
                 </view>
+                  <text class="portal-subtitle">{{ todoSummaryText }}</text>
+              </view>
                 <image
                   class="portal-mini-figure portal-mini-figure-order"
                   src="/static/images/work-order.png"
@@ -73,19 +73,19 @@
         <view class="focus-overview-card">
           <view class="summary-card">
             <view class="summary-item">
-              <text class="summary-num">{{ stats.inProgress }}</text>
+              <text class="summary-num" :class="{ loading: isInitialLoading }">{{ displayStat(stats.inProgress) }}</text>
               <text class="summary-label">进行中</text>
             </view>
             <view class="summary-item">
-              <text class="summary-num">{{ stats.pendingStart }}</text>
+              <text class="summary-num" :class="{ loading: isInitialLoading }">{{ displayStat(stats.pendingStart) }}</text>
               <text class="summary-label">待开始</text>
             </view>
             <view class="summary-item">
-              <text class="summary-num">{{ stats.todayCount }}</text>
+              <text class="summary-num" :class="{ loading: isInitialLoading }">{{ displayStat(stats.todayCount) }}</text>
               <text class="summary-label">今日工单</text>
             </view>
             <view class="summary-item">
-              <text class="summary-num">{{ stats.overdueCount }}</text>
+              <text class="summary-num" :class="{ loading: isInitialLoading }">{{ displayStat(stats.overdueCount) }}</text>
               <text class="summary-label">逾期工单</text>
             </view>
           </view>
@@ -108,6 +108,11 @@
                 <text>工单编号 {{ shortTicket(featuredOrder.ticketId) }}</text>
                 <text>派单时间 {{ featuredOrder.time }}</text>
               </view>
+            </view>
+
+            <view v-else-if="isInitialLoading" class="feature-empty feature-loading">
+              <text class="feature-empty-icon loading">…</text>
+              <text class="feature-empty-text">工单加载中</text>
             </view>
 
             <view v-else class="feature-empty">
@@ -165,6 +170,13 @@ const loading = ref(false)
 const statusBarHeight = ref(20)
 const hasLoadedOnce = ref(false)
 let unsubscribeWorkerSync: (() => void) | null = null
+const isInitialLoading = computed(() => (
+  loading.value
+  && !hasLoadedOnce.value
+  && !incidents.value.length
+  && !supportEntries.value.length
+  && !hallEntries.value.length
+))
 
 const userName = computed(() => authStore.user?.username || '维修师傅')
 const avatarChar = computed(() => userName.value.slice(0, 1).toUpperCase())
@@ -180,6 +192,11 @@ const stats = computed(() => {
   }
 })
 const todoCount = computed(() => stats.value.inProgress + stats.value.pendingStart)
+const todoSummaryText = computed(() => (
+  isInitialLoading.value
+    ? '正在同步正式任务...'
+    : `共计${todoCount.value}项正式任务待推进`
+))
 const featuredOrder = computed(() => {
   const supportTarget = supportEntries.value[0]
   if (supportTarget) {
@@ -207,6 +224,10 @@ const tips = [
   { title: '处理后及时提交备注', desc: '记录维修动作和异常原因，方便后续复盘与追踪。' },
   { title: '超时工单优先闭环', desc: '带有超时标记的工单会持续推送提醒，建议优先处理。' },
 ]
+
+function displayStat(value: number) {
+  return isInitialLoading.value ? '...' : String(value)
+}
 
 async function loadData() {
   const cached = getCache<Incident[]>('worker_workspace')
@@ -634,6 +655,12 @@ onUnmounted(() => {
   font-weight: 700;
 }
 
+.summary-num.loading,
+.feature-empty-icon.loading {
+  color: #94a06f;
+  letter-spacing: 4rpx;
+}
+
 .summary-label {
   margin-top: 14rpx;
   font-size: 24rpx;
@@ -770,6 +797,11 @@ onUnmounted(() => {
   box-shadow: none;
   background: linear-gradient(180deg, #fffaf6 0%, #fffefe 100%);
   border: 2rpx dashed rgba(255, 162, 127, 0.22);
+}
+
+.feature-empty.feature-loading {
+  border-style: solid;
+  background: linear-gradient(180deg, #f7fbea 0%, #fffefe 100%);
 }
 
 .feature-empty-icon {

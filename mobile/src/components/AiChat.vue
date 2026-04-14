@@ -8,6 +8,18 @@
       <text class="chat-title">{{ chatTitle }}</text>
       <text class="chat-hint">{{ chatHint }}</text>
     </view>
+    <view v-if="isOperatorMode && operatorQuickPrompts.length" class="quick-prompt-bar">
+      <text class="quick-prompt-title">经验速查</text>
+      <view class="quick-prompt-list">
+        <text
+          v-for="prompt in operatorQuickPrompts"
+          :key="prompt"
+          class="quick-prompt-chip"
+          :class="{ disabled: sending }"
+          @click="sendPresetMessage(prompt)"
+        >{{ prompt }}</text>
+      </view>
+    </view>
 
     <!-- 消息列表 -->
     <scroll-view
@@ -44,9 +56,61 @@
             <text class="msg-action" @click="speakText(msg.content)">播报</text>
           </view>
         </view>
+        <view
+          v-if="msg.role === 'ai' && (msg.experienceItems?.length || msg.suggestedFollowups?.length)"
+          class="msg-extensions"
+        >
+          <view v-if="msg.experienceItems?.length" class="experience-card-list">
+            <view
+              v-for="item in msg.experienceItems"
+              :key="item.id"
+              class="experience-card"
+            >
+              <view class="experience-card-head">
+                <text class="experience-card-title">{{ item.organized_text || item.source_text || '经验记录' }}</text>
+                <text v-if="item.score != null" class="experience-card-score">匹配 {{ formatExperienceScore(item.score) }}</text>
+              </view>
+              <text v-if="item.source_work_order_id" class="experience-card-meta">来源工单：{{ item.source_work_order_id }}</text>
+              <text v-if="item.suggested_steps?.length" class="experience-card-copy">建议：{{ item.suggested_steps.join('，') }}</text>
+              <text v-if="item.safety_notes?.length" class="experience-card-copy warn">注意：{{ item.safety_notes.join('，') }}</text>
+              <text v-if="item.conflict_flags?.length" class="experience-card-copy risk">
+                风险：{{ item.conflict_flags.map(flag => flag.message).filter(Boolean).join('，') }}
+              </text>
+              <view class="experience-card-footer">
+                <text class="experience-card-stats">有用 {{ item.helpful_count || 0 }} · 引用 {{ item.usage_count || 0 }}</text>
+                <view class="experience-feedback-row">
+                  <text
+                    class="experience-feedback-btn"
+                    :class="{ active: experienceFeedbackState[item.id] === 'helpful', disabled: !!experienceFeedbackLoading[item.id] }"
+                    @click="submitExperienceFeedback(item.id, 'helpful')"
+                  >有帮助</text>
+                  <text
+                    class="experience-feedback-btn"
+                    :class="{ active: experienceFeedbackState[item.id] === 'unhelpful', disabled: !!experienceFeedbackLoading[item.id] }"
+                    @click="submitExperienceFeedback(item.id, 'unhelpful')"
+                  >一般</text>
+                  <text
+                    class="experience-feedback-btn danger"
+                    :class="{ active: experienceFeedbackState[item.id] === 'incorrect', disabled: !!experienceFeedbackLoading[item.id] }"
+                    @click="submitExperienceFeedback(item.id, 'incorrect')"
+                  >不准确</text>
+                </view>
+              </view>
+            </view>
+          </view>
+          <view v-if="msg.suggestedFollowups?.length" class="followup-chip-list">
+            <text
+              v-for="followup in msg.suggestedFollowups"
+              :key="followup"
+              class="followup-chip"
+              :class="{ disabled: sending }"
+              @click="sendPresetMessage(followup)"
+            >{{ followup }}</text>
+          </view>
+        </view>
       </view>
 
-      <!-- 流式输出中 -->
+      <!-- 娴佸紡杈撳嚭涓?-->
       <view v-if="streamingText" class="msg ai-msg">
         <view class="msg-bubble ai streaming">
           <text>{{ streamingText }}</text>
@@ -81,7 +145,48 @@
       </view>
     </view>
 
-    <!-- 输入区 -->
+    <!-- 经验推荐 -->
+    <view v-if="isWorkerMode && experienceRecommendations.length" class="recommend-panel">
+      <view class="recommend-panel-head">
+        <text class="recommend-panel-title">经验推荐</text>
+        <text class="recommend-panel-subtitle">基于当前工单和维修步骤召回的历史经验</text>
+      </view>
+      <view
+        v-for="item in experienceRecommendations"
+        :key="item.experience_id"
+        class="recommend-card"
+      >
+        <view class="recommend-card-head">
+          <text class="recommend-card-title">{{ item.organized_text || '经验记录' }}</text>
+          <text v-if="item.confidence != null" class="recommend-card-score">匹配 {{ formatExperienceScore(item.confidence) }}</text>
+        </view>
+        <text v-if="item.source_work_order_id" class="recommend-card-meta">来源工单：{{ item.source_work_order_id }}</text>
+        <text v-if="item.safety_notes?.length" class="recommend-card-copy warn">注意：{{ item.safety_notes.join('，') }}</text>
+        <text v-if="item.conflict_flags?.length" class="recommend-card-copy risk">
+          风险：{{ item.conflict_flags.map(flag => flag.message).filter(Boolean).join('，') }}
+        </text>
+        <view class="recommend-card-footer">
+          <text class="recommend-card-stats">已有 {{ item.helpful_count || 0 }} 次正向反馈</text>
+          <view class="experience-feedback-row">
+            <text
+              class="experience-feedback-btn"
+              :class="{ active: experienceFeedbackState[item.experience_id] === 'helpful', disabled: !!experienceFeedbackLoading[item.experience_id] }"
+              @click="submitExperienceFeedback(item.experience_id, 'helpful')"
+            >有帮助</text>
+            <text
+              class="experience-feedback-btn"
+              :class="{ active: experienceFeedbackState[item.experience_id] === 'unhelpful', disabled: !!experienceFeedbackLoading[item.experience_id] }"
+              @click="submitExperienceFeedback(item.experience_id, 'unhelpful')"
+            >一般</text>
+            <text
+              class="experience-feedback-btn danger"
+              :class="{ active: experienceFeedbackState[item.experience_id] === 'incorrect', disabled: !!experienceFeedbackLoading[item.experience_id] }"
+              @click="submitExperienceFeedback(item.experience_id, 'incorrect')"
+            >不准确</text>
+          </view>
+        </view>
+      </view>
+    </view>
     <view class="chat-input-area">
       <view v-if="isWorkerMode" class="media-tools">
         <text class="media-btn" :class="{ disabled: mediaBusy }" @click="chooseImageForAnalysis">拍照</text>
@@ -126,12 +231,21 @@ import {
   type WorkerAiStepPlan,
   type WorkerAiStepStatus,
 } from '../api/ai-assistant'
+import {
+  maintenanceExperienceApi,
+  type MaintenanceExperienceFeedbackType,
+  type MaintenanceExperienceItem,
+  type MaintenanceExperienceRecommendation,
+} from '../api/maintenance-experience'
 
 interface ChatMsg {
   role: 'user' | 'ai'
   content: string
   thinking?: boolean
   stepId?: string
+  answerType?: string
+  experienceItems?: MaintenanceExperienceItem[]
+  suggestedFollowups?: string[]
 }
 
 const emit = defineEmits<{
@@ -173,16 +287,21 @@ const lastWorkflowPromptKey = ref('')
 const nextWorkflowPromptOverride = ref<{ key: string; message: string } | null>(null)
 const introducedPlanId = ref('')
 const lastStepMessageId = ref('')
+const experienceFeedbackLoading = ref<Record<string, MaintenanceExperienceFeedbackType | ''>>({})
+const experienceFeedbackState = ref<Record<string, MaintenanceExperienceFeedbackType | ''>>({})
 let recorderManager: any = null
 let h5MediaRecorder: MediaRecorder | null = null
 let h5AudioChunks: BlobPart[] = []
 
 const chatTitle = computed(() => props.title)
 const isWorkerMode = computed(() => props.mode === 'worker' && !!props.order)
+const isOperatorMode = computed(() => props.mode === 'operator')
 const chatHint = computed(() => props.hint || (
-  props.order
+  isWorkerMode.value
     ? '基于当前工单自动提供诊断建议'
-    : '可以咨询能耗、工单、派工和现场处置问题'
+    : isOperatorMode.value
+      ? (props.order ? '只读查看当前工单进展、维修指导和现场记录' : '可以查询工单、派工和维修进展')
+      : '可以咨询能耗、工单、派工和现场处置问题'
 ))
 const orderIntro = computed(() => {
   if (!props.order) return ''
@@ -191,9 +310,15 @@ const orderIntro = computed(() => {
 })
 const welcomeLead = computed(() => props.order ? '您好！我已了解当前工单情况：' : '您好，我是楼宇运维 AI 助手。')
 const welcomeBody = computed(() => (
-  props.order
+  isWorkerMode.value
     ? '请描述您的现场情况，我将提供针对性的维修指导。'
-    : '可以直接咨询能耗分析、派工处理、维修流程或现场处置问题。'
+    : isOperatorMode.value
+      ? (
+        props.order
+          ? '可以直接问我这张工单目前到哪一步、是否超时、维修指导做到哪一步了，或最近有没有图片、语音和协同记录。'
+          : '可以直接查询工单进度、派工状态、维修指导记录和风险说明。'
+      )
+      : '可以直接咨询能耗分析、派工处理、维修流程或现场处置问题。'
 ))
 const currentStep = computed<WorkerAiStep | null>(() => {
   const steps = stepPlan.value?.steps || []
@@ -201,6 +326,18 @@ const currentStep = computed<WorkerAiStep | null>(() => {
     || steps.find(step => step.status === 'needs_support')
     || steps.find(step => step.status !== 'completed' && step.status !== 'skipped')
     || null
+})
+const experienceRecommendations = computed<MaintenanceExperienceRecommendation[]>(() => (
+  stepPlan.value?.experience_recommendations || []
+))
+const operatorQuickPrompts = computed(() => {
+  if (!isOperatorMode.value) return []
+  const subject = props.order?.ticket_id ? `这张工单 ${props.order.ticket_id}` : '当前这类故障'
+  return [
+    `${subject} 类似问题历史上大家怎么处理？`,
+    `${subject} 最近有哪些相关经验？`,
+    `${subject} 哪些经验被引用最多？`,
+  ]
 })
 
 function getErrorMessage(err: unknown, fallback: string) {
@@ -210,6 +347,71 @@ function getErrorMessage(err: unknown, fallback: string) {
     if (typeof message === 'string' && message.trim()) return message.trim()
   }
   return fallback
+}
+
+function formatExperienceScore(score: number | null | undefined) {
+  if (score == null || Number.isNaN(Number(score))) return '--'
+  const normalized = Math.max(0, Math.min(1, Number(score)))
+  return `${Math.round(normalized * 100)}%`
+}
+
+function normalizeExperienceItems(facts: unknown): MaintenanceExperienceItem[] {
+  if (!facts || typeof facts !== 'object') return []
+  const rawItems = Array.isArray((facts as any).items) ? (facts as any).items : []
+  return rawItems.filter((item: unknown) => !!item && typeof item === 'object') as MaintenanceExperienceItem[]
+}
+
+function applyExperienceFeedbackToMessages(
+  experienceId: string,
+  payload: { helpful_count: number; unhelpful_count: number; incorrect_count: number },
+) {
+  messages.value.forEach((msg) => {
+    const target = msg.experienceItems?.find(item => item.id === experienceId)
+    if (!target) return
+    target.helpful_count = payload.helpful_count
+    target.unhelpful_count = payload.unhelpful_count
+    target.incorrect_count = payload.incorrect_count
+  })
+  const recommended = stepPlan.value?.experience_recommendations?.find(item => item.experience_id === experienceId)
+  if (recommended) {
+    recommended.helpful_count = payload.helpful_count
+  }
+}
+
+async function submitExperienceFeedback(
+  experienceId: string,
+  feedback: MaintenanceExperienceFeedbackType,
+) {
+  if (!experienceId || experienceFeedbackLoading.value[experienceId]) return
+  experienceFeedbackLoading.value = {
+    ...experienceFeedbackLoading.value,
+    [experienceId]: feedback,
+  }
+  try {
+    const response = await maintenanceExperienceApi.feedback(experienceId, {
+      feedback,
+      work_order_id: props.order?.ticket_id || null,
+    })
+    applyExperienceFeedbackToMessages(experienceId, response)
+    experienceFeedbackState.value = {
+      ...experienceFeedbackState.value,
+      [experienceId]: response.feedback as MaintenanceExperienceFeedbackType,
+    }
+    uni.showToast({ title: '经验反馈已记录', icon: 'success' })
+  } catch (err) {
+    uni.showToast({ title: getErrorMessage(err, '经验反馈失败'), icon: 'none' })
+  } finally {
+    experienceFeedbackLoading.value = {
+      ...experienceFeedbackLoading.value,
+      [experienceId]: '',
+    }
+  }
+}
+
+async function sendPresetMessage(text: string) {
+  if (sending.value || !text.trim()) return
+  inputText.value = text
+  await sendMessage()
 }
 
 function currentDispatchId() {
@@ -284,7 +486,11 @@ function shouldUseGuidanceChat() {
 function scrollToBottom() {
   if (!componentReady.value) return
   nextTick(() => {
-    if (componentReady.value) scrollTop.value = 99999
+    if (!componentReady.value) return
+    scrollTop.value = 0
+    setTimeout(() => {
+      if (componentReady.value) scrollTop.value = Number.MAX_SAFE_INTEGER
+    }, 32)
   })
 }
 
@@ -613,6 +819,12 @@ async function sendAssistantMessage(
       ? await operatorAiApi.chat({
           message: text,
           session_id: sessionId.value,
+          ticket_id: props.order?.ticket_id || null,
+          scope: {
+            source_component: options.source || 'AiChat',
+            work_order_status: props.order?.status || null,
+            execution_status: props.order?.current_dispatch?.execution_status || props.order?.execution_status || null,
+          },
           include_evidence: true,
         })
       : await workerAiApi.chat({
@@ -629,7 +841,17 @@ async function sendAssistantMessage(
         })
     sessionId.value = response.session_id
     removePendingThinking()
-    messages.value.push({ role: 'ai', content: response.answer })
+    messages.value.push({
+      role: 'ai',
+      content: response.answer,
+      answerType: 'answer_type' in response ? response.answer_type : undefined,
+      experienceItems: props.mode === 'operator' && 'facts' in response
+        ? normalizeExperienceItems(response.facts)
+        : undefined,
+      suggestedFollowups: 'suggested_followups' in response
+        ? (response.suggested_followups || [])
+        : undefined,
+    })
     if (props.mode === 'worker' && response.message_type === 'action_result') {
       const latestOrder = await refreshOrderState()
       if (latestOrder) {
@@ -964,10 +1186,12 @@ onBeforeUnmount(() => {
 .chat-messages {
   height: 520rpx;
   padding: 16rpx 20rpx;
+  box-sizing: border-box;
 }
 
 .msg {
   display: flex;
+  min-width: 0;
   margin-bottom: 20rpx;
   &.user-msg { justify-content: flex-end; }
   &.ai-msg   { justify-content: flex-start; }
@@ -979,8 +1203,17 @@ onBeforeUnmount(() => {
   border-radius: 20rpx;
   font-size: 26rpx;
   line-height: 1.6;
+  box-sizing: border-box;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 
-  text { display: block; margin-bottom: 6rpx; &:last-child { margin-bottom: 0; } }
+  text {
+    display: block;
+    margin-bottom: 6rpx;
+    white-space: pre-wrap;
+    word-break: break-word;
+    &:last-child { margin-bottom: 0; }
+  }
 
   &.user {
     background: linear-gradient(135deg, #d6e29f, #b5c875);
@@ -1265,6 +1498,8 @@ onBeforeUnmount(() => {
   padding: 16rpx 20rpx;
   border-top: 1rpx solid #f0f0f0;
   background: #fff;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .media-tools {
@@ -1297,9 +1532,12 @@ onBeforeUnmount(() => {
 
 .chat-input {
   flex: 1;
+  width: 0;
+  min-width: 0;
   background: #f5f7fa;
   border-radius: 12rpx;
   padding: 16rpx 20rpx;
+  box-sizing: border-box;
   font-size: 26rpx;
   color: #1a1a2e;
   min-height: 72rpx;
@@ -1307,6 +1545,7 @@ onBeforeUnmount(() => {
 
 .send-btn {
   width: 100rpx;
+  min-width: 100rpx;
   height: 72rpx;
   background: linear-gradient(135deg, #d6e29f, #b5c875);
   border-radius: 12rpx;
@@ -1317,5 +1556,161 @@ onBeforeUnmount(() => {
 
   text { font-size: 26rpx; color: #fff; font-weight: 600; }
   &.disabled { background: #ccc; pointer-events: none; }
+}
+
+.quick-prompt-bar {
+  padding: 18rpx 20rpx 0;
+}
+
+.quick-prompt-title {
+  display: block;
+  font-size: 22rpx;
+  color: #7a6c4d;
+  font-weight: 700;
+}
+
+.quick-prompt-list,
+.followup-chip-list,
+.experience-feedback-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10rpx;
+}
+
+.quick-prompt-list,
+.followup-chip-list {
+  margin-top: 12rpx;
+}
+
+.quick-prompt-chip,
+.followup-chip,
+.experience-feedback-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 50rpx;
+  padding: 0 18rpx;
+  border-radius: 999rpx;
+  font-size: 21rpx;
+  font-weight: 700;
+}
+
+.quick-prompt-chip,
+.followup-chip {
+  background: #f6f1df;
+  color: #7a6440;
+}
+
+.quick-prompt-chip.disabled,
+.followup-chip.disabled,
+.experience-feedback-btn.disabled {
+  opacity: 0.45;
+}
+
+.msg-extensions {
+  width: 100%;
+  margin-top: 10rpx;
+}
+
+.experience-card-list {
+  display: grid;
+  gap: 12rpx;
+}
+
+.experience-card,
+.recommend-card {
+  padding: 16rpx 18rpx;
+  border-radius: 18rpx;
+  background: #fffaf0;
+  border: 1rpx solid #efe1b4;
+}
+
+.recommend-panel {
+  margin: 0 20rpx 16rpx;
+  padding: 20rpx;
+  border-radius: 18rpx;
+  background: linear-gradient(180deg, #fffaf0 0%, #fff6e8 100%);
+  border: 1rpx solid #f0ddb3;
+}
+
+.recommend-panel-head,
+.experience-card-head,
+.recommend-card-head,
+.experience-card-footer,
+.recommend-card-footer {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16rpx;
+}
+
+.recommend-panel-title,
+.experience-card-title,
+.recommend-card-title {
+  flex: 1;
+  font-size: 25rpx;
+  line-height: 1.55;
+  color: #3d2f16;
+  font-weight: 800;
+}
+
+.recommend-panel-subtitle,
+.experience-card-meta,
+.recommend-card-meta,
+.experience-card-stats,
+.recommend-card-stats {
+  display: block;
+  margin-top: 8rpx;
+  font-size: 21rpx;
+  line-height: 1.6;
+  color: #8a7650;
+}
+
+.experience-card-copy,
+.recommend-card-copy {
+  display: block;
+  margin-top: 10rpx;
+  font-size: 22rpx;
+  line-height: 1.6;
+  color: #5d4d30;
+}
+
+.experience-card-copy.warn,
+.recommend-card-copy.warn {
+  color: #9b6b2c;
+}
+
+.experience-card-copy.risk,
+.recommend-card-copy.risk {
+  color: #b45042;
+}
+
+.experience-card-score,
+.recommend-card-score {
+  flex-shrink: 0;
+  font-size: 20rpx;
+  color: #8a6a2a;
+  font-weight: 700;
+}
+
+.experience-card-footer,
+.recommend-card-footer {
+  margin-top: 12rpx;
+  align-items: center;
+}
+
+.experience-feedback-btn {
+  background: #f6efe0;
+  color: #7a6440;
+}
+
+.experience-feedback-btn.active {
+  background: #e3f3df;
+  color: #2f7a3b;
+}
+
+.experience-feedback-btn.danger.active {
+  background: #ffe5df;
+  color: #b45042;
 }
 </style>

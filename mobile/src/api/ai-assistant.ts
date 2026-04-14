@@ -1,4 +1,5 @@
 import { BASE_URL, get, post } from './request'
+import type { MaintenanceExperienceRecommendation } from './maintenance-experience'
 
 export interface WorkerAiPendingAction {
   action: string
@@ -107,6 +108,7 @@ export interface WorkerAiStepPlan {
   root_cause_candidates: WorkerAiRootCause[]
   steps: WorkerAiStep[]
   safety_notes: string[]
+  experience_recommendations?: MaintenanceExperienceRecommendation[]
   guidance_ready: boolean
   model_provider?: string | null
   model_name?: string | null

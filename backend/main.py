@@ -26,9 +26,11 @@ from app.api.routes_context_events import router as context_events_router
 from app.api.routes_work_order_insights import router as work_order_insights_router
 from app.api.routes_worker_ai import router as worker_ai_router
 from app.api.routes_operator_ai import router as operator_ai_router
+from app.api.routes_maintenance_experiences import router as maintenance_experience_router
 from app.api.routes_admin import router as admin_router
 from app.api.routes_notifications import router as notifications_router
 from app.core.config import get_settings
+from app.db.maintenance_experience_schema import ensure_maintenance_experience_tables
 from app.db.notification_schema import ensure_notification_tables
 
 settings = get_settings()
@@ -86,6 +88,7 @@ async def lifespan(app: FastAPI):
     await ensure_auth_schema_compat()
     await ensure_ai_assistant_tables()
     await ensure_worker_ai_phase2_tables()
+    await ensure_maintenance_experience_tables()
     await ensure_notification_tables()
 
     # P2：确保 Tool 4 的物化视图可用，避免日粒度查询抛 UndefinedTableError
@@ -423,6 +426,7 @@ app.include_router(context_events_router, prefix="/api")
 app.include_router(work_order_insights_router, prefix="/api")
 app.include_router(worker_ai_router, prefix="/api")
 app.include_router(operator_ai_router, prefix="/api")
+app.include_router(maintenance_experience_router, prefix="/api")
 app.include_router(report_router, prefix="/api")
 app.include_router(notifications_router, prefix="/api")
 app.include_router(admin_router)

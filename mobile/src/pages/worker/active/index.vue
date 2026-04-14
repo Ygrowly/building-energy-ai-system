@@ -15,7 +15,7 @@
         @click="activeTab = tab.value"
       >
         <text class="tab-label">{{ tab.label }}</text>
-        <text class="tab-count">{{ tab.count }}</text>
+        <text class="tab-count" :class="{ loading: isInitialLoading }">{{ tab.countText }}</text>
       </view>
     </view>
 
@@ -165,6 +165,13 @@ const activeTab = ref<OrderTab>('in_progress')
 const hasLoadedOnce = ref(false)
 const authStore = useAuthStore()
 let unsubscribeWorkerSync: (() => void) | null = null
+const isInitialLoading = computed(() => (
+  loading.value
+  && !hasLoadedOnce.value
+  && !incidents.value.length
+  && !workOrders.value.length
+  && !supportEntries.value.length
+))
 
 const stats = computed(() => {
   const incidentStats = getWorkerDashboardStats(incidents.value)
@@ -180,9 +187,24 @@ const stats = computed(() => {
   }
 })
 const orderTabs = computed(() => [
-  { label: '进行中', value: 'in_progress' as const, count: stats.value.inProgress },
-  { label: '待开始', value: 'pending_start' as const, count: stats.value.pendingStart },
-  { label: '已完成', value: 'completed' as const, count: stats.value.completedCount },
+  {
+    label: '进行中',
+    value: 'in_progress' as const,
+    count: stats.value.inProgress,
+    countText: isInitialLoading.value ? '...' : String(stats.value.inProgress),
+  },
+  {
+    label: '待开始',
+    value: 'pending_start' as const,
+    count: stats.value.pendingStart,
+    countText: isInitialLoading.value ? '...' : String(stats.value.pendingStart),
+  },
+  {
+    label: '已完成',
+    value: 'completed' as const,
+    count: stats.value.completedCount,
+    countText: isInitialLoading.value ? '...' : String(stats.value.completedCount),
+  },
 ])
 const taskCards = computed<WorkerTaskCard[]>(() => {
   const incidentCards = incidents.value.map<WorkerTaskCard>((incident) => ({
@@ -732,6 +754,11 @@ onUnmounted(() => {
 .tab-count {
   font-size: 22rpx;
   color: #808873;
+}
+
+.tab-count.loading {
+  color: #94a06f;
+  letter-spacing: 4rpx;
 }
 
 .list-area {

@@ -30,6 +30,7 @@ from app.services.dispatch_hall_service import (
     reject_assigned_support_hall_entry,
     serialize_dispatch_hall_entry,
 )
+from app.services.maintenance_experience_service import schedule_experience_capture
 from app.services.dispatch_service import (
     complete_dispatch_task,
     get_current_dispatch_task,
@@ -679,6 +680,19 @@ async def _execute_pending_action(
         backend_action_ref=backend_ref,
     )
     await db.commit()
+    if action == "complete" and work_order is not None and reason:
+        schedule_experience_capture(
+            actor_user_id=user.id,
+            actor_role=user.role,
+            source_type="completion_summary",
+            source_text=reason,
+            source_work_order_id=work_order.ticket_id,
+            source_dispatch_id=dispatch_id,
+            contributor_user_id=user.id,
+            contributor_role=user.role,
+            building_id=work_order.building_id,
+            device_id=work_order.device_id,
+        )
     await _invalidate_related_cache()
 
     return {

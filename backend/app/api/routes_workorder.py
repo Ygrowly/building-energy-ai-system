@@ -408,6 +408,14 @@ def _dispatch_event_label(event_type: str) -> str:
         "support_worker_accepted": "鍗忓悓浜哄憳鎺ュ崟",
         "support_worker_rejected": "鍗忓悓浜哄憳鎷掑崟",
     })
+    labels.update({
+        "worker_accept": "维修人员接单",
+        "worker_arrive": "维修人员到场",
+        "worker_start": "开始处理",
+        "support_assigned": "协同任务已指派",
+        "support_worker_accepted": "协同人员接单",
+        "support_worker_rejected": "协同人员拒绝",
+    })
     return labels.get(event_type, event_type)
 
 
@@ -438,6 +446,13 @@ def _audit_log_label(action: str) -> str:
         "worker_feedback": "维修结果已提交",
         "close": "工单已关闭",
     }
+    labels.update({
+        "dispatch_hall_support_accept": "协同任务已接受",
+        "dispatch_hall_support_reject": "协同任务已拒绝",
+        "ai_worker_pending": "维小修等待确认",
+        "ai_worker_success": "维小修动作已执行",
+        "ai_worker_failed": "维小修动作执行失败",
+    })
     return labels.get(action, action)
 
 

@@ -10,7 +10,19 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import AiAssistantMessage, AiAssistantSession, AiMediaAsset, User, WorkerAiStepEvent, WorkerAiStepPlan
+from app.db.models import (
+    AiAssistantMessage,
+    AiAssistantSession,
+    AiMediaAsset,
+    User,
+    WorkOrder,
+    WorkerAiStepEvent,
+    WorkerAiStepPlan,
+)
+from app.services.maintenance_experience_service import (
+    build_operator_experience_answer,
+    looks_like_experience_query,
+)
 from app.services.work_order_insights_service import (
     build_work_order_insight_metrics,
     build_work_order_insight_query_response,
@@ -63,6 +75,52 @@ def _select_current_step(steps: list[dict[str, Any]]) -> dict[str, Any] | None:
     )
 
 
+def _format_guidance_step_status(status: str | None) -> str:
+    labels = {
+        "pending": "待处理",
+        "uncertain": "待判断",
+        "needs_support": "待协同",
+        "completed": "已完成",
+        "skipped": "已跳过",
+        "active": "进行中",
+        "not_ready": "未就绪",
+        "not_generated": "未生成",
+    }
+    normalized = (status or "").strip().lower()
+    return labels.get(normalized, status or "未知")
+
+
+def _format_guidance_event_type(event_type: str | None) -> str:
+    labels = {
+        "generate": "生成步骤卡片",
+        "note": "记录备注",
+        "completed": "标记完成",
+        "skipped": "标记跳过",
+        "needs_support": "标记待协同",
+        "uncertain": "标记待判断",
+        "worker_observation": "现场补充记录",
+    }
+    normalized = (event_type or "").strip().lower()
+    return labels.get(normalized, event_type or "状态更新")
+
+
+def _format_guidance_time(value: datetime | str | None) -> str:
+    if value is None:
+        return "--"
+    if isinstance(value, datetime):
+        target = value.astimezone(timezone.utc) if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        return target.astimezone().strftime("%Y-%m-%d %H:%M")
+    text = str(value).strip()
+    if not text:
+        return "--"
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        target = parsed.astimezone(timezone.utc) if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+        return target.astimezone().strftime("%Y-%m-%d %H:%M")
+    except ValueError:
+        return text
+
+
 async def _build_guidance_record_summary(
     db: AsyncSession,
     *,
@@ -77,7 +135,7 @@ async def _build_guidance_record_summary(
     )
     plan = result.scalar_one_or_none()
     if plan is None:
-        answer = f"{ticket_id} 还没有维修指导记录。通常要在工单进入开始处理后，维小修才会生成步骤卡片。"
+        answer = f"{ticket_id} 还没有维修指导记录。通常要在工单开始处理后，维小修才会生成步骤卡片。"
         return {
             "answer": answer,
             "facts": {"plan": None, "recent_events": [], "media_summary": {}},
@@ -122,25 +180,24 @@ async def _build_guidance_record_summary(
     image_count = sum(1 for item in media_items if item.media_type == "image")
     audio_count = sum(1 for item in media_items if item.media_type == "audio")
 
+    latest_event = recent_events[0] if recent_events else None
+    latest_note = f"，备注：{latest_event['note']}" if latest_event and latest_event.get("note") else ""
     parts = [
-        f"{ticket_id} 当前已有 1 份维修指导计划，版本 {plan.version}，状态 {plan.status}。",
-        f"步骤进度：完成 {status_counts['completed']} 步，跳过 {status_counts['skipped']} 步，待处理 {status_counts['pending']} 步，需要协同 {status_counts['needs_support']} 步。",
+        f"{ticket_id} 已生成 1 份维修指导，当前版本 {plan.version}，状态：{_format_guidance_step_status(plan.status)}。",
+        f"步骤进度：已完成 {status_counts['completed']} 步，已跳过 {status_counts['skipped']} 步，待处理 {status_counts['pending']} 步，需要协同 {status_counts['needs_support']} 步。",
     ]
     if current_step:
         parts.append(
-            f"当前建议步骤是“{current_step.get('title')}”，状态为 {current_step.get('status')}。"
+            f"当前进行到“{current_step.get('title')}”，状态：{_format_guidance_step_status(str(current_step.get('status') or 'pending'))}。"
         )
-    if recent_events:
-        latest_event = recent_events[0]
-        latest_note = f"，备注：{latest_event['note']}" if latest_event.get("note") else ""
+    if latest_event:
         parts.append(
-            f"最近一条指导记录是步骤 {latest_event.get('step_id')} 的 {latest_event.get('event_type')}，时间 {latest_event.get('created_at')}{latest_note}。"
+            f"最近一条记录：步骤 {latest_event.get('step_id')} 在 {_format_guidance_time(latest_event.get('created_at'))} {_format_guidance_event_type(latest_event.get('event_type'))}{latest_note}。"
         )
-    if image_count or audio_count:
-        parts.append(f"现场媒体记录：图片 {image_count} 份，语音 {audio_count} 份。")
+    parts.append(f"现场媒体：图片 {image_count} 份，语音 {audio_count} 份。")
 
     return {
-        "answer": " ".join(parts),
+        "answer": "\n".join(parts),
         "facts": {
             "plan": {
                 "plan_id": plan.id,
@@ -283,11 +340,11 @@ async def handle_operator_ai_chat(
 
     blocked_actions = _detect_blocked_actions(text)
     if blocked_actions:
-        answer = "我可以帮你查看工单状态、候选人建议和流程依据，但运小维第一版只做查和解释，不会直接执行改派、关闭或审批。"
+        answer = "我可以帮你查看工单状态、候选人建议和流程依据，但运小维第一版只做查询和解释，不会直接执行改派、关闭或审批。"
         await _append_message(db, session_id=session_id, role="assistant", content=answer)
         await db.commit()
         return {
-            "assistant": "运小维",
+            "assistant": "operator_ai",
             "session_id": session_id,
             "answer": answer,
             "readonly": True,
@@ -303,18 +360,44 @@ async def handle_operator_ai_chat(
         context = await build_work_order_review_context(db, ticket_id=resolved_ticket_id)
         if context is None:
             raise HTTPException(status_code=404, detail=f"工单 {resolved_ticket_id} 不存在")
-        work_order = context.get("work_order") or {}
+        work_order_data = context.get("work_order") or {}
+
+        if looks_like_experience_query(text):
+            work_order_result = await db.execute(select(WorkOrder).where(WorkOrder.ticket_id == resolved_ticket_id).limit(1))
+            work_order_row = work_order_result.scalar_one_or_none()
+            experience_answer = await build_operator_experience_answer(
+                db,
+                actor_role=user.role,
+                message=text,
+                work_order=work_order_row,
+            )
+            answer = experience_answer["answer"]
+            await _append_message(db, session_id=session_id, role="assistant", content=answer)
+            await db.commit()
+            return {
+                "assistant": "operator_ai",
+                "session_id": session_id,
+                "answer_type": "maintenance_experience_summary",
+                "answer": answer,
+                "readonly": True,
+                "facts": experience_answer["facts"],
+                "metrics": {},
+                "evidence_refs": experience_answer["evidence_refs"] if include_evidence else [],
+                "suggested_followups": experience_answer["suggested_followups"],
+                "blocked_actions": [],
+            }
+
         if _is_guidance_query(text):
             guidance = await _build_guidance_record_summary(
                 db,
-                work_order_id=str(work_order.get("id") or ""),
+                work_order_id=str(work_order_data.get("id") or ""),
                 ticket_id=resolved_ticket_id,
             )
             answer = guidance["answer"]
             await _append_message(db, session_id=session_id, role="assistant", content=answer)
             await db.commit()
             return {
-                "assistant": "运小维",
+                "assistant": "operator_ai",
                 "session_id": session_id,
                 "answer_type": "worker_guidance_record",
                 "answer": answer,
@@ -325,6 +408,7 @@ async def handle_operator_ai_chat(
                 "suggested_followups": guidance["suggested_followups"],
                 "blocked_actions": [],
             }
+
         answer = _timeline_answer(context, text)
         evidence_refs = [
             "work_order.status",
@@ -336,7 +420,7 @@ async def handle_operator_ai_chat(
         await _append_message(db, session_id=session_id, role="assistant", content=answer)
         await db.commit()
         return {
-            "assistant": "运小维",
+            "assistant": "operator_ai",
             "session_id": session_id,
             "answer_type": "single_work_order_summary",
             "answer": answer,
@@ -348,13 +432,36 @@ async def handle_operator_ai_chat(
             "blocked_actions": [],
         }
 
+    if looks_like_experience_query(text):
+        experience_answer = await build_operator_experience_answer(
+            db,
+            actor_role=user.role,
+            message=text,
+            work_order=None,
+        )
+        answer = experience_answer["answer"]
+        await _append_message(db, session_id=session_id, role="assistant", content=answer)
+        await db.commit()
+        return {
+            "assistant": "operator_ai",
+            "session_id": session_id,
+            "answer_type": "maintenance_experience_summary",
+            "answer": answer,
+            "readonly": True,
+            "facts": experience_answer["facts"],
+            "metrics": {},
+            "evidence_refs": experience_answer["evidence_refs"] if include_evidence else [],
+            "suggested_followups": experience_answer["suggested_followups"],
+            "blocked_actions": [],
+        }
+
     metrics = await build_work_order_insight_metrics(db)
     response = build_work_order_insight_query_response(question=text, metrics=metrics)
     answer = response.get("answer") or "我已查询工单运营指标。"
     await _append_message(db, session_id=session_id, role="assistant", content=answer)
     await db.commit()
     return {
-        "assistant": "运小维",
+        "assistant": "operator_ai",
         "session_id": session_id,
         "answer_type": response.get("intent", "operations_metric"),
         "answer": answer,

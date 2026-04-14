@@ -122,6 +122,19 @@
               <text v-if="order.worker_notes" class="note-text">{{ order.worker_notes }}</text>
             </view>
 
+            <view class="section-card" v-if="readonly && isOperatorViewer">
+              <text class="section-title">运小维</text>
+              <text class="note-text">
+                可直接查询这张工单的当前进度、维修指导步骤、最近协同记录，以及现场图片和语音上传情况。
+              </text>
+              <AiChat
+                :order="order"
+                mode="operator"
+                title="运小维"
+                hint="只读查询当前工单进展、维修指导和现场记录"
+              />
+            </view>
+
             <view class="section-card" v-if="!readonly">
               <text class="section-title">AI辅助维修</text>
               <AiChat
@@ -168,13 +181,45 @@
             placeholder="补充处理过程、现场情况或后续建议"
           />
         </view>
+        <view v-if="!readonly && order" class="action-card">
+          <text class="action-title">沉淀本次经验</text>
+          <view class="experience-type-row">
+            <view
+              class="experience-type-chip"
+              :class="{ active: experienceSourceType === 'worker_note' }"
+              @click="experienceSourceType = 'worker_note'"
+            >
+              <text>过程经验</text>
+            </view>
+            <view
+              class="experience-type-chip"
+              :class="{ active: experienceSourceType === 'completion_summary' }"
+              @click="experienceSourceType = 'completion_summary'"
+            >
+              <text>完工总结</text>
+            </view>
+          </view>
+          <textarea
+            v-model="experienceDraft"
+            class="note-input"
+            maxlength="1000"
+            placeholder="请记录故障现象 判断依据 处理动作 安全注意事项"
+          />
+          <view class="action-row single">
+            <button
+              class="action-btn experience"
+              :loading="experienceSubmitting"
+              @click="submitExperienceEntry"
+            >沉淀经验</button>
+          </view>
+        </view>
       </scroll-view>
     </template>
   </view>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { onHide, onShow, onUnload } from '@dcloudio/uni-app'
 import NavBar from '../../../components/NavBar.vue'
 import AiChat from '../../../components/AiChat.vue'
@@ -186,6 +231,8 @@ import {
   type WorkOrderTimelineResponse,
 } from '../../../api/workorder'
 import { incidentApi, type IncidentDetail } from '../../../api/incident'
+import { maintenanceExperienceApi, type MaintenanceExperienceSourceType } from '../../../api/maintenance-experience'
+import { useAuthStore } from '../../../stores/auth'
 import { useRouteGuard } from '../../../utils/route-guard'
 import {
   DISPATCH_EXECUTION_STATUS_LABEL,
@@ -216,6 +263,9 @@ const detailAllowedRoles = readonly ? [...OPERATOR_ROLES, ...WORKER_ROLES] : WOR
 
 useRouteGuard(detailAllowedRoles)
 
+const authStore = useAuthStore()
+const isOperatorViewer = computed(() => !!authStore.user?.role && OPERATOR_ROLES.includes(authStore.user.role))
+
 const incident = ref<IncidentDetail | null>(null)
 const order = ref<WorkOrder | null>(null)
 const orderTimeline = ref<WorkOrderTimelineResponse | null>(null)
@@ -234,7 +284,12 @@ const actionLoading = ref<
 >(null)
 const feedbackLoading = ref<string | null>(null)
 const workerNote = ref('')
-const activeTab = ref<'order' | 'customer' | 'service'>('order')
+const experienceDraft = ref('')
+const experienceSubmitting = ref(false)
+const experienceSourceType = ref<MaintenanceExperienceSourceType>('worker_note')
+const activeTab = ref<'order' | 'customer' | 'service'>(
+  readonly && isOperatorViewer.value ? 'service' : 'order',
+)
 const hasLoadedOnce = ref(false)
 const detailVisible = ref(true)
 let detailSyncTimer: ReturnType<typeof setTimeout> | null = null
@@ -242,6 +297,16 @@ let detailSyncTimer: ReturnType<typeof setTimeout> | null = null
 function handleOrderUpdated(nextOrder: WorkOrder) {
   order.value = nextOrder
 }
+
+watch(
+  isOperatorViewer,
+  (flag) => {
+    if (readonly && flag && activeTab.value === 'order') {
+      activeTab.value = 'service'
+    }
+  },
+  { immediate: true },
+)
 
 const ACTIVE_SYNC_EXECUTION_STATUSES = new Set([
   'pending_accept',
@@ -897,6 +962,40 @@ async function doSubmit(result: WorkerResult) {
   }
 }
 
+async function submitExperienceEntry() {
+  if (!order.value?.ticket_id) {
+    uni.showToast({ title: '缺少工单编号', icon: 'none' })
+    return
+  }
+  const sourceText = sanitizeDisplayText(experienceDraft.value)
+  if (!sourceText) {
+    uni.showToast({ title: '请先输入经验内容', icon: 'none' })
+    return
+  }
+
+  experienceSubmitting.value = true
+  try {
+    const response = await maintenanceExperienceApi.create({
+      source_type: experienceSourceType.value,
+      source_text: sourceText,
+      source_work_order_id: order.value.ticket_id,
+      source_dispatch_id: order.value.current_dispatch?.id || order.value.dispatch_id || null,
+      building_id: order.value.building_id || null,
+      device_id: order.value.device_id || null,
+      fault_type: incident.value?.rule_triggered || null,
+    })
+    experienceDraft.value = ''
+    uni.showToast({
+      title: response.status === 'existing' ? '经验已存在' : '经验已入库',
+      icon: 'success',
+    })
+  } catch (err) {
+    uni.showToast({ title: err instanceof Error ? err.message : '经验入库失败', icon: 'none' })
+  } finally {
+    experienceSubmitting.value = false
+  }
+}
+
 onMounted(async () => {
   await loadOrder()
   startDetailSync()
@@ -1270,6 +1369,42 @@ onUnmounted(() => {
   margin-top: 20rpx;
 }
 
+.action-row.single {
+  margin-top: 16rpx;
+}
+
+.experience-type-row {
+  display: flex;
+  gap: 12rpx;
+  margin-top: 18rpx;
+}
+
+.experience-type-chip {
+  flex: 1;
+  height: 70rpx;
+  border-radius: 18rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #f5f8e8;
+  box-shadow: inset 0 0 0 2rpx rgba(183, 204, 118, 0.12);
+
+  text {
+    font-size: 24rpx;
+    color: #6f8442;
+    font-weight: 700;
+  }
+}
+
+.experience-type-chip.active {
+  background: linear-gradient(135deg, #dfe8b8, #c8da8b);
+  box-shadow: 0 12rpx 24rpx rgba(167, 191, 99, 0.18);
+
+  text {
+    color: #51672a;
+  }
+}
+
 .action-btn {
   flex: 1;
   height: 84rpx;
@@ -1298,6 +1433,11 @@ onUnmounted(() => {
 .action-btn.escalate {
   color: #fff;
   background: linear-gradient(135deg, #d0dda0, #a9c165);
+}
+
+.action-btn.experience {
+  color: #fff;
+  background: linear-gradient(135deg, #7bbd6d, #5f9442);
 }
 
 .note-input {

@@ -22,6 +22,10 @@ from app.db.models import (
 )
 from app.schemas.mcp_schemas import MCPError
 from app.services.ai_model_provider import get_model_provider, parse_json_object
+from app.services.maintenance_experience_service import (
+    retrieve_experience_recommendations_for_work_order,
+    schedule_experience_capture,
+)
 from app.services.rag_engine import search_ragflow
 from app.services.worker_ai_service import _append_message, _assert_worker_permission, _ensure_session, _resolve_work_order
 
@@ -387,6 +391,7 @@ async def _generate_plan_with_model(
     *,
     context: dict[str, Any],
     rag_refs: list[dict[str, Any]],
+    experience_recommendations: list[dict[str, Any]],
 ) -> dict[str, Any] | None:
     provider = get_model_provider()
     if provider is None:
@@ -406,6 +411,7 @@ async def _generate_plan_with_model(
     user_prompt = {
         "context": context,
         "rag_refs": rag_refs,
+        "experience_recommendations": experience_recommendations,
         "schema": {
             "guide_version": 1,
             "summary": "string",
@@ -589,6 +595,7 @@ def _is_guidance_ready(work_order: WorkOrder, dispatch_task: DispatchTask | None
 
 
 def serialize_step_plan(plan: WorkerAiStepPlan, *, guidance_ready: bool = True) -> dict[str, Any]:
+    generated_from = _json_loads(plan.generated_from_json, {})
     return {
         "plan_id": plan.id,
         "ticket_id": None,
@@ -599,6 +606,7 @@ def serialize_step_plan(plan: WorkerAiStepPlan, *, guidance_ready: bool = True) 
         "root_cause_candidates": _json_loads(plan.root_cause_candidates_json, []),
         "steps": _json_loads(plan.steps_json, []),
         "safety_notes": _json_loads(plan.safety_notes_json, []),
+        "experience_recommendations": generated_from.get("experience_recommendations", []),
         "model_provider": plan.model_provider,
         "model_name": plan.model_name,
         "guidance_ready": guidance_ready,
@@ -645,6 +653,7 @@ async def get_or_create_worker_step_plan(
                 "root_cause_candidates": [],
                 "steps": [],
                 "safety_notes": [],
+                "experience_recommendations": [],
                 "guidance_ready": guidance_ready,
             }
         serialized = serialize_step_plan(existing, guidance_ready=guidance_ready)
@@ -662,12 +671,24 @@ async def get_or_create_worker_step_plan(
             "root_cause_candidates": [],
             "steps": [],
             "safety_notes": ["正式动手前请先确认现场安全和作业授权。"],
+            "experience_recommendations": [],
             "guidance_ready": False,
         }
 
     context = await _load_context(db, work_order=work_order)
     rag_refs, rag_reranked, rag_error = await _retrieve_manual_context(work_order)
-    model_plan = await _generate_plan_with_model(context=context, rag_refs=rag_refs)
+    experience_recommendations = await retrieve_experience_recommendations_for_work_order(
+        db,
+        work_order=work_order,
+        dispatch_id=getattr(dispatch_task, "id", dispatch_id),
+        assistant_session_id=None,
+        limit=3,
+    )
+    model_plan = await _generate_plan_with_model(
+        context=context,
+        rag_refs=rag_refs,
+        experience_recommendations=experience_recommendations,
+    )
     normalized = _normalize_step_plan(model_plan, work_order=work_order, rag_refs=rag_refs)
     if rag_error:
         normalized["safety_notes"].append("当前 RAGFlow 检索不可用，本次步骤包含本地通用排查建议。")
@@ -681,6 +702,7 @@ async def get_or_create_worker_step_plan(
             {
                 "context": context,
                 "rag_refs": rag_refs,
+                "experience_recommendations": experience_recommendations,
                 "rag_reranked": rag_reranked,
                 "rag_error": rag_error,
             },
@@ -844,6 +866,19 @@ async def handle_worker_guidance_chat(
         model_name=model_name,
     )
     await db.commit()
+    schedule_experience_capture(
+        actor_user_id=user.id,
+        actor_role=user.role,
+        source_type="worker_note",
+        source_text=text,
+        source_work_order_id=work_order.ticket_id,
+        source_dispatch_id=getattr(dispatch_task, "id", dispatch_id),
+        source_step_plan_id=plan.id,
+        contributor_user_id=user.id,
+        contributor_role=user.role,
+        building_id=work_order.building_id,
+        device_id=work_order.device_id,
+    )
 
     return {
         "assistant": "维小修",

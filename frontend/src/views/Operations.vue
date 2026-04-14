@@ -186,6 +186,9 @@
 
     <!-- 可解释性说明 -->
     <section class="section">
+      <MaintenanceExperienceWorkbench />
+    </section>
+    <section class="section">
       <h2 class="section-title"><Icon icon="mdi:shield-check" width="16" class="title-icon" /> 可解释性说明</h2>
       <div class="explainability-card">
         <p>当 AI 给出诊断结论时，右侧控制台会显示：</p>
@@ -209,6 +212,7 @@ import { isAbortError, startPerfSpan } from '@/utils/perf'
 import { useBuildingStore } from '@/stores/buildingStore'
 import { useDataRangeStore } from '@/stores/dataRangeStore'
 import { useReportExport } from '@/composables/useReportExport'
+import MaintenanceExperienceWorkbench from '@/components/MaintenanceExperienceWorkbench.vue'
 
 const dataRangeStore = useDataRangeStore()
 

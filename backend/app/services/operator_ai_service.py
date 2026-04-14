@@ -23,9 +23,10 @@ from app.services.maintenance_experience_service import (
     build_operator_experience_answer,
     looks_like_experience_query,
 )
-from app.services.work_order_insights_service import (
-    build_work_order_insight_metrics,
-    build_work_order_insight_query_response,
+from app.services.work_order_analysis_service import (
+    build_work_order_facts_response,
+    extract_work_order_analysis_scope,
+    infer_work_order_analysis_intent,
 )
 from app.services.work_order_review_context_service import build_work_order_review_context
 
@@ -220,6 +221,49 @@ async def _build_guidance_record_summary(
     }
 
 
+def _safe_session_state(raw: str | None) -> dict[str, Any]:
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _should_reuse_previous_analysis_scope(text: str) -> bool:
+    normalized = text.strip()
+    if not normalized:
+        return False
+    followup_tokens = ("那", "再", "继续", "换成", "改成", "拆开", "对比", "比较", "顺便", "另外", "上周", "上月")
+    return any(token in normalized for token in followup_tokens) or len(normalized) <= 20
+
+
+def _build_operator_analysis_scope(
+    *,
+    text: str,
+    scope: dict[str, Any] | None,
+    previous_state: dict[str, Any],
+) -> dict[str, Any]:
+    previous_scope = previous_state.get("analysis_scope") if isinstance(previous_state.get("analysis_scope"), dict) else None
+    candidate_scope = dict(scope or {})
+    if previous_scope and _should_reuse_previous_analysis_scope(text):
+        merged_scope = extract_work_order_analysis_scope(
+            question=text,
+            scope=candidate_scope,
+            previous_scope=previous_scope,
+            intent=str(previous_scope.get("intent") or ""),
+        )
+    else:
+        merged_scope = extract_work_order_analysis_scope(
+            question=text,
+            scope=candidate_scope,
+            previous_scope=None,
+            intent=None,
+        )
+    return merged_scope
+
+
 async def _ensure_session(
     db: AsyncSession,
     *,
@@ -326,6 +370,7 @@ async def handle_operator_ai_chat(
     ticket_id: str | None,
     scope: dict[str, Any] | None,
     include_evidence: bool,
+    include_chart: bool,
     user: User,
 ) -> dict[str, Any]:
     if user.role not in {"admin", "manager"}:
@@ -335,7 +380,10 @@ async def handle_operator_ai_chat(
     if not text:
         raise HTTPException(status_code=400, detail="消息不能为空")
     session_id = session_id or f"opai_{uuid.uuid4().hex}"
-    await _ensure_session(db, session_id=session_id, user=user, state={"scope": scope or {}})
+    existing_session = await db.get(AiAssistantSession, session_id)
+    previous_state = _safe_session_state(getattr(existing_session, "session_state_json", None))
+    session_state: dict[str, Any] = {"scope": scope or {}}
+    await _ensure_session(db, session_id=session_id, user=user, state=session_state)
     await _append_message(db, session_id=session_id, role="user", content=text)
 
     blocked_actions = _detect_blocked_actions(text)
@@ -344,12 +392,13 @@ async def handle_operator_ai_chat(
         await _append_message(db, session_id=session_id, role="assistant", content=answer)
         await db.commit()
         return {
-            "assistant": "operator_ai",
+            "assistant": "运小维",
             "session_id": session_id,
             "answer": answer,
             "readonly": True,
             "facts": [],
             "metrics": {},
+            "chart": None,
             "evidence_refs": [],
             "suggested_followups": ["查看这张工单的流程", "查看当前责任人和超时风险"],
             "blocked_actions": blocked_actions,
@@ -375,13 +424,14 @@ async def handle_operator_ai_chat(
             await _append_message(db, session_id=session_id, role="assistant", content=answer)
             await db.commit()
             return {
-                "assistant": "operator_ai",
+                "assistant": "运小维",
                 "session_id": session_id,
                 "answer_type": "maintenance_experience_summary",
                 "answer": answer,
                 "readonly": True,
                 "facts": experience_answer["facts"],
                 "metrics": {},
+                "chart": None,
                 "evidence_refs": experience_answer["evidence_refs"] if include_evidence else [],
                 "suggested_followups": experience_answer["suggested_followups"],
                 "blocked_actions": [],
@@ -397,13 +447,14 @@ async def handle_operator_ai_chat(
             await _append_message(db, session_id=session_id, role="assistant", content=answer)
             await db.commit()
             return {
-                "assistant": "operator_ai",
+                "assistant": "运小维",
                 "session_id": session_id,
                 "answer_type": "worker_guidance_record",
                 "answer": answer,
                 "readonly": True,
                 "facts": guidance["facts"],
                 "metrics": {},
+                "chart": None,
                 "evidence_refs": guidance["evidence_refs"] if include_evidence else [],
                 "suggested_followups": guidance["suggested_followups"],
                 "blocked_actions": [],
@@ -420,13 +471,14 @@ async def handle_operator_ai_chat(
         await _append_message(db, session_id=session_id, role="assistant", content=answer)
         await db.commit()
         return {
-            "assistant": "operator_ai",
+            "assistant": "运小维",
             "session_id": session_id,
             "answer_type": "single_work_order_summary",
             "answer": answer,
             "readonly": True,
             "facts": context,
             "metrics": {},
+            "chart": None,
             "evidence_refs": evidence_refs,
             "suggested_followups": ["查看是否超时", "查看派工和协同记录"],
             "blocked_actions": [],
@@ -443,32 +495,47 @@ async def handle_operator_ai_chat(
         await _append_message(db, session_id=session_id, role="assistant", content=answer)
         await db.commit()
         return {
-            "assistant": "operator_ai",
+            "assistant": "运小维",
             "session_id": session_id,
             "answer_type": "maintenance_experience_summary",
             "answer": answer,
             "readonly": True,
             "facts": experience_answer["facts"],
             "metrics": {},
+            "chart": None,
             "evidence_refs": experience_answer["evidence_refs"] if include_evidence else [],
             "suggested_followups": experience_answer["suggested_followups"],
             "blocked_actions": [],
         }
 
-    metrics = await build_work_order_insight_metrics(db)
-    response = build_work_order_insight_query_response(question=text, metrics=metrics)
-    answer = response.get("answer") or "我已查询工单运营指标。"
+    analysis_scope = _build_operator_analysis_scope(
+        text=text,
+        scope=scope,
+        previous_state=previous_state,
+    )
+    analysis_response = await build_work_order_facts_response(
+        db,
+        question=text,
+        intent=str(analysis_scope.get("intent") or infer_work_order_analysis_intent(text)),
+        scope=analysis_scope,
+        include_chart=include_chart,
+    )
+    answer = str(analysis_response.get("answer") or "我已完成只读运营分析。")
+    session_state["analysis_scope"] = analysis_response.get("facts", {}).get("scope") or analysis_scope
+    session_state["last_intent"] = analysis_response.get("intent")
+    await _ensure_session(db, session_id=session_id, user=user, state=session_state)
     await _append_message(db, session_id=session_id, role="assistant", content=answer)
     await db.commit()
     return {
-        "assistant": "operator_ai",
+        "assistant": "运小维",
         "session_id": session_id,
-        "answer_type": response.get("intent", "operations_metric"),
+        "answer_type": analysis_response.get("intent", "operations_analysis"),
         "answer": answer,
         "readonly": True,
-        "facts": [],
-        "metrics": response.get("metrics") or metrics,
-        "evidence_refs": ["work_order_insights.metrics"] if include_evidence else [],
-        "suggested_followups": ["查看超时工单", "查看维修人员负载", "查看待关闭工单"],
+        "facts": analysis_response.get("facts") or {},
+        "metrics": analysis_response.get("metrics") or {},
+        "chart": analysis_response.get("chart"),
+        "evidence_refs": analysis_response.get("evidence_refs") if include_evidence else [],
+        "suggested_followups": analysis_response.get("suggested_followups") or ["查看超时工单", "按班组拆分", "对比上一周期"],
         "blocked_actions": [],
     }

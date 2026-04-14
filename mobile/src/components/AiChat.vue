@@ -9,7 +9,7 @@
       <text class="chat-hint">{{ chatHint }}</text>
     </view>
     <view v-if="isOperatorMode && operatorQuickPrompts.length" class="quick-prompt-bar">
-      <text class="quick-prompt-title">经验速查</text>
+      <text class="quick-prompt-title">{{ props.order ? '工单追问' : '运营分析快捷问法' }}</text>
       <view class="quick-prompt-list">
         <text
           v-for="prompt in operatorQuickPrompts"
@@ -18,6 +18,38 @@
           :class="{ disabled: sending }"
           @click="sendPresetMessage(prompt)"
         >{{ prompt }}</text>
+      </view>
+    </view>
+    <view v-if="isOperatorWorkbench" class="operator-filter-panel">
+      <view class="operator-filter-head">
+        <text class="operator-filter-title">运小维 · 只读分析模式</text>
+        <text class="operator-filter-sub">{{ operatorFilterLoading ? '加载筛选项中...' : '可先选时间、楼宇、班组、人员，再发起问询' }}</text>
+      </view>
+      <view class="operator-filter-grid">
+        <picker class="operator-picker" :range="operatorDateOptions" range-key="label" :value="operatorDateOptions.findIndex(item => item.value === operatorDatePreset)" @change="operatorDatePreset = operatorDateOptions[$event.detail.value].value as any">
+          <view class="operator-picker-box">
+            <text class="operator-picker-label">时间范围</text>
+            <text class="operator-picker-value">{{ selectedOptionLabel(operatorDateOptions, operatorDatePreset, '本月') }}</text>
+          </view>
+        </picker>
+        <picker class="operator-picker" :range="operatorBuildingOptions" range-key="label" :value="operatorBuildingOptions.findIndex(item => item.value === operatorBuildingId)" @change="operatorBuildingId = operatorBuildingOptions[$event.detail.value].value">
+          <view class="operator-picker-box">
+            <text class="operator-picker-label">楼宇</text>
+            <text class="operator-picker-value">{{ selectedOptionLabel(operatorBuildingOptions, operatorBuildingId, '全部楼宇') }}</text>
+          </view>
+        </picker>
+        <picker class="operator-picker" :range="operatorTeamOptions" range-key="label" :value="operatorTeamOptions.findIndex(item => item.value === operatorTeamId)" @change="operatorTeamId = operatorTeamOptions[$event.detail.value].value">
+          <view class="operator-picker-box">
+            <text class="operator-picker-label">班组</text>
+            <text class="operator-picker-value">{{ selectedOptionLabel(operatorTeamOptions, operatorTeamId, '全部班组') }}</text>
+          </view>
+        </picker>
+        <picker class="operator-picker" :range="operatorWorkerOptions" range-key="label" :value="operatorWorkerOptions.findIndex(item => item.value === operatorWorkerId)" @change="operatorWorkerId = operatorWorkerOptions[$event.detail.value].value">
+          <view class="operator-picker-box">
+            <text class="operator-picker-label">人员</text>
+            <text class="operator-picker-value">{{ selectedOptionLabel(operatorWorkerOptions, operatorWorkerId, '全部人员') }}</text>
+          </view>
+        </picker>
       </view>
     </view>
 
@@ -57,9 +89,45 @@
           </view>
         </view>
         <view
-          v-if="msg.role === 'ai' && (msg.experienceItems?.length || msg.suggestedFollowups?.length)"
+          v-if="msg.role === 'ai' && (msg.readonly || msg.chart || msg.evidenceClaims?.length || msg.blockedActions?.length || msg.experienceItems?.length || msg.suggestedFollowups?.length)"
           class="msg-extensions"
         >
+          <view v-if="msg.readonly" class="readonly-tag">
+            <text>运小维 · 只读分析模式</text>
+          </view>
+          <view v-if="msg.blockedActions?.length" class="analysis-card warning-card">
+            <text class="analysis-card-title">写动作已拦截</text>
+            <text class="analysis-card-copy">当前只提供分析与证据，不直接执行改派、关闭或审批。</text>
+          </view>
+          <view v-if="msg.chart" class="analysis-card chart-card">
+            <view class="analysis-card-head">
+              <text class="analysis-card-title">{{ msg.chart?.title || '运营图表' }}</text>
+              <text v-if="msg.chart?.source" class="analysis-card-source">{{ msg.chart.source }}</text>
+            </view>
+            <view v-if="buildChartRows(msg.chart).length" class="chart-row-list">
+              <view v-for="item in buildChartRows(msg.chart)" :key="item.label" class="chart-row">
+                <view class="chart-row-head">
+                  <text class="chart-row-label">{{ item.label }}</text>
+                  <text class="chart-row-value">{{ item.values }}</text>
+                </view>
+                <view class="chart-row-track">
+                  <view class="chart-row-fill" :style="{ width: `${item.width}%` }" />
+                </view>
+              </view>
+            </view>
+          </view>
+          <view v-if="msg.evidenceClaims?.length" class="analysis-card evidence-card">
+            <view class="analysis-card-head">
+              <text class="analysis-card-title">证据引用</text>
+              <text class="analysis-card-toggle" @click="toggleEvidence(idx)">{{ msg.showEvidence ? '收起' : '展开' }}</text>
+            </view>
+            <view v-if="msg.showEvidence" class="evidence-list">
+              <view v-for="claim in msg.evidenceClaims" :key="claim.claim" class="evidence-item">
+                <text class="evidence-claim">{{ claim.claim }}</text>
+                <text class="evidence-ref">{{ claim.evidence_refs.join(' · ') }}</text>
+              </view>
+            </view>
+          </view>
           <view v-if="msg.experienceItems?.length" class="experience-card-list">
             <view
               v-for="item in msg.experienceItems"
@@ -237,6 +305,8 @@ import {
   type MaintenanceExperienceItem,
   type MaintenanceExperienceRecommendation,
 } from '../api/maintenance-experience'
+import { workerProfileApi } from '../api/workerProfile'
+import { getBuildingLabel } from '../constants/buildings'
 
 interface ChatMsg {
   role: 'user' | 'ai'
@@ -246,6 +316,17 @@ interface ChatMsg {
   answerType?: string
   experienceItems?: MaintenanceExperienceItem[]
   suggestedFollowups?: string[]
+  chart?: Record<string, any> | null
+  evidenceClaims?: Array<{ claim: string; evidence_refs: string[] }>
+  evidenceRefs?: string[]
+  blockedActions?: string[]
+  readonly?: boolean
+  showEvidence?: boolean
+}
+
+interface OperatorFilterOption {
+  value: string
+  label: string
 }
 
 const emit = defineEmits<{
@@ -289,6 +370,14 @@ const introducedPlanId = ref('')
 const lastStepMessageId = ref('')
 const experienceFeedbackLoading = ref<Record<string, MaintenanceExperienceFeedbackType | ''>>({})
 const experienceFeedbackState = ref<Record<string, MaintenanceExperienceFeedbackType | ''>>({})
+const operatorFilterLoading = ref(false)
+const operatorDatePreset = ref<'today' | 'week' | 'month' | '7d' | '30d'>('month')
+const operatorBuildingId = ref('')
+const operatorTeamId = ref('')
+const operatorWorkerId = ref('')
+const operatorBuildingOptions = ref<OperatorFilterOption[]>([{ value: '', label: '全部楼宇' }])
+const operatorTeamOptions = ref<OperatorFilterOption[]>([{ value: '', label: '全部班组' }])
+const operatorWorkerOptions = ref<OperatorFilterOption[]>([{ value: '', label: '全部人员' }])
 let recorderManager: any = null
 let h5MediaRecorder: MediaRecorder | null = null
 let h5AudioChunks: BlobPart[] = []
@@ -296,11 +385,12 @@ let h5AudioChunks: BlobPart[] = []
 const chatTitle = computed(() => props.title)
 const isWorkerMode = computed(() => props.mode === 'worker' && !!props.order)
 const isOperatorMode = computed(() => props.mode === 'operator')
+const isOperatorWorkbench = computed(() => isOperatorMode.value && !props.order)
 const chatHint = computed(() => props.hint || (
   isWorkerMode.value
     ? '基于当前工单自动提供诊断建议'
     : isOperatorMode.value
-      ? (props.order ? '只读查看当前工单进展、维修指导和现场记录' : '可以查询工单、派工和维修进展')
+      ? (props.order ? '只读查看当前工单进展、维修指导和现场记录' : '只读查询工单、班组、楼宇和时间范围运营分析')
       : '可以咨询能耗、工单、派工和现场处置问题'
 ))
 const orderIntro = computed(() => {
@@ -330,13 +420,28 @@ const currentStep = computed<WorkerAiStep | null>(() => {
 const experienceRecommendations = computed<MaintenanceExperienceRecommendation[]>(() => (
   stepPlan.value?.experience_recommendations || []
 ))
+const operatorDateOptions = computed<OperatorFilterOption[]>(() => ([
+  { value: 'today', label: '今天' },
+  { value: 'week', label: '本周' },
+  { value: 'month', label: '本月' },
+  { value: '7d', label: '近7天' },
+  { value: '30d', label: '近30天' },
+]))
 const operatorQuickPrompts = computed(() => {
   if (!isOperatorMode.value) return []
-  const subject = props.order?.ticket_id ? `这张工单 ${props.order.ticket_id}` : '当前这类故障'
+  if (props.order?.ticket_id) {
+    const subject = `这张工单 ${props.order.ticket_id}`
+    return [
+      `${subject} 完整流程是什么？`,
+      `${subject} 为什么超时？`,
+      `${subject} 最近有哪些相关经验？`,
+    ]
+  }
   return [
-    `${subject} 类似问题历史上大家怎么处理？`,
-    `${subject} 最近有哪些相关经验？`,
-    `${subject} 哪些经验被引用最多？`,
+    '生成本月工单运营总结',
+    '对比本周和上周公共楼工单处理效率',
+    '这个月谁处理得最多',
+    '本周哪个班组超时率最高',
   ]
 })
 
@@ -359,6 +464,130 @@ function normalizeExperienceItems(facts: unknown): MaintenanceExperienceItem[] {
   if (!facts || typeof facts !== 'object') return []
   const rawItems = Array.isArray((facts as any).items) ? (facts as any).items : []
   return rawItems.filter((item: unknown) => !!item && typeof item === 'object') as MaintenanceExperienceItem[]
+}
+
+function normalizeEvidenceClaims(
+  facts: unknown,
+  evidenceRefs: string[] | undefined,
+): Array<{ claim: string; evidence_refs: string[] }> {
+  if (facts && typeof facts === 'object' && Array.isArray((facts as any).claims)) {
+    return (facts as any).claims
+      .filter((item: unknown) => !!item && typeof item === 'object')
+      .map((item: any) => ({
+        claim: String(item.claim || '').trim(),
+        evidence_refs: Array.isArray(item.evidence_refs)
+          ? item.evidence_refs.map((ref: unknown) => String(ref || '').trim()).filter(Boolean)
+          : [],
+      }))
+      .filter((item: { claim: string }) => !!item.claim)
+  }
+  return (evidenceRefs || []).length
+    ? [{ claim: '本次回答引用了以下证据来源', evidence_refs: evidenceRefs || [] }]
+    : []
+}
+
+function selectedOptionLabel(options: OperatorFilterOption[], value: string, fallback: string) {
+  if (!value) return fallback
+  return options.find(item => item.value === value)?.label || fallback
+}
+
+function toIsoDate(target: Date) {
+  return target.toISOString().slice(0, 10)
+}
+
+function resolveOperatorDateScope(preset: 'today' | 'week' | 'month' | '7d' | '30d') {
+  const now = new Date()
+  const end = new Date(now)
+  const start = new Date(now)
+  if (preset === 'today') {
+    return { date_from: toIsoDate(start), date_to: toIsoDate(end) }
+  }
+  if (preset === 'week') {
+    const day = start.getDay()
+    const delta = day === 0 ? 6 : day - 1
+    start.setDate(start.getDate() - delta)
+    return { date_from: toIsoDate(start), date_to: toIsoDate(end) }
+  }
+  if (preset === 'month') {
+    start.setDate(1)
+    return { date_from: toIsoDate(start), date_to: toIsoDate(end) }
+  }
+  const days = preset === '30d' ? 29 : 6
+  start.setDate(start.getDate() - days)
+  return { date_from: toIsoDate(start), date_to: toIsoDate(end) }
+}
+
+async function loadOperatorFilters() {
+  if (!isOperatorWorkbench.value || operatorFilterLoading.value) return
+  operatorFilterLoading.value = true
+  try {
+    const [options, workers] = await Promise.all([
+      workerProfileApi.options(),
+      workerProfileApi.list(),
+    ])
+    operatorBuildingOptions.value = [
+      { value: '', label: '全部楼宇' },
+      ...(options.buildings || []).map(item => ({
+        value: item.primary_space_usage || item.building_id,
+        label: getBuildingLabel(item.primary_space_usage || item.building_id, item.building_id),
+      })),
+    ].filter((item, index, list) => list.findIndex(candidate => candidate.value === item.value) === index)
+    operatorTeamOptions.value = [
+      { value: '', label: '全部班组' },
+      ...(options.teams || []).map(item => ({ value: item.id, label: item.name })),
+    ]
+    operatorWorkerOptions.value = [
+      { value: '', label: '全部人员' },
+      ...(workers.profiles || []).map(item => ({
+        value: item.user.id,
+        label: item.user.username,
+      })),
+    ]
+  } catch (err) {
+    console.warn('[AiChat] 运营分析筛选项加载失败', err)
+  } finally {
+    operatorFilterLoading.value = false
+  }
+}
+
+function buildOperatorScope(source: string) {
+  const dateScope = resolveOperatorDateScope(operatorDatePreset.value)
+  return {
+    source_component: source,
+    ...dateScope,
+    building_id: operatorBuildingId.value || undefined,
+    team_id: operatorTeamId.value || undefined,
+    team_name: operatorTeamId.value ? selectedOptionLabel(operatorTeamOptions.value, operatorTeamId.value, '班组') : undefined,
+    worker_id: operatorWorkerId.value || undefined,
+    worker_name: operatorWorkerId.value ? selectedOptionLabel(operatorWorkerOptions.value, operatorWorkerId.value, '人员') : undefined,
+    work_order_status: props.order?.status || null,
+    execution_status: props.order?.current_dispatch?.execution_status || props.order?.execution_status || null,
+  }
+}
+
+function buildChartRows(chart: Record<string, any> | null | undefined) {
+  if (!chart || typeof chart !== 'object') return []
+  const x = Array.isArray(chart.x) ? chart.x.map((item: unknown) => String(item)) : []
+  const series = Array.isArray(chart.series) ? chart.series : []
+  if (!x.length || !series.length) return []
+  const primary = Array.isArray(series[0]?.data) ? series[0].data : []
+  const max = Math.max(...primary.map((item: unknown) => Number(item || 0)), 1)
+  return x.map((label: string, index: number) => {
+    const values = series
+      .map((entry: any) => `${entry.name || '值'} ${entry.data?.[index] ?? 0}`)
+      .join(' · ')
+    return {
+      label,
+      width: Math.max(8, Math.round((Number(primary[index] || 0) / max) * 100)),
+      values,
+    }
+  })
+}
+
+function toggleEvidence(index: number) {
+  const target = messages.value[index]
+  if (!target || target.role !== 'ai') return
+  target.showEvidence = !target.showEvidence
 }
 
 function applyExperienceFeedbackToMessages(
@@ -820,12 +1049,15 @@ async function sendAssistantMessage(
           message: text,
           session_id: sessionId.value,
           ticket_id: props.order?.ticket_id || null,
-          scope: {
-            source_component: options.source || 'AiChat',
-            work_order_status: props.order?.status || null,
-            execution_status: props.order?.current_dispatch?.execution_status || props.order?.execution_status || null,
-          },
+          scope: props.order
+            ? {
+                source_component: options.source || 'AiChat',
+                work_order_status: props.order?.status || null,
+                execution_status: props.order?.current_dispatch?.execution_status || props.order?.execution_status || null,
+              }
+            : buildOperatorScope(options.source || 'AiChat'),
           include_evidence: true,
+          include_chart: true,
         })
       : await workerAiApi.chat({
           message: text,
@@ -851,6 +1083,14 @@ async function sendAssistantMessage(
       suggestedFollowups: 'suggested_followups' in response
         ? (response.suggested_followups || [])
         : undefined,
+      chart: props.mode === 'operator' && 'chart' in response ? response.chart || null : null,
+      evidenceClaims: props.mode === 'operator' && 'facts' in response
+        ? normalizeEvidenceClaims(response.facts, 'evidence_refs' in response ? (response.evidence_refs || []) : [])
+        : undefined,
+      evidenceRefs: 'evidence_refs' in response ? (response.evidence_refs || []) : undefined,
+      blockedActions: 'blocked_actions' in response ? (response.blocked_actions || []) : undefined,
+      readonly: 'readonly' in response ? !!response.readonly : false,
+      showEvidence: false,
     })
     if (props.mode === 'worker' && response.message_type === 'action_result') {
       const latestOrder = await refreshOrderState()
@@ -1141,6 +1381,7 @@ watch(
   () => [props.mode, props.order?.ticket_id, props.dispatchId],
   () => {
     if (isWorkerMode.value) void loadStepPlan(true)
+    if (isOperatorWorkbench.value) void loadOperatorFilters()
   },
 )
 
@@ -1149,6 +1390,7 @@ onMounted(() => {
     componentReady.value = true
     setupRecorder()
     if (isWorkerMode.value) void loadStepPlan(true)
+    if (isOperatorWorkbench.value) void loadOperatorFilters()
   })
 })
 
@@ -1712,5 +1954,186 @@ onBeforeUnmount(() => {
 .experience-feedback-btn.danger.active {
   background: #ffe5df;
   color: #b45042;
+}
+
+.operator-filter-panel {
+  margin: 18rpx 20rpx 0;
+  padding: 18rpx;
+  border-radius: 18rpx;
+  background: linear-gradient(180deg, #f6fbf1 0%, #edf6ea 100%);
+  border: 1rpx solid #d6e7cf;
+}
+
+.operator-filter-head {
+  display: flex;
+  flex-direction: column;
+  gap: 6rpx;
+}
+
+.operator-filter-title {
+  font-size: 24rpx;
+  font-weight: 800;
+  color: #2f4a32;
+}
+
+.operator-filter-sub {
+  font-size: 21rpx;
+  line-height: 1.5;
+  color: #68806c;
+}
+
+.operator-filter-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12rpx;
+  margin-top: 14rpx;
+}
+
+.operator-picker {
+  min-width: 0;
+}
+
+.operator-picker-box {
+  min-height: 92rpx;
+  padding: 16rpx 18rpx;
+  border-radius: 14rpx;
+  background: rgba(255, 255, 255, 0.82);
+  border: 1rpx solid #d9e4d4;
+}
+
+.operator-picker-label {
+  display: block;
+  font-size: 20rpx;
+  color: #7b8c78;
+}
+
+.operator-picker-value {
+  display: block;
+  margin-top: 8rpx;
+  font-size: 24rpx;
+  line-height: 1.4;
+  color: #27412b;
+  font-weight: 700;
+}
+
+.readonly-tag {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44rpx;
+  padding: 0 16rpx;
+  border-radius: 999rpx;
+  background: #eef6e6;
+  color: #4c6a43;
+  font-size: 20rpx;
+  font-weight: 700;
+}
+
+.analysis-card {
+  margin-top: 12rpx;
+  padding: 16rpx 18rpx;
+  border-radius: 18rpx;
+  background: #f8fafc;
+  border: 1rpx solid #e2e8ef;
+}
+
+.warning-card {
+  background: #fff6ef;
+  border-color: #f3d8bf;
+}
+
+.analysis-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16rpx;
+}
+
+.analysis-card-title {
+  flex: 1;
+  font-size: 24rpx;
+  line-height: 1.5;
+  color: #23323b;
+  font-weight: 800;
+}
+
+.analysis-card-source,
+.analysis-card-toggle,
+.analysis-card-copy {
+  display: block;
+  margin-top: 8rpx;
+  font-size: 21rpx;
+  line-height: 1.55;
+  color: #6a7882;
+}
+
+.analysis-card-source,
+.analysis-card-toggle {
+  margin-top: 0;
+  flex-shrink: 0;
+}
+
+.chart-row-list,
+.evidence-list {
+  display: grid;
+  gap: 12rpx;
+  margin-top: 14rpx;
+}
+
+.chart-row-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16rpx;
+}
+
+.chart-row-label {
+  font-size: 22rpx;
+  color: #2b3c46;
+  font-weight: 700;
+}
+
+.chart-row-value {
+  flex: 1;
+  text-align: right;
+  font-size: 20rpx;
+  line-height: 1.5;
+  color: #71818c;
+}
+
+.chart-row-track {
+  height: 12rpx;
+  margin-top: 8rpx;
+  border-radius: 999rpx;
+  background: #e7eef4;
+  overflow: hidden;
+}
+
+.chart-row-fill {
+  height: 100%;
+  border-radius: 999rpx;
+  background: linear-gradient(90deg, #8cbf7d 0%, #5f9e87 100%);
+}
+
+.evidence-item {
+  padding: 14rpx;
+  border-radius: 14rpx;
+  background: #ffffff;
+  border: 1rpx solid #ebf0f4;
+}
+
+.evidence-claim {
+  display: block;
+  font-size: 22rpx;
+  line-height: 1.55;
+  color: #27343c;
+  font-weight: 700;
+}
+
+.evidence-ref {
+  display: block;
+  margin-top: 8rpx;
+  font-size: 20rpx;
+  line-height: 1.5;
+  color: #788690;
 }
 </style>

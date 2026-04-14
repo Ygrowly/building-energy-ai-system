@@ -53,7 +53,35 @@ export interface WorkerProfileSelfUpdatePayload {
   notes?: string | null
 }
 
+export interface WorkerProfileListResponse {
+  total: number
+  profiles: WorkerProfileItem[]
+  summary: {
+    workers_total: number
+    dispatch_enabled: number
+    on_duty: number
+    over_capacity: number
+  }
+}
+
+export interface WorkerProfileOptionsResponse {
+  teams: WorkerTeamInfo[]
+  buildings: Array<{
+    building_id: string
+    primary_space_usage?: string | null
+    sqm?: number | null
+  }>
+}
+
 export const workerProfileApi = {
+  list(): Promise<WorkerProfileListResponse> {
+    return get<WorkerProfileListResponse>('/api/worker-profiles')
+  },
+
+  options(): Promise<WorkerProfileOptionsResponse> {
+    return get<WorkerProfileOptionsResponse>('/api/worker-profiles/options')
+  },
+
   me(): Promise<WorkerProfileItem> {
     return get<WorkerProfileItem>('/api/worker-profiles/me')
   },

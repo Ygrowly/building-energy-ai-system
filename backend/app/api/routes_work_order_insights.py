@@ -21,12 +21,48 @@ from app.services.work_order_insights_service import (
     build_work_order_operation_insights,
     explain_auto_dispatch_operation_insights,
 )
+from app.services.work_order_analysis_service import (
+    build_work_order_facts_response,
+    build_work_order_report_response,
+)
 
 router = APIRouter(prefix="/work-order-insights", tags=["工单运营洞察"])
 
 
 class WorkOrderInsightQueryRequest(BaseModel):
     question: str = Field(..., min_length=1, max_length=500)
+
+
+class WorkOrderInsightFactsRequest(BaseModel):
+    question: str | None = Field(default=None, max_length=500)
+    intent: str | None = Field(default=None, max_length=64)
+    date_from: date | None = None
+    date_to: date | None = None
+    building_id: str | None = None
+    worker_id: str | None = None
+    worker_name: str | None = Field(default=None, max_length=128)
+    team_id: str | None = None
+    team_name: str | None = Field(default=None, max_length=128)
+    status: list[str] | None = None
+    group_by: str | None = Field(default=None, max_length=32)
+    metrics: list[str] | None = None
+    include_chart: bool = True
+
+
+class WorkOrderInsightReportRequest(BaseModel):
+    report_type: str = Field(..., max_length=32)
+    question: str | None = Field(default=None, max_length=500)
+    date_from: date | None = None
+    date_to: date | None = None
+    building_id: str | None = None
+    worker_id: str | None = None
+    worker_name: str | None = Field(default=None, max_length=128)
+    team_id: str | None = None
+    team_name: str | None = Field(default=None, max_length=128)
+    status: list[str] | None = None
+    group_by: str | None = Field(default=None, max_length=32)
+    metrics: list[str] | None = None
+    include_chart: bool = True
 
 
 class AutoDispatchOperationExplainRequest(BaseModel):
@@ -229,4 +265,38 @@ async def query_work_order_insights(
     return build_work_order_insight_query_response(
         question=req.question,
         metrics=metrics,
+    )
+
+
+@router.post("/facts", summary="参数化工单运营事实查询")
+async def query_work_order_facts(
+    req: WorkOrderInsightFactsRequest,
+    db: AsyncSession = Depends(get_db_session),
+    user: User = Depends(get_current_user),
+):
+    _require_role(user, "admin", "manager")
+    scope = req.model_dump(exclude={"question", "intent", "include_chart"}, exclude_none=True)
+    return await build_work_order_facts_response(
+        db,
+        question=req.question or "",
+        intent=req.intent,
+        scope=scope,
+        include_chart=req.include_chart,
+    )
+
+
+@router.post("/report", summary="工单运营日报/周报/月报")
+async def build_work_order_report(
+    req: WorkOrderInsightReportRequest,
+    db: AsyncSession = Depends(get_db_session),
+    user: User = Depends(get_current_user),
+):
+    _require_role(user, "admin", "manager")
+    scope = req.model_dump(exclude={"report_type", "question", "include_chart"}, exclude_none=True)
+    return await build_work_order_report_response(
+        db,
+        report_type=req.report_type,
+        question=req.question,
+        scope=scope,
+        include_chart=req.include_chart,
     )

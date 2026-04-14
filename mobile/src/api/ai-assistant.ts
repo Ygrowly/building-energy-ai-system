@@ -65,6 +65,7 @@ export interface OperatorAiChatResponse {
   readonly: boolean
   facts: any[] | Record<string, any>
   metrics: Record<string, any>
+  chart?: Record<string, any> | null
   evidence_refs: string[]
   suggested_followups: string[]
   blocked_actions: string[]
@@ -76,6 +77,7 @@ export interface OperatorAiChatRequest {
   ticket_id?: string | null
   scope?: Record<string, any> | null
   include_evidence?: boolean
+  include_chart?: boolean
 }
 
 export type WorkerAiStepStatus = 'pending' | 'completed' | 'skipped' | 'needs_support' | 'uncertain'

@@ -363,3 +363,48 @@ async def test_work_order_insight_query_endpoint_returns_deterministic_answer(
     assert response["readonly"] is True
     assert response["intent"] == "risk"
     assert "超时派工 2 个" in response["answer"]
+
+
+@pytest.mark.asyncio
+async def test_work_order_facts_endpoint_uses_phase4_service(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mock_build = AsyncMock(return_value={"readonly": True, "intent": "worker_performance"})
+    monkeypatch.setattr(routes_work_order_insights, "build_work_order_facts_response", mock_build)
+
+    response = await routes_work_order_insights.query_work_order_facts(
+        req=routes_work_order_insights.WorkOrderInsightFactsRequest(
+            question="这个月谁处理得最多",
+            building_id="Public",
+            include_chart=True,
+        ),
+        db=SimpleNamespace(),
+        user=SimpleNamespace(id="manager-1", role="manager"),
+    )
+
+    assert response["intent"] == "worker_performance"
+    assert mock_build.await_args.kwargs["scope"]["building_id"] == "Public"
+    assert mock_build.await_args.kwargs["include_chart"] is True
+
+
+@pytest.mark.asyncio
+async def test_work_order_report_endpoint_uses_phase4_service(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mock_build = AsyncMock(return_value={"readonly": True, "report_type": "monthly_report"})
+    monkeypatch.setattr(routes_work_order_insights, "build_work_order_report_response", mock_build)
+
+    response = await routes_work_order_insights.build_work_order_report(
+        req=routes_work_order_insights.WorkOrderInsightReportRequest(
+            report_type="monthly",
+            question="生成本月工单运营总结",
+            building_id="Public",
+            include_chart=False,
+        ),
+        db=SimpleNamespace(),
+        user=SimpleNamespace(id="manager-1", role="manager"),
+    )
+
+    assert response["report_type"] == "monthly_report"
+    assert mock_build.await_args.kwargs["scope"]["building_id"] == "Public"
+    assert mock_build.await_args.kwargs["include_chart"] is False

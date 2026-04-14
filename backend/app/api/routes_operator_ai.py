@@ -20,6 +20,7 @@ class OperatorAiChatRequest(BaseModel):
     ticket_id: str | None = Field(default=None, max_length=128)
     scope: dict[str, Any] | None = None
     include_evidence: bool = True
+    include_chart: bool = True
 
 
 @router.post("/chat", summary="运小维只读工单问询")
@@ -35,5 +36,6 @@ async def operator_ai_chat(
         ticket_id=req.ticket_id,
         scope=req.scope,
         include_evidence=req.include_evidence,
+        include_chart=req.include_chart,
         user=user,
     )

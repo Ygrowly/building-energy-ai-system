@@ -9,8 +9,8 @@
     <scroll-view scroll-y class="page-scroll">
       <view class="intro">
         <text class="intro-kicker">AI Assistant</text>
-        <text class="intro-title">今天想查什么？</text>
-        <text class="intro-copy">能耗、派工、维修流程都可以直接问。</text>
+        <text class="intro-title">{{ assistantMode === 'operator' ? '今天想分析什么？' : '今天想查什么？' }}</text>
+        <text class="intro-copy">{{ assistantMode === 'operator' ? '可按时间、楼宇、班组、人员做只读运营分析。' : '能耗、派工、维修流程都可以直接问。' }}</text>
       </view>
 
       <AiChat

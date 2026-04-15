@@ -179,7 +179,7 @@ const dispatchPanel = ref({
   requirement: null as any | null,
   candidates: [] as Candidate[],
 })
-const pendingFocus = ref<{ ticketId: string; action: 'dispatch' | 'reassign' | 'open' } | null>(null)
+const pendingFocus = ref<PendingFocus | null>(null)
 const suppressRouteQuerySync = ref(false)
 
 const workspaceSwitchItems: Array<{ mode: WorkOrderWorkspaceMode; label: string; icon: string; path: string }> = [
@@ -616,7 +616,7 @@ function syncPendingFocusFromRoute() {
 
   pendingFocus.value = {
     ticketId: route.query.focus_ticket,
-    action: 'open',
+    action: 'expand',
   }
   if (isVisibleTab('all')) {
     activeTab.value = 'all'

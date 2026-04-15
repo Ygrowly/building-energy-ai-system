@@ -176,15 +176,6 @@ export function useWorkOrderPresentation(options: UseWorkOrderPresentationOption
       || '未派工'
   }
 
-  function executionStatusForOrder(wo: any) {
-    return currentDispatchForOrder(wo)?.execution_status || wo.execution_status || ''
-  }
-
-  function executionLabelForOrder(wo: any) {
-    const status = executionStatusForOrder(wo)
-    return status ? options.executionLabels[status] ?? status : '—'
-  }
-
   function statusLabelForOrder(wo: any) {
     if (wo.status === 'closed') return options.statusLabels.closed ?? '已关闭'
     if (wo.approval_status === 'pending_review') return approvalStatusLabels.pending_review
@@ -196,10 +187,6 @@ export function useWorkOrderPresentation(options: UseWorkOrderPresentationOption
       return dispatchSummaryStatusLabels[wo.dispatch_summary_status] ?? wo.dispatch_summary_status
     }
     return options.statusLabels[wo.status] ?? wo.status
-  }
-
-  function assigneeNameForOrder(wo: any) {
-    return assigneeName(wo, currentDispatchForOrder(wo))
   }
 
   function assigneeNameForOrder(wo: any) {
@@ -357,9 +344,6 @@ export function useWorkOrderPresentation(options: UseWorkOrderPresentationOption
     executionStatusForOrder,
     executionLabelForOrder,
     statusLabelForOrder,
-    assigneeNameForOrder,
-    executionStatusForOrder,
-    executionLabelForOrder,
     assigneeNameForOrder,
     detailRows,
     timelineRows,

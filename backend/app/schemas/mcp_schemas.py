@@ -29,6 +29,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import Enum
+import re
 from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -50,7 +51,13 @@ class BuildingID(str, Enum):
     """
     EDUCATION = "Education"
     OFFICE = "Office"
-    PUBLIC = "Public services"
+    PUBLIC = "Public"
+
+    @classmethod
+    def _missing_(cls, value: object) -> "BuildingID" | None:
+        if value == "Public services":
+            return cls.PUBLIC
+        return None
 
 
 class MetricType(str, Enum):
@@ -67,9 +74,11 @@ class MetricType(str, Enum):
     HAC_ENERGY = "hac_energy"
     SIM_SUPPLY_TEMP_C = "sim_supply_temp_c"
     SIM_RETURN_TEMP_C = "sim_return_temp_c"
+    AMBIENT_TEMP_C = "air_temp_c"
     AIR_TEMP_C = "air_temp_c"
     DEW_TEMP_C = "dew_temp_c"
     HUMIDITY_RH_PCT = "humidity_rh_pct"
+    OCCUPANCY_DENSITY = "occupancy_density_per_100sqm"
 
 
 class OperationStatus(str, Enum):

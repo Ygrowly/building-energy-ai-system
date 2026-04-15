@@ -370,7 +370,7 @@ async def handle_operator_ai_chat(
     ticket_id: str | None,
     scope: dict[str, Any] | None,
     include_evidence: bool,
-    include_chart: bool,
+    include_chart: bool = True,
     user: User,
 ) -> dict[str, Any]:
     if user.role not in {"admin", "manager"}:
@@ -380,7 +380,7 @@ async def handle_operator_ai_chat(
     if not text:
         raise HTTPException(status_code=400, detail="消息不能为空")
     session_id = session_id or f"opai_{uuid.uuid4().hex}"
-    existing_session = await db.get(AiAssistantSession, session_id)
+    existing_session = await db.get(AiAssistantSession, session_id) if hasattr(db, "get") else None
     previous_state = _safe_session_state(getattr(existing_session, "session_state_json", None))
     session_state: dict[str, Any] = {"scope": scope or {}}
     await _ensure_session(db, session_id=session_id, user=user, state=session_state)

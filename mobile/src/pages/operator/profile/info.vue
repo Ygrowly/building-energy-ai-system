@@ -1,6 +1,6 @@
 <template>
-  <view class="page">
-    <NavBar title="个人资料" bg-color="#1a1a2e" :show-back="true" />
+  <view class="page theme-operator">
+    <NavBar title="个人资料" bg-color="#2f855a" :show-back="true" />
 
     <view class="form-section">
       <!-- 用户名（只读） -->
@@ -80,13 +80,15 @@ async function handleSave() {
 </script>
 
 <style lang="scss" scoped>
-.page { background: #f0f2f8; min-height: 100vh; }
+.page { background: var(--operator-bg, #eef5ef); min-height: 100vh; }
 
 .form-section {
-  background: #fff;
-  border-radius: 16rpx;
+  background: var(--operator-card, #fff);
+  border-radius: 20rpx;
   margin: 24rpx 32rpx 0;
   overflow: hidden;
+  border: 1rpx solid var(--operator-border, rgba(203, 225, 208, 0.96));
+  box-shadow: var(--operator-shadow, 0 12rpx 34rpx rgba(35, 75, 54, 0.1));
 }
 
 .form-item {
@@ -98,29 +100,29 @@ async function handleSave() {
 .form-label {
   width: 140rpx;
   font-size: 28rpx;
-  color: #666;
+  color: var(--operator-text-secondary, #5b6f62);
   flex-shrink: 0;
 }
 
 .form-value {
   flex: 1;
   font-size: 28rpx;
-  color: #1a1a2e;
+  color: var(--operator-text, #163022);
   text-align: right;
 
-  &.readonly { color: #999; }
+  &.readonly { color: var(--operator-text-muted, #8aa091); }
 }
 
 .form-input {
   flex: 1;
   font-size: 28rpx;
-  color: #1a1a2e;
+  color: var(--operator-text, #163022);
   text-align: right;
 }
 
 .form-divider {
   height: 1rpx;
-  background: #f5f5f5;
+  background: var(--operator-border, rgba(203, 225, 208, 0.96));
   margin: 0 28rpx;
 }
 
@@ -131,11 +133,11 @@ async function handleSave() {
 .save-btn {
   width: 100%;
   height: 88rpx;
-  background: #3b6cf4;
+  background: var(--operator-btn, linear-gradient(135deg, #42bf72, #2f855a));
   color: #fff;
   font-size: 30rpx;
   font-weight: 600;
-  border-radius: 16rpx;
+  border-radius: 20rpx;
   border: none;
 }
 </style>

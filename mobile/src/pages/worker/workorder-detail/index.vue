@@ -15,7 +15,15 @@
             <text v-if="executionText" class="hero-badge plain">{{ executionText }}</text>
           </view>
 
-          <text class="hero-title">{{ summaryText }}</text>
+          <text class="hero-title">{{ heroTitleText }}</text>
+          <view v-if="heroContextChips.length" class="hero-context-row">
+            <text
+              v-for="chip in heroContextChips"
+              :key="chip"
+              class="hero-context-chip"
+            >{{ chip }}</text>
+          </view>
+          <text v-if="heroInsightText" class="hero-insight">{{ heroInsightText }}</text>
           <text class="hero-location">{{ buildingLabel }} · {{ locationLabel }}</text>
 
           <view class="hero-meta">
@@ -122,19 +130,6 @@
               <text v-if="order.worker_notes" class="note-text">{{ order.worker_notes }}</text>
             </view>
 
-            <view class="section-card" v-if="readonly && isOperatorViewer">
-              <text class="section-title">运小维</text>
-              <text class="note-text">
-                可直接查询这张工单的当前进度、维修指导步骤、最近协同记录，以及现场图片和语音上传情况。
-              </text>
-              <AiChat
-                :order="order"
-                mode="operator"
-                title="运小维"
-                hint="只读查询当前工单进展、维修指导和现场记录"
-              />
-            </view>
-
             <view class="section-card" v-if="!readonly">
               <text class="section-title">维小修</text>
               <text class="note-text">{{ workerAiEntryText }}</text>
@@ -215,6 +210,8 @@ import {
   formatDeviceLabel,
   formatRuleLabel,
   formatSystemLabel,
+  formatTimelineLabel,
+  formatWorkOrderTitle,
   sanitizeDisplayText,
 } from '../../../utils/display'
 import { OPERATOR_ROLES, WORKER_ROLES } from '../../../constants/roles'
@@ -295,6 +292,28 @@ type TimelineItem = { time: string; label: string; note?: string; sortValue: num
 type ProgressAction = { action: WorkerDispatchAction; label: string }
 type DispatchHistoryCard = { id: string; title: string; status: string; meta: string; notes: string[] }
 
+function toTimestamp(value?: string | null): number | null {
+  if (!value) return null
+  const parsed = new Date(value).getTime()
+  return Number.isNaN(parsed) ? null : parsed
+}
+
+function formatCompactDateTime(value?: string | null): string {
+  const text = formatDateTime(value)
+  if (!text || text === '--') return ''
+  return text.slice(5, 16)
+}
+
+function buildWindowText(start?: string | null, end?: string | null): string {
+  const startText = formatCompactDateTime(start)
+  const endText = formatCompactDateTime(end)
+  if (!startText && !endText) return ''
+  if (!startText) return endText
+  if (!endText || startText === endText) return startText
+  if (startText.slice(0, 5) === endText.slice(0, 5)) return `${startText} ~ ${endText.slice(6)}`
+  return `${startText} ~ ${endText}`
+}
+
 const detailTabs = [
   { key: 'order', label: '工单信息' },
   { key: 'customer', label: '客户信息' },
@@ -348,6 +367,68 @@ const summaryText = computed(() => (
   || sanitizeDisplayText(order.value?.issue_description)
   || '工单待处理'
 ))
+const anomalyLinks = computed(() => (
+  [...(order.value?.anomaly_links || [])]
+    .filter(item => Boolean(item.data_timestamp))
+    .sort((a, b) => (toTimestamp(a.data_timestamp) || 0) - (toTimestamp(b.data_timestamp) || 0))
+))
+const latestAnomalyLink = computed(() => anomalyLinks.value[anomalyLinks.value.length - 1] || null)
+const anomalyWindowText = computed(() => buildWindowText(
+  incident.value?.first_seen_at || anomalyLinks.value[0]?.data_timestamp || null,
+  incident.value?.last_seen_at || latestAnomalyLink.value?.data_timestamp || null,
+))
+const anomalyCountText = computed(() => {
+  const count = incident.value?.anomaly_count || anomalyLinks.value.length
+  return count > 1 ? `连续 ${count} 次` : ''
+})
+const peakDeviationValue = computed<number | null>(() => {
+  if (incident.value?.peak_deviation_pct !== null && incident.value?.peak_deviation_pct !== undefined) {
+    return incident.value.peak_deviation_pct
+  }
+  return anomalyLinks.value.reduce<number | null>((peak, item) => {
+    const current = item.deviation_pct
+    if (current === null || current === undefined) return peak
+    if (peak === null || Math.abs(current) > Math.abs(peak)) return current
+    return peak
+  }, null)
+})
+const latestActualValue = computed<number | null>(() => {
+  if (incident.value?.latest_actual_value !== null && incident.value?.latest_actual_value !== undefined) {
+    return incident.value.latest_actual_value
+  }
+  return latestAnomalyLink.value?.actual_value ?? null
+})
+const latestExpectedValue = computed<number | null>(() => {
+  if (incident.value?.latest_expected_value !== null && incident.value?.latest_expected_value !== undefined) {
+    return incident.value.latest_expected_value
+  }
+  return latestAnomalyLink.value?.expected_value ?? null
+})
+const heroTitleText = computed(() => {
+  const ruleTriggered = incident.value?.rule_triggered || anomalyLinks.value[0]?.rule_triggered
+  return formatWorkOrderTitle({
+    ruleTriggered,
+    summaryText: summaryText.value,
+    issueDescription: order.value?.issue_description,
+    buildingId: order.value?.building_id || incident.value?.building_id || hallEntry.value?.work_order?.building_id,
+  })
+})
+const heroContextChips = computed(() => (
+  [anomalyWindowText.value, anomalyCountText.value].filter(Boolean) as string[]
+))
+const heroInsightText = computed(() => {
+  const parts: string[] = []
+  if (peakDeviationValue.value !== null && peakDeviationValue.value !== undefined) {
+    parts.push(`峰值偏离 ${formatPct(peakDeviationValue.value)}`)
+  }
+  if (latestActualValue.value !== null && latestActualValue.value !== undefined) {
+    parts.push(`最新实际 ${formatMetricValue(latestActualValue.value)}`)
+  }
+  if (latestExpectedValue.value !== null && latestExpectedValue.value !== undefined) {
+    parts.push(`最新预期 ${formatMetricValue(latestExpectedValue.value)}`)
+  }
+  return parts.join('，')
+})
 const priorityText = computed(() => PRIORITY_LABEL[
   hallEntry.value?.work_order?.priority
   || incident.value?.priority
@@ -673,7 +754,7 @@ const serviceTimeline = computed<TimelineItem[]>(() => {
     return timelineItems
       .map(item => ({
         time: formatDateTime(item.occurred_at),
-        label: item.attempt_no ? `第 ${item.attempt_no} 次 · ${item.label}` : item.label,
+        label: item.attempt_no ? `第 ${item.attempt_no} 次 · ${formatTimelineLabel(item.label)}` : formatTimelineLabel(item.label),
         note: sanitizeDisplayText(item.note || '') || undefined,
         sortValue: new Date(item.occurred_at || '').getTime() || 0,
       }))
@@ -801,7 +882,7 @@ async function loadOrder(options: { silent?: boolean } = {}) {
       orderTimeline.value = timelineData
     }
 
-    if (incidentId && !readonly) {
+    if (incidentId) {
       try {
         incident.value = await incidentApi.detail(incidentId)
         const currentTicketId = incident.value.current_work_order?.ticket_id
@@ -811,13 +892,6 @@ async function loadOrder(options: { silent?: boolean } = {}) {
         }
       } catch {
         incident.value = null
-      }
-    } else if (!ticketId && incidentId) {
-      incident.value = await incidentApi.detail(incidentId)
-      const currentTicketId = incident.value.current_work_order?.ticket_id
-      if (currentTicketId) {
-        order.value = await workOrderApi.detail(currentTicketId)
-        await loadWorkOrderTimeline(currentTicketId)
       }
     }
     hasLoadedOnce.value = true
@@ -1066,16 +1140,41 @@ onUnmounted(() => {
 .hero-title {
   display: block;
   margin-top: 22rpx;
-  font-size: 42rpx;
-  line-height: 1.34;
+  font-size: 40rpx;
+  line-height: 1.26;
   color: #fff;
   font-weight: 700;
   text-shadow: 0 6rpx 16rpx rgba(82, 97, 48, 0.16);
 }
 
-.hero-location {
+.hero-context-row {
+  margin-top: 16rpx;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12rpx;
+}
+
+.hero-context-chip {
+  padding: 10rpx 18rpx;
+  border-radius: 999rpx;
+  font-size: 22rpx;
+  line-height: 1;
+  color: rgba(255, 255, 255, 0.98);
+  background: rgba(255, 255, 255, 0.18);
+  box-shadow: inset 0 0 0 1rpx rgba(255, 255, 255, 0.16);
+}
+
+.hero-insight {
   display: block;
   margin-top: 14rpx;
+  font-size: 24rpx;
+  line-height: 1.6;
+  color: rgba(248, 250, 240, 0.92);
+}
+
+.hero-location {
+  display: block;
+  margin-top: 16rpx;
   font-size: 25rpx;
   color: rgba(251, 253, 245, 0.94);
 }

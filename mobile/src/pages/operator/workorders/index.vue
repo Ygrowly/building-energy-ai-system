@@ -1,6 +1,6 @@
 <template>
-  <view class="page">
-    <NavBar title="工单审阅" bg-color="#111827" />
+  <view class="page theme-operator">
+    <NavBar title="工单审阅" bg-color="#2f855a" />
 
     <!-- 分组切换 -->
     <view class="tab-shell">
@@ -276,7 +276,7 @@
         <view class="dispatch-header">
           <view>
             <text class="dispatch-title">{{ dispatchPanel.mode === 'reassign' ? '改派中心' : '派工中心' }}</text>
-            <text class="dispatch-subtitle">{{ dispatchPanel.requirement?.summary || '为当前工单选择最合适的维修人员' }}</text>
+            <text class="dispatch-subtitle">{{ localizedDispatchRequirement.summary || '为当前工单选择最合适的维修人员' }}</text>
           </view>
           <text class="dispatch-close" @click="closeDispatchPanel">关闭</text>
         </view>
@@ -284,24 +284,24 @@
         <view v-if="dispatchPanel.requirement" class="requirement-strip">
           <view class="req-pill">
             <text class="req-label">楼宇</text>
-            <text class="req-value">{{ dispatchPanel.requirement.building_id }}</text>
+            <text class="req-value">{{ localizedDispatchRequirement.buildingText }}</text>
           </view>
           <view class="req-pill">
             <text class="req-label">优先级</text>
-            <text class="req-value">{{ dispatchPanel.requirement.priority }}</text>
+            <text class="req-value">{{ localizedDispatchRequirement.priorityText }}</text>
           </view>
           <view class="req-pill">
             <text class="req-label">建议班组</text>
-            <text class="req-value">{{ dispatchPanel.requirement.preferred_team_name }}</text>
+            <text class="req-value">{{ localizedDispatchRequirement.preferredTeamText }}</text>
           </view>
         </view>
 
         <view class="requirement-tags">
           <text
-            v-for="skill in dispatchPanel.requirement?.required_skills || []"
+            v-for="skill in localizedDispatchRequirement.skillTexts"
             :key="skill"
             class="requirement-tag"
-          >{{ requirementSkillText(skill) }}</text>
+          >{{ skill }}</text>
         </view>
 
         <scroll-view scroll-y class="dispatch-list">
@@ -324,23 +324,23 @@
             <view class="candidate-stats">
               <text class="candidate-stat">值班：{{ shiftText(candidate.shift_status) }}</text>
               <text class="candidate-stat">负载：{{ candidate.current_active_orders }}/{{ candidate.max_active_orders }}</text>
-              <text class="candidate-stat">匹配技能：{{ candidate.matched_skill_names?.length || 0 }}</text>
+              <text class="candidate-stat">{{ candidateMatchedSkillSummary(candidate) }}</text>
             </view>
 
-            <view class="badge-row">
-              <text v-for="badge in candidate.badges" :key="badge" class="badge-chip">{{ badge }}</text>
+            <view v-if="candidate.badges?.length" class="badge-row">
+              <text v-for="badge in candidate.badges" :key="badge" class="badge-chip">{{ candidateBadgeText(badge) }}</text>
             </view>
 
             <view v-if="candidate.skill_names?.length" class="extra-row">
               <text class="extra-label">技能</text>
-              <text class="extra-value">{{ candidate.skill_names.join(' / ') }}</text>
+              <text class="extra-value">{{ candidateSkillText(candidate) }}</text>
             </view>
             <view v-if="candidate.service_buildings?.length" class="extra-row">
               <text class="extra-label">覆盖楼宇</text>
-              <text class="extra-value">{{ candidate.service_buildings.join(' / ') }}</text>
+              <text class="extra-value">{{ candidateBuildingText(candidate) }}</text>
             </view>
 
-            <text class="candidate-reason">{{ candidate.recommend_reason }}</text>
+            <text class="candidate-reason">{{ candidateReasonText(candidate) }}</text>
 
             <button
               class="dispatch-submit"
@@ -494,13 +494,13 @@
           >
             <view class="batch-result-top">
               <view>
-                <text class="batch-skip-ticket">{{ item.ticket_id }}</text>
+                <text class="batch-skip-ticket">{{ formatOperatorTicketTag(item.ticket_id) }}</text>
                 <text class="batch-skip-meta">
-                  {{ item.current_status ? `当前状态 ${item.current_status}` : '状态未知' }}
+                  {{ item.current_status ? `当前状态 ${formatOperatorWorkOrderStatusLabel(item.current_status)}` : '状态未知' }}
                   <text v-if="item.assigned_to_name"> · 原推荐 {{ item.assigned_to_name }}</text>
                 </text>
               </view>
-              <text class="batch-result-reason">{{ item.reason }}</text>
+              <text class="batch-result-reason">{{ sanitizeOperatorDisplayText(item.reason) || '派工失败' }}</text>
             </view>
             <view class="batch-result-actions">
               <button
@@ -525,42 +525,41 @@
 
           <template v-else>
             <view
-              v-for="item in batchDispatchPanel.preview?.recommendations || []"
-              :key="item.ticket_id"
+              v-for="entry in batchRecommendationCards"
+              :key="entry.item.ticket_id"
               class="candidate-card batch-card"
             >
               <view class="candidate-top">
                 <view>
-                  <text class="candidate-name">{{ item.ticket_id }}</text>
-                  <text class="candidate-meta">{{ item.building_id }} · {{ item.priority === 'high' ? '高优先' : item.priority }}</text>
+                  <text class="candidate-name">{{ entry.view.title }}</text>
+                  <text class="candidate-meta">{{ entry.view.buildingText }} · {{ entry.view.priorityText }}</text>
                 </view>
                 <view class="score-pill">
                   <text class="score-label">差值</text>
-                  <text class="score-value">{{ item.score_gap ?? '--' }}</text>
+                  <text class="score-value">{{ entry.view.scoreGapText }}</text>
                 </view>
               </view>
 
               <view class="extra-row">
+                <text class="extra-label">工单</text>
+                <text class="extra-value">{{ entry.view.ticketTag }}</text>
+              </view>
+              <view class="extra-row">
                 <text class="extra-label">推荐人员</text>
-                <text class="extra-value">
-                  {{ item.chosen_candidate?.username || '暂无' }}
-                  <text v-if="item.chosen_candidate?.team_name"> · {{ item.chosen_candidate?.team_name }}</text>
-                </text>
+                <text class="extra-value">{{ entry.view.chosenCandidateText }}</text>
               </view>
               <view class="extra-row">
                 <text class="extra-label">需求技能</text>
-                <text class="extra-value">
-                  {{ (item.requirement?.required_skills || []).map(requirementSkillText).join(' / ') || '基础巡检' }}
-                </text>
+                <text class="extra-value">{{ entry.view.requirementText }}</text>
               </view>
-              <view class="extra-row" v-if="item.chosen_candidate">
+              <view class="extra-row" v-if="entry.item.chosen_candidate">
                 <text class="extra-label">推荐分</text>
                 <text class="extra-value">
-                  {{ item.chosen_candidate.score }}
-                  <text class="muted-text"> · 负载 {{ item.chosen_candidate.current_active_orders }}/{{ item.chosen_candidate.max_active_orders }}</text>
+                  {{ entry.item.chosen_candidate.score }}
+                  <text class="muted-text"> · 负载 {{ entry.item.chosen_candidate.current_active_orders }}/{{ entry.item.chosen_candidate.max_active_orders }}</text>
                 </text>
               </view>
-              <text class="candidate-reason">{{ item.selection_reason }}</text>
+              <text class="candidate-reason">{{ entry.view.selectionReason }}</text>
             </view>
 
             <view
@@ -597,13 +596,13 @@
               >
                 <view class="batch-skip-example-top">
                   <view>
-                    <text class="batch-skip-ticket">{{ item.ticket_id }}</text>
-                    <text class="batch-skip-meta">{{ item.building_id }} · {{ priorityText(item.priority) }}</text>
+                    <text class="batch-skip-ticket">{{ formatOperatorTicketTag(item.ticket_id) }}</text>
+                    <text class="batch-skip-meta">{{ formatBuildingLabel(item.building_id) }} · {{ priorityText(item.priority) }}</text>
                   </view>
                   <text class="batch-skip-reason">{{ item.label }}</text>
                 </view>
                 <text class="batch-skip-detail">
-                  {{ item.top_candidate ? `第一候选 ${item.top_candidate.username} · ${item.top_candidate.score} 分 · 负载 ${item.top_candidate.current_active_orders}/${item.top_candidate.max_active_orders}` : '暂无可用候选人' }}
+                  {{ item.top_candidate ? `第一候选 ${item.top_candidate.username} · ${item.top_candidate.score} 分 · 当前负载 ${item.top_candidate.current_active_orders}/${item.top_candidate.max_active_orders}` : (sanitizeOperatorDisplayText(item.reason) || '暂无可用候选人') }}
                 </text>
               </view>
             </view>
@@ -646,7 +645,19 @@ import { incidentApi, type Incident } from '../../../api/incident'
 import { getCache, setCache } from '../../../utils/cache'
 import { getDispatchSortScore, getDispatchSummaryStats, resolveExecutionStatus } from '../../../utils/incident-card'
 import { formatDateTime } from '../../../utils/format'
-import { formatBuildingLabel, formatDeviceLabel, sanitizeDisplayText } from '../../../utils/display'
+import { formatBuildingLabel, formatDeviceLabel } from '../../../utils/display'
+import {
+  buildOperatorBatchRecommendationView,
+  buildOperatorDispatchRequirementView,
+  formatOperatorBuildingList,
+  formatOperatorHallApplicationType,
+  formatOperatorHallEntryType,
+  formatOperatorShiftLabel,
+  formatOperatorSkillList,
+  formatOperatorTicketTag,
+  formatOperatorWorkOrderStatusLabel,
+  sanitizeOperatorDisplayText,
+} from '../../../utils/operator-display'
 
 useRouteGuard(OPERATOR_ROLES)
 
@@ -748,6 +759,13 @@ const batchPriorityOptions: Array<{ label: string; value: PendingPriorityFilter 
   { label: '中优先', value: 'medium' },
   { label: '低优先', value: 'low' },
 ]
+const localizedDispatchRequirement = computed(() => buildOperatorDispatchRequirementView(dispatchPanel.value.requirement))
+const batchRecommendationCards = computed(() =>
+  (batchDispatchPanel.value.preview?.recommendations || []).map((item) => ({
+    item,
+    view: buildOperatorBatchRecommendationView(item),
+  })),
+)
 
 function priorityText(priority?: string) {
   const map: Record<string, string> = {
@@ -756,6 +774,29 @@ function priorityText(priority?: string) {
     low: '低优先',
   }
   return map[priority || ''] || '中优先'
+}
+
+function candidateBadgeText(value?: string | null) {
+  return sanitizeOperatorDisplayText(value) || '综合推荐'
+}
+
+function candidateSkillText(candidate: DispatchCandidate) {
+  const values = formatOperatorSkillList(candidate.skill_names)
+  return values.join(' / ') || '基础巡检'
+}
+
+function candidateBuildingText(candidate: DispatchCandidate) {
+  const values = formatOperatorBuildingList(candidate.service_buildings)
+  return values.join(' / ') || '楼宇范围待确认'
+}
+
+function candidateMatchedSkillSummary(candidate: DispatchCandidate) {
+  const matched = formatOperatorSkillList(candidate.matched_skill_names)
+  return matched.length ? `匹配技能：${matched.length} 项` : '匹配技能：0 项'
+}
+
+function candidateReasonText(candidate: DispatchCandidate) {
+  return sanitizeOperatorDisplayText(candidate.recommend_reason) || '系统综合技能、负载与服务范围生成推荐'
 }
 
 const emptyText = computed(() => {
@@ -817,7 +858,10 @@ const pendingBuildingFilters = computed(() => {
     .map(([value, count]) => ({
       value,
       count,
-      label: value.length > 14 ? `${value.slice(0, 14)}...` : value,
+      label: (() => {
+        const display = formatBuildingLabel(value)
+        return display.length > 14 ? `${display.slice(0, 14)}...` : display
+      })(),
     }))
   return [{ value: 'all', count: incidents.value.length, label: '全部楼宇' }, ...rows]
 })
@@ -1012,11 +1056,11 @@ function hallPendingApplications(entry: DispatchHallEntry) {
 }
 
 function hallEntryTypeLabel(entry: DispatchHallEntry) {
-  return entry.entry_type === 'support_request' ? '共享协同' : '待接管'
+  return formatOperatorHallEntryType(entry.entry_type)
 }
 
 function hallEntryTitle(entry: DispatchHallEntry) {
-  return sanitizeDisplayText(entry.support_reason || entry.reason || entry.work_order?.issue_description) || '共享工单待处理'
+  return sanitizeOperatorDisplayText(entry.support_reason || entry.reason || entry.work_order?.issue_description) || '共享工单待处理'
 }
 
 function hallEntryBuilding(entry: DispatchHallEntry) {
@@ -1033,21 +1077,21 @@ function hallEntryOwner(entry: DispatchHallEntry) {
 
 function hallEntryReason(entry: DispatchHallEntry) {
   if (entry.entry_type === 'takeover_candidate') {
-    return sanitizeDisplayText(entry.reason || entry.work_order?.dispatch_blocked_reason) || '当前派工已超时，等待接管确认'
+    return sanitizeOperatorDisplayText(entry.reason || entry.work_order?.dispatch_blocked_reason) || '当前派工已超时，等待接管确认'
   }
-  return sanitizeDisplayText(entry.support_reason || entry.reason) || '主责任人申请协同支援'
+  return sanitizeOperatorDisplayText(entry.support_reason || entry.reason) || '主责任人申请协同支援'
 }
 
 function hallVisibilitySummary(entry: DispatchHallEntry) {
   const parts: string[] = []
   if (entry.target_team_ids?.length) parts.push(`目标班组 ${entry.target_team_ids.length} 个`)
-  if (entry.target_skill_tags?.length) parts.push(`技能 ${entry.target_skill_tags.join(' / ')}`)
+  if (entry.target_skill_tags?.length) parts.push(`需求技能 ${formatOperatorSkillList(entry.target_skill_tags).join(' / ')}`)
   if (entry.target_user_ids?.length) parts.push(`推荐人员 ${entry.target_user_ids.length} 人`)
   return parts.join(' · ')
 }
 
 function applicationTypeLabel(application: DispatchHallApplication) {
-  return application.application_type === 'takeover' ? '申请接管' : '申请协同'
+  return formatOperatorHallApplicationType(application.application_type)
 }
 
 function hallEmptyHint(entry: DispatchHallEntry) {
@@ -1222,27 +1266,14 @@ function openHallDetail(entry: DispatchHallEntry) {
 }
 
 function shiftText(status?: string) {
-  const map: Record<string, string> = {
-    on_duty: '值班中',
-    standby: '待命',
-    off_duty: '离岗',
-  }
-  return map[status || ''] || '值班中'
-}
-
-function requirementSkillText(skill: string) {
-  const map: Record<string, string> = {
-    hvac: '暖通空调',
-    electrical: '电气配电',
-    plumbing: '给排水',
-    controls: '楼宇自控',
-    inspection: '现场巡检',
-  }
-  return map[skill] || skill
+  return formatOperatorShiftLabel(status)
 }
 
 function candidateMeta(candidate: DispatchCandidate) {
-  return [candidate.team_name || '综合运维班', candidate.job_title || '维修工程师'].join(' · ')
+  return [
+    sanitizeOperatorDisplayText(candidate.team_name) || '综合运维班',
+    sanitizeOperatorDisplayText(candidate.job_title) || '维修工程师',
+  ].join(' · ')
 }
 
 function closeDispatchPanel() {
@@ -1614,7 +1645,7 @@ async function doAdminAction(incident: Incident, action: OperatorAction, confirm
   uni.showModal({
     title: '操作确认',
     content: confirmTitle,
-    confirmColor: action.includes('reject') ? '#ff4d4f' : '#3b6cf4',
+    confirmColor: action.includes('reject') ? '#ff4d4f' : '#2f855a',
     async success(res) {
       if (!res.confirm) { actionLoading.value = null; return }
       try {
@@ -1660,7 +1691,7 @@ onMounted(loadData)
   overflow: hidden;
   background:
     radial-gradient(circle at top right, rgba(74, 222, 128, 0.1), transparent 24%),
-    #eef2f8;
+    var(--operator-bg, #eef5ef);
 }
 
 .tab-shell {
@@ -1918,7 +1949,7 @@ onMounted(loadData)
   box-shadow: 0 10rpx 22rpx rgba(16, 24, 40, 0.06);
   &.approve { background: linear-gradient(135deg, #12b76a, #16c47f); color: #fff; }
   &.danger  { background: #fff2f0; color: #ff4d4f; }
-  &.neutral { background: #eef4ff; color: #2f6df6; }
+  &.neutral { background: #eef8f1; color: #2f855a; }
 }
 
 .empty-state {
@@ -1944,7 +1975,7 @@ onMounted(loadData)
 .dispatch-mask {
   position: fixed;
   inset: 0;
-  background: rgba(15, 23, 42, 0.34);
+  background: var(--operator-overlay, rgba(18, 38, 28, 0.34));
   display: flex;
   align-items: flex-end;
   z-index: 30;
@@ -1955,8 +1986,8 @@ onMounted(loadData)
   max-height: 78vh;
   border-radius: 36rpx 36rpx 0 0;
   background:
-    radial-gradient(circle at top right, rgba(59, 130, 246, 0.08), transparent 22%),
-    #fff;
+    radial-gradient(circle at top right, rgba(47, 133, 90, 0.1), transparent 22%),
+    var(--operator-card, #fff);
   padding: 26rpx 24rpx calc(env(safe-area-inset-bottom, 0px) + 24rpx);
   box-sizing: border-box;
   box-shadow: 0 -18rpx 40rpx rgba(15, 23, 42, 0.14);
@@ -1991,7 +2022,7 @@ onMounted(loadData)
 .dispatch-close {
   padding: 10rpx 0 10rpx 18rpx;
   font-size: 24rpx;
-  color: #2563eb;
+  color: var(--primary, #2f855a);
 }
 
 .requirement-strip {
@@ -2003,8 +2034,8 @@ onMounted(loadData)
 
 .req-pill {
   border-radius: 20rpx;
-  background: #f8fbff;
-  border: 1rpx solid rgba(59, 130, 246, 0.12);
+  background: var(--operator-card-soft, #f4fbf5);
+  border: 1rpx solid var(--operator-border-strong, rgba(47, 133, 90, 0.18));
   padding: 16rpx 14rpx;
 }
 
@@ -2032,8 +2063,8 @@ onMounted(loadData)
 .requirement-tag {
   padding: 8rpx 14rpx;
   border-radius: 999rpx;
-  background: #eef4ff;
-  color: #2563eb;
+  background: var(--operator-chip-bg, #ebf8ef);
+  color: var(--primary, #2f855a);
   font-size: 20rpx;
 }
 
@@ -2045,8 +2076,8 @@ onMounted(loadData)
 .batch-config-box {
   margin-top: 18rpx;
   border-radius: 24rpx;
-  background: #f8fbff;
-  border: 1rpx solid rgba(59, 130, 246, 0.12);
+  background: var(--operator-card-soft, #f4fbf5);
+  border: 1rpx solid var(--operator-border-strong, rgba(47, 133, 90, 0.18));
   padding: 18rpx;
 }
 
@@ -2077,9 +2108,9 @@ onMounted(loadData)
   font-weight: 700;
 
   &.active {
-    color: #2563eb;
-    border-color: rgba(59, 130, 246, 0.22);
-    background: #eef4ff;
+    color: var(--primary, #2f855a);
+    border-color: var(--operator-border-strong, rgba(47, 133, 90, 0.18));
+    background: var(--operator-chip-bg, #ebf8ef);
   }
 }
 
@@ -2089,8 +2120,8 @@ onMounted(loadData)
   line-height: 64rpx;
   border: none;
   border-radius: 18rpx;
-  background: #e8f1ff;
-  color: #2563eb;
+  background: var(--operator-chip-bg, #ebf8ef);
+  color: var(--primary, #2f855a);
   font-size: 22rpx;
   font-weight: 700;
 }
@@ -2118,7 +2149,7 @@ onMounted(loadData)
 }
 
 .batch-planned-count {
-  color: #2563eb;
+  color: var(--primary, #2f855a);
   font-weight: 700;
 }
 
@@ -2170,7 +2201,7 @@ onMounted(loadData)
   color: #526071;
 
   &.accent {
-    color: #2563eb;
+    color: var(--primary, #2f855a);
     font-weight: 700;
   }
 }
@@ -2251,8 +2282,8 @@ onMounted(loadData)
   font-weight: 700;
 
   &.accent {
-    background: #eef4ff;
-    color: #2563eb;
+    background: var(--operator-chip-bg, #ebf8ef);
+    color: var(--primary, #2f855a);
   }
 }
 
@@ -2265,9 +2296,9 @@ onMounted(loadData)
 }
 
 .batch-card {
-  border-color: rgba(59, 130, 246, 0.12);
+  border-color: var(--operator-border-strong, rgba(47, 133, 90, 0.18));
   background:
-    radial-gradient(circle at top right, rgba(59, 130, 246, 0.05), transparent 24%),
+    radial-gradient(circle at top right, rgba(47, 133, 90, 0.06), transparent 24%),
     linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);
 }
 
@@ -2311,7 +2342,7 @@ onMounted(loadData)
   margin-top: 4rpx;
   font-size: 30rpx;
   font-weight: 800;
-  color: #2563eb;
+  color: var(--primary, #2f855a);
 }
 
 .candidate-stats {
@@ -2377,7 +2408,7 @@ onMounted(loadData)
   height: 74rpx;
   border-radius: 18rpx;
   border: none;
-  background: linear-gradient(135deg, #2563eb, #3b82f6);
+  background: var(--operator-btn, linear-gradient(135deg, #42bf72, #2f855a));
   color: #fff;
   font-size: 24rpx;
   font-weight: 700;
@@ -2643,8 +2674,8 @@ onMounted(loadData)
 }
 
 .hall-application-status {
-  background: #eef4ff;
-  color: #2563eb;
+  background: var(--operator-chip-bg, #ebf8ef);
+  color: var(--primary, #2f855a);
 }
 
 .hall-application-note {
@@ -2705,8 +2736,8 @@ onMounted(loadData)
   height: 68rpx;
   line-height: 68rpx;
   border-radius: 18rpx;
-  background: #eef4ff;
-  color: #2563eb;
+  background: var(--operator-chip-bg, #ebf8ef);
+  color: var(--primary, #2f855a);
 }
 
 .hall-secondary-btn.danger {

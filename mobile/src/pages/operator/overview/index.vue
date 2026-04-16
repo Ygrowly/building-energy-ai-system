@@ -1,6 +1,6 @@
 <template>
-  <view class="page">
-    <NavBar title="能耗总览" bg-color="#1a1a2e">
+  <view class="page theme-operator">
+    <NavBar title="能耗总览" bg-color="#2f855a">
       <template #right>
         <view class="refresh-btn" :class="{ spinning: loading }" @click="loadData">
           <image class="nav-icon" src="/static/icons/refresh.svg" mode="aspectFit" />
@@ -1018,4 +1018,191 @@ onUnmounted(() => clearInterval(timer))
 @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
 
 .safe-bottom { height: calc(env(safe-area-inset-bottom, 0px) + 140rpx); }
+
+.theme-operator.page {
+  background:
+    radial-gradient(circle at top, rgba(66, 191, 114, 0.18), transparent 34%),
+    linear-gradient(180deg, var(--operator-bg-soft, #f7fbf7) 0%, var(--operator-bg, #eef5ef) 100%);
+}
+
+.theme-operator .header-greeting,
+.theme-operator .chip-sub,
+.theme-operator .section-count,
+.theme-operator .wo-time,
+.theme-operator .wo-empty-text,
+.theme-operator .brow-sub,
+.theme-operator .detail-sub,
+.theme-operator .dkpi-unit,
+.theme-operator .hm-sub,
+.theme-operator .hm-y-label,
+.theme-operator .hm-x-label,
+.theme-operator .hm-legend-text,
+.theme-operator .hm-empty-text,
+.theme-operator .info-label,
+.theme-operator .info-unit,
+.theme-operator .dw-label,
+.theme-operator .dw-unit {
+  color: var(--operator-text-muted, #8aa091);
+}
+
+.theme-operator .header-name,
+.theme-operator .chip-temp,
+.theme-operator .section-title,
+.theme-operator .wo-desc,
+.theme-operator .brow-name,
+.theme-operator .detail-name,
+.theme-operator .dkpi-value,
+.theme-operator .hm-title,
+.theme-operator .info-value,
+.theme-operator .dw-value {
+  color: var(--operator-text, #163022);
+}
+
+.theme-operator .weather-chip,
+.theme-operator .filter-bar,
+.theme-operator .wo-card,
+.theme-operator .building-row,
+.theme-operator .detail-header,
+.theme-operator .detail-kpi,
+.theme-operator .heatmap-card,
+.theme-operator .info-card,
+.theme-operator .detail-water-card {
+  background: var(--operator-card, #ffffff);
+  border: 1rpx solid var(--operator-border, rgba(203, 225, 208, 0.96));
+  box-shadow: var(--operator-shadow, 0 12rpx 34rpx rgba(35, 75, 54, 0.1));
+}
+
+.theme-operator .chip-date-wrap {
+  border-right-color: var(--operator-border, rgba(203, 225, 208, 0.96));
+}
+
+.theme-operator .chip-date-value,
+.theme-operator .filter-text,
+.theme-operator .wo-meta-item,
+.theme-operator .section-link,
+.theme-operator .detail-kpi .dkpi-label {
+  color: var(--operator-text-secondary, #5b6f62);
+}
+
+.theme-operator .section-link {
+  color: var(--primary, #2f855a);
+}
+
+.theme-operator .refresh-btn {
+  border-radius: 24rpx;
+  background: rgba(66, 191, 114, 0.12);
+  border: 1rpx solid rgba(66, 191, 114, 0.18);
+}
+
+.theme-operator .banner-card {
+  background: linear-gradient(135deg, #234b36 0%, #2f855a 55%, #46a46a 100%);
+  border: 1rpx solid rgba(208, 236, 216, 0.12);
+  box-shadow: 0 16rpx 38rpx rgba(35, 75, 54, 0.2);
+}
+
+.theme-operator .banner-circle.c1 {
+  background: rgba(229, 255, 237, 0.12);
+}
+
+.theme-operator .banner-circle.c2 {
+  background: rgba(197, 255, 219, 0.1);
+}
+
+.theme-operator .banner-label {
+  color: rgba(236, 252, 242, 0.62);
+}
+
+.theme-operator .banner-kpi-label,
+.theme-operator .banner-bar-lbl {
+  color: rgba(242, 251, 245, 0.58);
+}
+
+.theme-operator .banner-kpi-val {
+  color: #ddffe9;
+}
+
+.theme-operator .banner-bar.bar-highlight {
+  background: #ddffe9;
+}
+
+.theme-operator .banner-bar.bar-dim {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.theme-operator .banner-bar-lbl.lbl-active {
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.theme-operator .filter-tab-content {
+  background: var(--operator-card-soft, #f4fbf5);
+}
+
+.theme-operator .filter-tab.tab-active .filter-tab-content {
+  background: var(--operator-btn, linear-gradient(135deg, #42bf72 0%, #2f855a 100%));
+  box-shadow: 0 8rpx 18rpx rgba(47, 133, 90, 0.24);
+}
+
+.theme-operator .wo-card {
+  border-left-color: var(--primary, #2f855a);
+}
+
+.theme-operator .wo-meta-item {
+  background: var(--operator-chip-bg, #ebf8ef);
+}
+
+.theme-operator .wo-reason {
+  background: rgba(245, 158, 11, 0.1);
+}
+
+.theme-operator .wo-btn-approve {
+  background: var(--operator-btn, linear-gradient(135deg, #42bf72, #2f855a));
+}
+
+.theme-operator .wo-sk-card {
+  background: linear-gradient(90deg, #edf6ef 25%, #f7fbf7 50%, #edf6ef 75%);
+}
+
+.theme-operator .brow-icon-box.bg-blue,
+.theme-operator .detail-icon-box.bg-blue,
+.theme-operator .brow-icon-box.bg-purple,
+.theme-operator .detail-icon-box.bg-purple,
+.theme-operator .brow-icon-box.bg-teal,
+.theme-operator .detail-icon-box.bg-teal,
+.theme-operator .brow-icon-box.bg-orange,
+.theme-operator .detail-icon-box.bg-orange,
+.theme-operator .brow-icon-box.bg-indigo,
+.theme-operator .detail-icon-box.bg-indigo,
+.theme-operator .brow-icon-box.bg-gray,
+.theme-operator .detail-icon-box.bg-gray,
+.theme-operator .dkpi-icon-wrap.icon-green,
+.theme-operator .dkpi-icon-wrap.icon-blue,
+.theme-operator .dkpi-icon-wrap.icon-orange {
+  background: var(--operator-card-soft, #f4fbf5);
+}
+
+.theme-operator .detail-badge.dbadge-green,
+.theme-operator .brow-badge.badge-green {
+  background: var(--operator-chip-bg, #ebf8ef);
+  color: var(--primary, #2f855a);
+}
+
+.theme-operator .detail-badge.dbadge-green .detail-dot,
+.theme-operator .brow-badge.badge-green .brow-dot,
+.theme-operator .section-dot {
+  background: var(--primary, #2f855a);
+}
+
+.theme-operator .dw-track {
+  background: #dcefe1;
+}
+
+.theme-operator .dw-fill {
+  background: var(--operator-btn, linear-gradient(90deg, #42bf72, #2f855a));
+}
+
+.theme-operator .sk-banner,
+.theme-operator .sk-half,
+.theme-operator .sk-card {
+  background: linear-gradient(90deg, #edf6ef 25%, #f7fbf7 50%, #edf6ef 75%);
+}
 </style>

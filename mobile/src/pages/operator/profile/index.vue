@@ -1,6 +1,6 @@
 <template>
-  <view class="page">
-    <NavBar title="我的" bg-color="#1a1a2e">
+  <view class="page theme-operator">
+    <NavBar title="我的" bg-color="#2f855a">
       <template #right>
         <view class="refresh-btn" :class="{ spinning: dashboardLoading }" @click="refreshDashboard">
           <image class="refresh-icon" src="/static/icons/refresh.svg" mode="aspectFit" />
@@ -842,5 +842,85 @@ onShow(() => {
   font-size: 30rpx;
   color: #ff4d4f;
   font-weight: 600;
+}
+
+.theme-operator.page {
+  background:
+    radial-gradient(circle at top, rgba(66, 191, 114, 0.18), transparent 34%),
+    linear-gradient(180deg, var(--operator-bg-soft, #f7fbf7) 0%, var(--operator-bg, #eef5ef) 100%);
+}
+
+.theme-operator .refresh-btn {
+  background: rgba(66, 191, 114, 0.12);
+  border: 1rpx solid rgba(66, 191, 114, 0.18);
+}
+
+.theme-operator .profile-card,
+.theme-operator .stats-card,
+.theme-operator .quick-card,
+.theme-operator .detail-card,
+.theme-operator .logout-btn {
+  background: var(--operator-card, #ffffff);
+  border: 1rpx solid var(--operator-border, rgba(203, 225, 208, 0.96));
+  box-shadow: var(--operator-shadow, 0 12rpx 34rpx rgba(35, 75, 54, 0.1));
+}
+
+.theme-operator .profile-card {
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.98), rgba(244, 251, 245, 0.96));
+}
+
+.theme-operator .avatar-badge,
+.theme-operator .profile-chip.dark {
+  background: var(--operator-btn, linear-gradient(135deg, #42bf72, #2f855a));
+}
+
+.theme-operator .username,
+.theme-operator .section-title,
+.theme-operator .quick-title,
+.theme-operator .detail-label {
+  color: var(--operator-text, #163022);
+}
+
+.theme-operator .profile-contact,
+.theme-operator .detail-value,
+.theme-operator .detail-hint,
+.theme-operator .quick-desc,
+.theme-operator .section-note,
+.theme-operator .profile-note {
+  color: var(--operator-text-secondary, #5b6f62);
+}
+
+.theme-operator .role-badge,
+.theme-operator .profile-edit,
+.theme-operator .profile-chip,
+.theme-operator .quick-badge {
+  background: var(--operator-chip-bg, #ebf8ef);
+}
+
+.theme-operator .role-badge text,
+.theme-operator .profile-edit text,
+.theme-operator .quick-badge,
+.theme-operator .stat-value {
+  color: var(--primary, #2f855a);
+}
+
+.theme-operator .profile-chip text,
+.theme-operator .stat-label {
+  color: var(--operator-text, #163022);
+}
+
+.theme-operator .stat-desc {
+  color: var(--operator-text-muted, #8aa091);
+}
+
+.theme-operator .stat-item + .stat-item::before,
+.theme-operator .detail-divider {
+  background: var(--operator-border, rgba(203, 225, 208, 0.96));
+}
+
+.theme-operator .quick-arrow,
+.theme-operator .detail-arrow {
+  opacity: 0.32;
 }
 </style>

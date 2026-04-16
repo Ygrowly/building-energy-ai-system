@@ -28,28 +28,47 @@
       <view class="operator-filter-grid">
         <picker class="operator-picker" :range="operatorDateOptions" range-key="label" :value="operatorDateOptions.findIndex(item => item.value === operatorDatePreset)" @change="operatorDatePreset = operatorDateOptions[$event.detail.value].value as any">
           <view class="operator-picker-box">
-            <text class="operator-picker-label">时间范围</text>
+            <view class="operator-picker-meta">
+              <text class="operator-picker-label">时间范围</text>
+              <text class="operator-picker-action">选择</text>
+            </view>
             <text class="operator-picker-value">{{ selectedOptionLabel(operatorDateOptions, operatorDatePreset, '本月') }}</text>
           </view>
         </picker>
         <picker class="operator-picker" :range="operatorBuildingOptions" range-key="label" :value="operatorBuildingOptions.findIndex(item => item.value === operatorBuildingId)" @change="operatorBuildingId = operatorBuildingOptions[$event.detail.value].value">
           <view class="operator-picker-box">
-            <text class="operator-picker-label">楼宇</text>
+            <view class="operator-picker-meta">
+              <text class="operator-picker-label">楼宇</text>
+              <text class="operator-picker-action">选择</text>
+            </view>
             <text class="operator-picker-value">{{ selectedOptionLabel(operatorBuildingOptions, operatorBuildingId, '全部楼宇') }}</text>
           </view>
         </picker>
         <picker class="operator-picker" :range="operatorTeamOptions" range-key="label" :value="operatorTeamOptions.findIndex(item => item.value === operatorTeamId)" @change="operatorTeamId = operatorTeamOptions[$event.detail.value].value">
           <view class="operator-picker-box">
-            <text class="operator-picker-label">班组</text>
+            <view class="operator-picker-meta">
+              <text class="operator-picker-label">班组</text>
+              <text class="operator-picker-action">选择</text>
+            </view>
             <text class="operator-picker-value">{{ selectedOptionLabel(operatorTeamOptions, operatorTeamId, '全部班组') }}</text>
           </view>
         </picker>
         <picker class="operator-picker" :range="operatorWorkerOptions" range-key="label" :value="operatorWorkerOptions.findIndex(item => item.value === operatorWorkerId)" @change="operatorWorkerId = operatorWorkerOptions[$event.detail.value].value">
           <view class="operator-picker-box">
-            <text class="operator-picker-label">人员</text>
+            <view class="operator-picker-meta">
+              <text class="operator-picker-label">人员</text>
+              <text class="operator-picker-action">选择</text>
+            </view>
             <text class="operator-picker-value">{{ selectedOptionLabel(operatorWorkerOptions, operatorWorkerId, '全部人员') }}</text>
           </view>
         </picker>
+      </view>
+      <view v-if="operatorScopePreview.length" class="operator-scope-preview">
+        <text
+          v-for="item in operatorScopePreview"
+          :key="item"
+          class="operator-scope-chip"
+        >{{ item }}</text>
       </view>
     </view>
 
@@ -81,18 +100,50 @@
           <view class="dot" /><view class="dot" /><view class="dot" />
           <text v-if="msg.content" class="thinking-text">{{ msg.content }}</text>
         </view>
+        <view v-else-if="shouldRenderOperatorSummaryCard(msg)" class="analysis-summary-card">
+          <view class="analysis-summary-head">
+            <text class="analysis-summary-title">结论摘要</text>
+            <text class="analysis-summary-mode">运小维 · 只读分析模式</text>
+          </view>
+          <view v-if="analysisScopeChips(msg).length" class="analysis-summary-chip-list">
+            <text
+              v-for="chip in analysisScopeChips(msg)"
+              :key="chip"
+              class="analysis-summary-chip"
+            >{{ chip }}</text>
+          </view>
+          <text
+            v-for="(paragraph, paragraphIndex) in splitMessageContent(msg.content)"
+            :key="`summary_${idx}_${paragraphIndex}`"
+            class="analysis-summary-text"
+          >{{ paragraph }}</text>
+          <view v-if="analysisSummaryStats(msg).length" class="analysis-summary-grid">
+            <view
+              v-for="item in analysisSummaryStats(msg)"
+              :key="item.label"
+              class="analysis-summary-stat"
+            >
+              <text class="analysis-summary-stat-label">{{ item.label }}</text>
+              <text class="analysis-summary-stat-value">{{ item.value }}</text>
+            </view>
+          </view>
+        </view>
         <!-- 正常消息 -->
         <view v-else class="msg-bubble" :class="msg.role">
-          <text>{{ msg.content }}</text>
+          <text
+            v-for="(paragraph, paragraphIndex) in splitMessageContent(msg.content)"
+            :key="`${idx}_${paragraphIndex}`"
+            class="msg-paragraph"
+          >{{ paragraph }}</text>
           <view v-if="isWorkerMode && msg.role === 'ai' && msg.content" class="msg-actions">
             <text class="msg-action" @click="speakText(msg.content)">播报</text>
           </view>
         </view>
         <view
-          v-if="msg.role === 'ai' && (msg.readonly || msg.chart || msg.evidenceClaims?.length || msg.blockedActions?.length || msg.experienceItems?.length || msg.suggestedFollowups?.length)"
+          v-if="msg.role === 'ai' && shouldRenderMessageExtensions(msg)"
           class="msg-extensions"
         >
-          <view v-if="msg.readonly" class="readonly-tag">
+          <view v-if="msg.readonly && !shouldRenderOperatorSummaryCard(msg)" class="readonly-tag">
             <text>运小维 · 只读分析模式</text>
           </view>
           <view v-if="msg.blockedActions?.length" class="analysis-card warning-card">
@@ -100,18 +151,177 @@
             <text class="analysis-card-copy">当前只提供分析与证据，不直接执行改派、关闭或审批。</text>
           </view>
           <view v-if="msg.chart" class="analysis-card chart-card">
-            <view class="analysis-card-head">
-              <text class="analysis-card-title">{{ msg.chart?.title || '运营图表' }}</text>
-              <text v-if="msg.chart?.source" class="analysis-card-source">{{ msg.chart.source }}</text>
-            </view>
-            <view v-if="buildChartRows(msg.chart).length" class="chart-row-list">
-              <view v-for="item in buildChartRows(msg.chart)" :key="item.label" class="chart-row">
-                <view class="chart-row-head">
-                  <text class="chart-row-label">{{ item.label }}</text>
-                  <text class="chart-row-value">{{ item.values }}</text>
+            <view class="analysis-card-head analysis-card-head--stack">
+              <view class="analysis-card-title-wrap">
+                <text class="analysis-card-title">{{ msg.chart?.title || '运营图表' }}</text>
+                <text v-if="msg.chart?.source" class="analysis-card-source">{{ msg.chart.source }}</text>
+              </view>
+              <view class="chart-toolbar-row">
+                <view class="chart-view-switch">
+                  <text
+                    class="chart-view-chip"
+                    :class="{ active: (msg.chartView || 'chart') === 'chart' }"
+                    @click="setChartView(idx, 'chart')"
+                  >图表</text>
+                  <text
+                    class="chart-view-chip"
+                    :class="{ active: (msg.chartView || 'chart') === 'table' }"
+                    @click="setChartView(idx, 'table')"
+                  >明细</text>
                 </view>
-                <view class="chart-row-track">
-                  <view class="chart-row-fill" :style="{ width: `${item.width}%` }" />
+                <text class="chart-collapse-chip" @click="toggleChartCollapse(idx)">{{ msg.chartCollapsed ? '展开' : '收起' }}</text>
+              </view>
+            </view>
+            <view v-if="chartSeriesTabs(msg.chart).length > 1" class="chart-series-tabs">
+              <text
+                v-for="(seriesItem, seriesIndex) in chartSeriesTabs(msg.chart)"
+                :key="seriesItem.key"
+                class="chart-series-chip"
+                :class="{ active: (msg.selectedSeriesIndex ?? 0) === seriesIndex }"
+                @click="selectChartSeries(idx, seriesIndex)"
+              >{{ seriesItem.label }}</text>
+            </view>
+            <view v-if="msg.chartVisual" class="chart-visual-shell">
+              <view class="chart-axis-meta">
+                <text class="chart-axis-meta-item">X轴：{{ chartXAxisUnit(msg) }}</text>
+                <text class="chart-axis-meta-item">Y轴：{{ chartYAxisLabel(msg) }}</text>
+              </view>
+              <view v-if="activeChartDatum(msg)" class="chart-focus-card">
+                <text class="chart-focus-kicker">点击图表查看数据</text>
+                <view class="chart-focus-main">
+                  <text class="chart-focus-label">{{ activeChartDatum(msg)?.label }}</text>
+                  <text class="chart-focus-value">{{ activeChartDatum(msg)?.primaryValue }}</text>
+                </view>
+                <text v-if="activeChartDatum(msg)?.secondaryValues" class="chart-focus-sub">{{ activeChartDatum(msg)?.secondaryValues }}</text>
+              </view>
+              <view v-if="msg.chartCollapsed" class="chart-collapsed-tip">图表已收起，点击右上角“展开”查看。</view>
+              <scroll-view
+                v-else-if="(msg.chartView || 'chart') === 'chart'"
+                scroll-x
+                class="chart-scroll"
+                show-scrollbar="false"
+              >
+                <view class="chart-visual-canvas" :style="{ width: `${msg.chartVisual.canvasWidth}px` }">
+                  <svg
+                    class="chart-svg"
+                    :viewBox="`0 0 ${msg.chartVisual.canvasWidth} ${msg.chartVisual.canvasHeight}`"
+                    preserveAspectRatio="none"
+                  >
+                    <defs>
+                      <linearGradient id="chartBarGradient" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stop-color="#8cbf7d" />
+                        <stop offset="100%" stop-color="#5f9e87" />
+                      </linearGradient>
+                    </defs>
+                    <line
+                      v-for="grid in msg.chartVisual?.gridLines || []"
+                      :key="`grid_${grid}`"
+                      :x1="msg.chartVisual.paddingLeft"
+                      :x2="msg.chartVisual.canvasWidth - msg.chartVisual.paddingRight"
+                      :y1="grid"
+                      :y2="grid"
+                      class="chart-grid-line"
+                    />
+                    <text
+                      v-for="tick in msg.chartVisual?.yTicks || []"
+                      :key="tick.key"
+                      :x="msg.chartVisual.paddingLeft - 8"
+                      :y="tick.y + 4"
+                      text-anchor="end"
+                      class="chart-y-tick"
+                    >{{ tick.label }}</text>
+                    <line
+                      v-if="msg.chartVisual?.zeroY != null"
+                      :x1="msg.chartVisual.paddingLeft"
+                      :x2="msg.chartVisual.canvasWidth - msg.chartVisual.paddingRight"
+                      :y1="msg.chartVisual.zeroY"
+                      :y2="msg.chartVisual.zeroY"
+                      class="chart-axis-baseline"
+                    />
+                    <line
+                      v-if="msg.chartVisual?.activeGuide"
+                      :x1="msg.chartVisual.activeGuide.x"
+                      :x2="msg.chartVisual.activeGuide.x"
+                      :y1="msg.chartVisual.paddingTop"
+                      :y2="msg.chartVisual.canvasHeight - msg.chartVisual.paddingBottom"
+                      class="chart-active-guide"
+                    />
+                    <template v-if="msg.chartVisual?.kind === 'line'">
+                      <polyline
+                        :points="msg.chartVisual?.fillPoints"
+                        class="chart-area"
+                      />
+                      <polyline
+                        :points="msg.chartVisual?.linePoints"
+                        class="chart-line"
+                      />
+                      <circle
+                        v-for="point in msg.chartVisual?.points || []"
+                        :key="`${point.key}_hit`"
+                        :cx="point.x"
+                        :cy="point.y"
+                        r="12"
+                        class="chart-point-hit"
+                        @click="selectChartDatum(idx, point.index)"
+                      />
+                      <circle
+                        v-for="point in msg.chartVisual?.points || []"
+                        :key="point.key"
+                        :cx="point.x"
+                        :cy="point.y"
+                        :r="point.active ? 6 : 4.5"
+                        class="chart-point"
+                        :class="{ active: point.active }"
+                        @click="selectChartDatum(idx, point.index)"
+                      />
+                    </template>
+                    <template v-else>
+                      <rect
+                        v-for="bar in msg.chartVisual?.bars || []"
+                        :key="bar.key"
+                        :x="bar.x"
+                        :y="bar.y"
+                        :width="bar.width"
+                        :height="bar.height"
+                        rx="8"
+                        fill="url(#chartBarGradient)"
+                        class="chart-bar-rect"
+                        :class="{ active: bar.active }"
+                        @click="selectChartDatum(idx, bar.index)"
+                      />
+                    </template>
+                  </svg>
+                  <view
+                    class="chart-axis-row"
+                    :style="{ width: `${msg.chartVisual.canvasWidth}px` }"
+                  >
+                    <text
+                      v-for="axisItem in msg.chartVisual?.axisLabels || []"
+                      :key="axisItem.key"
+                      class="chart-axis-label"
+                      :style="{ width: `${axisItem.width}px`, left: `${axisItem.left}px` }"
+                      @click="selectChartDatum(idx, axisItem.index)"
+                    >{{ axisItem.label }}</text>
+                  </view>
+                </view>
+              </scroll-view>
+              <view v-else-if="(msg.chartView || 'chart') === 'table' && !msg.chartCollapsed && buildChartTableRows(msg.chart).length" class="chart-table">
+                <view
+                  v-for="row in buildChartTableRows(msg.chart)"
+                  :key="row.label"
+                  class="chart-table-row"
+                >
+                  <text class="chart-table-label">{{ row.label }}</text>
+                  <view class="chart-table-values">
+                    <view
+                      v-for="item in row.values"
+                      :key="item.key"
+                      class="chart-table-pill"
+                    >
+                      <text class="chart-table-name">{{ item.label }}</text>
+                      <text class="chart-table-value">{{ item.value }}</text>
+                    </view>
+                  </view>
                 </view>
               </view>
             </view>
@@ -119,7 +329,7 @@
           <view v-if="msg.evidenceClaims?.length" class="analysis-card evidence-card">
             <view class="analysis-card-head">
               <text class="analysis-card-title">证据引用</text>
-              <text class="analysis-card-toggle" @click="toggleEvidence(idx)">{{ msg.showEvidence ? '收起' : '展开' }}</text>
+              <text class="analysis-card-toggle" @click="toggleEvidence(idx)">{{ msg.showEvidence ? '收起' : `展开 ${msg.evidenceClaims.length} 条` }}</text>
             </view>
             <view v-if="msg.showEvidence" class="evidence-list">
               <view v-for="claim in msg.evidenceClaims" :key="claim.claim" class="evidence-item">
@@ -166,14 +376,20 @@
               </view>
             </view>
           </view>
-          <view v-if="msg.suggestedFollowups?.length" class="followup-chip-list">
-            <text
-              v-for="followup in msg.suggestedFollowups"
-              :key="followup"
-              class="followup-chip"
-              :class="{ disabled: sending }"
-              @click="sendPresetMessage(followup)"
-            >{{ followup }}</text>
+          <view v-if="msg.suggestedFollowups?.length" class="analysis-card followup-card">
+            <view class="analysis-card-head">
+              <text class="analysis-card-title">继续追问</text>
+              <text class="analysis-card-copy">点一下直接发送</text>
+            </view>
+            <view class="followup-chip-list followup-chip-list--embedded">
+              <text
+                v-for="followup in msg.suggestedFollowups"
+                :key="followup"
+                class="followup-chip"
+                :class="{ disabled: sending }"
+                @click="sendPresetMessage(followup)"
+              >{{ followup }}</text>
+            </view>
           </view>
         </view>
       </view>
@@ -317,6 +533,13 @@ interface ChatMsg {
   experienceItems?: MaintenanceExperienceItem[]
   suggestedFollowups?: string[]
   chart?: Record<string, any> | null
+  chartVisual?: Record<string, any> | null
+  chartCollapsed?: boolean
+  chartView?: 'chart' | 'table'
+  selectedSeriesIndex?: number
+  activeChartIndex?: number
+  metrics?: Record<string, any> | null
+  scope?: Record<string, any> | null
   evidenceClaims?: Array<{ claim: string; evidence_refs: string[] }>
   evidenceRefs?: string[]
   blockedActions?: string[]
@@ -444,6 +667,15 @@ const operatorQuickPrompts = computed(() => {
     '本周哪个班组超时率最高',
   ]
 })
+const operatorScopePreview = computed(() => {
+  const items = [
+    selectedOptionLabel(operatorDateOptions.value, operatorDatePreset.value, '本月'),
+    operatorBuildingId.value ? selectedOptionLabel(operatorBuildingOptions.value, operatorBuildingId.value, '全部楼宇') : '',
+    operatorTeamId.value ? selectedOptionLabel(operatorTeamOptions.value, operatorTeamId.value, '全部班组') : '',
+    operatorWorkerId.value ? selectedOptionLabel(operatorWorkerOptions.value, operatorWorkerId.value, '全部人员') : '',
+  ].filter(Boolean)
+  return items as string[]
+})
 
 function getErrorMessage(err: unknown, fallback: string) {
   if (err instanceof Error && err.message) return err.message
@@ -489,6 +721,140 @@ function normalizeEvidenceClaims(
 function selectedOptionLabel(options: OperatorFilterOption[], value: string, fallback: string) {
   if (!value) return fallback
   return options.find(item => item.value === value)?.label || fallback
+}
+
+function splitMessageContent(text: string) {
+  const paragraphs = String(text || '')
+    .split(/\n+/)
+    .map(item => item.trim())
+    .filter(Boolean)
+  return paragraphs.length ? paragraphs : ['']
+}
+
+function shouldRenderMessageExtensions(msg: ChatMsg) {
+  return Boolean(
+    msg.readonly
+      || msg.chart
+      || msg.evidenceClaims?.length
+      || msg.blockedActions?.length
+      || msg.experienceItems?.length
+      || msg.suggestedFollowups?.length,
+  )
+}
+
+function shouldRenderOperatorSummaryCard(msg: ChatMsg) {
+  return Boolean(
+    isOperatorMode.value
+      && msg.role === 'ai'
+      && msg.readonly
+      && msg.answerType !== 'greeting'
+      && String(msg.content || '').trim(),
+  )
+}
+
+function normalizeScopeStatusLabels(statusValue: unknown) {
+  const labels: Record<string, string> = {
+    pending_dispatch: '待派工',
+    dispatched: '已派工',
+    processing: '处理中',
+    waiting_support: '待协同',
+    pending_close: '待关闭',
+    overdue: '超时',
+    closed: '已关闭',
+    completed: '已完成',
+  }
+  const values = Array.isArray(statusValue) ? statusValue : [statusValue]
+  return values
+    .map(item => String(item || '').trim())
+    .filter(Boolean)
+    .map(item => labels[item] || item)
+}
+
+function analysisScopeChips(msg: ChatMsg) {
+  const scope = msg.scope || {}
+  const chips = [
+    scope.date_label ? String(scope.date_label) : '',
+    scope.building_id ? getBuildingLabel(String(scope.building_id), String(scope.building_id)) : '',
+    scope.team_name ? String(scope.team_name) : '',
+    scope.worker_name ? String(scope.worker_name) : '',
+    ...normalizeScopeStatusLabels(scope.status).map(item => `状态 · ${item}`),
+  ].filter(Boolean)
+  return chips as string[]
+}
+
+function formatSummaryValue(value: unknown, unit = '') {
+  if (value === null || value === undefined || value === '') return '--'
+  if (typeof value === 'number') {
+    const normalized = Number.isInteger(value) ? String(value) : value.toFixed(1)
+    return `${normalized}${unit}`
+  }
+  return `${String(value)}${unit}`
+}
+
+function analysisSummaryStats(msg: ChatMsg) {
+  const summary = (msg.metrics && typeof msg.metrics === 'object' ? msg.metrics.summary : null) as Record<string, any> | null
+  if (!summary) return [] as Array<{ label: string; value: string }>
+  const items: Array<{ label: string; value: string }> = []
+  if (msg.answerType === 'monthly_report' || msg.answerType === 'weekly_report' || msg.answerType === 'daily_report') {
+    items.push(
+      { label: '新增工单', value: formatSummaryValue(summary.created_count, ' 单') },
+      { label: '完成', value: formatSummaryValue(summary.completed_count, ' 单') },
+      { label: '超时', value: formatSummaryValue(summary.overdue_count, ' 单') },
+      { label: '平均到场', value: formatSummaryValue(summary.avg_arrive_minutes, ' 分钟') },
+    )
+    if (summary.top_building) items.push({ label: '热点楼宇', value: formatSummaryValue(summary.top_building) })
+    if (summary.top_worker) items.push({ label: '高频处理人', value: formatSummaryValue(summary.top_worker) })
+    return items.filter(item => item.value !== '--')
+  }
+  if (msg.answerType === 'comparison_analysis') {
+    return [
+      { label: '当前新增', value: formatSummaryValue(summary.current_created_count, ' 单') },
+      { label: '上期新增', value: formatSummaryValue(summary.previous_created_count, ' 单') },
+      { label: '当前超时', value: formatSummaryValue(summary.current_overdue_count, ' 单') },
+      { label: '当前到场', value: formatSummaryValue(summary.current_avg_arrive_minutes, ' 分钟') },
+    ].filter(item => item.value !== '--')
+  }
+  if (msg.answerType === 'open_work_order_analysis') {
+    return [
+      { label: '未完成总量', value: formatSummaryValue(summary.open_total, ' 单') },
+      { label: '待派工/已派工', value: formatSummaryValue(summary.pending_dispatch_count, ' 单') },
+      { label: '处理中', value: formatSummaryValue(summary.processing_count, ' 单') },
+      { label: '待协同', value: formatSummaryValue(summary.waiting_support_count, ' 单') },
+      { label: '待关闭', value: formatSummaryValue(summary.pending_close_count, ' 单') },
+      { label: '超时', value: formatSummaryValue(summary.overdue_total, ' 单') },
+    ].filter(item => item.value !== '--')
+  }
+  if (msg.answerType === 'worker_performance') {
+    return [
+      { label: '人员数', value: formatSummaryValue(summary.workers) },
+      { label: '派工总量', value: formatSummaryValue(summary.assigned_total, ' 单') },
+      { label: '完成总量', value: formatSummaryValue(summary.completed_total, ' 单') },
+      { label: '超时总量', value: formatSummaryValue(summary.overdue_total, ' 单') },
+    ].filter(item => item.value !== '--')
+  }
+  if (msg.answerType === 'team_performance') {
+    return [
+      { label: '班组数', value: formatSummaryValue(summary.teams) },
+      { label: '派工总量', value: formatSummaryValue(summary.assigned_total, ' 单') },
+      { label: '完成总量', value: formatSummaryValue(summary.completed_total, ' 单') },
+      { label: '超时总量', value: formatSummaryValue(summary.overdue_total, ' 单') },
+    ].filter(item => item.value !== '--')
+  }
+  if (msg.answerType === 'building_hotspot') {
+    return [
+      { label: '楼宇数', value: formatSummaryValue(summary.buildings) },
+    ].filter(item => item.value !== '--')
+  }
+  if (msg.answerType === 'overdue_analysis') {
+    return [
+      { label: '超时总量', value: formatSummaryValue(summary.overdue_total, ' 单') },
+    ].filter(item => item.value !== '--')
+  }
+  const fallbackEntries = Object.entries(summary)
+    .filter(([, value]) => ['number', 'string'].includes(typeof value))
+    .slice(0, 4)
+    .map(([key, value]) => ({ label: key, value: formatSummaryValue(value) }))
+  return fallbackEntries.filter(item => item.value !== '--')
 }
 
 function toIsoDate(target: Date) {
@@ -565,23 +931,341 @@ function buildOperatorScope(source: string) {
   }
 }
 
-function buildChartRows(chart: Record<string, any> | null | undefined) {
+function chartSeriesTabs(chart: Record<string, any> | null | undefined) {
+  const series = Array.isArray(chart?.series) ? chart.series : []
+  return series.map((entry: any, index: number) => ({
+    key: `${entry?.name || 'series'}_${index}`,
+    label: String(entry?.name || `系列 ${index + 1}`),
+  }))
+}
+
+function clampSeriesIndex(chart: Record<string, any> | null | undefined, index: number) {
+  const series = Array.isArray(chart?.series) ? chart.series : []
+  if (!series.length) return 0
+  return Math.max(0, Math.min(index, series.length - 1))
+}
+
+function chartSeriesName(chart: Record<string, any> | null | undefined, selectedSeriesIndex = 0) {
+  const series = Array.isArray(chart?.series) ? chart.series : []
+  if (!series.length) return '数值'
+  const seriesIndex = clampSeriesIndex(chart, selectedSeriesIndex)
+  return String(series[seriesIndex]?.name || `系列 ${seriesIndex + 1}`)
+}
+
+function inferChartNumericUnit(seriesName: string) {
+  if (/%|率/i.test(seriesName)) return '%'
+  if (/分钟|minutes?/i.test(seriesName)) return '分钟'
+  if (/次数|次/i.test(seriesName)) return '次'
+  if (/工单|单|数量|count|超时/i.test(seriesName)) return '单'
+  return '值'
+}
+
+function formatChartNumber(value: unknown, unit = '') {
+  const numeric = Number(value)
+  if (!Number.isFinite(numeric)) return '--'
+  const normalized = Math.abs(numeric) >= 100
+    ? Math.round(numeric)
+    : Number.isInteger(numeric)
+      ? numeric
+      : Number(numeric.toFixed(1))
+  if (!unit || unit === '值') return String(normalized)
+  if (unit === '%') return `${normalized}${unit}`
+  return `${normalized}${unit}`
+}
+
+function buildChartRows(chart: Record<string, any> | null | undefined, selectedSeriesIndex = 0) {
   if (!chart || typeof chart !== 'object') return []
   const x = Array.isArray(chart.x) ? chart.x.map((item: unknown) => String(item)) : []
   const series = Array.isArray(chart.series) ? chart.series : []
   if (!x.length || !series.length) return []
-  const primary = Array.isArray(series[0]?.data) ? series[0].data : []
-  const max = Math.max(...primary.map((item: unknown) => Number(item || 0)), 1)
+  const seriesIndex = clampSeriesIndex(chart, selectedSeriesIndex)
+  const primarySeries = series[seriesIndex] || series[0]
+  const primary = Array.isArray(primarySeries?.data) ? primarySeries.data : []
+  const unit = inferChartNumericUnit(String(primarySeries?.name || ''))
   return x.map((label: string, index: number) => {
-    const values = series
-      .map((entry: any) => `${entry.name || '值'} ${entry.data?.[index] ?? 0}`)
+    const secondaryValues = series
+      .filter((_: any, currentIndex: number) => currentIndex !== seriesIndex)
+      .map((entry: any) => {
+        const entryName = String(entry?.name || '值')
+        return `${entryName} ${formatChartNumber(entry?.data?.[index] ?? 0, inferChartNumericUnit(entryName))}`
+      })
       .join(' · ')
+    const rawValue = primary[index] ?? 0
     return {
+      index,
       label,
-      width: Math.max(8, Math.round((Number(primary[index] || 0) / max) * 100)),
-      values,
+      rawValue: Number(rawValue || 0),
+      primaryValue: `${primarySeries?.name || '值'} ${formatChartNumber(rawValue, unit)}`,
+      secondaryValues,
     }
   })
+}
+
+function truncateChartAxisLabel(label: string) {
+  const value = String(label || '')
+  return value.length > 8 ? `${value.slice(0, 8)}...` : value
+}
+
+function resolveDefaultSeriesIndex(chart: Record<string, any> | null | undefined) {
+  const series = Array.isArray(chart?.series) ? chart.series : []
+  if (!series.length) return 0
+  let targetIndex = 0
+  let targetScore = Number.NEGATIVE_INFINITY
+  series.forEach((entry: any, index: number) => {
+    const values = Array.isArray(entry?.data) ? entry.data.map((item: unknown) => Number(item || 0)) : []
+    if (!values.length) return
+    const maxAbs = Math.max(...values.map(item => Math.abs(item)), 0)
+    const nonZeroCount = values.filter(item => item !== 0).length
+    const uniqueCount = new Set(values.map(item => String(item))).size
+    const score = maxAbs * 100 + nonZeroCount * 10 + uniqueCount
+    if (score >= targetScore) {
+      targetScore = score
+      targetIndex = index
+    }
+  })
+  return targetIndex
+}
+
+function resolveDefaultActiveChartIndex(chart: Record<string, any> | null | undefined, selectedSeriesIndex = 0) {
+  const rows = buildChartRows(chart, selectedSeriesIndex)
+  if (!rows.length) return 0
+  let targetIndex = 0
+  let targetValue = Number.NEGATIVE_INFINITY
+  rows.forEach((item, index) => {
+    const numeric = Number(item.rawValue || 0)
+    if (numeric >= targetValue) {
+      targetValue = numeric
+      targetIndex = index
+    }
+  })
+  return targetIndex
+}
+
+function chartXAxisUnit(msg: ChatMsg) {
+  const groupBy = String(msg.scope?.group_by || '')
+  if (groupBy === 'day') return '日期'
+  if (groupBy === 'period') return '周期'
+  if (groupBy === 'status') return '状态'
+  if (groupBy === 'team') return '班组'
+  if (groupBy === 'building') return '楼宇'
+  if (groupBy === 'worker') return '人员'
+  if (groupBy === 'experience') return '经验'
+  const x = Array.isArray(msg.chart?.x) ? msg.chart.x : []
+  if (x.every((item: unknown) => /^\d{4}-\d{2}-\d{2}$/.test(String(item || '')))) return '日期'
+  return '维度'
+}
+
+function chartYAxisUnit(msg: ChatMsg) {
+  return inferChartNumericUnit(chartSeriesName(msg.chart, msg.selectedSeriesIndex ?? 0))
+}
+
+function chartYAxisLabel(msg: ChatMsg) {
+  const seriesName = chartSeriesName(msg.chart, msg.selectedSeriesIndex ?? 0)
+  const unit = chartYAxisUnit(msg)
+  if (!unit || unit === '值') return seriesName
+  if (seriesName.includes(unit)) return seriesName
+  return `${seriesName}（${unit}）`
+}
+
+function activeChartDatum(msg: ChatMsg) {
+  const rows = buildChartRows(msg.chart, msg.selectedSeriesIndex ?? 0)
+  if (!rows.length) return null
+  const index = Math.max(0, Math.min(msg.activeChartIndex ?? 0, rows.length - 1))
+  return rows[index] || rows[0]
+}
+
+function buildChartVisualModel(
+  chart: Record<string, any> | null | undefined,
+  selectedSeriesIndex = 0,
+  activeIndex = 0,
+) {
+  if (!chart || typeof chart !== 'object') return null
+  const rows = buildChartRows(chart, selectedSeriesIndex)
+  if (!rows.length) return null
+  const values = rows.map(item => Number(item.rawValue || 0))
+  const kind = String(chart.type || '').toLowerCase() === 'line' ? 'line' : 'bar'
+  const paddingLeft = 58
+  const paddingRight = 20
+  const paddingTop = 22
+  const paddingBottom = 44
+  const canvasHeight = 204
+  const minStepWidth = kind === 'line'
+    ? (rows.length > 6 ? 58 : 76)
+    : (rows.length > 6 ? 70 : 94)
+  const spanCount = kind === 'line' ? Math.max(rows.length - 1, 1) : rows.length
+  const canvasWidth = Math.max(320, paddingLeft + paddingRight + spanCount * minStepWidth)
+  const usableWidth = canvasWidth - paddingLeft - paddingRight
+  const usableHeight = canvasHeight - paddingTop - paddingBottom
+  const slotWidth = kind === 'line'
+    ? (rows.length === 1 ? usableWidth : usableWidth / (rows.length - 1))
+    : usableWidth / rows.length
+  const axisLabelWidth = kind === 'line'
+    ? (rows.length === 1 ? usableWidth : Math.min(112, Math.max(72, usableWidth / rows.length)))
+    : slotWidth
+  const maxValue = Math.max(...values, 0)
+  const minValue = Math.min(...values, 0)
+  const span = Math.max(maxValue - minValue, 1)
+  const zeroY = paddingTop + usableHeight * (1 - ((0 - minValue) / span))
+  const safeActiveIndex = Math.max(0, Math.min(activeIndex, rows.length - 1))
+  const gridLines = [0, 0.25, 0.5, 0.75, 1].map(step => Number((paddingTop + usableHeight * step).toFixed(2)))
+  const yUnit = inferChartNumericUnit(chartSeriesName(chart, selectedSeriesIndex))
+  const yTicks = [1, 0.75, 0.5, 0.25, 0].map((step, index) => {
+    const value = minValue + span * step
+    const y = paddingTop + usableHeight * (1 - step)
+    return {
+      key: `y_tick_${index}`,
+      y: Number(y.toFixed(2)),
+      label: formatChartNumber(value, yUnit),
+    }
+  })
+  const axisLabels = rows.map((item, index) => ({
+    key: `${item.label}_${index}`,
+    index,
+    label: truncateChartAxisLabel(item.label),
+    width: Number(axisLabelWidth.toFixed(2)),
+    left: 0,
+  }))
+
+  if (kind === 'line') {
+    const points = values.map((value, index) => {
+      const xPosition = rows.length === 1
+        ? paddingLeft + usableWidth / 2
+        : paddingLeft + (usableWidth * index) / (rows.length - 1)
+      const yPosition = paddingTop + usableHeight * (1 - ((value - minValue) / span))
+      return {
+        key: `${index}_${value}`,
+        index,
+        x: Number(xPosition.toFixed(2)),
+        y: Number(yPosition.toFixed(2)),
+        active: index === safeActiveIndex,
+      }
+    })
+    points.forEach((point, index) => {
+      axisLabels[index].left = Number((point.x - axisLabelWidth / 2).toFixed(2))
+    })
+    const linePoints = points.map(point => `${point.x},${point.y}`).join(' ')
+    const fillPoints = [
+      `${points[0]?.x ?? paddingLeft},${zeroY}`,
+      ...points.map(point => `${point.x},${point.y}`),
+      `${points[points.length - 1]?.x ?? paddingLeft},${zeroY}`,
+    ].join(' ')
+    return {
+      kind: 'line',
+      canvasWidth,
+      canvasHeight,
+      slotWidth,
+      paddingLeft,
+      paddingRight,
+      paddingTop,
+      paddingBottom,
+      gridLines,
+      yTicks,
+      zeroY,
+      axisLabels,
+      points,
+      linePoints,
+      fillPoints,
+      activeGuide: points[safeActiveIndex] ? { x: points[safeActiveIndex].x } : null,
+    }
+  }
+
+  const barWidth = Math.max(Math.min(slotWidth * 0.52, 42), 18)
+  const bars = values.map((value, index) => {
+    const normalized = (value - minValue) / span
+    const barHeight = Math.max(Math.abs(value - 0) / span * usableHeight, 4)
+    const xPosition = paddingLeft + slotWidth * index + (slotWidth - barWidth) / 2
+    const yPosition = value >= 0 ? paddingTop + usableHeight * (1 - normalized) : zeroY
+    return {
+      key: `${index}_${value}`,
+      index,
+      x: Number(xPosition.toFixed(2)),
+      y: Number(yPosition.toFixed(2)),
+      width: Number(barWidth.toFixed(2)),
+      height: Number(barHeight.toFixed(2)),
+      active: index === safeActiveIndex,
+    }
+  })
+  bars.forEach((bar, index) => {
+    axisLabels[index].left = Number((bar.x + bar.width / 2 - axisLabelWidth / 2).toFixed(2))
+  })
+  return {
+    kind: 'bar',
+    canvasWidth,
+    canvasHeight,
+    slotWidth,
+    paddingLeft,
+    paddingRight,
+    paddingTop,
+    paddingBottom,
+    gridLines,
+    yTicks,
+    zeroY,
+    axisLabels,
+    bars,
+    activeGuide: bars[safeActiveIndex]
+      ? { x: Number((bars[safeActiveIndex].x + bars[safeActiveIndex].width / 2).toFixed(2)) }
+      : null,
+  }
+}
+
+function syncMessageChartVisual(message: ChatMsg | undefined, resetActiveIndex = false) {
+  if (!message) return
+  const rowCount = buildChartRows(message.chart, message.selectedSeriesIndex ?? 0).length
+  if (!rowCount) {
+    message.chartVisual = null
+    message.activeChartIndex = 0
+    return
+  }
+  if (resetActiveIndex || message.activeChartIndex == null || message.activeChartIndex >= rowCount) {
+    message.activeChartIndex = resolveDefaultActiveChartIndex(message.chart, message.selectedSeriesIndex ?? 0)
+  }
+  message.chartVisual = message.chart
+    ? buildChartVisualModel(message.chart, message.selectedSeriesIndex ?? 0, message.activeChartIndex ?? 0)
+    : null
+}
+
+function buildChartTableRows(chart: Record<string, any> | null | undefined) {
+  if (!chart || typeof chart !== 'object') return []
+  const x = Array.isArray(chart.x) ? chart.x.map((item: unknown) => String(item)) : []
+  const series = Array.isArray(chart.series) ? chart.series : []
+  if (!x.length || !series.length) return []
+  return x.map((label: string, index: number) => ({
+    label,
+    values: series.map((entry: any, seriesIndex: number) => ({
+      key: `${label}_${seriesIndex}`,
+      label: String(entry?.name || `系列 ${seriesIndex + 1}`),
+      value: String(entry?.data?.[index] ?? 0),
+    })),
+  }))
+}
+
+function selectChartSeries(messageIndex: number, seriesIndex: number) {
+  const target = messages.value[messageIndex]
+  if (!target?.chart) return
+  target.selectedSeriesIndex = clampSeriesIndex(target.chart, seriesIndex)
+  syncMessageChartVisual(target, true)
+}
+
+function setChartView(messageIndex: number, view: 'chart' | 'table') {
+  const target = messages.value[messageIndex]
+  if (!target?.chart) return
+  target.chartView = view
+  if (target.chartCollapsed) target.chartCollapsed = false
+}
+
+function toggleChartCollapse(messageIndex: number) {
+  const target = messages.value[messageIndex]
+  if (!target?.chart) return
+  target.chartCollapsed = !target.chartCollapsed
+}
+
+function selectChartDatum(messageIndex: number, datumIndex: number) {
+  const target = messages.value[messageIndex]
+  if (!target?.chart) return
+  const rowCount = buildChartRows(target.chart, target.selectedSeriesIndex ?? 0).length
+  if (!rowCount) return
+  target.activeChartIndex = Math.max(0, Math.min(datumIndex, rowCount - 1))
+  syncMessageChartVisual(target)
 }
 
 function toggleEvidence(index: number) {
@@ -1084,6 +1768,19 @@ async function sendAssistantMessage(
         ? (response.suggested_followups || [])
         : undefined,
       chart: props.mode === 'operator' && 'chart' in response ? response.chart || null : null,
+      chartVisual: null,
+      chartCollapsed: false,
+      chartView: 'chart',
+      selectedSeriesIndex: props.mode === 'operator' && 'chart' in response
+        ? resolveDefaultSeriesIndex(response.chart || null)
+        : 0,
+      activeChartIndex: props.mode === 'operator' && 'chart' in response
+        ? resolveDefaultActiveChartIndex(response.chart || null, resolveDefaultSeriesIndex(response.chart || null))
+        : 0,
+      metrics: 'metrics' in response ? (response.metrics || null) : null,
+      scope: props.mode === 'operator' && 'facts' in response && response.facts && typeof response.facts === 'object'
+        ? ((response.facts as any).scope || null)
+        : null,
       evidenceClaims: props.mode === 'operator' && 'facts' in response
         ? normalizeEvidenceClaims(response.facts, 'evidence_refs' in response ? (response.evidence_refs || []) : [])
         : undefined,
@@ -1092,6 +1789,10 @@ async function sendAssistantMessage(
       readonly: 'readonly' in response ? !!response.readonly : false,
       showEvidence: false,
     })
+    const latestMessage = messages.value[messages.value.length - 1]
+    if (latestMessage?.role === 'ai' && latestMessage.chart) {
+      syncMessageChartVisual(latestMessage, true)
+    }
     if (props.mode === 'worker' && response.message_type === 'action_result') {
       const latestOrder = await refreshOrderState()
       if (latestOrder) {
@@ -1427,46 +2128,53 @@ onBeforeUnmount(() => {
 
 .chat-messages {
   height: 520rpx;
-  padding: 16rpx 20rpx;
+  padding: 18rpx 20rpx 12rpx;
   box-sizing: border-box;
+  background:
+    linear-gradient(180deg, rgba(246, 249, 251, 0.72) 0%, rgba(255, 255, 255, 0) 120rpx),
+    #fff;
 }
 
 .msg {
   display: flex;
+  flex-direction: column;
   min-width: 0;
-  margin-bottom: 20rpx;
-  &.user-msg { justify-content: flex-end; }
-  &.ai-msg   { justify-content: flex-start; }
+  margin-bottom: 24rpx;
+  width: 100%;
+  &.user-msg { align-items: flex-end; }
+  &.ai-msg   { align-items: flex-start; }
 }
 
 .msg-bubble {
-  max-width: 75%;
-  padding: 18rpx 22rpx;
-  border-radius: 20rpx;
+  max-width: calc(100% - 84rpx);
+  padding: 20rpx 22rpx;
+  border-radius: 24rpx;
   font-size: 26rpx;
-  line-height: 1.6;
+  line-height: 1.72;
   box-sizing: border-box;
   overflow-wrap: anywhere;
   word-break: break-word;
+  box-shadow: 0 10rpx 28rpx rgba(45, 57, 72, 0.06);
+  border: 1rpx solid transparent;
 
   text {
     display: block;
-    margin-bottom: 6rpx;
+    margin-bottom: 0;
     white-space: pre-wrap;
     word-break: break-word;
-    &:last-child { margin-bottom: 0; }
   }
 
   &.user {
     background: linear-gradient(135deg, #d6e29f, #b5c875);
     color: #fff;
-    border-bottom-right-radius: 4rpx;
+    border-bottom-right-radius: 8rpx;
   }
 
   &.ai {
-    background: #f5f5f5;
-    color: #333;
-    border-bottom-left-radius: 4rpx;
+    background: linear-gradient(180deg, #ffffff 0%, #f7f9fb 100%);
+    border-color: #e6ebef;
+    color: #2b3740;
+    border-bottom-left-radius: 8rpx;
   }
 
   &.streaming {
@@ -1474,6 +2182,100 @@ onBeforeUnmount(() => {
     align-items: flex-end;
     gap: 8rpx;
   }
+}
+
+.msg-paragraph + .msg-paragraph {
+  margin-top: 12rpx;
+}
+
+.analysis-summary-card {
+  width: calc(100% - 32rpx);
+  max-width: calc(100% - 32rpx);
+  padding: 18rpx 18rpx 16rpx;
+  border-radius: 24rpx;
+  background: linear-gradient(180deg, #ffffff 0%, #f7fafc 100%);
+  border: 1rpx solid #e4ecf1;
+  box-shadow: 0 12rpx 30rpx rgba(40, 55, 71, 0.07);
+}
+
+.analysis-summary-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14rpx;
+}
+
+.analysis-summary-title {
+  font-size: 24rpx;
+  color: #22333c;
+  font-weight: 800;
+}
+
+.analysis-summary-mode {
+  flex-shrink: 0;
+  padding: 6rpx 14rpx;
+  border-radius: 999rpx;
+  background: #eef6e6;
+  color: #4c6a43;
+  font-size: 18rpx;
+  font-weight: 700;
+}
+
+.analysis-summary-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8rpx;
+  margin-top: 12rpx;
+}
+
+.analysis-summary-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 38rpx;
+  padding: 0 12rpx;
+  border-radius: 999rpx;
+  background: #f1f5f8;
+  color: #60727d;
+  font-size: 18rpx;
+  font-weight: 700;
+}
+
+.analysis-summary-text {
+  display: block;
+  margin-top: 14rpx;
+  font-size: 23rpx;
+  line-height: 1.68;
+  color: #30424d;
+}
+
+.analysis-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10rpx;
+  margin-top: 16rpx;
+}
+
+.analysis-summary-stat {
+  min-width: 0;
+  padding: 14rpx 14rpx 12rpx;
+  border-radius: 16rpx;
+  background: linear-gradient(180deg, #fbfdfd 0%, #f3f7f8 100%);
+  border: 1rpx solid #e4ecef;
+}
+
+.analysis-summary-stat-label {
+  display: block;
+  font-size: 18rpx;
+  color: #82929b;
+}
+
+.analysis-summary-stat-value {
+  display: block;
+  margin-top: 8rpx;
+  font-size: 24rpx;
+  line-height: 1.35;
+  color: #22343d;
+  font-weight: 800;
 }
 
 .bold { font-weight: 700; }
@@ -1514,7 +2316,7 @@ onBeforeUnmount(() => {
 .msg-actions {
   display: flex;
   justify-content: flex-end;
-  margin-top: 8rpx;
+  margin-top: 12rpx;
 }
 
 .msg-action {
@@ -1801,7 +2603,7 @@ onBeforeUnmount(() => {
 }
 
 .quick-prompt-bar {
-  padding: 18rpx 20rpx 0;
+  padding: 18rpx 20rpx 2rpx;
 }
 
 .quick-prompt-title {
@@ -1850,8 +2652,11 @@ onBeforeUnmount(() => {
 }
 
 .msg-extensions {
-  width: 100%;
-  margin-top: 10rpx;
+  width: calc(100% - 32rpx);
+  max-width: calc(100% - 32rpx);
+  margin-top: 12rpx;
+  display: grid;
+  gap: 12rpx;
 }
 
 .experience-card-list {
@@ -1957,36 +2762,37 @@ onBeforeUnmount(() => {
 }
 
 .operator-filter-panel {
-  margin: 18rpx 20rpx 0;
-  padding: 18rpx;
-  border-radius: 18rpx;
+  margin: 18rpx 20rpx 4rpx;
+  padding: 16rpx;
+  border-radius: 22rpx;
   background: linear-gradient(180deg, #f6fbf1 0%, #edf6ea 100%);
   border: 1rpx solid #d6e7cf;
+  box-shadow: inset 0 1rpx 0 rgba(255, 255, 255, 0.7);
 }
 
 .operator-filter-head {
   display: flex;
   flex-direction: column;
-  gap: 6rpx;
+  gap: 4rpx;
 }
 
 .operator-filter-title {
-  font-size: 24rpx;
+  font-size: 23rpx;
   font-weight: 800;
   color: #2f4a32;
 }
 
 .operator-filter-sub {
-  font-size: 21rpx;
-  line-height: 1.5;
+  font-size: 20rpx;
+  line-height: 1.45;
   color: #68806c;
 }
 
 .operator-filter-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12rpx;
-  margin-top: 14rpx;
+  gap: 10rpx;
+  margin-top: 12rpx;
 }
 
 .operator-picker {
@@ -1994,26 +2800,61 @@ onBeforeUnmount(() => {
 }
 
 .operator-picker-box {
-  min-height: 92rpx;
-  padding: 16rpx 18rpx;
-  border-radius: 14rpx;
+  min-height: 72rpx;
+  padding: 14rpx 16rpx;
+  border-radius: 16rpx;
   background: rgba(255, 255, 255, 0.82);
   border: 1rpx solid #d9e4d4;
+  box-shadow: 0 8rpx 18rpx rgba(68, 102, 73, 0.05);
+}
+
+.operator-picker-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12rpx;
 }
 
 .operator-picker-label {
   display: block;
-  font-size: 20rpx;
+  font-size: 19rpx;
   color: #7b8c78;
+}
+
+.operator-picker-action {
+  flex-shrink: 0;
+  font-size: 18rpx;
+  color: #86a07f;
+  font-weight: 700;
 }
 
 .operator-picker-value {
   display: block;
-  margin-top: 8rpx;
-  font-size: 24rpx;
-  line-height: 1.4;
+  margin-top: 6rpx;
+  font-size: 23rpx;
+  line-height: 1.32;
   color: #27412b;
   font-weight: 700;
+}
+
+.operator-scope-preview {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8rpx;
+  margin-top: 12rpx;
+}
+
+.operator-scope-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 40rpx;
+  padding: 0 14rpx;
+  border-radius: 999rpx;
+  background: rgba(255, 255, 255, 0.76);
+  color: #4d6650;
+  font-size: 19rpx;
+  font-weight: 700;
+  border: 1rpx solid rgba(214, 231, 207, 0.92);
 }
 
 .readonly-tag {
@@ -2029,11 +2870,11 @@ onBeforeUnmount(() => {
 }
 
 .analysis-card {
-  margin-top: 12rpx;
   padding: 16rpx 18rpx;
-  border-radius: 18rpx;
-  background: #f8fafc;
+  border-radius: 20rpx;
+  background: linear-gradient(180deg, #fbfdff 0%, #f6f9fc 100%);
   border: 1rpx solid #e2e8ef;
+  box-shadow: 0 10rpx 26rpx rgba(38, 52, 67, 0.05);
 }
 
 .warning-card {
@@ -2041,11 +2882,33 @@ onBeforeUnmount(() => {
   border-color: #f3d8bf;
 }
 
+.chart-card {
+  background: linear-gradient(180deg, #fbfdff 0%, #f2f7fb 100%);
+}
+
+.evidence-card {
+  background: linear-gradient(180deg, #ffffff 0%, #fafcfd 100%);
+}
+
+.followup-card {
+  background: linear-gradient(180deg, #fffdfa 0%, #fcf7ee 100%);
+}
+
 .analysis-card-head {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 16rpx;
+}
+
+.analysis-card-head--stack {
+  flex-wrap: wrap;
+  gap: 12rpx;
+}
+
+.analysis-card-title-wrap {
+  flex: 1;
+  min-width: 0;
 }
 
 .analysis-card-title {
@@ -2056,7 +2919,18 @@ onBeforeUnmount(() => {
   font-weight: 800;
 }
 
-.analysis-card-source,
+.analysis-card-source {
+  display: inline-flex;
+  align-items: center;
+  margin-top: 8rpx;
+  padding: 4rpx 12rpx;
+  border-radius: 999rpx;
+  background: #eef3f7;
+  color: #6a7882;
+  font-size: 19rpx;
+  line-height: 1.4;
+}
+
 .analysis-card-toggle,
 .analysis-card-copy {
   display: block;
@@ -2066,22 +2940,274 @@ onBeforeUnmount(() => {
   color: #6a7882;
 }
 
-.analysis-card-source,
 .analysis-card-toggle {
   margin-top: 0;
   flex-shrink: 0;
+  color: #627a88;
+  font-weight: 700;
+}
+
+.analysis-card-head .analysis-card-copy {
+  margin-top: 0;
+  flex-shrink: 0;
+}
+
+.chart-toolbar-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 10rpx;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.chart-view-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 8rpx;
+  padding: 6rpx;
+  border-radius: 999rpx;
+  background: #edf3ef;
+}
+
+.chart-view-chip,
+.chart-series-chip,
+.chart-collapse-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 42rpx;
+  padding: 0 16rpx;
+  border-radius: 999rpx;
+  font-size: 20rpx;
+  font-weight: 700;
+}
+
+.chart-view-chip {
+  color: #6c7f72;
+}
+
+.chart-view-chip.active {
+  background: #ffffff;
+  color: #365a42;
+  box-shadow: 0 4rpx 12rpx rgba(54, 90, 66, 0.1);
+}
+
+.chart-collapse-chip {
+  background: #f3f7fa;
+  color: #60717d;
+  border: 1rpx solid #dfe8ef;
+}
+
+.chart-series-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10rpx;
+  margin-top: 14rpx;
+}
+
+.chart-series-chip {
+  background: #eef3f7;
+  color: #667786;
+}
+
+.chart-series-chip.active {
+  background: #dfeee0;
+  color: #315942;
+}
+
+.chart-visual-shell {
+  margin-top: 16rpx;
+  padding: 14rpx;
+  border-radius: 18rpx;
+  background: rgba(255, 255, 255, 0.94);
+  border: 1rpx solid #e4ebf1;
+}
+
+.chart-axis-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10rpx;
+}
+
+.chart-axis-meta-item {
+  display: inline-flex;
+  align-items: center;
+  min-height: 38rpx;
+  padding: 0 12rpx;
+  border-radius: 999rpx;
+  background: #f5f8fb;
+  color: #6c7b86;
+  font-size: 18rpx;
+  font-weight: 700;
+}
+
+.chart-focus-card {
+  margin-top: 12rpx;
+  padding: 14rpx 16rpx;
+  border-radius: 16rpx;
+  background: linear-gradient(135deg, #f7fbff 0%, #eef6f2 100%);
+  border: 1rpx solid #dbe8de;
+}
+
+.chart-focus-kicker {
+  display: block;
+  font-size: 18rpx;
+  color: #7b8c98;
+}
+
+.chart-focus-main {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16rpx;
+  margin-top: 8rpx;
+}
+
+.chart-focus-label {
+  flex: 1;
+  min-width: 0;
+  font-size: 24rpx;
+  color: #273640;
+  font-weight: 700;
+}
+
+.chart-focus-value {
+  flex-shrink: 0;
+  font-size: 24rpx;
+  color: #365a42;
+  font-weight: 800;
+}
+
+.chart-focus-sub {
+  display: block;
+  margin-top: 8rpx;
+  font-size: 19rpx;
+  line-height: 1.5;
+  color: #6d7b85;
+}
+
+.chart-collapsed-tip {
+  margin-top: 12rpx;
+  padding: 18rpx 16rpx;
+  border-radius: 16rpx;
+  background: #f7fafc;
+  border: 1rpx dashed #d8e2ea;
+  color: #71808b;
+  font-size: 20rpx;
+  text-align: center;
+}
+
+.chart-scroll {
+  margin-top: 14rpx;
+  white-space: nowrap;
+}
+
+.chart-visual-canvas {
+  display: inline-block;
+  min-width: 100%;
+}
+
+.chart-svg {
+  width: 100%;
+  height: 300rpx;
+  display: block;
+}
+
+.chart-grid-line {
+  stroke: #e6edf2;
+  stroke-width: 1;
+}
+
+.chart-y-tick {
+  fill: #90a0ac;
+  font-size: 10px;
+}
+
+.chart-axis-baseline {
+  stroke: #ccd8df;
+  stroke-width: 1.2;
+}
+
+.chart-active-guide {
+  stroke: rgba(95, 158, 135, 0.35);
+  stroke-width: 1.2;
+  stroke-dasharray: 4 4;
+}
+
+.chart-line {
+  fill: none;
+  stroke: #5f9e87;
+  stroke-width: 4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.chart-area {
+  fill: rgba(140, 191, 125, 0.18);
+  stroke: none;
+}
+
+.chart-point-hit {
+  fill: transparent;
+  stroke: transparent;
+}
+
+.chart-point {
+  fill: #ffffff;
+  stroke: #5f9e87;
+  stroke-width: 3;
+  transition: all 0.2s ease;
+}
+
+.chart-point.active {
+  fill: #dff0df;
+  stroke: #2f7c59;
+  stroke-width: 4;
+}
+
+.chart-bar-rect {
+  fill: url(#chartBarGradient);
+  opacity: 0.72;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.chart-bar-rect.active {
+  opacity: 1;
+}
+
+.chart-axis-row {
+  position: relative;
+  height: 42rpx;
+  margin-top: 10rpx;
+}
+
+.chart-axis-label {
+  position: absolute;
+  top: 0;
+  min-width: 0;
+  text-align: center;
+  font-size: 18rpx;
+  line-height: 1.45;
+  color: #7d8a94;
 }
 
 .chart-row-list,
 .evidence-list {
   display: grid;
   gap: 12rpx;
-  margin-top: 14rpx;
+  margin-top: 16rpx;
+}
+
+.chart-row {
+  padding: 14rpx 16rpx;
+  border-radius: 16rpx;
+  background: rgba(255, 255, 255, 0.86);
+  border: 1rpx solid #e4ebf1;
 }
 
 .chart-row-head {
   display: flex;
-  align-items: baseline;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 16rpx;
 }
@@ -2092,17 +3218,33 @@ onBeforeUnmount(() => {
   font-weight: 700;
 }
 
-.chart-row-value {
+.chart-row-values {
   flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4rpx;
+}
+
+.chart-row-main {
   text-align: right;
   font-size: 20rpx;
   line-height: 1.5;
-  color: #71818c;
+  color: #506670;
+  font-weight: 700;
+}
+
+.chart-row-sub {
+  text-align: right;
+  font-size: 18rpx;
+  line-height: 1.5;
+  color: #8a98a3;
 }
 
 .chart-row-track {
   height: 12rpx;
-  margin-top: 8rpx;
+  margin-top: 10rpx;
   border-radius: 999rpx;
   background: #e7eef4;
   overflow: hidden;
@@ -2112,6 +3254,54 @@ onBeforeUnmount(() => {
   height: 100%;
   border-radius: 999rpx;
   background: linear-gradient(90deg, #8cbf7d 0%, #5f9e87 100%);
+}
+
+.chart-table {
+  display: grid;
+  gap: 10rpx;
+  margin-top: 16rpx;
+}
+
+.chart-table-row {
+  padding: 14rpx 16rpx;
+  border-radius: 16rpx;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1rpx solid #e5edf2;
+}
+
+.chart-table-label {
+  display: block;
+  font-size: 22rpx;
+  color: #283942;
+  font-weight: 800;
+}
+
+.chart-table-values {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10rpx;
+  margin-top: 12rpx;
+}
+
+.chart-table-pill {
+  min-width: 132rpx;
+  padding: 10rpx 12rpx;
+  border-radius: 14rpx;
+  background: #f4f7fa;
+}
+
+.chart-table-name {
+  display: block;
+  font-size: 18rpx;
+  color: #82909a;
+}
+
+.chart-table-value {
+  display: block;
+  margin-top: 6rpx;
+  font-size: 21rpx;
+  color: #31444f;
+  font-weight: 700;
 }
 
 .evidence-item {
@@ -2135,5 +3325,9 @@ onBeforeUnmount(() => {
   font-size: 20rpx;
   line-height: 1.5;
   color: #788690;
+}
+
+.followup-chip-list--embedded {
+  margin-top: 14rpx;
 }
 </style>

@@ -1,6 +1,6 @@
 <template>
-  <view class="page">
-    <NavBar title="消息中心" bg-color="#1a1a2e" />
+  <view class="page theme-operator">
+    <NavBar title="消息中心" bg-color="#2f855a" />
     <OperatorMessageCenter :with-tab-bar="true" />
     <TabBar :tabs="OPERATOR_TABS" current="alerts" theme="operator" />
   </view>
@@ -23,6 +23,6 @@ useRouteGuard(OPERATOR_ROLES)
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  background: #f0f2f8;
+  background: var(--operator-bg, #eef5ef);
 }
 </style>

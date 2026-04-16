@@ -25,6 +25,7 @@ ANALYSIS_INTENTS = {
     "team_performance",
     "building_hotspot",
     "overdue_analysis",
+    "open_work_order_analysis",
     "support_takeover_analysis",
     "reassign_analysis",
     "experience_usage_analysis",
@@ -67,11 +68,43 @@ _STATUS_ALIASES = {
     "已关闭": "closed",
     "closed": "closed",
     "执行中": "dispatched",
+    "已派工": "dispatched",
+    "派工中": "dispatched",
+    "dispatched": "dispatched",
     "处理中": "processing",
     "processing": "processing",
     "待派工": "pending_dispatch",
     "pending_dispatch": "pending_dispatch",
 }
+_STATUS_LABELS = {
+    "pending_dispatch": "待派工",
+    "dispatched": "已派工",
+    "processing": "处理中",
+    "waiting_support": "待协同",
+    "pending_close": "待关闭",
+    "completed": "已完成",
+    "closed": "已关闭",
+    "overdue": "超时",
+}
+_OPEN_WORK_ORDER_KEYWORDS = (
+    "未完成",
+    "未关闭",
+    "未闭环",
+    "开放工单",
+    "在途工单",
+    "待处理工单",
+    "待关闭工单",
+)
+_STATUS_QUERY_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("pending_close", ("待关闭", "待闭环")),
+    ("waiting_support", ("待协同", "协同中", "需协同", "支援中")),
+    ("processing", ("处理中", "维修中", "处置中")),
+    ("dispatched", ("已派工", "派工中", "已分派")),
+    ("pending_dispatch", ("待派工", "未派工")),
+    ("completed", ("已完成", "已完工")),
+    ("closed", ("已关闭", "已闭环")),
+    ("overdue", ("超时", "sla")),
+)
 _ISSUE_CATEGORY_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("暖通空调", ("空调", "暖通", "冷机", "风机", "温度", "hvac", "chiller")),
     ("电气照明", ("电", "照明", "配电", "跳闸", "elect", "power")),
@@ -151,6 +184,11 @@ def _building_label(value: str | None) -> str:
     return str(value or "全部楼宇")
 
 
+def _status_label(value: str | None) -> str:
+    normalized = str(value or "").strip().lower()
+    return _STATUS_LABELS.get(normalized, value or "未知状态")
+
+
 def _normalized_statuses(value: Any) -> list[str]:
     if value is None:
         return []
@@ -162,6 +200,19 @@ def _normalized_statuses(value: Any) -> list[str]:
         rows = [str(value).strip()]
     normalized = [_STATUS_ALIASES.get(item, item) for item in rows]
     return list(dict.fromkeys(normalized))
+
+
+def _extract_statuses_from_question(question: str | None) -> list[str]:
+    normalized = str(question or "").strip().lower()
+    if not normalized:
+        return []
+    matches: list[str] = []
+    for status, keywords in _STATUS_QUERY_RULES:
+        if any(keyword in normalized for keyword in keywords):
+            matches.append(status)
+    if any(token in normalized for token in _OPEN_WORK_ORDER_KEYWORDS):
+        matches = [item for item in matches if item not in {"completed", "closed"}]
+    return list(dict.fromkeys(matches))
 
 
 def _infer_issue_category(text: str | None) -> str:
@@ -178,6 +229,8 @@ def infer_work_order_analysis_intent(question: str, fallback: str | None = None)
     normalized = (question or "").strip().lower()
     if not normalized:
         return fallback or "monthly_report"
+    if any(token in normalized for token in _OPEN_WORK_ORDER_KEYWORDS):
+        return "open_work_order_analysis"
     if any(token in normalized for token in ("月报", "本月总结", "运营总结", "月度")):
         return "monthly_report"
     if any(token in normalized for token in ("周报", "本周总结")):
@@ -220,6 +273,7 @@ def _infer_group_by(question: str, intent: str, current: str | None = None) -> s
         "team_performance": "team",
         "building_hotspot": "building",
         "overdue_analysis": "building",
+        "open_work_order_analysis": "status",
         "support_takeover_analysis": "team",
         "reassign_analysis": "team",
         "experience_usage_analysis": "experience",
@@ -240,10 +294,19 @@ def _infer_metrics(question: str, intent: str, raw_metrics: Any = None) -> list[
         if metrics:
             return list(dict.fromkeys(metrics))
     normalized = question or ""
+    if intent == "open_work_order_analysis":
+        metrics: list[str] = []
+        if any(token in normalized.lower() for token in ("超时", "sla")):
+            metrics.append("overdue_count")
+        if any(token in normalized for token in ("待协同", "协同", "支援")):
+            metrics.append("waiting_support_count")
+        if any(token in normalized for token in ("待关闭", "待闭环")):
+            metrics.append("pending_close_count")
+        return list(dict.fromkeys(metrics or ["open_count", "overdue_count"]))
     metrics: list[str] = []
     if any(token in normalized for token in ("接单", "派工量")):
         metrics.append("assigned_count")
-    if "完成" in normalized or "闭环" in normalized:
+    if ("完成" in normalized and "未完成" not in normalized) or "闭环" in normalized:
         metrics.append("completed_count")
     if any(token in normalized for token in ("超时", "sla")):
         metrics.append("overdue_count")
@@ -254,6 +317,7 @@ def _infer_metrics(question: str, intent: str, raw_metrics: Any = None) -> list[
         "team_performance": ["assigned_count", "completed_count", "overdue_count"],
         "building_hotspot": ["work_order_count", "completed_count", "overdue_count"],
         "overdue_analysis": ["overdue_count"],
+        "open_work_order_analysis": ["open_count", "overdue_count"],
         "support_takeover_analysis": ["waiting_support_count", "takeover_count"],
         "reassign_analysis": ["reassign_count"],
         "experience_usage_analysis": ["usage_count", "helpful_count"],
@@ -399,9 +463,7 @@ def extract_work_order_analysis_scope(
         base["building_id"] = _normalize_building(str(base["building_id"]))
     statuses = _normalized_statuses(base.get("status"))
     if not statuses:
-        for token, value in _STATUS_ALIASES.items():
-            if token.lower() in normalized.lower():
-                statuses.append(value)
+        statuses = _extract_statuses_from_question(normalized)
     if statuses:
         base["status"] = list(dict.fromkeys(statuses))
     resolved_intent = infer_work_order_analysis_intent(question, fallback=intent or str(base.get("intent") or "monthly_report"))
@@ -727,6 +789,156 @@ def _empty_response(question: str, intent: str, scope: dict[str, Any]) -> dict[s
         "chart": None,
         "evidence_refs": [],
         "suggested_followups": ["缩小时间范围后重试", "切换楼宇或班组后重试"],
+    }
+
+
+def _open_work_order_payload(
+    question: str,
+    scope: dict[str, Any],
+    work_order_rows: list[dict[str, Any]],
+    dispatch_rows: list[dict[str, Any]],
+    end_at: datetime,
+) -> dict[str, Any]:
+    requested_statuses = set(_normalized_statuses(scope.get("status")))
+    latest_dispatch_by_work_order: dict[str, dict[str, Any]] = {}
+    for row in dispatch_rows:
+        work_order_id = str(row.get("work_order_id") or "")
+        previous = latest_dispatch_by_work_order.get(work_order_id)
+        current_sort = (
+            _coerce_datetime(row.get("assigned_at")) or datetime.min.replace(tzinfo=timezone.utc),
+            int(row.get("attempt_no") or 0),
+        )
+        if previous is None:
+            latest_dispatch_by_work_order[work_order_id] = row
+            continue
+        previous_sort = (
+            _coerce_datetime(previous.get("assigned_at")) or datetime.min.replace(tzinfo=timezone.utc),
+            int(previous.get("attempt_no") or 0),
+        )
+        if current_sort >= previous_sort:
+            latest_dispatch_by_work_order[work_order_id] = row
+
+    active_rows: list[dict[str, Any]] = []
+    for row in work_order_rows:
+        status = str(row.get("status") or "").strip().lower()
+        if status in CLOSED_WORK_ORDER_STATUSES:
+            continue
+        if requested_statuses and status not in requested_statuses:
+            continue
+        dispatch = latest_dispatch_by_work_order.get(str(row.get("work_order_id") or ""))
+        active_rows.append(
+            {
+                "work_order_id": row.get("work_order_id"),
+                "ticket_id": row.get("ticket_id"),
+                "status": status,
+                "status_label": _status_label(status),
+                "building_name": _building_label(row.get("building_id")),
+                "team_name": (dispatch or {}).get("team_name") or "未分组",
+                "worker_name": (dispatch or {}).get("worker_name") or "未分配",
+                "overdue": _is_dispatch_overdue(dispatch, end_at) if dispatch else False,
+            }
+        )
+
+    if not active_rows:
+        return _empty_response(question, "open_work_order_analysis", scope)
+
+    group_by = str(scope.get("group_by") or "status")
+    grouped: dict[str, dict[str, Any]] = {}
+    for row in active_rows:
+        if group_by == "team":
+            key = row["team_name"] or "未分组"
+            label = row["team_name"] or "未分组"
+        elif group_by == "building":
+            key = row["building_name"] or "未知楼宇"
+            label = row["building_name"] or "未知楼宇"
+        elif group_by == "worker":
+            key = row["worker_name"] or "未分配"
+            label = row["worker_name"] or "未分配"
+        else:
+            key = row["status"] or "unknown"
+            label = row["status_label"]
+        target = grouped.setdefault(
+            key,
+            {
+                "key": key,
+                "label": label,
+                "work_order_count": 0,
+                "overdue_count": 0,
+            },
+        )
+        target["work_order_count"] += 1
+        if row["overdue"]:
+            target["overdue_count"] += 1
+
+    rows = sorted(grouped.values(), key=lambda item: (-int(item["work_order_count"]), item["label"]))
+    top = rows[0]
+    status_counter = Counter(str(row["status"]) for row in active_rows)
+    open_total = len(active_rows)
+    overdue_total = sum(1 for row in active_rows if row["overdue"])
+    pending_dispatch_count = int(status_counter.get("pending_dispatch", 0) + status_counter.get("dispatched", 0))
+    processing_count = int(status_counter.get("processing", 0))
+    waiting_support_count = int(status_counter.get("waiting_support", 0))
+    pending_close_count = int(status_counter.get("pending_close", 0))
+    target_label = "未完成工单"
+    if requested_statuses:
+        if len(requested_statuses) == 1:
+            target_label = _status_label(next(iter(requested_statuses)))
+        else:
+            target_label = "指定状态工单"
+
+    if group_by == "status":
+        answer = (
+            f"{scope['date_label']}内{target_label}共 {open_total} 单，"
+            f"其中待派工/已派工 {pending_dispatch_count} 单，处理中 {processing_count} 单，"
+            f"待协同 {waiting_support_count} 单，待关闭 {pending_close_count} 单，超时 {overdue_total} 单。"
+        )
+    else:
+        group_label = {
+            "team": "班组",
+            "building": "楼宇",
+            "worker": "人员",
+        }.get(group_by, "维度")
+        answer = (
+            f"{scope['date_label']}内{target_label}共 {open_total} 单，按{group_label}看 "
+            f"{top['label']} 最多，共 {top['work_order_count']} 单，其中超时 {top['overdue_count']} 单。"
+        )
+
+    return {
+        "question": question,
+        "intent": "open_work_order_analysis",
+        "readonly": True,
+        "answer": answer,
+        "facts": {
+            "scope": scope,
+            "claims": _claims(
+                (f"{scope['date_label']}内{target_label}共 {open_total} 单。", ["metrics.summary.open_total"]),
+                (f"当前最多的是 {top['label']}，共 {top['work_order_count']} 单。", ["metrics.rows[0].work_order_count"]),
+            ),
+            "rows": active_rows[:12],
+        },
+        "metrics": {
+            "summary": {
+                "open_total": open_total,
+                "overdue_total": overdue_total,
+                "pending_dispatch_count": pending_dispatch_count,
+                "processing_count": processing_count,
+                "waiting_support_count": waiting_support_count,
+                "pending_close_count": pending_close_count,
+            },
+            "rows": rows,
+        },
+        "chart": {
+            "type": "bar",
+            "title": f"{scope['date_label']}{target_label}分布",
+            "source": "work_order_insights.open_work_order_analysis",
+            "x": [item["label"] for item in rows[:6]],
+            "series": [
+                {"name": "工单数", "data": [item["work_order_count"] for item in rows[:6]]},
+                {"name": "超时数", "data": [item["overdue_count"] for item in rows[:6]]},
+            ],
+        },
+        "evidence_refs": ["work_orders", "dispatch_tasks"],
+        "suggested_followups": ["查看未完成工单明细", "按班组拆分未完成工单", "只看待关闭工单"],
     }
 
 
@@ -1419,6 +1631,8 @@ async def build_work_order_facts_response(
         payload = _building_hotspot_payload(question, resolved_scope, work_order_rows, dispatch_rows, start_at, end_at)
     elif resolved_intent == "overdue_analysis":
         payload = _overdue_payload(question, resolved_scope, dispatch_rows, end_at)
+    elif resolved_intent == "open_work_order_analysis":
+        payload = _open_work_order_payload(question, resolved_scope, work_order_rows, dispatch_rows, end_at)
     elif resolved_intent == "support_takeover_analysis":
         payload = _support_takeover_payload(question, resolved_scope, dispatch_rows, hall_rows)
     elif resolved_intent == "reassign_analysis":

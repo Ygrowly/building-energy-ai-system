@@ -10,7 +10,7 @@
     <view class="dispatch-header">
       <view class="header-left">
         <view class="badge" :class="incident.priority">
-          {{ PRIORITY_LABEL[incident.priority] || incident.priority }}
+          {{ priorityLabel }}
         </view>
         <view class="rule-chip">
           {{ ruleLabel }}
@@ -119,7 +119,7 @@
         </view>
       </view>
       <view class="status-tag" :class="incident.workflow_status || ''">
-        {{ STATUS_LABEL[incident.workflow_status || ''] || incident.workflow_status || '处理中' }}
+        {{ workflowStatusLabel }}
       </view>
     </view>
 
@@ -218,6 +218,10 @@ import {
   formatRuleLabel,
   sanitizeDisplayText,
 } from '../utils/display'
+import {
+  formatOperatorWorkOrderStatusLabel,
+  sanitizeOperatorDisplayText,
+} from '../utils/operator-display'
 
 const props = withDefaults(defineProps<{
   incident: Incident
@@ -235,13 +239,15 @@ const emit = defineEmits<{
 
 const isStatusDrivenCard = computed(() => props.mode === 'operator-review' && props.incident.workflow_status === 'dispatched')
 const priorityClass = computed(() => `priority-${props.incident.priority || 'medium'}`)
+const priorityLabel = computed(() => PRIORITY_LABEL[props.incident.priority || ''] || sanitizeOperatorDisplayText(props.incident.priority) || '中优先')
+const workflowStatusLabel = computed(() => formatOperatorWorkOrderStatusLabel(props.incident.workflow_status))
 const buildingLabel = computed(() => formatBuildingLabel(props.incident.building_id))
 const deviceLabel = computed(() => formatDeviceLabel(props.incident.device_id, props.incident.building_id))
 const displayIncidentNo = computed(() => props.incident.incident_id || '--')
 const classicRuleLabel = computed(() => formatRuleLabel(props.incident.rule_triggered))
 const causeLabel = computed(() => formatRootCauseLabel(props.incident.hvac_root_cause))
-const summaryText = computed(() => sanitizeDisplayText(props.incident.summary_text))
-const aiReasonText = computed(() => sanitizeDisplayText(props.incident.current_work_order?.ai_reason))
+const summaryText = computed(() => sanitizeOperatorDisplayText(props.incident.summary_text))
+const aiReasonText = computed(() => sanitizeOperatorDisplayText(props.incident.current_work_order?.ai_reason))
 const classicSummaryText = computed(() => summaryText.value || aiReasonText.value || '暂无异常概述')
 const currentDispatch = computed(() => props.incident.current_dispatch || null)
 const signedPeak = computed(() => {
@@ -614,8 +620,8 @@ function formatTime(value: string | null): string {
   }
 
   &.accent {
-    background: #eef4ff;
-    border-color: #d7e5ff;
+    background: #eef8f1;
+    border-color: rgba(47, 133, 90, 0.16);
   }
 
   &.success {
@@ -783,9 +789,9 @@ function formatTime(value: string | null): string {
   color: #506074;
 
   &.accent {
-    background: #eef4ff;
-    color: #2f6df6;
-    border-color: #d7e5ff;
+    background: #eef8f1;
+    color: #2f855a;
+    border-color: rgba(47, 133, 90, 0.16);
   }
 }
 
@@ -797,14 +803,14 @@ function formatTime(value: string | null): string {
   flex-shrink: 0;
 
   &.pending_review { background: #fffbe6; color: #d48806; }
-  &.auto_approved { background: #e6f7ff; color: #096dd9; }
+  &.auto_approved { background: #eef8f1; color: #2f855a; }
   &.auto_rejected { background: #fff2f0; color: #ff4d4f; }
-  &.dispatched { background: #e6f7ff; color: #096dd9; }
+  &.dispatched { background: #eef8f1; color: #2f855a; }
   &.completed { background: #f6ffed; color: #389e0d; }
   &.closed { background: #f5f5f5; color: #8c8c8c; }
   &.false_alarm { background: #f0f0f0; color: #595959; }
   &.escalated { background: #f0f0ff; color: #722ed1; }
-  &.admin_override_approved { background: #e6f7ff; color: #096dd9; }
+  &.admin_override_approved { background: #eef8f1; color: #2f855a; }
   &.admin_override_rejected { background: #fff2f0; color: #ff4d4f; }
 }
 
@@ -848,8 +854,8 @@ function formatTime(value: string | null): string {
 }
 
 .ai-reason {
-  background: linear-gradient(135deg, #f7f9ff, #eef4ff);
-  border-color: #dce8ff;
+  background: linear-gradient(135deg, #f8fcf8, #eef8f1);
+  border-color: rgba(47, 133, 90, 0.16);
 }
 
 .ai-head {

@@ -31,34 +31,45 @@
 
     <view v-else class="message-list">
       <view
-        v-for="item in notificationStore.items"
-        :key="item.recipient_id"
+        v-for="entry in notificationCards"
+        :key="entry.item.recipient_id"
         class="msg-item clickable"
-        :class="[severityClass(item.severity), { unread: !item.read_at }]"
-        @click="openNotification(item)"
+        :class="[entry.view.tone, { unread: !entry.item.read_at }]"
+        @click="openNotification(entry.item)"
       >
-        <view class="msg-icon workorder" :class="severityClass(item.severity)">
-          <text>{{ severityMark(item.severity) }}</text>
+        <view class="msg-accent" :class="entry.view.tone" />
+        <view class="msg-icon" :class="entry.view.tone">
+          <text>{{ entry.view.iconText }}</text>
         </view>
         <view class="msg-body">
-          <text class="msg-title">{{ item.title }}</text>
-          <text class="msg-sub">{{ item.body }}</text>
-          <view class="msg-meta">
-            <text class="msg-tag">{{ eventLabel(item.event_type) }}</text>
-            <text v-if="item.related_ticket_id" class="msg-tag ticket">{{ item.related_ticket_id }}</text>
-            <text class="msg-time">{{ formatRelativeTime(item.created_at) }}</text>
+          <view class="msg-head">
+            <text class="msg-event" :class="entry.view.tone">{{ entry.view.eventLabel }}</text>
+            <text class="msg-time">{{ formatRelativeTime(entry.item.created_at) }}</text>
+          </view>
+          <text class="msg-title">{{ entry.view.title }}</text>
+          <text class="msg-sub">{{ entry.view.subtitle }}</text>
+          <text v-if="entry.view.detail" class="msg-detail">{{ entry.view.detail }}</text>
+          <view v-if="entry.view.chips.length" class="msg-chips">
+            <text
+              v-for="chip in entry.view.chips"
+              :key="chip.text"
+              class="msg-chip"
+              :class="chip.tone"
+            >{{ chip.text }}</text>
           </view>
         </view>
-        <view v-if="!item.read_at" class="msg-unread"></view>
+        <view v-if="!entry.item.read_at" class="msg-unread" />
       </view>
     </view>
   </scroll-view>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted } from 'vue'
-import { useNotificationStore } from '../stores/notification'
+import { computed, onMounted, ref, watch } from 'vue'
 import type { NotificationItem } from '../api/notification'
+import { workOrderApi, type WorkOrder } from '../api/workorder'
+import { useNotificationStore } from '../stores/notification'
+import { buildOperatorNotificationCard } from '../utils/operator-display'
 
 const props = withDefaults(defineProps<{
   withTabBar?: boolean
@@ -67,53 +78,29 @@ const props = withDefaults(defineProps<{
 })
 
 const notificationStore = useNotificationStore()
-
-const EVENT_LABELS: Record<string, string> = {
-  assigned: '已派单',
-  auto_assigned: '自动派单',
-  accepted: '已接单',
-  arrived: '已到场',
-  started: '处理中',
-  support_requested: '协同请求',
-  support_resolved: '协同完成',
-  rejected: '已拒单',
-  cancelled: '已取消',
-  transferred: '已转派',
-  reminded: '调度催办',
-  timeout_warning: '临近超时',
-  timeout_overdue: '已超时',
-  support_assigned: '协同指派',
-  support_worker_accepted: '协同接单',
-  support_worker_rejected: '协同拒单',
-  worker_feedback: '维修反馈',
-  close: '工单关闭',
-  admin_override: '管理员处理',
-  dispatch_hall_takeover_open: '接管大厅',
-  dispatch_hall_support_open: '协同大厅',
-  dispatch_hall_closed: '大厅关闭',
-}
+const workOrderDetails = ref<Record<string, WorkOrder>>({})
+const loadingTicketIds = new Set<string>()
 
 const listAreaStyle = computed(() => ({
   paddingBottom: props.withTabBar ? 'calc(env(safe-area-inset-bottom, 0px) + 140rpx)' : '32rpx',
 }))
 
-function eventLabel(eventType: string) {
-  return EVENT_LABELS[eventType] || eventType
-}
+const notificationTicketIds = computed(() =>
+  Array.from(new Set(
+    notificationStore.items
+      .map((item) => item.related_ticket_id || item.cta_params?.ticket_id || item.payload?.ticket_id)
+      .filter((value): value is string => typeof value === 'string' && Boolean(value.trim())),
+  )),
+)
 
-function severityClass(severity?: string | null) {
-  if (severity === 'danger') return 'danger'
-  if (severity === 'warning') return 'warning'
-  if (severity === 'success') return 'success'
-  return 'info'
-}
-
-function severityMark(severity?: string | null) {
-  if (severity === 'danger') return '急'
-  if (severity === 'warning') return '警'
-  if (severity === 'success') return '成'
-  return '工'
-}
+const notificationCards = computed(() =>
+  notificationStore.items.map((item) => ({
+    item,
+    view: buildOperatorNotificationCard(item, {
+      workOrder: workOrderDetails.value[item.related_ticket_id || item.cta_params?.ticket_id || item.payload?.ticket_id || ''] || null,
+    }),
+  })),
+)
 
 function formatRelativeTime(value?: string | null) {
   if (!value) return '--'
@@ -134,6 +121,29 @@ async function refresh() {
 async function markAllRead() {
   if (notificationStore.unreadCount === 0) return
   await notificationStore.markAllRead('workorder')
+}
+
+async function hydrateWorkOrders() {
+  const missingIds = notificationTicketIds.value.filter((ticketId) => !workOrderDetails.value[ticketId] && !loadingTicketIds.has(ticketId))
+  if (!missingIds.length) return
+
+  missingIds.forEach((ticketId) => loadingTicketIds.add(ticketId))
+  const results = await Promise.allSettled(
+    missingIds.map(async (ticketId) => ({
+      ticketId,
+      detail: await workOrderApi.detail(ticketId),
+    })),
+  )
+
+  const nextMap = { ...workOrderDetails.value }
+  results.forEach((result, index) => {
+    const ticketId = missingIds[index]
+    loadingTicketIds.delete(ticketId)
+    if (result.status === 'fulfilled') {
+      nextMap[result.value.ticketId] = result.value.detail
+    }
+  })
+  workOrderDetails.value = nextMap
 }
 
 async function openNotification(item: NotificationItem) {
@@ -173,6 +183,9 @@ onMounted(() => {
   void refresh()
 })
 
+watch(notificationTicketIds, () => {
+  void hydrateWorkOrders()
+}, { immediate: true })
 </script>
 
 <style lang="scss" scoped>
@@ -186,8 +199,8 @@ onMounted(() => {
 .toolbar-card,
 .empty-block,
 .msg-item {
-  background: #fff;
-  border-radius: 24rpx;
+  background: var(--operator-card, #ffffff);
+  border-radius: 28rpx;
 }
 
 .toolbar-card {
@@ -197,6 +210,8 @@ onMounted(() => {
   align-items: center;
   justify-content: space-between;
   gap: 20rpx;
+  border: 1rpx solid var(--operator-border, rgba(203, 225, 208, 0.96));
+  box-shadow: var(--operator-shadow, 0 12rpx 34rpx rgba(35, 75, 54, 0.1));
 }
 
 .toolbar-copy {
@@ -207,12 +222,12 @@ onMounted(() => {
 
 .toolbar-label {
   font-size: 22rpx;
-  color: #9ca3af;
+  color: var(--operator-text-muted, #8aa091);
 }
 
 .toolbar-value {
   font-size: 42rpx;
-  color: #111827;
+  color: var(--operator-text, #163022);
   font-weight: 700;
 }
 
@@ -222,7 +237,7 @@ onMounted(() => {
 }
 
 .toolbar-btn {
-  padding: 14rpx 22rpx;
+  padding: 14rpx 24rpx;
   border-radius: 999rpx;
 
   text {
@@ -232,15 +247,15 @@ onMounted(() => {
 }
 
 .toolbar-btn.ghost {
-  background: #eef2f7;
+  background: var(--operator-card-soft, #f4fbf5);
 
   text {
-    color: #475569;
+    color: var(--operator-text-secondary, #5b6f62);
   }
 }
 
 .toolbar-btn.primary {
-  background: linear-gradient(135deg, #3b82f6, #2563eb);
+  background: var(--operator-btn, linear-gradient(135deg, #42bf72, #2f855a));
 
   text {
     color: #fff;
@@ -254,46 +269,87 @@ onMounted(() => {
 .empty-block {
   padding: 56rpx 32rpx;
   text-align: center;
+  border: 1rpx solid var(--operator-border, rgba(203, 225, 208, 0.96));
+  background: var(--operator-bg-soft, #f7fbf7);
 }
 
 .empty-check {
   display: block;
   font-size: 44rpx;
-  color: #60a5fa;
+  color: var(--primary, #2f855a);
 }
 
 .empty-text {
   display: block;
   margin-top: 10rpx;
   font-size: 26rpx;
-  color: #94a3b8;
+  color: var(--operator-text-muted, #8aa091);
 }
 
 .message-list {
   display: flex;
   flex-direction: column;
-  gap: 12rpx;
+  gap: 14rpx;
 }
 
 .msg-item {
   position: relative;
   display: flex;
   align-items: flex-start;
-  gap: 20rpx;
-  padding: 22rpx 24rpx;
+  gap: 18rpx;
+  padding: 24rpx 24rpx 24rpx 28rpx;
+  border: 1rpx solid var(--operator-border, rgba(203, 225, 208, 0.96));
+  box-shadow: 0 10rpx 24rpx rgba(35, 75, 54, 0.06);
+  overflow: hidden;
 }
 
 .msg-item.unread {
-  box-shadow: 0 0 0 2rpx rgba(59, 130, 246, 0.12);
+  box-shadow:
+    0 0 0 2rpx rgba(66, 191, 114, 0.18),
+    0 12rpx 28rpx rgba(35, 75, 54, 0.08);
+}
+
+.msg-accent {
+  position: absolute;
+  left: 0;
+  top: 20rpx;
+  bottom: 20rpx;
+  width: 10rpx;
+  border-radius: 999rpx;
+}
+
+.msg-accent.info,
+.msg-icon.info,
+.msg-event.info,
+.msg-chip.accent {
+  color: #2f855a;
+}
+
+.msg-accent.info {
+  background: linear-gradient(180deg, #5bca85, #2f855a);
+}
+
+.msg-accent.warning {
+  background: linear-gradient(180deg, #f7b955, #e58e11);
+}
+
+.msg-accent.danger {
+  background: linear-gradient(180deg, #ef6d6d, #dc2626);
+}
+
+.msg-accent.success {
+  background: linear-gradient(180deg, #73d69a, #2f9e62);
 }
 
 .msg-icon {
-  width: 64rpx;
-  height: 64rpx;
-  border-radius: 18rpx;
+  position: relative;
+  width: 68rpx;
+  height: 68rpx;
+  border-radius: 22rpx;
   display: flex;
   align-items: center;
   justify-content: center;
+  flex-shrink: 0;
 
   text {
     font-size: 28rpx;
@@ -303,19 +359,19 @@ onMounted(() => {
 }
 
 .msg-icon.info {
-  background: linear-gradient(135deg, #93c5fd, #3b82f6);
+  background: linear-gradient(135deg, #7fd7a0, #2f855a);
 }
 
 .msg-icon.warning {
-  background: linear-gradient(135deg, #fdba74, #f59e0b);
+  background: linear-gradient(135deg, #fdc877, #e58e11);
 }
 
 .msg-icon.danger {
-  background: linear-gradient(135deg, #fca5a5, #ef4444);
+  background: linear-gradient(135deg, #f49b9b, #dc2626);
 }
 
 .msg-icon.success {
-  background: linear-gradient(135deg, #86efac, #22c55e);
+  background: linear-gradient(135deg, #8ee3af, #2f9e62);
 }
 
 .msg-body {
@@ -323,53 +379,113 @@ onMounted(() => {
   min-width: 0;
 }
 
+.msg-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12rpx;
+}
+
+.msg-event {
+  display: inline-flex;
+  align-items: center;
+  padding: 6rpx 16rpx;
+  border-radius: 999rpx;
+  font-size: 20rpx;
+  font-weight: 700;
+}
+
+.msg-event.info {
+  background: var(--operator-chip-bg, #ebf8ef);
+}
+
+.msg-event.warning {
+  background: rgba(245, 158, 11, 0.12);
+  color: #d97706;
+}
+
+.msg-event.danger {
+  background: rgba(239, 68, 68, 0.12);
+  color: #dc2626;
+}
+
+.msg-event.success {
+  background: rgba(34, 197, 94, 0.12);
+  color: #15803d;
+}
+
+.msg-time {
+  flex-shrink: 0;
+  font-size: 20rpx;
+  color: var(--operator-text-muted, #8aa091);
+}
+
 .msg-title {
   display: block;
+  margin-top: 12rpx;
   font-size: 28rpx;
-  font-weight: 700;
-  color: #111827;
+  font-weight: 800;
+  line-height: 1.4;
+  color: var(--operator-text, #163022);
 }
 
 .msg-sub {
   display: block;
   margin-top: 8rpx;
   font-size: 24rpx;
+  line-height: 1.65;
+  color: var(--operator-text-secondary, #5b6f62);
+}
+
+.msg-detail {
+  display: block;
+  margin-top: 10rpx;
+  font-size: 22rpx;
   line-height: 1.6;
-  color: #64748b;
+  color: var(--operator-text-muted, #8aa091);
 }
 
-.msg-meta {
+.msg-chips {
   display: flex;
-  align-items: center;
-  gap: 10rpx;
   flex-wrap: wrap;
-  margin-top: 12rpx;
+  gap: 10rpx;
+  margin-top: 14rpx;
 }
 
-.msg-tag,
-.msg-time {
-  font-size: 20rpx;
-}
-
-.msg-tag {
-  padding: 4rpx 14rpx;
+.msg-chip {
+  padding: 6rpx 14rpx;
   border-radius: 999rpx;
-  background: #eef2ff;
-  color: #4f46e5;
+  font-size: 20rpx;
+  line-height: 1.4;
 }
 
-.msg-tag.ticket {
-  background: #e0f2fe;
-  color: #0369a1;
+.msg-chip.neutral {
+  background: #f3f8f3;
+  color: var(--operator-text-secondary, #5b6f62);
 }
 
-.msg-time {
-  color: #94a3b8;
+.msg-chip.accent {
+  background: var(--operator-chip-bg, #ebf8ef);
+}
+
+.msg-chip.warning {
+  background: rgba(245, 158, 11, 0.12);
+  color: #d97706;
+}
+
+.msg-chip.danger {
+  background: rgba(239, 68, 68, 0.12);
+  color: #dc2626;
+}
+
+.msg-chip.success {
+  background: rgba(34, 197, 94, 0.12);
+  color: #15803d;
 }
 
 .msg-unread {
   position: absolute;
-  top: 28rpx;
+  top: 24rpx;
   right: 24rpx;
   width: 16rpx;
   height: 16rpx;

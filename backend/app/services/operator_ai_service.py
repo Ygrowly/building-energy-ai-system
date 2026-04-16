@@ -68,6 +68,31 @@ def _is_guidance_query(text: str) -> bool:
     return any(token in normalized for token in keywords)
 
 
+def _is_greeting_or_smalltalk(text: str) -> bool:
+    normalized = re.sub(r"\s+", "", str(text or "").strip().lower())
+    if not normalized:
+        return False
+    exact_tokens = {
+        "你好",
+        "您好",
+        "嗨",
+        "哈喽",
+        "hello",
+        "hi",
+        "在吗",
+        "在么",
+        "谢谢",
+        "多谢",
+        "辛苦了",
+    }
+    if normalized in exact_tokens:
+        return True
+    return any(
+        token in normalized
+        for token in ("你好呀", "您好呀", "hello呀", "谢谢你", "谢谢您", "辛苦啦")
+    )
+
+
 def _select_current_step(steps: list[dict[str, Any]]) -> dict[str, Any] | None:
     return (
         next((step for step in steps if step.get("status") in {"pending", "uncertain"}), None)
@@ -235,8 +260,33 @@ def _should_reuse_previous_analysis_scope(text: str) -> bool:
     normalized = text.strip()
     if not normalized:
         return False
-    followup_tokens = ("那", "再", "继续", "换成", "改成", "拆开", "对比", "比较", "顺便", "另外", "上周", "上月")
-    return any(token in normalized for token in followup_tokens) or len(normalized) <= 20
+    if _is_greeting_or_smalltalk(normalized):
+        return False
+    followup_tokens = (
+        "那",
+        "再看",
+        "继续",
+        "然后",
+        "顺便",
+        "另外",
+        "换成",
+        "改成",
+        "切换",
+        "拆开",
+        "拆分",
+        "只看",
+        "按班组",
+        "按楼宇",
+        "按人员",
+        "按日期",
+        "对比",
+        "比较",
+        "上周",
+        "上一周",
+        "上月",
+        "上一月",
+    )
+    return any(token in normalized for token in followup_tokens)
 
 
 def _build_operator_analysis_scope(
@@ -402,6 +452,24 @@ async def handle_operator_ai_chat(
             "evidence_refs": [],
             "suggested_followups": ["查看这张工单的流程", "查看当前责任人和超时风险"],
             "blocked_actions": blocked_actions,
+        }
+
+    if _is_greeting_or_smalltalk(text):
+        answer = "我是运小维，只做只读问询和运营分析。你可以直接问我工单进度、未完成工单情况、超时原因，或者某个时间范围内的班组、楼宇、人员统计。"
+        await _append_message(db, session_id=session_id, role="assistant", content=answer)
+        await db.commit()
+        return {
+            "assistant": "运小维",
+            "session_id": session_id,
+            "answer_type": "greeting",
+            "answer": answer,
+            "readonly": True,
+            "facts": [],
+            "metrics": {},
+            "chart": None,
+            "evidence_refs": [],
+            "suggested_followups": ["查看本月工单运营总结", "未完成工单情况", "本周哪个班组超时率最高"],
+            "blocked_actions": [],
         }
 
     resolved_ticket_id = ticket_id or _extract_ticket_id(text)

@@ -1,6 +1,6 @@
 <template>
-  <view class="page">
-    <NavBar title="账号与安全" bg-color="#1a1a2e" :show-back="true" />
+  <view class="page theme-operator">
+    <NavBar title="账号与安全" bg-color="#2f855a" :show-back="true" />
 
     <!-- 账户状态 -->
     <view class="section">
@@ -69,7 +69,7 @@ async function doChangePwd() {
 </script>
 
 <style lang="scss" scoped>
-.page { background: #f0f2f8; min-height: 100vh; }
+.page { background: var(--operator-bg, #eef5ef); min-height: 100vh; }
 
 .section {
   margin: 24rpx 32rpx 0;
@@ -77,38 +77,42 @@ async function doChangePwd() {
 
 .section-title {
   font-size: 26rpx;
-  color: #999;
+  color: var(--operator-text-secondary, #5b6f62);
   margin-bottom: 16rpx;
   padding-left: 8rpx;
 }
 
 .status-card {
-  background: #fff;
-  border-radius: 16rpx;
+  background: var(--operator-card, #fff);
+  border-radius: 20rpx;
   padding: 32rpx 28rpx;
   display: flex;
   align-items: center;
   gap: 16rpx;
+  border: 1rpx solid var(--operator-border, rgba(203, 225, 208, 0.96));
+  box-shadow: var(--operator-shadow, 0 12rpx 34rpx rgba(35, 75, 54, 0.1));
 }
 
 .status-dot {
   width: 16rpx;
   height: 16rpx;
   border-radius: 8rpx;
-  background: #ccc;
+  background: var(--operator-text-muted, #8aa091);
 
-  &.active { background: #52c41a; }
+  &.active { background: var(--primary, #2f855a); }
 }
 
 .status-text {
   font-size: 28rpx;
-  color: #1a1a2e;
+  color: var(--operator-text, #163022);
 }
 
 .form-card {
-  background: #fff;
-  border-radius: 16rpx;
+  background: var(--operator-card, #fff);
+  border-radius: 20rpx;
   overflow: hidden;
+  border: 1rpx solid var(--operator-border, rgba(203, 225, 208, 0.96));
+  box-shadow: var(--operator-shadow, 0 12rpx 34rpx rgba(35, 75, 54, 0.1));
 }
 
 .form-input {
@@ -116,13 +120,13 @@ async function doChangePwd() {
   height: 96rpx;
   padding: 0 28rpx;
   font-size: 28rpx;
-  color: #1a1a2e;
+  color: var(--operator-text, #163022);
   box-sizing: border-box;
 }
 
 .form-divider {
   height: 1rpx;
-  background: #f5f5f5;
+  background: var(--operator-border, rgba(203, 225, 208, 0.96));
   margin: 0 28rpx;
 }
 
@@ -133,11 +137,11 @@ async function doChangePwd() {
 .save-btn {
   width: 100%;
   height: 88rpx;
-  background: #3b6cf4;
+  background: var(--operator-btn, linear-gradient(135deg, #42bf72, #2f855a));
   color: #fff;
   font-size: 30rpx;
   font-weight: 600;
-  border-radius: 16rpx;
+  border-radius: 20rpx;
   border: none;
 }
 </style>

@@ -229,13 +229,13 @@
           <text>{{ RULE_EMOJI[anom.rule_triggered] || '⚠' }}</text>
         </view>
         <view class="msg-body">
-          <text class="msg-title">{{ RULE_LABEL[anom.rule_triggered] || anom.rule_triggered }}</text>
+          <text class="msg-title">{{ formatRuleLabel(anom.rule_triggered) }}</text>
           <text class="msg-sub">
             {{ formatBuildingLabel(anom.building_id) }}
             <text v-if="anom.deviation_pct != null" :class="'dev-' + deviationSeverity(anom.deviation_pct)"> · {{ anom.deviation_pct > 0 ? '+' : '' }}{{ anom.deviation_pct.toFixed(1) }}%</text>
             · {{ formatRelativeTime(anom.data_timestamp) }}
           </text>
-          <text v-if="anom.message" class="msg-detail">{{ anom.message }}</text>
+          <text v-if="anom.message" class="msg-detail">{{ sanitizeOperatorDisplayText(anom.message) }}</text>
         </view>
         <view class="msg-tag" :class="'tag-' + deviationSeverity(anom.deviation_pct)">
           <text>{{ { high: '严重', medium: '警告', low: '提示' }[deviationSeverity(anom.deviation_pct)] }}</text>
@@ -271,15 +271,15 @@
         :key="prediction.id"
         class="prediction-card"
         :class="'prediction-' + prediction.risk_level"
-      >
+        >
         <view class="prediction-card-left">
           <view class="prediction-icon" :class="prediction.risk_level">
             <text>{{ prediction.risk_level === 'critical' ? '⚠' : '⚡' }}</text>
           </view>
           <view class="prediction-info">
             <view class="prediction-header">
-              <text class="prediction-name">{{ prediction.building_name }}</text>
-              <view class="prediction-mode-badge"><text>{{ predictionWindowLabel(prediction.horizon_h) }}</text></view>
+              <text class="prediction-name">{{ predictionBuildingName(prediction) }}</text>
+              <view class="prediction-mode-badge"><text>{{ formatOperatorPredictionMode(prediction.horizon_h) }}</text></view>
             </view>
             <text class="prediction-desc">{{ predictionSummary(prediction) }}</text>
             <text class="prediction-meta">
@@ -309,7 +309,6 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { RULE_LABEL } from '../constants/status'
 import { useNotificationStore } from '../stores/notification'
 import { dataApi, type AnomalyItem, type PredictionItem } from '../api/data'
 import { incidentApi, type Incident } from '../api/incident'
@@ -318,7 +317,12 @@ import OperatorWorkorderNotifications from './OperatorWorkorderNotifications.vue
 import { ALL_BUILDING_FILTER_OPTIONS } from '../constants/buildings'
 import { formatRelativeTime, formatServerDateTime } from '../utils/format'
 import { getCache, setCache } from '../utils/cache'
-import { formatBuildingLabel, sanitizeDisplayText } from '../utils/display'
+import { formatBuildingLabel, formatRuleLabel } from '../utils/display'
+import {
+  formatOperatorMetricLabel,
+  formatOperatorPredictionMode,
+  sanitizeOperatorDisplayText,
+} from '../utils/operator-display'
 import {
   buildOperatorWorkorderMessageItems,
   filterOperatorWorkorderMessageItems,
@@ -710,19 +714,8 @@ async function loadPredictions() {
   }
 }
 
-function predictionWindowLabel(horizon: number) {
-  return `${horizon}h`
-}
-
 function metricLabel(metricName: string) {
-  const labels: Record<string, string> = {
-    electricity_kwh: '用电量',
-    water_l: '水耗',
-    hac_energy: '空调能耗',
-    sim_supply_temp_c: '供水温度',
-    sim_return_temp_c: '回水温度',
-  }
-  return labels[metricName] || metricName
+  return formatOperatorMetricLabel(metricName)
 }
 
 function metricUnit(metricName: string) {
@@ -746,8 +739,12 @@ function formatForecastTime(iso: string | null) {
   return formatServerDateTime(iso)
 }
 
+function predictionBuildingName(item: PredictionItem) {
+  return sanitizeOperatorDisplayText(item.building_name) || formatBuildingLabel(item.building_id || item.building_type)
+}
+
 function predictionSummary(item: PredictionItem) {
-  const metric = RULE_LABEL[item.rule_triggered || ''] || metricLabel(item.metric_name)
+  const metric = item.rule_triggered ? formatRuleLabel(item.rule_triggered) : metricLabel(item.metric_name)
   const prefix = item.risk_level === 'critical' ? '预计显著异常' : '预计偏离基线'
   return `${metric} ${prefix}`
 }
@@ -766,7 +763,7 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  background: #f0f2f8;
+  background: var(--operator-bg, #eef5ef);
   width: 100%;
   box-sizing: border-box;
 }
@@ -1105,8 +1102,8 @@ onMounted(() => {
   font-weight: 600;
 }
 .msg-action-btn.accent {
-  background: rgba(59, 130, 246, 0.12);
-  color: #2563eb;
+  background: rgba(47, 133, 90, 0.12);
+  color: var(--primary, #2f855a);
 }
 .msg-action-btn.warn {
   background: rgba(245, 158, 11, 0.14);
@@ -1200,8 +1197,8 @@ onMounted(() => {
   font-weight: 500;
   padding: 2rpx 14rpx;
   border-radius: 20rpx;
-  background: rgba(59, 108, 244, 0.1);
-  color: #3b6cf4;
+  background: rgba(47, 133, 90, 0.1);
+  color: var(--primary, #2f855a);
 }
 .prediction-desc {
   font-size: 24rpx;

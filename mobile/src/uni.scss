@@ -6,10 +6,24 @@ page {
 
 /* ---- 运维端色系 ---- */
 .theme-operator {
-  --primary: #3b6cf4;
-  --primary-dark: #1a1a2e;
-  --primary-light: #e8effe;
-  --accent: #00c9ff;
+  --primary: #2f855a;
+  --primary-dark: #234b36;
+  --primary-light: #eef8f1;
+  --accent: #4ade80;
+  --operator-bg: #eef5ef;
+  --operator-bg-soft: #f7fbf7;
+  --operator-card: #ffffff;
+  --operator-card-soft: #f4fbf5;
+  --operator-border: rgba(203, 225, 208, 0.96);
+  --operator-border-strong: rgba(47, 133, 90, 0.18);
+  --operator-shadow: 0 12rpx 34rpx rgba(35, 75, 54, 0.1);
+  --operator-text: #163022;
+  --operator-text-secondary: #5b6f62;
+  --operator-text-muted: #8aa091;
+  --operator-chip-bg: #ebf8ef;
+  --operator-chip-text: #26734d;
+  --operator-btn: linear-gradient(135deg, #42bf72, #2f855a);
+  --operator-overlay: rgba(18, 38, 28, 0.34);
 }
 
 /* ---- 维修端色系 ---- */

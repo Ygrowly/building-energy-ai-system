@@ -136,6 +136,8 @@
           </view>
         </view>
       </view>
+
+      <view class="worker-tabbar-spacer" />
     </scroll-view>
 
     <TabBar :tabs="WORKER_TABS" current="workspace" theme="worker" />
@@ -154,7 +156,7 @@ import { WORKER_TABS } from '../../../constants/tabs'
 import { getCache, setCache } from '../../../utils/cache'
 import { useAuthStore } from '../../../stores/auth'
 import { useNotificationStore } from '../../../stores/notification'
-import { getWorkerDashboardStats, getWorkerFeatureOrder } from '../../../utils/worker-ui'
+import { getWorkerDashboardStats, getWorkerFeatureOrder, isWorkerAiReadyIncident } from '../../../utils/worker-ui'
 import { subscribeWorkerOrdersUpdated } from '../../../utils/worker-sync'
 import { sanitizeDisplayText, formatBuildingLabel, formatDeviceLabel } from '../../../utils/display'
 import { formatDateTime } from '../../../utils/format'
@@ -200,17 +202,20 @@ const todoSummaryText = computed(() => (
 const featuredOrder = computed(() => {
   const supportTarget = supportEntries.value[0]
   if (supportTarget) {
+    const workerAiReady = supportTarget.status === 'accepted'
     return {
       ticketId: supportTarget.work_order?.ticket_id || supportTarget.id,
       hallEntryId: supportTarget.id,
       incidentId: supportTarget.incident_id || undefined,
+      dispatchId: supportTarget.source_dispatch_id || supportTarget.source_dispatch?.id || undefined,
       title: sanitizeDisplayText(supportTarget.support_reason || supportTarget.reason || supportTarget.work_order?.issue_description) || '协同任务待处理',
       building: formatBuildingLabel(supportTarget.work_order?.building_id),
       location: formatDeviceLabel(supportTarget.work_order?.device_id, supportTarget.work_order?.building_id) || '协同现场待确认',
       time: formatDateTime(supportTarget.assigned_at || supportTarget.created_at),
       timeTag: supportTarget.status === 'assigned' ? '待确认协同' : '协同处理中',
       priorityLabel: '协同任务',
-      actionLabel: supportTarget.status === 'assigned' ? '响应协同' : '查看协同',
+      actionLabel: workerAiReady ? '进入维小修' : '响应协同',
+      workerAiReady,
       kind: 'support' as const,
     }
   }
@@ -291,20 +296,63 @@ function shortTicket(ticketId: string) {
   return ticketId.slice(-8)
 }
 
+function buildWorkerAiUrl(params: {
+  ticketId: string
+  incidentId?: string
+  dispatchId?: string
+  hallEntryId?: string
+}) {
+  const query = [
+    `ticket_id=${encodeURIComponent(params.ticketId)}`,
+    params.incidentId ? `incident_id=${encodeURIComponent(params.incidentId)}` : '',
+    params.hallEntryId ? `hall_entry_id=${encodeURIComponent(params.hallEntryId)}` : '',
+    params.dispatchId ? `dispatch_id=${encodeURIComponent(params.dispatchId)}` : '',
+  ].filter(Boolean).join('&')
+  return `/pages/worker/ai-workorder/index?${query}`
+}
+
+function buildWorkOrderDetailUrl(params: {
+  ticketId: string
+  incidentId?: string
+  dispatchId?: string
+  hallEntryId?: string
+}) {
+  const query = [
+    params.hallEntryId ? `hall_entry_id=${encodeURIComponent(params.hallEntryId)}` : '',
+    params.incidentId ? `incident_id=${encodeURIComponent(params.incidentId)}` : '',
+    `ticket_id=${encodeURIComponent(params.ticketId)}`,
+    params.dispatchId ? `dispatch_id=${encodeURIComponent(params.dispatchId)}` : '',
+  ].filter(Boolean).join('&')
+  return `/pages/worker/workorder-detail/index?${query}`
+}
+
 function openFeatureOrder() {
   if (!featuredOrder.value) return
   if (featuredOrder.value.kind === 'support') {
-    const dispatchId = supportEntries.value.find(item => item.id === featuredOrder.value?.hallEntryId)?.source_dispatch_id
+    const target = supportEntries.value.find(item => item.id === featuredOrder.value?.hallEntryId)
+    const ticketId = target?.work_order?.ticket_id || featuredOrder.value.ticketId
+    const dispatchId = target?.source_dispatch_id || target?.source_dispatch?.id || featuredOrder.value.dispatchId
+    const params = {
+      ticketId,
+      incidentId: target?.incident_id || featuredOrder.value.incidentId,
+      dispatchId,
+      hallEntryId: featuredOrder.value.hallEntryId,
+    }
     uni.navigateTo({
-      url: `/pages/worker/ai-workorder/index?hall_entry_id=${featuredOrder.value.hallEntryId}&incident_id=${featuredOrder.value.incidentId || ''}&ticket_id=${featuredOrder.value.ticketId}${dispatchId ? `&dispatch_id=${dispatchId}` : ''}`,
+      url: featuredOrder.value.workerAiReady ? buildWorkerAiUrl(params) : buildWorkOrderDetailUrl(params),
     })
     return
   }
   const target = incidents.value.find(item => (item.current_work_order?.ticket_id || item.incident_id) === featuredOrder.value?.ticketId)
   if (!target?.current_work_order?.ticket_id) return
-  const dispatchId = target.current_dispatch?.id || target.current_work_order.dispatch_id
+  const dispatchId = target.current_dispatch?.id || featuredOrder.value.dispatchId || target.current_work_order.dispatch_id
+  const params = {
+    ticketId: target.current_work_order.ticket_id,
+    incidentId: target.incident_id,
+    dispatchId,
+  }
   uni.navigateTo({
-    url: `/pages/worker/ai-workorder/index?incident_id=${target.incident_id}&ticket_id=${target.current_work_order.ticket_id}${dispatchId ? `&dispatch_id=${dispatchId}` : ''}`,
+    url: isWorkerAiReadyIncident(target) ? buildWorkerAiUrl(params) : buildWorkOrderDetailUrl(params),
   })
 }
 
@@ -376,10 +424,14 @@ onUnmounted(() => {
   position: relative;
   z-index: 1;
   height: 100vh;
-  padding: 0 24rpx calc(168rpx + env(safe-area-inset-bottom, 0px));
+  padding: 0 24rpx;
   box-sizing: border-box;
   scrollbar-width: none;
   -ms-overflow-style: none;
+}
+
+.worker-tabbar-spacer {
+  height: calc(276rpx + env(safe-area-inset-bottom, 0px));
 }
 
 .page-scroll::-webkit-scrollbar {

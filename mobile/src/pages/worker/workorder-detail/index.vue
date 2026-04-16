@@ -136,14 +136,11 @@
             </view>
 
             <view class="section-card" v-if="!readonly">
-              <text class="section-title">AI辅助维修</text>
-              <AiChat
-                :order="order"
-                mode="worker"
-                :dispatch-id="order.current_dispatch?.id || order.dispatch_id || null"
-                :hall-entry-id="hallEntry?.id || null"
-                @order-updated="handleOrderUpdated"
-              />
+              <text class="section-title">维小修</text>
+              <text class="note-text">{{ workerAiEntryText }}</text>
+              <view v-if="canOpenWorkerAi" class="ai-entry-action" @click="openWorkerAi">
+                <text>打开维小修</text>
+              </view>
             </view>
           </view>
         </view>
@@ -180,37 +177,8 @@
             maxlength="500"
             placeholder="补充处理过程、现场情况或后续建议"
           />
-        </view>
-        <view v-if="!readonly && order" class="action-card">
-          <text class="action-title">沉淀本次经验</text>
-          <view class="experience-type-row">
-            <view
-              class="experience-type-chip"
-              :class="{ active: experienceSourceType === 'worker_note' }"
-              @click="experienceSourceType = 'worker_note'"
-            >
-              <text>过程经验</text>
-            </view>
-            <view
-              class="experience-type-chip"
-              :class="{ active: experienceSourceType === 'completion_summary' }"
-              @click="experienceSourceType = 'completion_summary'"
-            >
-              <text>完工总结</text>
-            </view>
-          </view>
-          <textarea
-            v-model="experienceDraft"
-            class="note-input"
-            maxlength="1000"
-            placeholder="请记录故障现象 判断依据 处理动作 安全注意事项"
-          />
-          <view class="action-row single">
-            <button
-              class="action-btn experience"
-              :loading="experienceSubmitting"
-              @click="submitExperienceEntry"
-            >沉淀经验</button>
+          <view v-if="canOpenWorkerAi" class="result-helper" @click="openWorkerAi">
+            <text>让维小修先帮我整理现场备注</text>
           </view>
         </view>
       </scroll-view>
@@ -231,7 +199,6 @@ import {
   type WorkOrderTimelineResponse,
 } from '../../../api/workorder'
 import { incidentApi, type IncidentDetail } from '../../../api/incident'
-import { maintenanceExperienceApi, type MaintenanceExperienceSourceType } from '../../../api/maintenance-experience'
 import { useAuthStore } from '../../../stores/auth'
 import { useRouteGuard } from '../../../utils/route-guard'
 import {
@@ -284,9 +251,6 @@ const actionLoading = ref<
 >(null)
 const feedbackLoading = ref<string | null>(null)
 const workerNote = ref('')
-const experienceDraft = ref('')
-const experienceSubmitting = ref(false)
-const experienceSourceType = ref<MaintenanceExperienceSourceType>('worker_note')
 const activeTab = ref<'order' | 'customer' | 'service'>(
   readonly && isOperatorViewer.value ? 'service' : 'order',
 )
@@ -316,6 +280,7 @@ const ACTIVE_SYNC_EXECUTION_STATUSES = new Set([
   'waiting_support',
   'overdue',
 ])
+const WORKER_AI_READY_EXECUTION_STATUSES = new Set(['processing', 'waiting_support', 'supporting'])
 
 type WorkerDispatchAction =
   | 'accept'
@@ -433,6 +398,24 @@ const currentDispatchTask = computed(() => {
     return dispatchTasks.value.find(item => item.id === currentDispatchId) || order.value?.current_dispatch || null
   }
   return dispatchTasks.value[dispatchTasks.value.length - 1] || null
+})
+function isWorkerAiReadyStatus(value?: string | null) {
+  return WORKER_AI_READY_EXECUTION_STATUSES.has(String(value || '').toLowerCase())
+}
+
+function hasStartedDispatchForAi(dispatch?: Partial<DispatchTask> | null) {
+  return Boolean(
+    dispatch?.processing_started_at
+      || isWorkerAiReadyStatus(dispatch?.execution_status)
+      || isWorkerAiReadyStatus(dispatch?.dispatch_status),
+  )
+}
+
+const hasStartedCurrentDispatchForAi = computed(() => {
+  if (hallEntry.value) return hallEntry.value.status === 'accepted'
+  const dispatch = currentDispatchTask.value || order.value?.current_dispatch || incident.value?.current_dispatch || null
+  if (dispatch) return hasStartedDispatchForAi(dispatch)
+  return Boolean(order.value?.processing_started_at || isWorkerAiReadyStatus(order.value?.execution_status))
 })
 const currentBlockReason = computed(() => sanitizeDisplayText(
   hallEntry.value?.support_reason
@@ -607,13 +590,26 @@ const progressActions = computed<ProgressAction[]>(() => {
         { action: 'arrive' as const, label: '立即到场' },
         { action: 'reject' as const, label: '退回改派' },
       ]
-      if (!order.value?.processing_started_at) return [{ action: 'start' as const, label: '开始处理' }]
+      if (!hasStartedCurrentDispatchForAi.value) return [{ action: 'start' as const, label: '开始处理' }]
       return [{ action: 'request_support' as const, label: '申请协同' }]
     default:
       return []
   }
 })
-const canSubmitFeedback = computed(() => !hallEntry.value && (['processing', 'waiting_support'].includes(currentExecutionStatus.value) || !!order.value?.processing_started_at))
+const canSubmitFeedback = computed(() => !hallEntry.value && hasStartedCurrentDispatchForAi.value)
+const canOpenWorkerAi = computed(() => Boolean(
+  order.value
+    && hasStartedCurrentDispatchForAi.value,
+))
+const workerAiEntryText = computed(() => {
+  if (canOpenWorkerAi.value) {
+    return '已经进入现场处理阶段。维小修现在负责现场排查、图片/语音判断、备注整理和经验建议，流程动作仍在本页完成。'
+  }
+  if (hallEntry.value?.status === 'assigned') {
+    return '请先在本页确认协同任务。确认后再接入维小修看现场。'
+  }
+  return '请先在本页完成接单、到场和开始处理。开始处理成功后，系统会转接维小修。'
+})
 
 const orderRows = computed(() => [
   { label: '工单编号', value: order.value?.ticket_id || '--' },
@@ -840,6 +836,22 @@ async function loadOrder(options: { silent?: boolean } = {}) {
   }
 }
 
+function openWorkerAi(options: { freshStart?: boolean } = {}) {
+  if (!order.value?.ticket_id || !canOpenWorkerAi.value) {
+    uni.showToast({ title: '请先完成开始处理', icon: 'none' })
+    return
+  }
+  const dispatchId = hallEntry.value?.source_dispatch_id || order.value.current_dispatch?.id || order.value.dispatch_id || ''
+  const query = [
+    `ticket_id=${order.value.ticket_id}`,
+    incidentId ? `incident_id=${incidentId}` : '',
+    hallEntry.value?.id ? `hall_entry_id=${hallEntry.value.id}` : '',
+    dispatchId ? `dispatch_id=${dispatchId}` : '',
+    options.freshStart ? 'fresh_start=1' : '',
+  ].filter(Boolean).join('&')
+  uni.navigateTo({ url: `/pages/worker/ai-workorder/index?${query}` })
+}
+
 async function submitWorkerAction(action: WorkerDispatchAction) {
   if (!order.value?.ticket_id && !hallEntry.value?.id) return
   if ((action === 'request_support' || action === 'reject' || action === 'reject_support') && !sanitizeDisplayText(workerNote.value)) {
@@ -902,6 +914,10 @@ async function submitWorkerAction(action: WorkerDispatchAction) {
       workerNote.value = ''
     }
     await loadOrder({ silent: true })
+    if (action === 'start' || action === 'accept_support') {
+      openWorkerAi({ freshStart: true })
+      return
+    }
     startDetailSync()
   } catch {
     uni.showToast({ title: '操作失败，请稍后再试', icon: 'none' })
@@ -959,40 +975,6 @@ async function doSubmit(result: WorkerResult) {
     uni.showToast({ title: '提交失败，请稍后再试', icon: 'none' })
   } finally {
     feedbackLoading.value = null
-  }
-}
-
-async function submitExperienceEntry() {
-  if (!order.value?.ticket_id) {
-    uni.showToast({ title: '缺少工单编号', icon: 'none' })
-    return
-  }
-  const sourceText = sanitizeDisplayText(experienceDraft.value)
-  if (!sourceText) {
-    uni.showToast({ title: '请先输入经验内容', icon: 'none' })
-    return
-  }
-
-  experienceSubmitting.value = true
-  try {
-    const response = await maintenanceExperienceApi.create({
-      source_type: experienceSourceType.value,
-      source_text: sourceText,
-      source_work_order_id: order.value.ticket_id,
-      source_dispatch_id: order.value.current_dispatch?.id || order.value.dispatch_id || null,
-      building_id: order.value.building_id || null,
-      device_id: order.value.device_id || null,
-      fault_type: incident.value?.rule_triggered || null,
-    })
-    experienceDraft.value = ''
-    uni.showToast({
-      title: response.status === 'existing' ? '经验已存在' : '经验已入库',
-      icon: 'success',
-    })
-  } catch (err) {
-    uni.showToast({ title: err instanceof Error ? err.message : '经验入库失败', icon: 'none' })
-  } finally {
-    experienceSubmitting.value = false
   }
 }
 
@@ -1347,6 +1329,22 @@ onUnmounted(() => {
   font-weight: 700;
 }
 
+.ai-entry-action {
+  margin-top: 18rpx;
+  height: 78rpx;
+  border-radius: 22rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #d6e29f, #b5c875);
+
+  text {
+    color: #fff;
+    font-size: 26rpx;
+    font-weight: 700;
+  }
+}
+
 .action-card {
   margin-top: 22rpx;
   margin-bottom: 28rpx;
@@ -1367,42 +1365,6 @@ onUnmounted(() => {
   display: flex;
   gap: 14rpx;
   margin-top: 20rpx;
-}
-
-.action-row.single {
-  margin-top: 16rpx;
-}
-
-.experience-type-row {
-  display: flex;
-  gap: 12rpx;
-  margin-top: 18rpx;
-}
-
-.experience-type-chip {
-  flex: 1;
-  height: 70rpx;
-  border-radius: 18rpx;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: #f5f8e8;
-  box-shadow: inset 0 0 0 2rpx rgba(183, 204, 118, 0.12);
-
-  text {
-    font-size: 24rpx;
-    color: #6f8442;
-    font-weight: 700;
-  }
-}
-
-.experience-type-chip.active {
-  background: linear-gradient(135deg, #dfe8b8, #c8da8b);
-  box-shadow: 0 12rpx 24rpx rgba(167, 191, 99, 0.18);
-
-  text {
-    color: #51672a;
-  }
 }
 
 .action-btn {
@@ -1435,11 +1397,6 @@ onUnmounted(() => {
   background: linear-gradient(135deg, #d0dda0, #a9c165);
 }
 
-.action-btn.experience {
-  color: #fff;
-  background: linear-gradient(135deg, #7bbd6d, #5f9442);
-}
-
 .note-input {
   width: 100%;
   min-height: 150rpx;
@@ -1451,5 +1408,22 @@ onUnmounted(() => {
   font-size: 26rpx;
   line-height: 1.6;
   color: #342b27;
+}
+
+.result-helper {
+  min-height: 68rpx;
+  margin-top: 16rpx;
+  border-radius: 16rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #f5f8e8;
+  box-shadow: inset 0 0 0 2rpx rgba(183, 204, 118, 0.18);
+
+  text {
+    font-size: 24rpx;
+    color: #5f7440;
+    font-weight: 700;
+  }
 }
 </style>

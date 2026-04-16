@@ -14,6 +14,8 @@ export interface WorkerDashboardStats {
 
 export interface WorkerFeatureOrder {
   ticketId: string
+  incidentId?: string
+  dispatchId?: string
   title: string
   building: string
   location: string
@@ -21,6 +23,7 @@ export interface WorkerFeatureOrder {
   timeTag: string
   priorityLabel: string
   actionLabel: string
+  workerAiReady?: boolean
 }
 
 export interface WorkerMessageCard {
@@ -46,6 +49,7 @@ type WorkerDispatchStage = 'accept' | 'arrive' | 'finish' | null
 
 const COMPLETED_STATUSES = new Set(['completed', 'closed', 'false_alarm', 'escalated'])
 const PENDING_EXECUTION_STATUSES = new Set(['pending_accept'])
+const WORKER_AI_READY_STATUSES = new Set(['processing', 'waiting_support', 'supporting'])
 const PRIORITY_WEIGHT: Record<string, number> = { high: 3, medium: 2, low: 1 }
 const PRIORITY_LABEL_MAP: Record<string, string> = {
   high: '高优先',
@@ -126,6 +130,27 @@ export function getWorkerOrderBucket(incident: Incident): WorkerOrderBucket {
   return isWorkerPendingStartIncident(incident) ? 'pending_start' : 'in_progress'
 }
 
+function isWorkerAiReadyStatus(value?: string | null): boolean {
+  return WORKER_AI_READY_STATUSES.has(String(value || '').toLowerCase())
+}
+
+export function isWorkerAiReadyIncident(incident?: Incident | null): boolean {
+  if (!incident || isWorkerCompletedIncident(incident)) return false
+  const dispatch = getDispatch(incident)
+  if (dispatch) {
+    return Boolean(
+      dispatch.processing_started_at
+        || isWorkerAiReadyStatus(dispatch.execution_status)
+        || isWorkerAiReadyStatus(dispatch.dispatch_status),
+    )
+  }
+  const order = getOrder(incident)
+  return Boolean(
+    order?.processing_started_at
+      || isWorkerAiReadyStatus(order?.execution_status),
+  )
+}
+
 function isToday(value?: string | null): boolean {
   if (!value) return false
   const now = new Date()
@@ -171,6 +196,7 @@ export function getWorkerFeatureOrder(incidents: Incident[]): WorkerFeatureOrder
 
   const dispatch = getDispatch(target)
   const order = getOrder(target)
+  const workerAiReady = isWorkerAiReadyIncident(target)
   const building = formatBuildingLabel(target.building_id)
   const location = formatDeviceLabel(target.device_id, target.building_id) || formatSystemLabel(target.rule_triggered)
   const timeTag = dispatch?.sla_status === 'overdue' || order?.sla_status === 'overdue'
@@ -183,13 +209,16 @@ export function getWorkerFeatureOrder(incidents: Incident[]): WorkerFeatureOrder
 
   return {
     ticketId: order?.ticket_id || target.incident_id,
+    incidentId: target.incident_id,
+    dispatchId: dispatch?.id || undefined,
     title: sanitizeDisplayText(target.summary_text) || formatRuleLabel(target.rule_triggered),
     building,
     location,
     time: formatDateTime(dispatch?.dispatch_at || order?.dispatch_at || target.created_at),
     timeTag,
     priorityLabel: PRIORITY_LABEL_MAP[target.priority] || '普通工单',
-    actionLabel: isWorkerPendingStartIncident(target) ? '立即处理' : '继续处理',
+    actionLabel: workerAiReady ? '进入维小修' : isWorkerPendingStartIncident(target) ? '立即处理' : '继续处理',
+    workerAiReady,
   }
 }
 

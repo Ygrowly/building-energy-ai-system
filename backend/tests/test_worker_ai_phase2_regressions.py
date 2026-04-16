@@ -11,6 +11,7 @@ from app.services import operator_ai_service, worker_ai_service
 from app.services.operator_ai_service import handle_operator_ai_chat
 from app.services.worker_ai_service import (
     _PENDING_ACTIONS,
+    _is_worker_ai_action_history_message,
     _validate_worker_action_availability,
     handle_worker_ai_chat,
 )
@@ -38,6 +39,28 @@ def test_worker_ai_validation_blocks_duplicate_arrive_after_processing():
 
     assert message is not None
     assert "无需重复确认到场" in message
+
+
+def test_worker_ai_history_filters_action_flow_messages_but_keeps_guidance():
+    action_message = SimpleNamespace(
+        role="assistant",
+        content="当前工单已开始处理，无需重复开始。",
+        content_type="text",
+    )
+    tool_result = SimpleNamespace(
+        role="assistant",
+        content="已完成“开始处理”。",
+        content_type="tool_result",
+    )
+    guidance_message = SimpleNamespace(
+        role="assistant",
+        content="先看控制屏读数，再拍一张面板照片。",
+        content_type="guidance_reply",
+    )
+
+    assert _is_worker_ai_action_history_message(action_message) is True
+    assert _is_worker_ai_action_history_message(tool_result) is True
+    assert _is_worker_ai_action_history_message(guidance_message) is False
 
 
 @pytest.mark.asyncio
@@ -89,7 +112,8 @@ async def test_worker_ai_confirm_invalid_pending_action_returns_chat_not_500(
 
     assert response["message_type"] == "chat"
     assert response["executed"] is False
-    assert "无需重复确认到场" in response["answer"]
+    assert "无需重复确认到场" not in response["answer"]
+    assert "现场排查" in response["answer"]
 
 
 @pytest.mark.asyncio

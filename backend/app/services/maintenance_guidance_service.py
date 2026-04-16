@@ -540,6 +540,8 @@ async def _generate_guidance_reply_with_model(
         "你是维修端 AI 维小修，现在处于维修指导阶段。"
         "你要根据当前工单、维修步骤计划、当前步骤和维修人员刚描述的现场情况，给出下一步诊断建议。"
         "不要回答接单、到场、开始处理、请求协同、完成等工单动作菜单；这些由另一个动作执行器处理。"
+        "你的口吻要像正在陪现场师傅排查，不要像规章制度或状态机。"
+        "除非安全风险很高，answer 不要堆长清单；优先用 1 段判断加最多 3 个下一步要点。"
         "如果用户描述漏液、外流、冒烟、异味、异常噪声、带电风险、压力系统或制冷剂风险，先给安全优先建议。"
         "可以建议调整步骤顺序，但不能自动替用户完成步骤或改变工单状态。"
         "不要编造未提供的读数、阈值、维保记录、证书、法规编号或设备铭牌参数。"
@@ -565,7 +567,8 @@ async def _generate_guidance_reply_with_model(
             "safety_level": "normal|caution|danger",
         },
         "rules": [
-            "answer 要直接面向维修人员，说明为什么这样判断和下一步该观察什么。",
+            "answer 要直接面向维修人员，先回应他刚说的现场情况，再说明下一步该观察什么。",
+            "少用“必须、禁止、流程、状态机、规则”等口吻；需要安全提醒时也要说清楚原因。",
             "如果现场描述明显比当前步骤更紧急，可以说明先临时切到更安全/更相关的检查。",
             "需要协同时只建议维修人员说“请求协同，因为...”，不要替他提交。",
             "如果信息不足，问 1 到 3 个关键澄清问题。",
@@ -588,8 +591,10 @@ async def _generate_guidance_reply_with_model(
 
 def _is_guidance_ready(work_order: WorkOrder, dispatch_task: DispatchTask | None) -> bool:
     dispatch_status = getattr(dispatch_task, "dispatch_status", None)
+    dispatch_started_at = getattr(dispatch_task, "processing_started_at", None)
     return bool(
         work_order.processing_started_at
+        or dispatch_started_at
         or dispatch_status in {"processing", "waiting_support", "supporting"}
     )
 
@@ -649,7 +654,7 @@ async def get_or_create_worker_step_plan(
                 "plan_id": None,
                 "status": "not_generated",
                 "plan_version": 0,
-                "summary": "开始处理后，维小修会生成维修指导步骤。",
+                "summary": "开始处理后，维小修会接入现场维修指导。",
                 "root_cause_candidates": [],
                 "steps": [],
                 "safety_notes": [],
@@ -667,7 +672,7 @@ async def get_or_create_worker_step_plan(
             "plan_id": None,
             "status": "not_ready",
             "plan_version": 0,
-            "summary": "当前工单还未进入处理阶段。你可以先用维小修完成接单、到场和开始处理，开始处理后我会生成步骤卡片。",
+            "summary": "当前工单还未进入处理阶段。请先在工单详情页完成接单、到场和开始处理，开始处理后维小修再接入现场指导。",
             "root_cause_candidates": [],
             "steps": [],
             "safety_notes": ["正式动手前请先确认现场安全和作业授权。"],
@@ -965,7 +970,7 @@ async def update_worker_step_status(
     elif next_step:
         next_suggestion = f"下一步建议：{next_step.get('title')}。{next_step.get('instruction')}"
     else:
-        next_suggestion = "步骤卡片已全部处理。请汇总现场记录，再由你确认是否提交处理完成。"
+        next_suggestion = "现场步骤已经走完。请回到工单详情页提交维修结果，我可以继续帮你整理现场备注。"
 
     return {
         "ok": True,

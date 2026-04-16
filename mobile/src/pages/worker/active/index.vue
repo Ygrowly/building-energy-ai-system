@@ -77,9 +77,16 @@
           </view>
         </view>
 
-        <view class="action-row">
+        <view class="action-row" :class="{ triple: canOpenWorkerAiFromCard(card) && activeTab !== 'completed' }">
           <view class="ghost-btn" @click.stop="callContact(card)">联系TA</view>
-          <view class="primary-btn" @click.stop="openDetail(card, activeTab === 'completed')">
+          <view
+            v-if="canOpenWorkerAiFromCard(card) && activeTab !== 'completed'"
+            class="ghost-btn"
+            @click.stop="openDetail(card)"
+          >
+            工单详情
+          </view>
+          <view class="primary-btn" @click.stop="handlePrimaryAction(card, activeTab === 'completed')">
             {{ actionLabel(card) }}
           </view>
         </view>
@@ -90,6 +97,8 @@
         <text class="empty-title">当前分类暂无我的工单</text>
         <text class="empty-subtitle">正式派给我的工单和协同任务会第一时间同步到这里</text>
       </view>
+
+      <view class="worker-tabbar-spacer" />
     </scroll-view>
 
     <TabBar :tabs="WORKER_TABS" current="workorders" theme="worker" />
@@ -124,7 +133,7 @@ import {
 useRouteGuard(WORKER_ROLES)
 
 type OrderTab = 'in_progress' | 'pending_start' | 'completed'
-type WorkerCardFlag = { label: string; tone: 'support' | 'overdue' | 'reassigned' }
+type WorkerCardFlag = { label: string; tone: 'support' | 'overdue' | 'reassigned' | 'ai' }
 type WorkerTaskCard =
   | {
       key: string
@@ -253,6 +262,16 @@ const directWorkOrders = computed(() => {
   )
   return workOrders.value.filter(item => item.ticket_id && !incidentTickets.has(item.ticket_id))
 })
+const WORKER_AI_READY_STATUSES = new Set(['processing', 'waiting_support', 'supporting'])
+
+function keepStartedOrdersVisible() {
+  if (activeTab.value !== 'pending_start') return
+  const hasPendingStart = taskCards.value.some(item => item.bucket === 'pending_start')
+  const hasInProgress = taskCards.value.some(item => item.bucket === 'in_progress')
+  if (!hasPendingStart && hasInProgress) {
+    activeTab.value = 'in_progress'
+  }
+}
 
 function isSupportEntryAssignedToMe(entry: DispatchHallEntry) {
   const userId = authStore.user?.id
@@ -293,6 +312,55 @@ function isDirectWorkOrderOverdue(workOrder?: WorkOrder | null) {
 function isDirectWorkOrderWaitingSupport(workOrder?: WorkOrder | null) {
   if (!workOrder || isDirectWorkOrderCompleted(workOrder)) return false
   return getDirectWorkOrderExecutionStatus(workOrder) === 'waiting_support'
+}
+
+function isProcessingStage(value?: string | null) {
+  return WORKER_AI_READY_STATUSES.has(String(value || '').toLowerCase())
+}
+
+function hasStartedCurrentDispatch(dispatch?: {
+  processing_started_at?: string | null
+  execution_status?: string | null
+  dispatch_status?: string | null
+} | null) {
+  return Boolean(
+    dispatch?.processing_started_at
+      || isProcessingStage(dispatch?.execution_status)
+      || isProcessingStage(dispatch?.dispatch_status),
+  )
+}
+
+function hasStartedWorkOrderWithoutDispatch(workOrder?: WorkOrder | null) {
+  return Boolean(
+    workOrder
+      && !workOrder.current_dispatch
+      && (
+        workOrder.processing_started_at
+        || isProcessingStage(workOrder.execution_status)
+      ),
+  )
+}
+
+function canOpenWorkerAiFromCard(card: WorkerTaskCard) {
+  if (activeTab.value === 'completed') return false
+  if (card.kind === 'support') {
+    return card.hallEntry.status === 'accepted'
+  }
+  if (card.kind === 'work_order') {
+    const dispatch = card.workOrder.current_dispatch
+    return dispatch
+      ? hasStartedCurrentDispatch(dispatch)
+      : hasStartedWorkOrderWithoutDispatch(card.workOrder)
+  }
+
+  const order = card.incident.current_work_order
+  const dispatch = card.incident.current_dispatch
+  return dispatch
+    ? hasStartedCurrentDispatch(dispatch)
+    : Boolean(
+      order?.processing_started_at
+        || isProcessingStage(order?.execution_status),
+    )
 }
 
 function isDirectWorkOrderReassigned(workOrder?: WorkOrder | null) {
@@ -371,6 +439,7 @@ async function loadData() {
     if (incidentResult.status === 'rejected' && workOrderResult.status === 'rejected' && supportResult.status === 'rejected') {
       throw new Error('load failed')
     }
+    keepStartedOrdersVisible()
   } catch {
     if (!incidents.value.length && !workOrders.value.length && !supportEntries.value.length) {
       uni.showToast({ title: '工单加载失败', icon: 'none' })
@@ -474,6 +543,7 @@ function statusText(card: WorkerTaskCard) {
 function cardFlags(card: WorkerTaskCard): WorkerCardFlag[] {
   if (card.kind === 'support') {
     return [
+      ...(canOpenWorkerAiFromCard(card) ? [{ label: '维小修可继续', tone: 'ai' as const }] : []),
       {
         label: card.hallEntry.status === 'assigned' ? '已指派协同' : '协同处理中',
         tone: 'support',
@@ -483,6 +553,9 @@ function cardFlags(card: WorkerTaskCard): WorkerCardFlag[] {
   if (card.kind === 'work_order') {
     const flags: WorkerCardFlag[] = []
     const dispatch = card.workOrder.current_dispatch
+    if (canOpenWorkerAiFromCard(card)) {
+      flags.push({ label: '维小修可继续', tone: 'ai' })
+    }
     if (isDirectWorkOrderOverdue(card.workOrder)) {
       flags.push({ label: '已超时', tone: 'overdue' })
     }
@@ -501,6 +574,9 @@ function cardFlags(card: WorkerTaskCard): WorkerCardFlag[] {
 
   const flags: WorkerCardFlag[] = []
   const dispatch = card.incident.current_dispatch
+  if (canOpenWorkerAiFromCard(card)) {
+    flags.push({ label: '维小修可继续', tone: 'ai' })
+  }
   if (isWorkerOverdueIncident(card.incident)) {
     flags.push({ label: '已超时', tone: 'overdue' })
   }
@@ -629,15 +705,64 @@ function callContact(card: WorkerTaskCard) {
 
 function actionLabel(card: WorkerTaskCard) {
   if (activeTab.value === 'completed') return '查看记录'
+  if (canOpenWorkerAiFromCard(card)) return '进入维小修'
   if (card.kind === 'support') return card.hallEntry.status === 'assigned' ? '响应协同' : '查看协同'
   return activeTab.value === 'pending_start' ? '立即处理' : '继续处理'
 }
 
-function openDetail(card: WorkerTaskCard, readonly = false) {
-  if (!readonly) {
-    openAiWorkorder(card)
+function getWorkerAiTarget(card: WorkerTaskCard) {
+  if (card.kind === 'support') {
+    return {
+      ticketId: card.hallEntry.work_order?.ticket_id || card.ticketId,
+      incidentId: card.hallEntry.incident_id || card.hallEntry.work_order?.incident_id || '',
+      dispatchId: card.hallEntry.source_dispatch_id || card.hallEntry.source_dispatch?.id || '',
+      hallEntryId: card.hallEntry.id,
+    }
+  }
+  if (card.kind === 'work_order') {
+    return {
+      ticketId: card.workOrder.ticket_id,
+      incidentId: '',
+      dispatchId: card.workOrder.current_dispatch?.id || card.workOrder.dispatch_id || '',
+      hallEntryId: '',
+    }
+  }
+  return {
+    ticketId: card.incident.current_work_order?.ticket_id || card.ticketId,
+    incidentId: card.incident.incident_id,
+    dispatchId: card.incident.current_dispatch?.id || '',
+    hallEntryId: '',
+  }
+}
+
+function openWorkerAiFromCard(card: WorkerTaskCard) {
+  if (!canOpenWorkerAiFromCard(card)) {
+    openDetail(card)
     return
   }
+  const target = getWorkerAiTarget(card)
+  if (!target.ticketId) {
+    uni.showToast({ title: '缺少工单编号', icon: 'none' })
+    return
+  }
+  const query = [
+    `ticket_id=${encodeURIComponent(target.ticketId)}`,
+    target.incidentId ? `incident_id=${encodeURIComponent(target.incidentId)}` : '',
+    target.hallEntryId ? `hall_entry_id=${encodeURIComponent(target.hallEntryId)}` : '',
+    target.dispatchId ? `dispatch_id=${encodeURIComponent(target.dispatchId)}` : '',
+  ].filter(Boolean).join('&')
+  uni.navigateTo({ url: `/pages/worker/ai-workorder/index?${query}` })
+}
+
+function handlePrimaryAction(card: WorkerTaskCard, readonly = false) {
+  if (!readonly && canOpenWorkerAiFromCard(card)) {
+    openWorkerAiFromCard(card)
+    return
+  }
+  openDetail(card, readonly)
+}
+
+function openDetail(card: WorkerTaskCard, readonly = false) {
   if (card.kind === 'support') {
     const ticketId = card.hallEntry.work_order?.ticket_id
     if (!ticketId) return
@@ -659,31 +784,6 @@ function openDetail(card: WorkerTaskCard, readonly = false) {
   const readonlyQuery = readonly ? '&readonly=1' : ''
   uni.navigateTo({
     url: `/pages/worker/workorder-detail/index?incident_id=${card.incident.incident_id}&ticket_id=${ticketId}${readonlyQuery}`,
-  })
-}
-
-function openAiWorkorder(card: WorkerTaskCard) {
-  if (card.kind === 'support') {
-    const ticketId = card.hallEntry.work_order?.ticket_id
-    if (!ticketId) return
-    const dispatchId = card.hallEntry.source_dispatch_id ? `&dispatch_id=${card.hallEntry.source_dispatch_id}` : ''
-    uni.navigateTo({
-      url: `/pages/worker/ai-workorder/index?hall_entry_id=${card.hallEntry.id}&ticket_id=${ticketId}${dispatchId}`,
-    })
-    return
-  }
-  if (card.kind === 'work_order') {
-    const dispatchId = card.workOrder.current_dispatch?.id || card.workOrder.dispatch_id
-    uni.navigateTo({
-      url: `/pages/worker/ai-workorder/index?ticket_id=${card.workOrder.ticket_id}${dispatchId ? `&dispatch_id=${dispatchId}` : ''}`,
-    })
-    return
-  }
-  const ticketId = card.incident.current_work_order?.ticket_id
-  if (!ticketId) return
-  const dispatchId = card.incident.current_dispatch?.id || card.incident.current_work_order?.dispatch_id
-  uni.navigateTo({
-    url: `/pages/worker/ai-workorder/index?incident_id=${card.incident.incident_id}&ticket_id=${ticketId}${dispatchId ? `&dispatch_id=${dispatchId}` : ''}`,
   })
 }
 
@@ -763,8 +863,12 @@ onUnmounted(() => {
 
 .list-area {
   height: calc(100vh - 320rpx);
-  padding: 22rpx 24rpx calc(168rpx + env(safe-area-inset-bottom, 0px));
+  padding: 22rpx 24rpx 0;
   box-sizing: border-box;
+}
+
+.worker-tabbar-spacer {
+  height: calc(276rpx + env(safe-area-inset-bottom, 0px));
 }
 
 .workorder-card,
@@ -903,6 +1007,11 @@ onUnmounted(() => {
   background: #fbf4df;
 }
 
+.flag-badge.ai {
+  color: #4f7136;
+  background: #edf6dc;
+}
+
 .location-text,
 .distance-text {
   font-size: 24rpx;
@@ -977,6 +1086,10 @@ onUnmounted(() => {
   margin-top: 24rpx;
 }
 
+.action-row.triple {
+  gap: 10rpx;
+}
+
 .ghost-btn,
 .primary-btn {
   flex: 1;
@@ -987,6 +1100,11 @@ onUnmounted(() => {
   justify-content: center;
   font-size: 28rpx;
   font-weight: 600;
+}
+
+.action-row.triple .ghost-btn,
+.action-row.triple .primary-btn {
+  font-size: 24rpx;
 }
 
 .ghost-btn {

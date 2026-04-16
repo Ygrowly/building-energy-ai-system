@@ -3,7 +3,7 @@
   从 workorder-detail 页抽出，独立管理对话状态和 SSE 流
 -->
 <template>
-  <view class="ai-chat">
+  <view class="ai-chat" :class="{ 'input-docked': dockInput, 'has-floating-step-entry': showFloatingWorkflowEntry }">
     <view class="chat-header">
       <text class="chat-title">{{ chatTitle }}</text>
       <text class="chat-hint">{{ chatHint }}</text>
@@ -82,11 +82,14 @@
           <text v-if="msg.content" class="thinking-text">{{ msg.content }}</text>
         </view>
         <!-- 正常消息 -->
-        <view v-else class="msg-bubble" :class="msg.role">
+        <view
+          v-else
+          class="msg-bubble"
+          :id="msg.role === 'ai' ? messageBubbleId(idx) : undefined"
+          :class="msg.role"
+          @longpress="msg.role === 'ai' && msg.content ? openAiMessageMenu(msg.content, idx) : undefined"
+        >
           <text>{{ msg.content }}</text>
-          <view v-if="isWorkerMode && msg.role === 'ai' && msg.content" class="msg-actions">
-            <text class="msg-action" @click="speakText(msg.content)">播报</text>
-          </view>
         </view>
         <view
           v-if="msg.role === 'ai' && (msg.readonly || msg.chart || msg.evidenceClaims?.length || msg.blockedActions?.length || msg.experienceItems?.length || msg.suggestedFollowups?.length)"
@@ -189,27 +192,105 @@
       <view style="height: 20rpx" />
     </scroll-view>
 
-    <view v-if="isWorkerMode && stepPlan?.guidance_ready && currentStep" class="step-panel">
-      <view class="step-panel-head">
-        <text class="step-panel-tag">当前步骤</text>
-        <text class="step-panel-index">第 {{ stepIndex(currentStep.id) + 1 }} 步</text>
+    <view v-if="isWorkerMode && stepPlan?.guidance_ready && workflowSteps.length && !dockInput" class="step-panel" :class="{ collapsed: !stepPanelExpanded, expanded: stepPanelExpanded }">
+      <view class="step-panel-summary" @click="toggleStepPanel">
+        <view class="step-panel-summary-copy">
+          <view class="step-panel-head">
+            <text class="step-panel-tag">维修流程</text>
+            <text class="step-panel-index">{{ completedStepCount }}/{{ workflowSteps.length }} 已完成</text>
+          </view>
+          <text class="step-panel-title">{{ guidanceStep?.title || '现场排查步骤' }}</text>
+          <view class="step-panel-pills">
+            <text class="step-panel-pill current">第 {{ activeStepIndex + 1 }} 步</text>
+            <text class="step-panel-pill">{{ guidanceStep ? stepStatusLabel(guidanceStep.status) : '待处理' }}</text>
+          </view>
+          <text class="step-panel-text">{{ stepPanelExpanded ? '左右滑动切换不同步骤' : '展开流程卡片查看完整步骤' }}</text>
+        </view>
+        <view class="step-panel-toggle">
+          <text>{{ stepPanelExpanded ? '收起' : '展开' }}</text>
+        </view>
       </view>
-      <text class="step-panel-title">{{ currentStep.title }}</text>
-      <text class="step-panel-text">{{ currentStep.instruction }}</text>
-      <text v-if="currentStep.expected_result" class="step-panel-sub">预期：{{ currentStep.expected_result }}</text>
-      <text v-if="currentStep.risk_note" class="step-panel-sub warn">注意：{{ currentStep.risk_note }}</text>
-      <textarea
-        v-model="stepNote"
-        class="step-note-input"
-        maxlength="300"
-        auto-height
-        placeholder="记录这一步的现场读数、发现或备注"
-      />
-      <view class="step-actions">
-        <text class="step-btn note" :class="{ disabled: updatingStepId || !stepNote.trim() }" @click="saveCurrentStepNote">备注</text>
-        <text class="step-btn done" :class="{ disabled: updatingStepId }" @click="markCurrentStep('completed')">完成</text>
-        <text class="step-btn skip" :class="{ disabled: updatingStepId }" @click="markCurrentStep('skipped')">跳过</text>
-        <text class="step-btn support" :class="{ disabled: updatingStepId }" @click="markCurrentStep('needs_support')">协同</text>
+
+      <view v-if="stepPanelExpanded" class="step-panel-body">
+        <scroll-view
+          scroll-x
+          class="step-tab-row"
+          :show-scrollbar="false"
+        >
+          <view class="step-tab-track">
+            <text
+              v-for="(step, index) in workflowSteps"
+              :key="`${step.id}-tab`"
+              class="step-tab-chip"
+              :class="{
+                active: index === stepSwiperCurrent,
+                current: step.id === currentStep?.id,
+                done: step.status === 'completed',
+              }"
+              @click="jumpToStep(index)"
+            >第 {{ index + 1 }} 步</text>
+          </view>
+        </scroll-view>
+
+        <swiper
+          class="step-swiper"
+          :current="stepSwiperCurrent"
+          :indicator-dots="false"
+          :circular="false"
+          :duration="260"
+          @change="handleStepSwiperChange"
+        >
+          <swiper-item v-for="(step, index) in workflowSteps" :key="step.id">
+            <scroll-view
+              scroll-y
+              class="step-swiper-scroll"
+              :show-scrollbar="false"
+            >
+              <view class="step-swiper-item">
+                <view
+                  class="flow-step-card"
+                  :class="{ current: step.id === currentStep?.id, done: step.status === 'completed', skipped: step.status === 'skipped', support: step.status === 'needs_support' }"
+                >
+                  <view class="flow-step-head">
+                    <view>
+                      <text class="step-panel-tag">{{ step.id === currentStep?.id ? '当前步骤' : stepStatusLabel(step.status) }}</text>
+                      <text class="flow-step-title">{{ step.title }}</text>
+                    </view>
+                    <text class="flow-step-index">第 {{ index + 1 }} 步</text>
+                  </view>
+                  <text class="step-panel-text">{{ step.instruction }}</text>
+                  <text v-if="step.expected_result" class="step-panel-sub">预期：{{ step.expected_result }}</text>
+                  <text v-if="step.risk_note" class="step-panel-sub warn">注意：{{ step.risk_note }}</text>
+                  <textarea
+                    v-model="stepNotes[step.id]"
+                    class="step-note-input"
+                    maxlength="300"
+                    placeholder="记录这一步的现场读数、发现或备注"
+                  />
+                  <view class="step-actions">
+                    <text class="step-btn note" :class="{ disabled: updatingStepId === step.id || !String(stepNotes[step.id] || '').trim() }" @click="saveStepNoteForStep(step)">备注</text>
+                    <text class="step-btn done" :class="{ disabled: updatingStepId === step.id }" @click="markStep(step, 'completed')">完成</text>
+                    <text class="step-btn skip" :class="{ disabled: updatingStepId === step.id }" @click="markStep(step, 'skipped')">跳过</text>
+                    <text class="step-btn support" :class="{ disabled: updatingStepId === step.id }" @click="markStep(step, 'needs_support')">协同</text>
+                  </view>
+                </view>
+              </view>
+            </scroll-view>
+          </swiper-item>
+        </swiper>
+
+        <view class="step-swiper-footer">
+          <text class="step-swiper-counter">第 {{ stepSwiperCurrent + 1 }} / {{ workflowSteps.length }} 步</text>
+          <view class="step-swiper-dots">
+            <view
+              v-for="(step, index) in workflowSteps"
+              :key="`${step.id}-dot`"
+              class="step-swiper-dot"
+              :class="{ active: index === stepSwiperCurrent, done: step.status === 'completed' }"
+              @click="jumpToStep(index)"
+            />
+          </view>
+        </view>
       </view>
     </view>
 
@@ -256,35 +337,228 @@
       </view>
     </view>
     <view class="chat-input-area">
-      <view v-if="isWorkerMode" class="media-tools">
-        <text class="media-btn" :class="{ disabled: mediaBusy }" @click="chooseImageForAnalysis">拍照</text>
-        <text class="media-btn" :class="{ active: recording, disabled: mediaBusy }" @click="toggleRecording">{{ recording ? '停止' : '语音' }}</text>
-        <text class="media-btn" @click="speakLatestAiMessage">播报</text>
+      <template v-if="isWorkerMode && dockInput">
+        <view
+          v-if="showFloatingWorkflowEntry"
+          class="floating-step-wrap"
+        >
+          <view v-if="stepPanelExpanded" class="floating-step-popover">
+            <view class="floating-step-popover-head">
+              <view class="floating-step-popover-copy">
+                <text class="floating-step-popover-tag">维修流程</text>
+                <text class="floating-step-popover-title">{{ guidanceStep?.title || '现场排查步骤' }}</text>
+                <text class="floating-step-popover-sub">{{ completedStepCount }}/{{ workflowSteps.length }} 已完成，左右滑动查看不同步骤</text>
+              </view>
+              <text class="floating-step-popover-close" @click.stop="toggleStepPanel">收起</text>
+            </view>
+
+            <view class="step-panel-body floating">
+              <scroll-view
+                scroll-x
+                class="step-tab-row"
+                :show-scrollbar="false"
+              >
+                <view class="step-tab-track">
+                  <text
+                    v-for="(step, index) in workflowSteps"
+                    :key="`${step.id}-floating-tab`"
+                    class="step-tab-chip"
+                    :class="{
+                      active: index === stepSwiperCurrent,
+                      current: step.id === currentStep?.id,
+                      done: step.status === 'completed',
+                    }"
+                    @click="jumpToStep(index)"
+                  >第 {{ index + 1 }} 步</text>
+                </view>
+              </scroll-view>
+
+              <swiper
+                class="step-swiper floating"
+                :current="stepSwiperCurrent"
+                :indicator-dots="false"
+                :circular="false"
+                :duration="260"
+                @change="handleStepSwiperChange"
+              >
+                <swiper-item v-for="(step, index) in workflowSteps" :key="`${step.id}-floating`">
+                  <scroll-view
+                    scroll-y
+                    class="step-swiper-scroll"
+                    :show-scrollbar="false"
+                  >
+                    <view class="step-swiper-item">
+                      <view
+                        class="flow-step-card"
+                        :class="{ current: step.id === currentStep?.id, done: step.status === 'completed', skipped: step.status === 'skipped', support: step.status === 'needs_support' }"
+                      >
+                        <view class="flow-step-head">
+                          <view>
+                            <text class="step-panel-tag">{{ step.id === currentStep?.id ? '当前步骤' : stepStatusLabel(step.status) }}</text>
+                            <text class="flow-step-title">{{ step.title }}</text>
+                          </view>
+                          <text class="flow-step-index">第 {{ index + 1 }} 步</text>
+                        </view>
+                        <text class="step-panel-text">{{ step.instruction }}</text>
+                        <text v-if="step.expected_result" class="step-panel-sub">预期：{{ step.expected_result }}</text>
+                        <text v-if="step.risk_note" class="step-panel-sub warn">注意：{{ step.risk_note }}</text>
+                        <textarea
+                          v-model="stepNotes[step.id]"
+                          class="step-note-input"
+                          maxlength="300"
+                          placeholder="记录这一步的现场读数、发现或备注"
+                        />
+                        <view class="step-actions">
+                          <text class="step-btn note" :class="{ disabled: updatingStepId === step.id || !String(stepNotes[step.id] || '').trim() }" @click="saveStepNoteForStep(step)">备注</text>
+                          <text class="step-btn done" :class="{ disabled: updatingStepId === step.id }" @click="markStep(step, 'completed')">完成</text>
+                          <text class="step-btn skip" :class="{ disabled: updatingStepId === step.id }" @click="markStep(step, 'skipped')">跳过</text>
+                          <text class="step-btn support" :class="{ disabled: updatingStepId === step.id }" @click="markStep(step, 'needs_support')">协同</text>
+                        </view>
+                      </view>
+                    </view>
+                  </scroll-view>
+                </swiper-item>
+              </swiper>
+
+              <view class="step-swiper-footer">
+                <text class="step-swiper-counter">第 {{ stepSwiperCurrent + 1 }} / {{ workflowSteps.length }} 步</text>
+                <view class="step-swiper-dots">
+                  <view
+                    v-for="(step, index) in workflowSteps"
+                    :key="`${step.id}-floating-dot`"
+                    class="step-swiper-dot"
+                    :class="{ active: index === stepSwiperCurrent, done: step.status === 'completed' }"
+                    @click="jumpToStep(index)"
+                  />
+                </view>
+              </view>
+            </view>
+          </view>
+
+          <view
+            class="floating-step-chip"
+            :class="{ active: stepPanelExpanded }"
+            @click="toggleStepPanel"
+          >
+            <view class="floating-step-icon" aria-hidden="true">
+              <view class="floating-step-icon-line short" />
+              <view class="floating-step-icon-line" />
+              <view class="floating-step-icon-line" />
+            </view>
+            <text class="floating-step-chip-label">维修流程</text>
+            <text class="floating-step-chip-badge">第 {{ activeStepIndex + 1 }} 步</text>
+          </view>
+        </view>
+
+        <view class="worker-input-pill" :class="{ 'voice-mode': voiceInputMode }">
+          <view
+            class="input-icon-btn camera input-camera-btn"
+            :class="{ disabled: mediaBusy }"
+            @click="chooseCameraForAnalysis"
+          >
+            <image class="chat-control-icon camera-icon-img" src="/static/icons/chat-camera.svg" mode="aspectFit" />
+          </view>
+          <view
+            v-if="voiceInputMode"
+            class="voice-hold-area"
+            :class="{ active: recording, disabled: mediaBusy && !recording }"
+            @touchstart.stop.prevent="startVoiceHold"
+            @touchend.stop.prevent="stopVoiceHold"
+            @touchcancel.stop.prevent="stopVoiceHold"
+            @mousedown.stop.prevent="startVoiceHold"
+            @mouseup.stop.prevent="stopVoiceHold"
+            @mouseleave.stop.prevent="stopVoiceHold"
+          >
+            <text>{{ recording ? '松开发送' : '按住说话' }}</text>
+          </view>
+          <textarea
+            v-else
+            class="chat-input"
+            v-model="inputText"
+            :placeholder="inputPlaceholder"
+            placeholder-style="color: #9ca19a;"
+            :disabled="sending"
+            :maxlength="500"
+            confirm-type="send"
+            @confirm="sendMessage"
+          />
+          <view
+            class="input-icon-btn input-mode-toggle"
+            :class="{ active: voiceInputMode, disabled: mediaBusy && !recording }"
+            @click="toggleVoiceInputMode"
+          >
+            <image
+              v-if="voiceInputMode"
+              class="chat-control-icon keyboard-icon-img"
+              src="/static/icons/chat-keyboard.svg"
+              mode="aspectFit"
+            />
+            <image
+              v-else
+              class="chat-control-icon"
+              src="/static/icons/chat-voice.svg"
+              mode="aspectFit"
+            />
+          </view>
+        </view>
+      </template>
+      <template v-else>
+        <view v-if="isWorkerMode" class="media-tools">
+          <text class="media-btn" :class="{ disabled: mediaBusy }" @click="chooseImageForAnalysis()">拍照</text>
+          <text class="media-btn" :class="{ active: recording, disabled: mediaBusy }" @click="toggleRecording">{{ recording ? '停止' : '语音' }}</text>
+        </view>
+        <textarea
+          class="chat-input"
+          v-model="inputText"
+          :placeholder="inputPlaceholder"
+          placeholder-style="color: #9ca19a;"
+          :disabled="sending"
+          auto-height
+          :maxlength="500"
+          @confirm="sendMessage"
+        />
+        <view
+          class="send-btn"
+          :class="{ disabled: !inputText.trim() || sending }"
+          @click="sendMessage"
+        >
+          <text v-if="!sending">发送</text>
+          <text v-else>...</text>
+        </view>
+      </template>
+    </view>
+    <view v-if="messageMenuVisible" class="message-menu-mask" @click="closeAiMessageMenu">
+      <view class="message-menu" :style="messageMenuStyle" @click.stop>
+        <view class="message-menu-item" @click="copyAiMessage">
+          <text class="message-menu-icon">复</text>
+          <text>复制</text>
+        </view>
+        <view class="message-menu-item" @click="selectAiMessageText">
+          <text class="message-menu-icon">选</text>
+          <text>选取文本</text>
+        </view>
+        <view class="message-menu-item" @click="speakAiMessage">
+          <text class="message-menu-icon">读</text>
+          <text>朗读</text>
+        </view>
       </view>
-      <textarea
-        class="chat-input"
-        v-model="inputText"
-        placeholder="描述现场情况或提问..."
-        :disabled="sending"
-        auto-height
-        :maxlength="500"
-        @confirm="sendMessage"
-      />
-      <view
-        class="send-btn"
-        :class="{ disabled: !inputText.trim() || sending }"
-        @click="sendMessage"
-      >
-        <text v-if="!sending">发送</text>
-        <text v-else>...</text>
+    </view>
+
+    <view v-if="selectedTextVisible" class="select-text-mask" @click="closeSelectedText">
+      <view class="select-text-panel" @click.stop>
+        <view class="select-text-head">
+          <text class="select-text-title">选取文本</text>
+          <text class="select-text-close" @click="closeSelectedText">关闭</text>
+        </view>
+        <text class="select-text-content" selectable>{{ selectedTextContent }}</text>
       </view>
     </view>
   </view>
 </template>
 
 <script setup lang="ts">
-import { ref, nextTick, computed, onBeforeUnmount, onMounted, watch } from 'vue'
-import { workOrderApi, type WorkOrder } from '../api/workorder'
+import { ref, nextTick, computed, onBeforeUnmount, onMounted, watch, getCurrentInstance } from 'vue'
+import type { WorkOrder } from '../api/workorder'
 import {
   sendChatMessage,
   buildContextMessage,
@@ -295,6 +569,10 @@ import {
   buildAbsoluteApiUrl,
   operatorAiApi,
   workerAiApi,
+  type WorkerAiChatResponse,
+  type OperatorAiChatResponse,
+  type WorkerAiHistoryMessage,
+  type WorkerAiGuidanceChatResponse,
   type WorkerAiStep,
   type WorkerAiStepPlan,
   type WorkerAiStepStatus,
@@ -332,6 +610,7 @@ interface OperatorFilterOption {
 const emit = defineEmits<{
   (e: 'order-updated', order: WorkOrder): void
 }>()
+const componentInstance = getCurrentInstance()
 
 const props = withDefaults(defineProps<{
   order?: WorkOrder | null
@@ -340,6 +619,7 @@ const props = withDefaults(defineProps<{
   mode?: 'general' | 'operator' | 'worker'
   dispatchId?: string | null
   hallEntryId?: string | null
+  dockInput?: boolean
 }>(), {
   order: null,
   title: 'AI 辅助维修',
@@ -347,6 +627,7 @@ const props = withDefaults(defineProps<{
   mode: 'general',
   dispatchId: null,
   hallEntryId: null,
+  dockInput: false,
 })
 
 const messages = ref<ChatMsg[]>([])
@@ -361,13 +642,19 @@ const guidanceLoading = ref(false)
 const updatingStepId = ref<string | null>(null)
 const mediaBusy = ref(false)
 const recording = ref(false)
-const stepNote = ref('')
+const voiceInputMode = ref(false)
+const stepNotes = ref<Record<string, string>>({})
+const stepPanelExpanded = ref(false)
+const stepSwiperCurrent = ref(0)
 const componentReady = ref(false)
-const workflowBootstrapping = ref(false)
-const lastWorkflowPromptKey = ref('')
-const nextWorkflowPromptOverride = ref<{ key: string; message: string } | null>(null)
 const introducedPlanId = ref('')
-const lastStepMessageId = ref('')
+const activeHistoryKey = ref('')
+const historyLoadedKey = ref('')
+const messageMenuContent = ref('')
+const messageMenuVisible = ref(false)
+const messageMenuStyle = ref<Record<string, string>>({})
+const selectedTextVisible = ref(false)
+const selectedTextContent = ref('')
 const experienceFeedbackLoading = ref<Record<string, MaintenanceExperienceFeedbackType | ''>>({})
 const experienceFeedbackState = ref<Record<string, MaintenanceExperienceFeedbackType | ''>>({})
 const operatorFilterLoading = ref(false)
@@ -381,14 +668,20 @@ const operatorWorkerOptions = ref<OperatorFilterOption[]>([{ value: '', label: '
 let recorderManager: any = null
 let h5MediaRecorder: MediaRecorder | null = null
 let h5AudioChunks: BlobPart[] = []
+let stepPlanLoadPromise: Promise<void> | null = null
+let recordingStopRequested = false
 
 const chatTitle = computed(() => props.title)
 const isWorkerMode = computed(() => props.mode === 'worker' && !!props.order)
 const isOperatorMode = computed(() => props.mode === 'operator')
 const isOperatorWorkbench = computed(() => isOperatorMode.value && !props.order)
+const dockInput = computed(() => props.dockInput)
+const inputPlaceholder = computed(() => (
+  isWorkerMode.value && dockInput.value ? '发消息...' : '描述现场情况或提问...'
+))
 const chatHint = computed(() => props.hint || (
   isWorkerMode.value
-    ? '基于当前工单自动提供诊断建议'
+    ? '把现场情况发我，我陪你判断下一步'
     : isOperatorMode.value
       ? (props.order ? '只读查看当前工单进展、维修指导和现场记录' : '只读查询工单、班组、楼宇和时间范围运营分析')
       : '可以咨询能耗、工单、派工和现场处置问题'
@@ -401,7 +694,7 @@ const orderIntro = computed(() => {
 const welcomeLead = computed(() => props.order ? '您好！我已了解当前工单情况：' : '您好，我是楼宇运维 AI 助手。')
 const welcomeBody = computed(() => (
   isWorkerMode.value
-    ? '请描述您的现场情况，我将提供针对性的维修指导。'
+    ? '不用一次说全，先告诉我眼前看到什么。'
     : isOperatorMode.value
       ? (
         props.order
@@ -417,6 +710,24 @@ const currentStep = computed<WorkerAiStep | null>(() => {
     || steps.find(step => step.status !== 'completed' && step.status !== 'skipped')
     || null
 })
+const guidanceStep = computed<WorkerAiStep | null>(() => {
+  const steps = stepPlan.value?.steps || []
+  return currentStep.value || steps[0] || null
+})
+const workflowSteps = computed<WorkerAiStep[]>(() => stepPlan.value?.steps || [])
+const completedStepCount = computed(() => workflowSteps.value.filter(step => step.status === 'completed').length)
+const activeStepIndex = computed(() => {
+  const target = guidanceStep.value
+  if (!target) return 0
+  const index = stepIndex(target.id)
+  return index >= 0 ? index : 0
+})
+const showFloatingWorkflowEntry = computed(() => Boolean(
+  isWorkerMode.value
+    && dockInput.value
+    && stepPlan.value?.guidance_ready
+    && workflowSteps.value.length,
+))
 const experienceRecommendations = computed<MaintenanceExperienceRecommendation[]>(() => (
   stepPlan.value?.experience_recommendations || []
 ))
@@ -452,6 +763,76 @@ function getErrorMessage(err: unknown, fallback: string) {
     if (typeof message === 'string' && message.trim()) return message.trim()
   }
   return fallback
+}
+
+function messageBubbleId(index: number) {
+  return `ai-message-bubble-${index}`
+}
+
+function rpxToPx(value: number) {
+  try {
+    const info = uni.getSystemInfoSync()
+    return (info.windowWidth || 375) * value / 750
+  } catch {
+    return value / 2
+  }
+}
+
+function queryRect(selector: string): Promise<any | null> {
+  return new Promise((resolve) => {
+    const query = componentInstance?.proxy
+      ? uni.createSelectorQuery().in(componentInstance.proxy)
+      : uni.createSelectorQuery()
+    query.select(selector).boundingClientRect((rect: any) => resolve(rect || null)).exec()
+  })
+}
+
+function buildMessageMenuStyle(rect: { top: number; left: number; width: number; height: number }) {
+  const info = uni.getSystemInfoSync()
+  const sideGap = rpxToPx(24)
+  const menuWidth = Math.min(rpxToPx(580), Math.max(220, (info.windowWidth || 375) - sideGap * 2))
+  const menuHeight = rpxToPx(276)
+  const anchorGap = rpxToPx(14)
+  const dockedReserve = dockInput.value
+    ? rpxToPx(showFloatingWorkflowEntry.value && stepPanelExpanded.value ? 860 : showFloatingWorkflowEntry.value ? 340 : 220)
+    : rpxToPx(48)
+  const maxTop = Math.max(sideGap, (info.windowHeight || 667) - dockedReserve - menuHeight)
+  let top = rect.top + rect.height + anchorGap
+  if (top > maxTop) {
+    top = rect.top - menuHeight - anchorGap
+  }
+  top = Math.max(sideGap, Math.min(top, (info.windowHeight || 667) - menuHeight - sideGap))
+
+  let left = rect.left
+  if (rect.width < menuWidth) {
+    left = rect.left + (rect.width - menuWidth) / 2
+  }
+  left = Math.max(sideGap, Math.min(left, (info.windowWidth || 375) - menuWidth - sideGap))
+
+  return {
+    top: `${top}px`,
+    left: `${left}px`,
+    bottom: 'auto',
+  }
+}
+
+function pushUniqueAiMessage(content: string) {
+  const last = messages.value[messages.value.length - 1]
+  if (last?.role === 'ai' && last.content === content) return
+  messages.value.push({ role: 'ai', content })
+}
+
+function shouldPreferWorkerGeneralChat(text: string) {
+  const normalized = String(text || '').trim().toLowerCase()
+  if (!normalized) return true
+  const pureGreeting = new Set([
+    '你好', '您好', 'hi', 'hello', '哈喽', '在吗', '在不在', '喂',
+    '好的', '好', '行', '可以', '嗯', '嗯嗯', 'ok',
+  ])
+  if (pureGreeting.has(normalized)) return true
+  if (normalized.length <= 6 && !/[0-9]/.test(normalized) && !/[?？]/.test(normalized)) return true
+  if (/(你是谁|你是干嘛的|你能做什么|怎么用|怎么帮我|我是新手|还没开始|不会做)/.test(normalized)) return true
+  return false
 }
 
 function formatExperienceScore(score: number | null | undefined) {
@@ -647,59 +1028,100 @@ function currentDispatchId() {
   return props.dispatchId || props.order?.current_dispatch?.id || props.order?.dispatch_id || null
 }
 
-async function refreshOrderState() {
-  if (!props.order?.ticket_id) return null
-  try {
-    const latest = await workOrderApi.detail(props.order.ticket_id)
-    emit('order-updated', latest)
-    return latest
-  } catch (err) {
-    console.warn('[AiChat] 工单刷新失败', err)
-    return null
+function currentHistoryKey() {
+  if (!isWorkerMode.value || !props.order?.ticket_id) return ''
+  return [
+    props.order.ticket_id,
+    currentDispatchId() || '',
+    props.hallEntryId || '',
+  ].join(':')
+}
+
+function mapHistoryMessage(message: WorkerAiHistoryMessage): ChatMsg | null {
+  const content = String(message.content || '').trim()
+  if (!content) return null
+  if (isActionFlowHistoryMessage(message, content)) return null
+  return {
+    role: message.role === 'user' ? 'user' : 'ai',
+    content,
   }
 }
 
-function currentWorkflowPrompt(): { key: string; message: string } | null {
-  if (!isWorkerMode.value || !props.order) return null
-  if (nextWorkflowPromptOverride.value) return nextWorkflowPromptOverride.value
-  if (props.hallEntryId) return { key: `support:${props.hallEntryId}`, message: '确认协同' }
+function isActionFlowHistoryMessage(message: WorkerAiHistoryMessage, content: string) {
+  const contentType = message.content_type || ''
+  if (contentType === 'tool_result') return true
+  if (contentType === 'guidance_observation' || contentType === 'guidance_reply') return false
+  if (message.role === 'ai') {
+    return [
+      '你要执行“',
+      '确认后我就替你提交',
+      '确认后我会提交',
+      '已完成“',
+      '无需重复',
+      '当前工单已',
+      '当前还未',
+      '当前派工阶段不支持',
+      '我正在等待你确认是否执行上一条动作',
+      '请回复“确认”执行',
+      '好的，我已取消这次动作',
+      '状态机',
+      '我在，咱们直接看现场',
+      '这张单已经在处理中',
+      '我先按你看到的现场来判断',
+      '你把现象、读数、报警码或照片发我一个就行',
+      '先把一个现象发我就行',
+      '先看这个：',
+    ].some(fragment => content.includes(fragment))
+  }
+  return [
+    '确认',
+    '取消',
+    '开始处理',
+    '开始维修',
+    '开始排查',
+    '确认接单',
+    '接单',
+    '我接了',
+    '确认到场',
+    '我已到场',
+    '已到场',
+    '到场了',
+  ].includes(content)
+}
 
-  const dispatch = props.order.current_dispatch
-  const dispatchStatus = (
-    dispatch?.dispatch_status
-    || dispatch?.execution_status
-    || props.order.execution_status
-    || props.order.status
-    || ''
-  ).toLowerCase()
+async function loadWorkerHistory() {
+  if (!isWorkerMode.value || !props.order?.ticket_id) return
+  const key = currentHistoryKey()
+  if (!key) return
+  if (activeHistoryKey.value !== key) {
+    activeHistoryKey.value = key
+    messages.value = []
+    sessionId.value = null
+    isFirstMessage.value = true
+  }
+  if (historyLoadedKey.value === key) return
+  historyLoadedKey.value = key
 
-  if (
-    dispatchStatus.includes('processing')
-    || dispatchStatus.includes('waiting_support')
-    || dispatchStatus.includes('completed')
-    || dispatchStatus.includes('closed')
-  ) {
-    return null
+  try {
+    const response = await workerAiApi.history(props.order.ticket_id, {
+      dispatch_id: currentDispatchId(),
+      hall_entry_id: props.hallEntryId,
+      limit: 80,
+    })
+    if (response.session_id && !sessionId.value) {
+      sessionId.value = response.session_id
+    }
+    const restored = response.messages
+      .map(mapHistoryMessage)
+      .filter(Boolean) as ChatMsg[]
+    if (restored.length && messages.value.length === 0) {
+      messages.value = restored
+      isFirstMessage.value = false
+      scrollToBottom()
+    }
+  } catch (err) {
+    console.warn('[AiChat] 维小修历史对话加载失败', err)
   }
-  if (!props.order.accepted_at && !dispatch?.accepted_at && dispatchStatus.includes('assigned')) {
-    return { key: 'accept', message: '确认接单' }
-  }
-  if (!props.order.arrived_at && !dispatch?.arrived_at && (props.order.accepted_at || dispatch?.accepted_at || dispatchStatus.includes('accepted'))) {
-    return { key: 'arrive', message: '确认到场' }
-  }
-  if (!props.order.processing_started_at && !dispatch?.processing_started_at && (props.order.arrived_at || dispatch?.arrived_at || dispatchStatus.includes('arrived'))) {
-    return { key: 'start', message: '开始处理' }
-  }
-  if (!props.order.accepted_at && !dispatch?.accepted_at) {
-    return { key: 'accept', message: '确认接单' }
-  }
-  if (!props.order.arrived_at && !dispatch?.arrived_at) {
-    return { key: 'arrive', message: '确认到场' }
-  }
-  if (!props.order.processing_started_at && !dispatch?.processing_started_at) {
-    return { key: 'start', message: '开始处理' }
-  }
-  return null
 }
 
 function shouldUseGuidanceChat() {
@@ -708,7 +1130,7 @@ function shouldUseGuidanceChat() {
       && props.order?.ticket_id
       && stepPlan.value?.guidance_ready
       && stepPlan.value?.plan_id
-      && currentStep.value,
+      && guidanceStep.value,
   )
 }
 
@@ -723,24 +1145,38 @@ function scrollToBottom() {
   })
 }
 
-async function loadStepPlan(autoGenerate = true) {
-  if (!isWorkerMode.value || !props.order?.ticket_id || guidanceLoading.value) return
+async function loadStepPlan(
+  autoGenerate = true,
+  options: { notifyNotReady?: boolean; notifyError?: boolean } = {},
+) {
+  if (!isWorkerMode.value || !props.order?.ticket_id) return
+  if (stepPlanLoadPromise) return stepPlanLoadPromise
+  const notifyNotReady = options.notifyNotReady ?? true
+  const notifyError = options.notifyError ?? true
   guidanceLoading.value = true
-  try {
-    stepPlan.value = await workerAiApi.getSteps(props.order.ticket_id, {
-      auto_generate: autoGenerate,
-      dispatch_id: currentDispatchId(),
-    })
-    if (!stepPlan.value.guidance_ready) {
-      await bootstrapWorkflowPrompt()
-    } else {
-      introduceStepPlanIfReady()
+
+  stepPlanLoadPromise = (async () => {
+    try {
+      stepPlan.value = await workerAiApi.getSteps(props.order!.ticket_id, {
+        auto_generate: autoGenerate,
+        dispatch_id: currentDispatchId(),
+      })
+      if (!stepPlan.value.guidance_ready) {
+        if (notifyNotReady) {
+          pushUniqueAiMessage('这张单还没有进入现场处理阶段，请先回到工单详情页完成接单、到场和开始处理。')
+        }
+      } else {
+        introduceStepPlanIfReady()
+      }
+    } catch (err) {
+      if (notifyError) pushUniqueAiMessage(getErrorMessage(err, '步骤卡片加载失败'))
+    } finally {
+      guidanceLoading.value = false
+      stepPlanLoadPromise = null
     }
-  } catch (err) {
-    messages.value.push({ role: 'ai', content: getErrorMessage(err, '步骤卡片加载失败') })
-  } finally {
-    guidanceLoading.value = false
-  }
+  })()
+
+  return stepPlanLoadPromise
 }
 
 function stepIndex(stepId: string | undefined): number {
@@ -748,28 +1184,41 @@ function stepIndex(stepId: string | undefined): number {
   return stepPlan.value.steps.findIndex(step => step.id === stepId)
 }
 
-function formatPlanOverview(plan: WorkerAiStepPlan): string {
-  const lines = plan.steps.map((step, index) => `${index + 1}. ${step.title}`)
-  return [
-    '我先把整体维修路线说一下：',
-    ...lines,
-    '',
-    '我们按这个顺序一步一步走。你也可以随时说“我想先查别的地方”，我会根据现场情况调整建议。',
-  ].join('\n')
+function stepStatusLabel(status: WorkerAiStepStatus) {
+  const labels: Record<WorkerAiStepStatus, string> = {
+    pending: '待处理',
+    completed: '已完成',
+    skipped: '已跳过',
+    needs_support: '需协同',
+    uncertain: '待确认',
+  }
+  return labels[status] || '待处理'
 }
 
-function formatStepMessage(step: WorkerAiStep): string {
-  const index = stepIndex(step.id)
-  const total = stepPlan.value?.steps?.length || 0
-  const lines = [
-    `现在做第 ${index + 1}/${total} 步：${step.title}`,
-    step.instruction,
-  ]
-  if (step.expected_result) lines.push(`预期结果：${step.expected_result}`)
-  if (step.risk_note) lines.push(`注意：${step.risk_note}`)
-  if (step.requires_photo) lines.push('这一步建议拍照，方便我结合现场图片判断。')
-  lines.push('做完后直接告诉我“完成了”。如果看不清、做不了、需要协同，也直接说出来。')
-  return lines.join('\n')
+function toggleStepPanel() {
+  const nextExpanded = !stepPanelExpanded.value
+  stepPanelExpanded.value = nextExpanded
+  if (nextExpanded) {
+    stepSwiperCurrent.value = activeStepIndex.value
+  }
+}
+
+function handleStepSwiperChange(event: any) {
+  const next = Number(event?.detail?.current ?? 0)
+  stepSwiperCurrent.value = Number.isFinite(next) ? next : 0
+}
+
+function jumpToStep(index: number) {
+  if (index < 0 || index >= workflowSteps.value.length) return
+  stepSwiperCurrent.value = index
+}
+
+function syncStepNotesFromPlan() {
+  const next = { ...stepNotes.value }
+  for (const step of workflowSteps.value) {
+    if (next[step.id] === undefined) next[step.id] = step.note || ''
+  }
+  stepNotes.value = next
 }
 
 function introduceStepPlanIfReady() {
@@ -777,51 +1226,8 @@ function introduceStepPlanIfReady() {
   if (!plan?.guidance_ready || !plan.steps.length || !plan.plan_id) return
   if (introducedPlanId.value !== plan.plan_id) {
     introducedPlanId.value = plan.plan_id
-    messages.value.push({ role: 'ai', content: formatPlanOverview(plan) })
   }
-  pushCurrentStepMessage()
   scrollToBottom()
-}
-
-function pushCurrentStepMessage(force = false) {
-  const step = currentStep.value
-  if (!step) return
-  if (!force && lastStepMessageId.value === step.id) return
-  lastStepMessageId.value = step.id
-  messages.value.push({ role: 'ai', content: formatStepMessage(step), stepId: step.id })
-}
-
-function classifyStepStatusFromText(text: string): WorkerAiStepStatus | null {
-  const normalized = text.trim()
-  if (!normalized || !currentStep.value || sending.value) return null
-  if (/(需要|请求|申请|找|叫).*(协同|支援|电工|水工|班组|师傅)|协同|支援/.test(normalized)) {
-    return 'needs_support'
-  }
-  if (/不确定|不清楚|看不清|看不懂|不会|不知道|没找到|找不到|判断不了|无法判断|做不了|不能做|卡住/.test(normalized)) {
-    return 'uncertain'
-  }
-  if (/跳过|先不做|先不处理|暂时不做|略过/.test(normalized)) {
-    return 'skipped'
-  }
-  if (/完成|完成了|做完|做完了|已完成|处理好了|好了|搞定|检查完|看完了|核对完|确认了/.test(normalized)) {
-    return 'completed'
-  }
-  return null
-}
-
-async function bootstrapWorkflowPrompt(force = false) {
-  const prompt = currentWorkflowPrompt()
-  if (!prompt || workflowBootstrapping.value) return
-  if (!force && lastWorkflowPromptKey.value === prompt.key) return
-  workflowBootstrapping.value = true
-  lastWorkflowPromptKey.value = prompt.key
-  try {
-    messages.value.push({ role: 'ai', content: '我先带你完成工单前置流程...', thinking: true })
-    scrollToBottom()
-    await sendAssistantMessage(prompt.message, { silentUserMessage: true, source: 'workflow_bootstrap' })
-  } finally {
-    workflowBootstrapping.value = false
-  }
 }
 
 async function updateStep(
@@ -831,7 +1237,6 @@ async function updateStep(
 ) {
   if (!props.order?.ticket_id || !stepPlan.value?.plan_id || updatingStepId.value) return
   updatingStepId.value = stepId
-  const oldStep = stepPlan.value.steps.find(step => step.id === stepId)
   const note = options.note?.trim() || null
   try {
     const response = await workerAiApi.updateStep(props.order.ticket_id, stepId, {
@@ -846,84 +1251,41 @@ async function updateStep(
       steps: response.steps,
     }
     const updatedStep = response.steps.find(step => step.id === stepId)
-    if (updatedStep) stepNote.value = updatedStep.note || ''
-    const actionLabel: Record<WorkerAiStepStatus, string> = {
-      completed: '完成',
-      skipped: '跳过',
-      needs_support: '需要协同',
-      uncertain: '不确定',
-      pending: '重新打开',
-    }[status]
-    if (options.noteOnly) {
-      if (note) {
-        messages.value.push({ role: 'user', content: `备注：${note}` })
-      }
-      messages.value.push({ role: 'ai', content: response.next_suggestion })
-      scrollToBottom()
-      return
+    if (updatedStep) {
+      stepNotes.value = { ...stepNotes.value, [stepId]: updatedStep.note || '' }
     }
-    if (options.echoUser !== false) {
-      messages.value.push({ role: 'user', content: `${actionLabel}：${oldStep?.title || '当前步骤'}` })
-    }
-    if (status === 'needs_support') {
-      messages.value.push({ role: 'ai', content: response.next_suggestion })
-    } else if (status === 'uncertain') {
-      messages.value.push({
-        role: 'ai',
-        content: '没关系，这一步先不要硬做。你可以拍一张现场图，或者把你卡住的位置告诉我，我再帮你判断。',
-        stepId,
-      })
-    } else if (currentStep.value) {
-      pushCurrentStepMessage(true)
-    } else {
-      messages.value.push({ role: 'ai', content: '这轮维修步骤已经走完了。请汇总现场记录，再由你确认是否提交处理完成。' })
-    }
-    scrollToBottom()
+    syncStepNotesFromPlan()
+    uni.showToast({ title: options.noteOnly ? '备注已保存' : '步骤已更新', icon: 'success' })
   } catch (err) {
-    messages.value.push({ role: 'ai', content: getErrorMessage(err, '步骤状态更新失败') })
+    uni.showToast({ title: getErrorMessage(err, '步骤状态更新失败'), icon: 'none' })
   } finally {
     updatingStepId.value = null
   }
 }
 
-async function markCurrentStep(status: WorkerAiStepStatus) {
-  if (!currentStep.value) return
-  await updateStep(currentStep.value.id, status, { note: stepNote.value })
+async function markStep(step: WorkerAiStep, status: WorkerAiStepStatus) {
+  await updateStep(step.id, status, { note: stepNotes.value[step.id] || step.note || '' })
 }
 
-async function saveCurrentStepNote() {
-  if (!currentStep.value) return
-  if (!stepNote.value.trim()) {
+async function saveStepNoteForStep(step: WorkerAiStep) {
+  const note = String(stepNotes.value[step.id] || '').trim()
+  if (!note) {
     uni.showToast({ title: '请先输入备注内容', icon: 'none' })
     return
   }
-  await updateStep(currentStep.value.id, currentStep.value.status, {
+  await updateStep(step.id, step.status, {
     echoUser: false,
-    note: stepNote.value,
+    note,
     noteOnly: true,
   })
-}
-
-async function handleStepStatusText(text: string): Promise<boolean> {
-  const status = classifyStepStatusFromText(text)
-  if (!status || !currentStep.value) return false
-  messages.value.push({ role: 'user', content: text })
-  inputText.value = ''
-  isFirstMessage.value = false
-  scrollToBottom()
-  await updateStep(currentStep.value.id, status, { echoUser: false })
-  return true
 }
 
 async function sendMessage() {
   const text = inputText.value.trim()
   if (!text || sending.value) return
+  const preferWorkerGeneralChat = shouldPreferWorkerGeneralChat(text)
 
-  if (props.mode === 'worker' && await handleStepStatusText(text)) {
-    return
-  }
-
-  if (shouldUseGuidanceChat()) {
+  if (shouldUseGuidanceChat() && !preferWorkerGeneralChat) {
     messages.value.push({ role: 'user', content: text })
     inputText.value = ''
     sending.value = true
@@ -932,6 +1294,27 @@ async function sendMessage() {
     scrollToBottom()
     messages.value.push({ role: 'ai', content: '我在结合当前步骤和现场描述判断...', thinking: true })
     await sendGuidanceMessage(text)
+    return
+  }
+
+  if (props.mode === 'worker') {
+    messages.value.push({ role: 'user', content: text })
+    inputText.value = ''
+    sending.value = true
+    streamingText.value = ''
+    isFirstMessage.value = false
+    messages.value.push({ role: 'ai', content: '我看一下这张单和你刚说的现场情况。', thinking: true })
+    scrollToBottom()
+    await loadStepPlan(true, { notifyNotReady: false, notifyError: false })
+    if (shouldUseGuidanceChat() && !preferWorkerGeneralChat) {
+      const last = messages.value[messages.value.length - 1]
+      if (last?.role === 'ai' && last.thinking) {
+        last.content = '我在结合当前步骤和现场描述判断...'
+      }
+      await sendGuidanceMessage(text)
+      return
+    }
+    await sendAssistantMessage(text, { source: 'AiChat.worker' })
     return
   }
 
@@ -1006,13 +1389,17 @@ async function sendMessage() {
 
 async function sendGuidanceMessage(text: string) {
   const plan = stepPlan.value
-  const step = currentStep.value
+  const step = guidanceStep.value
   if (!props.order?.ticket_id || !plan?.plan_id || !step) {
-    await sendAssistantMessage(text)
+    removePendingThinking()
+    messages.value.push({ role: 'ai', content: '我还没拿到这张单的维修指导上下文。请稍等一下再发，或者返回工单详情重新进入维小修。' })
+    sending.value = false
+    scrollToBottom()
     return
   }
   try {
-    const response = await workerAiApi.guidanceChat({
+    let finalized = false
+    const payload = {
       message: text,
       session_id: sessionId.value,
       ticket_id: props.order.ticket_id,
@@ -1026,12 +1413,59 @@ async function sendGuidanceMessage(text: string) {
         work_order_status: props.order.status || null,
         execution_status: props.order.current_dispatch?.execution_status || props.order.execution_status || null,
       },
+    }
+    const nextSessionId = await workerAiApi.guidanceChatStream(payload, {
+      onThinking(event) {
+        const last = messages.value[messages.value.length - 1]
+        if (last?.role === 'ai' && last.thinking) {
+          last.content = event.message || '我在结合当前步骤和现场描述判断...'
+        }
+      },
+      onText(event) {
+        appendStreamingChunk(event.content)
+      },
+      onResult(event) {
+        const response = event.payload as WorkerAiGuidanceChatResponse
+        sessionId.value = response.session_id
+        finalizeStreamingMessage({
+          role: 'ai',
+          content: response.answer,
+          stepId: response.step_id || step.id,
+        }, response.answer)
+        finalized = true
+      },
+      onError(event) {
+        removePendingThinking()
+        streamingText.value = ''
+        messages.value.push({ role: 'ai', content: event.message || '维修指导请求失败，请重试' })
+        sending.value = false
+        scrollToBottom()
+      },
+      onDone(event) {
+        sessionId.value = event.session_id || sessionId.value
+        if (!finalized && streamingText.value.trim()) {
+          finalizeStreamingMessage({
+            role: 'ai',
+            content: '',
+            stepId: step.id,
+          })
+          finalized = true
+        }
+        sending.value = false
+        scrollToBottom()
+      },
+      onNetworkError(err) {
+        removePendingThinking()
+        streamingText.value = ''
+        messages.value.push({ role: 'ai', content: err.message || '网络异常，请重试' })
+        sending.value = false
+        scrollToBottom()
+      },
     })
-    sessionId.value = response.session_id
-    removePendingThinking()
-    messages.value.push({ role: 'ai', content: response.answer, stepId: response.step_id || step.id })
+    if (nextSessionId) sessionId.value = nextSessionId
   } catch (err) {
     removePendingThinking()
+    streamingText.value = ''
     messages.value.push({ role: 'ai', content: err instanceof Error ? err.message : '维修指导请求失败，请重试' })
   } finally {
     sending.value = false
@@ -1044,8 +1478,63 @@ async function sendAssistantMessage(
   options: { silentUserMessage?: boolean; source?: string } = {},
 ) {
   try {
-    const response = props.mode === 'operator'
-      ? await operatorAiApi.chat({
+    let finalized = false
+    const nextSessionId = props.mode === 'worker'
+      ? await workerAiApi.chatStream({
+          message: text,
+          session_id: sessionId.value,
+          ticket_id: props.order?.ticket_id || null,
+          dispatch_id: props.dispatchId || props.order?.current_dispatch?.id || props.order?.dispatch_id || null,
+          hall_entry_id: props.hallEntryId || null,
+          client_context: {
+            source_component: options.source || 'AiChat',
+            work_order_status: props.order?.status || null,
+            execution_status: props.order?.current_dispatch?.execution_status || props.order?.execution_status || null,
+          },
+        }, {
+          onThinking(event) {
+            const last = messages.value[messages.value.length - 1]
+            if (last?.role === 'ai' && last.thinking) {
+              last.content = event.message || '我在看这张单和你刚说的情况...'
+            }
+          },
+          onText(event) {
+            appendStreamingChunk(event.content)
+          },
+          onResult(event) {
+            const response = event.payload as WorkerAiChatResponse
+            sessionId.value = response.session_id
+            finalizeStreamingMessage({
+              role: 'ai',
+              content: response.answer,
+            }, response.answer)
+            finalized = true
+          },
+          onError(event) {
+            removePendingThinking()
+            streamingText.value = ''
+            messages.value.push({ role: 'ai', content: event.message || '请求失败，请重试' })
+            sending.value = false
+            scrollToBottom()
+          },
+          onDone(event) {
+            sessionId.value = event.session_id || sessionId.value
+            if (!finalized && streamingText.value.trim()) {
+              finalizeStreamingMessage({ role: 'ai', content: '' })
+              finalized = true
+            }
+            sending.value = false
+            scrollToBottom()
+          },
+          onNetworkError(err) {
+            removePendingThinking()
+            streamingText.value = ''
+            messages.value.push({ role: 'ai', content: err.message || '网络异常，请重试' })
+            sending.value = false
+            scrollToBottom()
+          },
+        })
+      : await operatorAiApi.chatStream({
           message: text,
           session_id: sessionId.value,
           ticket_id: props.order?.ticket_id || null,
@@ -1058,64 +1547,50 @@ async function sendAssistantMessage(
             : buildOperatorScope(options.source || 'AiChat'),
           include_evidence: true,
           include_chart: true,
-        })
-      : await workerAiApi.chat({
-          message: text,
-          session_id: sessionId.value,
-          ticket_id: props.order?.ticket_id || null,
-          dispatch_id: props.dispatchId || props.order?.current_dispatch?.id || props.order?.dispatch_id || null,
-          hall_entry_id: props.hallEntryId || null,
-          client_context: {
-            source_component: options.source || 'AiChat',
-            work_order_status: props.order?.status || null,
-            execution_status: props.order?.current_dispatch?.execution_status || props.order?.execution_status || null,
-          },
-        })
-    sessionId.value = response.session_id
-    removePendingThinking()
-    messages.value.push({
-      role: 'ai',
-      content: response.answer,
-      answerType: 'answer_type' in response ? response.answer_type : undefined,
-      experienceItems: props.mode === 'operator' && 'facts' in response
-        ? normalizeExperienceItems(response.facts)
-        : undefined,
-      suggestedFollowups: 'suggested_followups' in response
-        ? (response.suggested_followups || [])
-        : undefined,
-      chart: props.mode === 'operator' && 'chart' in response ? response.chart || null : null,
-      evidenceClaims: props.mode === 'operator' && 'facts' in response
-        ? normalizeEvidenceClaims(response.facts, 'evidence_refs' in response ? (response.evidence_refs || []) : [])
-        : undefined,
-      evidenceRefs: 'evidence_refs' in response ? (response.evidence_refs || []) : undefined,
-      blockedActions: 'blocked_actions' in response ? (response.blocked_actions || []) : undefined,
-      readonly: 'readonly' in response ? !!response.readonly : false,
-      showEvidence: false,
+        }, {
+      onThinking(event) {
+        const last = messages.value[messages.value.length - 1]
+        if (last?.role === 'ai' && last.thinking) {
+          last.content = event.message || '我在整理分析结论...'
+        }
+      },
+      onText(event) {
+        appendStreamingChunk(event.content)
+      },
+      onResult(event) {
+        const response = event.payload as OperatorAiChatResponse
+        sessionId.value = response.session_id
+        finalizeStreamingMessage(buildOperatorAiMessage(response), response.answer)
+        finalized = true
+      },
+      onError(event) {
+        removePendingThinking()
+        streamingText.value = ''
+        messages.value.push({ role: 'ai', content: event.message || '请求失败，请重试' })
+        sending.value = false
+        scrollToBottom()
+      },
+      onDone(event) {
+        sessionId.value = event.session_id || sessionId.value
+        if (!finalized && streamingText.value.trim()) {
+          finalizeStreamingMessage({ role: 'ai', content: '' })
+          finalized = true
+        }
+        sending.value = false
+        scrollToBottom()
+      },
+      onNetworkError(err) {
+        removePendingThinking()
+        streamingText.value = ''
+        messages.value.push({ role: 'ai', content: err.message || '网络异常，请重试' })
+        sending.value = false
+        scrollToBottom()
+      },
     })
-    if (props.mode === 'worker' && response.message_type === 'action_result') {
-      const latestOrder = await refreshOrderState()
-      if (latestOrder) {
-        await nextTick()
-      }
-      if (response.action_result?.action === 'start') {
-        await loadStepPlan(true)
-      }
-      if (response.action_result?.action === 'accept') {
-        nextWorkflowPromptOverride.value = { key: 'arrive', message: '确认到场' }
-        lastWorkflowPromptKey.value = ''
-        messages.value.push({ role: 'ai', content: '接下来到达现场后，回复“确认”我就帮你提交到场；如果还没到场，可以回复“取消”。' })
-        await bootstrapWorkflowPrompt(true)
-      } else if (response.action_result?.action === 'arrive') {
-        nextWorkflowPromptOverride.value = { key: 'start', message: '开始处理' }
-        lastWorkflowPromptKey.value = ''
-        messages.value.push({ role: 'ai', content: '是否现在开始处理？回复“确认”后我会提交开始处理，随后生成维修步骤卡片。' })
-        await bootstrapWorkflowPrompt(true)
-      } else if (response.action_result?.action === 'start') {
-        nextWorkflowPromptOverride.value = null
-      }
-    }
+    if (nextSessionId) sessionId.value = nextSessionId
   } catch (err) {
     removePendingThinking()
+    streamingText.value = ''
     messages.value.push({ role: 'ai', content: getErrorMessage(err, '请求失败，请重试') })
   } finally {
     sending.value = false
@@ -1128,14 +1603,56 @@ function removePendingThinking() {
   if (last?.role === 'ai' && last.thinking) messages.value.pop()
 }
 
-async function chooseImageForAnalysis() {
+function appendStreamingChunk(content: string) {
+  if (!content) return
+  removePendingThinking()
+  streamingText.value += content
+  scrollToBottom()
+}
+
+function finalizeStreamingMessage(message: ChatMsg | null, fallbackContent = '') {
+  removePendingThinking()
+  const content = String(streamingText.value || fallbackContent || '').trim()
+  streamingText.value = ''
+  if (message && content) {
+    messages.value.push({
+      ...message,
+      content,
+    })
+  } else if (content) {
+    messages.value.push({ role: 'ai', content })
+  }
+  scrollToBottom()
+}
+
+function buildOperatorAiMessage(response: OperatorAiChatResponse, fallbackContent = ''): ChatMsg {
+  return {
+    role: 'ai',
+    content: fallbackContent || response.answer,
+    answerType: response.answer_type,
+    experienceItems: normalizeExperienceItems(response.facts),
+    suggestedFollowups: response.suggested_followups || [],
+    chart: response.chart || null,
+    evidenceClaims: normalizeEvidenceClaims(response.facts, response.evidence_refs || []),
+    evidenceRefs: response.evidence_refs || [],
+    blockedActions: response.blocked_actions || [],
+    readonly: !!response.readonly,
+    showEvidence: false,
+  }
+}
+
+async function chooseCameraForAnalysis() {
+  await chooseImageForAnalysis(['camera'])
+}
+
+async function chooseImageForAnalysis(sourceType: Array<'camera' | 'album'> = ['camera', 'album']) {
   if (!isWorkerMode.value || !props.order?.ticket_id || mediaBusy.value) return
   mediaBusy.value = true
   try {
     const chooseResult: any = await new Promise((resolve, reject) => {
       uni.chooseImage({
         count: 1,
-        sourceType: ['camera', 'album'],
+        sourceType,
         success: resolve,
         fail: reject,
       })
@@ -1172,6 +1689,40 @@ async function chooseImageForAnalysis() {
   }
 }
 
+function stopRecording() {
+  if (!recording.value || recordingStopRequested) return
+  recordingStopRequested = true
+  try {
+    if (process.env.UNI_PLATFORM === 'h5') {
+      if (h5MediaRecorder && h5MediaRecorder.state !== 'inactive') {
+        h5MediaRecorder.stop()
+      }
+    } else {
+      recorderManager?.stop()
+    }
+  } catch {
+    recordingStopRequested = false
+    recording.value = false
+    mediaBusy.value = false
+  }
+}
+
+function toggleVoiceInputMode() {
+  if (mediaBusy.value && !recording.value) return
+  if (recording.value) stopRecording()
+  voiceInputMode.value = !voiceInputMode.value
+}
+
+function startVoiceHold() {
+  if (!voiceInputMode.value || recording.value || mediaBusy.value) return
+  toggleRecording()
+}
+
+function stopVoiceHold() {
+  if (!voiceInputMode.value) return
+  stopRecording()
+}
+
 function setupRecorder() {
   if (process.env.UNI_PLATFORM === 'h5') {
     recorderManager = null
@@ -1184,11 +1735,13 @@ function setupRecorder() {
   try {
     recorderManager = uni.getRecorderManager()
     recorderManager.onStop(async (res: any) => {
+      recordingStopRequested = false
       recording.value = false
       if (!res?.tempFilePath) return
       await transcribeAudioFile(res.tempFilePath)
     })
     recorderManager.onError((err: any) => {
+      recordingStopRequested = false
       recording.value = false
       mediaBusy.value = false
       messages.value.push({ role: 'ai', content: err?.errMsg || '录音失败，请改用文字输入。' })
@@ -1201,11 +1754,7 @@ function setupRecorder() {
 function toggleRecording() {
   if (!isWorkerMode.value) return
   if (recording.value) {
-    if (process.env.UNI_PLATFORM === 'h5') {
-      h5MediaRecorder?.stop()
-    } else {
-      recorderManager?.stop()
-    }
+    stopRecording()
     return
   }
   if (mediaBusy.value) return
@@ -1218,6 +1767,7 @@ function toggleRecording() {
     return
   }
   try {
+    recordingStopRequested = false
     recording.value = true
     mediaBusy.value = true
     recorderManager.start({
@@ -1245,6 +1795,7 @@ async function startH5Recording() {
   }
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+    recordingStopRequested = false
     h5AudioChunks = []
     const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
       ? 'audio/webm;codecs=opus'
@@ -1254,6 +1805,7 @@ async function startH5Recording() {
       if (event.data?.size) h5AudioChunks.push(event.data)
     }
     h5MediaRecorder.onstop = async () => {
+      recordingStopRequested = false
       recording.value = false
       stream.getTracks().forEach(track => track.stop())
       const blob = new Blob(h5AudioChunks, { type: 'audio/webm' })
@@ -1261,6 +1813,7 @@ async function startH5Recording() {
       mediaBusy.value = false
     }
     h5MediaRecorder.onerror = () => {
+      recordingStopRequested = false
       recording.value = false
       mediaBusy.value = false
       stream.getTracks().forEach(track => track.stop())
@@ -1333,14 +1886,46 @@ async function transcribeAudioBlob(blob: Blob) {
   }
 }
 
-async function speakLatestAiMessage() {
-  const latest = [...messages.value].reverse().find(msg => msg.role === 'ai' && !msg.thinking && msg.content)
-  if (latest) {
-    await speakText(latest.content)
-    return
-  }
-  const text = currentStep.value?.instruction || stepPlan.value?.summary || welcomeBody.value
-  await speakText(text)
+async function openAiMessageMenu(content: string, index: number) {
+  const text = content.trim()
+  if (!text) return
+  messageMenuContent.value = text
+  const rect = await queryRect(`#${messageBubbleId(index)}`)
+  messageMenuStyle.value = rect ? buildMessageMenuStyle(rect) : {}
+  messageMenuVisible.value = true
+}
+
+function closeAiMessageMenu() {
+  messageMenuVisible.value = false
+  messageMenuStyle.value = {}
+}
+
+function copyAiMessage() {
+  const content = messageMenuContent.value
+  closeAiMessageMenu()
+  if (!content) return
+  uni.setClipboardData({
+    data: content,
+    success() {
+      uni.showToast({ title: '已复制', icon: 'success' })
+    },
+  })
+}
+
+function selectAiMessageText() {
+  selectedTextContent.value = messageMenuContent.value
+  closeAiMessageMenu()
+  selectedTextVisible.value = true
+}
+
+function closeSelectedText() {
+  selectedTextVisible.value = false
+}
+
+async function speakAiMessage() {
+  const content = messageMenuContent.value
+  closeAiMessageMenu()
+  await speakText(content)
 }
 
 async function speakText(text: string) {
@@ -1370,17 +1955,28 @@ async function speakText(text: string) {
 }
 
 watch(
-  () => currentStep.value?.id,
+  () => stepPlan.value?.steps,
   () => {
-    stepNote.value = currentStep.value?.note || ''
+    syncStepNotesFromPlan()
+  },
+  { immediate: true, deep: true },
+)
+
+watch(
+  () => [guidanceStep.value?.id, workflowSteps.value.length],
+  () => {
+    stepSwiperCurrent.value = activeStepIndex.value
   },
   { immediate: true },
 )
 
 watch(
-  () => [props.mode, props.order?.ticket_id, props.dispatchId],
+  () => [props.mode, props.order?.ticket_id, props.dispatchId, props.hallEntryId],
   () => {
-    if (isWorkerMode.value) void loadStepPlan(true)
+    if (isWorkerMode.value) {
+      void loadWorkerHistory()
+      void loadStepPlan(true, { notifyNotReady: false, notifyError: false })
+    }
     if (isOperatorWorkbench.value) void loadOperatorFilters()
   },
 )
@@ -1389,7 +1985,10 @@ onMounted(() => {
   nextTick(() => {
     componentReady.value = true
     setupRecorder()
-    if (isWorkerMode.value) void loadStepPlan(true)
+    if (isWorkerMode.value) {
+      void loadWorkerHistory()
+      void loadStepPlan(true, { notifyNotReady: false, notifyError: false })
+    }
     if (isOperatorWorkbench.value) void loadOperatorFilters()
   })
 })
@@ -1511,47 +2110,94 @@ onBeforeUnmount(() => {
   40%         { transform: translateY(-8rpx); }
 }
 
-.msg-actions {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: 8rpx;
-}
-
-.msg-action {
-  font-size: 22rpx;
-  color: #6b7d3f;
-  font-weight: 700;
-}
-
 .step-panel {
-  margin: 0 20rpx 16rpx;
-  padding: 20rpx;
-  border-radius: 18rpx;
-  background: linear-gradient(180deg, #fbfcf5 0%, #f4f8e5 100%);
-  border: 1rpx solid #dfe8b8;
+  margin: 8rpx 20rpx 18rpx;
+  border-radius: 24rpx;
+  background: linear-gradient(145deg, #fbfcf5 0%, #f2f7df 54%, #eef5d3 100%);
+  border: 1rpx solid #d8e2af;
+  box-sizing: border-box;
+  box-shadow: 0 16rpx 38rpx rgba(128, 146, 72, 0.12);
+  overflow: hidden;
 }
 
-.step-panel-head {
+.step-panel.collapsed {
+  margin-bottom: 14rpx;
+}
+
+.step-panel-summary,
+.step-panel-head,
+.flow-step-head,
+.step-swiper-footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16rpx;
 }
 
+.step-panel-summary {
+  min-height: 110rpx;
+  padding: 22rpx 22rpx 20rpx;
+}
+
+.step-panel-summary-copy {
+  flex: 1;
+  min-width: 0;
+}
+
 .step-panel-tag,
 .step-panel-index {
   font-size: 22rpx;
   color: #6b7d3f;
-  font-weight: 700;
+  font-weight: 800;
+}
+
+.step-panel-toggle {
+  width: 96rpx;
+  height: 58rpx;
+  border-radius: 999rpx;
+  background: rgba(255, 255, 255, 0.92);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #6b7d3f;
+  font-size: 22rpx;
+  font-weight: 800;
+  flex-shrink: 0;
+  box-shadow: inset 0 0 0 1rpx rgba(214, 226, 159, 0.9);
 }
 
 .step-panel-title {
   display: block;
   margin-top: 12rpx;
-  font-size: 28rpx;
-  line-height: 1.45;
+  font-size: 30rpx;
+  line-height: 1.4;
   color: #273012;
-  font-weight: 800;
+  font-weight: 900;
+}
+
+.step-panel-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12rpx;
+  margin-top: 14rpx;
+}
+
+.step-panel-pill {
+  min-height: 48rpx;
+  padding: 0 18rpx;
+  border-radius: 999rpx;
+  background: rgba(255, 255, 255, 0.76);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22rpx;
+  color: #647440;
+  font-weight: 700;
+}
+
+.step-panel-pill.current {
+  background: #dce8aa;
+  color: #415118;
 }
 
 .step-panel-text,
@@ -1567,17 +2213,179 @@ onBeforeUnmount(() => {
   color: #9b5c2a;
 }
 
+.step-panel-body {
+  padding: 0 18rpx 18rpx;
+  border-top: 1rpx solid rgba(216, 226, 175, 0.78);
+}
+
+.step-tab-row {
+  width: 100%;
+  margin-top: 18rpx;
+  white-space: nowrap;
+}
+
+.step-tab-track {
+  display: flex;
+  gap: 12rpx;
+  width: max-content;
+  padding-right: 8rpx;
+}
+
+.step-tab-chip {
+  min-width: 120rpx;
+  height: 56rpx;
+  padding: 0 18rpx;
+  border-radius: 999rpx;
+  background: rgba(255, 255, 255, 0.8);
+  color: #657349;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22rpx;
+  font-weight: 700;
+  border: 1rpx solid transparent;
+  box-sizing: border-box;
+}
+
+.step-tab-chip.active {
+  background: #ffffff;
+  border-color: #c9d88c;
+  color: #273012;
+}
+
+.step-tab-chip.current {
+  box-shadow: inset 0 0 0 1rpx rgba(206, 220, 146, 0.95);
+}
+
+.step-tab-chip.done {
+  background: #edf5d3;
+  color: #536228;
+}
+
+.step-swiper {
+  height: 760rpx;
+  margin-top: 18rpx;
+}
+
+.step-swiper-scroll {
+  height: 100%;
+}
+
+.step-swiper-item {
+  min-height: 100%;
+  padding: 2rpx;
+  box-sizing: border-box;
+}
+
+.flow-step-card {
+  width: 100%;
+  height: 100%;
+  min-height: 100%;
+  padding: 22rpx;
+  border-radius: 22rpx;
+  border: 1rpx solid #dfe8b8;
+  background: #ffffff;
+  box-sizing: border-box;
+  white-space: normal;
+  box-shadow: 0 10rpx 24rpx rgba(118, 133, 69, 0.08);
+
+  &.current {
+    border-color: #c7d982;
+    background: linear-gradient(180deg, #fffef7 0%, #ffffff 100%);
+  }
+
+  &.done {
+    background: #f4f9e8;
+  }
+
+  &.skipped {
+    background: #faf7ed;
+  }
+
+  &.support {
+    background: #fff6ee;
+  }
+}
+
+.flow-step-head {
+  align-items: flex-start;
+}
+
+.flow-step-title {
+  display: block;
+  margin-top: 8rpx;
+  font-size: 30rpx;
+  line-height: 1.35;
+  color: #273012;
+  font-weight: 900;
+}
+
+.flow-step-index {
+  flex-shrink: 0;
+  min-width: 96rpx;
+  height: 46rpx;
+  padding: 0 16rpx;
+  border-radius: 999rpx;
+  background: #f1f5de;
+  color: #6b7d3f;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22rpx;
+  font-weight: 800;
+}
+
 .step-note-input {
   width: 100%;
+  height: 120rpx;
   min-height: 120rpx;
   margin-top: 16rpx;
   padding: 16rpx 18rpx;
   box-sizing: border-box;
   border-radius: 14rpx;
-  background: #ffffff;
+  border: 1rpx solid #edf1db;
+  background: #fbfcf8;
   color: #1a1a2e;
   font-size: 24rpx;
   line-height: 1.6;
+}
+
+.step-swiper-footer {
+  margin-top: 18rpx;
+}
+
+.step-swiper-counter {
+  color: #687644;
+  font-size: 22rpx;
+  font-weight: 700;
+}
+
+.step-swiper-dots {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 10rpx;
+}
+
+.step-swiper-dot {
+  width: 12rpx;
+  height: 12rpx;
+  border-radius: 999rpx;
+  background: rgba(107, 125, 63, 0.24);
+}
+
+.step-swiper-dot.active {
+  width: 34rpx;
+  background: #7a9043;
+}
+
+.step-swiper-dot.done {
+  background: rgba(122, 144, 67, 0.52);
+}
+
+.step-swiper-dot.active.done {
+  background: #7a9043;
 }
 
 .guide-panel {
@@ -1798,6 +2606,466 @@ onBeforeUnmount(() => {
 
   text { font-size: 26rpx; color: #fff; font-weight: 600; }
   &.disabled { background: #ccc; pointer-events: none; }
+}
+
+.worker-voice-btn,
+.input-icon-btn {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.worker-voice-btn {
+  width: 68rpx;
+  height: 68rpx;
+  border-radius: 50%;
+  background: #f5f7f1;
+  box-shadow: inset 0 0 0 1rpx rgba(39, 48, 18, 0.035);
+  transition: transform 0.16s ease, background-color 0.16s ease;
+
+  &.active {
+    background: #2a2f25;
+    transform: scale(0.96);
+
+    .chat-control-icon {
+      filter: brightness(0) invert(1);
+    }
+  }
+
+  &.disabled {
+    opacity: 0.55;
+  }
+}
+
+.input-icon-btn {
+  width: 68rpx;
+  height: 68rpx;
+  border-radius: 50%;
+  background: #f5f7f1;
+  box-shadow: inset 0 0 0 1rpx rgba(39, 48, 18, 0.035);
+  transition: transform 0.16s ease, background-color 0.16s ease;
+
+  &:active {
+    transform: scale(0.94);
+    background: #eef2df;
+  }
+
+  &.disabled {
+    opacity: 0.45;
+  }
+}
+
+.chat-control-icon {
+  width: 48rpx;
+  height: 48rpx;
+  display: block;
+}
+
+.floating-step-wrap {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 16rpx;
+  pointer-events: auto;
+}
+
+.floating-step-chip {
+  min-width: 220rpx;
+  max-width: calc(100% - 120rpx);
+  height: 76rpx;
+  padding: 0 26rpx 0 22rpx;
+  border-radius: 999rpx;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 12rpx 30rpx rgba(36, 40, 28, 0.09);
+  display: inline-flex;
+  align-items: center;
+  gap: 14rpx;
+  box-sizing: border-box;
+}
+
+.floating-step-chip.active {
+  background: #f7fbeb;
+  box-shadow: 0 16rpx 34rpx rgba(91, 108, 43, 0.14);
+}
+
+.floating-step-icon {
+  width: 34rpx;
+  height: 34rpx;
+  border-radius: 12rpx;
+  background: #f1f5df;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4rpx;
+  padding: 0 7rpx;
+  box-sizing: border-box;
+  flex-shrink: 0;
+}
+
+.floating-step-icon-line {
+  height: 3rpx;
+  border-radius: 999rpx;
+  background: #5f7137;
+}
+
+.floating-step-icon-line.short {
+  width: 60%;
+}
+
+.floating-step-chip-label {
+  font-size: 28rpx;
+  line-height: 1;
+  color: #273012;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.floating-step-chip-badge {
+  max-width: 164rpx;
+  height: 42rpx;
+  padding: 0 14rpx;
+  border-radius: 999rpx;
+  background: #edf4cf;
+  color: #61713e;
+  font-size: 21rpx;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.floating-step-popover {
+  width: 100%;
+  border-radius: 28rpx;
+  background: linear-gradient(180deg, #fcfdf7 0%, #f3f8e3 100%);
+  border: 1rpx solid #dce5b4;
+  box-shadow: 0 24rpx 56rpx rgba(90, 107, 46, 0.18);
+  overflow: hidden;
+}
+
+.floating-step-popover-head {
+  padding: 24rpx 24rpx 18rpx;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18rpx;
+}
+
+.floating-step-popover-copy {
+  flex: 1;
+  min-width: 0;
+}
+
+.floating-step-popover-tag {
+  display: block;
+  font-size: 22rpx;
+  color: #6b7d3f;
+  font-weight: 800;
+}
+
+.floating-step-popover-title {
+  display: block;
+  margin-top: 10rpx;
+  font-size: 30rpx;
+  line-height: 1.38;
+  color: #273012;
+  font-weight: 900;
+}
+
+.floating-step-popover-sub {
+  display: block;
+  margin-top: 10rpx;
+  font-size: 22rpx;
+  line-height: 1.55;
+  color: #677345;
+}
+
+.floating-step-popover-close {
+  min-width: 88rpx;
+  height: 56rpx;
+  padding: 0 18rpx;
+  border-radius: 999rpx;
+  background: rgba(255, 255, 255, 0.94);
+  color: #6b7d3f;
+  font-size: 22rpx;
+  font-weight: 800;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  box-shadow: inset 0 0 0 1rpx rgba(214, 226, 159, 0.9);
+}
+
+.camera-icon-img {
+  width: 52rpx;
+  height: 52rpx;
+}
+
+.keyboard-icon-img {
+  width: 50rpx;
+  height: 50rpx;
+}
+
+.ai-chat.input-docked {
+  padding-bottom: calc(214rpx + env(safe-area-inset-bottom, 0px));
+}
+
+.ai-chat.input-docked.has-floating-step-entry {
+  padding-bottom: calc(310rpx + env(safe-area-inset-bottom, 0px));
+}
+
+.ai-chat.input-docked .chat-messages {
+  padding: 18rpx 0 10rpx;
+}
+
+.ai-chat.input-docked .msg {
+  margin-bottom: 22rpx;
+}
+
+.ai-chat.input-docked .msg-bubble {
+  padding: 20rpx 24rpx;
+  border-radius: 18rpx;
+  font-size: 27rpx;
+  line-height: 1.68;
+}
+
+.ai-chat.input-docked .msg-bubble.ai {
+  max-width: calc(100% - 24rpx);
+  background: #f6f6f6;
+  border-bottom-left-radius: 8rpx;
+}
+
+.ai-chat.input-docked .msg-bubble.user {
+  max-width: 72%;
+  border-bottom-right-radius: 8rpx;
+}
+
+.ai-chat.input-docked .chat-input-area {
+  position: fixed;
+  left: 24rpx;
+  right: 24rpx;
+  bottom: calc(46rpx + env(safe-area-inset-bottom, 0px));
+  z-index: 120;
+  width: auto;
+  min-height: auto;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  pointer-events: none;
+  box-sizing: border-box;
+  max-width: calc(100vw - 48rpx);
+  overflow: visible;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 16rpx;
+}
+
+.worker-input-pill {
+  width: 100%;
+  min-width: 0;
+  height: 104rpx;
+  padding: 10rpx 14rpx;
+  border: 1rpx solid rgba(39, 48, 18, 0.04);
+  border-radius: 999rpx;
+  background: #ffffff;
+  box-shadow: 0 14rpx 40rpx rgba(34, 38, 27, 0.10);
+  display: flex;
+  align-items: center;
+  gap: 18rpx;
+  box-sizing: border-box;
+  pointer-events: auto;
+}
+
+.step-panel-body.floating {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.step-swiper.floating {
+  height: min(840rpx, 56vh);
+}
+
+.input-camera-btn,
+.input-mode-toggle {
+  width: 82rpx;
+  height: 82rpx;
+}
+
+.input-camera-btn {
+  background: transparent;
+  box-shadow: none;
+}
+
+.input-mode-toggle,
+.input-mode-toggle.active {
+  background: transparent;
+  box-shadow: none;
+}
+
+.voice-hold-area {
+  flex: 1;
+  min-width: 0;
+  height: 82rpx;
+  min-height: 82rpx;
+  border-radius: 999rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #1f241d;
+  font-size: 28rpx;
+  font-weight: 800;
+  letter-spacing: 0;
+  background: transparent;
+  transition: background-color 0.16s ease, transform 0.16s ease;
+
+  &.active {
+    background: #eef4ce;
+    transform: scale(0.99);
+  }
+
+  &.disabled {
+    opacity: 0.45;
+  }
+}
+
+.camera-standalone {
+  display: none !important;
+}
+
+.ai-chat.input-docked .media-tools {
+  flex-direction: row;
+  gap: 8rpx;
+}
+
+.ai-chat.input-docked .media-btn {
+  width: 58rpx;
+  height: 52rpx;
+  border-radius: 16rpx;
+  font-size: 18rpx;
+}
+
+.ai-chat.input-docked .chat-input {
+  height: 82rpx;
+  min-height: 82rpx;
+  max-height: 82rpx;
+  padding: 21rpx 6rpx;
+  border-radius: 0;
+  background: transparent;
+  font-size: 26rpx;
+  color: #23261f;
+  line-height: 40rpx;
+  overflow: hidden;
+}
+
+.ai-chat.input-docked .send-btn {
+  width: 96rpx;
+  min-width: 96rpx;
+  height: 66rpx;
+  border-radius: 999rpx;
+  background: #b7ca74;
+  box-shadow: 0 8rpx 20rpx rgba(115, 133, 57, 0.16);
+}
+
+.message-menu-mask,
+.select-text-mask {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 220;
+  background: rgba(23, 27, 17, 0.08);
+}
+
+.message-menu {
+  position: fixed;
+  width: min(580rpx, calc(100vw - 96rpx));
+  max-width: calc(100vw - 96rpx);
+  left: 48rpx;
+  bottom: calc(180rpx + env(safe-area-inset-bottom, 0px));
+  border-radius: 18rpx;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 24rpx 64rpx rgba(39, 48, 18, 0.18);
+}
+
+.message-menu-item {
+  height: 88rpx;
+  padding: 0 32rpx;
+  display: flex;
+  align-items: center;
+  gap: 22rpx;
+  border-bottom: 1rpx solid #eef0e8;
+  color: #273012;
+  font-size: 28rpx;
+  font-weight: 700;
+
+  &:last-child {
+    border-bottom: 0;
+  }
+}
+
+.message-menu-icon {
+  width: 42rpx;
+  color: #5f7137;
+  font-size: 24rpx;
+  font-weight: 900;
+}
+
+.select-text-mask {
+  display: flex;
+  align-items: flex-end;
+  padding: 0 24rpx calc(26rpx + env(safe-area-inset-bottom, 0px));
+  box-sizing: border-box;
+}
+
+.select-text-panel {
+  width: 100%;
+  max-height: 62vh;
+  padding: 24rpx;
+  border-radius: 24rpx;
+  background: #ffffff;
+  box-shadow: 0 24rpx 64rpx rgba(39, 48, 18, 0.18);
+  box-sizing: border-box;
+}
+
+.select-text-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 18rpx;
+}
+
+.select-text-title {
+  font-size: 28rpx;
+  color: #273012;
+  font-weight: 800;
+}
+
+.select-text-close {
+  font-size: 24rpx;
+  color: #6b7d3f;
+  font-weight: 700;
+}
+
+.select-text-content {
+  display: block;
+  max-height: 48vh;
+  overflow-y: auto;
+  font-size: 27rpx;
+  line-height: 1.7;
+  color: #2f3327;
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .quick-prompt-bar {

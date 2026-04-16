@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from typing import Any, Literal
 
 from fastapi import HTTPException
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.cache import delete_cache_by_prefix
@@ -123,6 +124,74 @@ def _looks_like_action_only(text: str) -> bool:
     }
 
 
+def _looks_like_bare_ack(text: str) -> bool:
+    normalized = _clean_text(text).lower()
+    return normalized in {
+        "可以",
+        "好的",
+        "好",
+        "行",
+        "嗯",
+        "嗯嗯",
+        "ok",
+        "继续",
+        "确认",
+        "确定",
+    }
+
+
+def _looks_like_greeting(text: str) -> bool:
+    normalized = _clean_text(text).lower()
+    return normalized in {"你好", "您好", "在吗", "在不在", "hello", "hi", "哈喽", "喂"}
+
+
+def _looks_like_guidance_question(text: str) -> bool:
+    normalized = _clean_text(text)
+    if not normalized:
+        return False
+    action_tokens = (
+        "确认接单",
+        "接单",
+        "确认到场",
+        "我已到场",
+        "开始处理",
+        "开始维修",
+        "请求协同",
+        "需要协同",
+        "处理完成",
+        "维修完成",
+        "退回改派",
+        "无法接单",
+        "确认协同",
+        "无法支援",
+    )
+    if any(token in normalized for token in action_tokens):
+        return False
+    guidance_tokens = (
+        "下一步",
+        "接下来",
+        "下面",
+        "后面",
+        "步骤",
+        "第一步",
+        "第二步",
+        "做什么",
+        "做些啥",
+        "做些什么",
+        "怎么做",
+        "怎么查",
+        "怎么排查",
+        "怎么处理",
+        "看哪里",
+        "查哪里",
+        "先查",
+        "帮我判断",
+        "要注意什么",
+        "怎么办",
+    )
+    return any(token in normalized for token in guidance_tokens) or normalized.endswith(("？", "?"))
+
+
 def _extract_reason(text: str, action: str | None = None) -> str | None:
     cleaned = _clean_text(text)
     if not cleaned:
@@ -179,6 +248,10 @@ async def classify_worker_intent(message: str, *, context_summary: str = "") -> 
     if rule_intent.confidence >= 0.8:
         return rule_intent
 
+    text = _clean_text(message)
+    if _looks_like_greeting(text) or _looks_like_bare_ack(text) or _looks_like_guidance_question(text):
+        return WorkerIntent(action=None, confidence=1.0)
+
     provider = get_model_provider()
     if provider is None:
         return rule_intent
@@ -218,12 +291,18 @@ async def classify_worker_intent(message: str, *, context_summary: str = "") -> 
 
     parsed = parse_json_object(raw) or {}
     action = parsed.get("action")
-    if action not in _ACTION_LABELS:
-        return rule_intent
     try:
         confidence = float(parsed.get("confidence") or 0)
     except (TypeError, ValueError):
         confidence = 0.0
+    if action in {None, "", "null"}:
+        return WorkerIntent(
+            action=None,
+            confidence=confidence,
+            reply=None,
+        )
+    if action not in _ACTION_LABELS:
+        return rule_intent
     return WorkerIntent(
         action=action,
         confidence=confidence,
@@ -366,6 +445,123 @@ async def _resolve_work_order(
     return work_order, dispatch_task, hall_entry
 
 
+async def get_worker_ai_history(
+    db: AsyncSession,
+    *,
+    ticket_id: str,
+    dispatch_id: str | None,
+    hall_entry_id: str | None,
+    limit: int,
+    user: User,
+) -> dict[str, Any]:
+    work_order, dispatch_task, hall_entry = await _resolve_work_order(
+        db,
+        ticket_id=ticket_id,
+        dispatch_id=dispatch_id,
+        hall_entry_id=hall_entry_id,
+    )
+    if work_order is None:
+        raise HTTPException(status_code=404, detail="工单不存在")
+    _assert_worker_permission(user, work_order, dispatch_task, hall_entry)
+
+    session_filters = [
+        AiAssistantSession.assistant_name == "wei_xiao_xiu",
+        AiAssistantSession.work_order_id == work_order.id,
+        AiAssistantSession.user_id == user.id,
+    ]
+    latest_session_result = await db.execute(
+        select(AiAssistantSession.id)
+        .where(*session_filters)
+        .order_by(AiAssistantSession.updated_at.desc())
+        .limit(1)
+    )
+    latest_session_id = latest_session_result.scalar_one_or_none()
+
+    history_limit = max(limit * 3, limit)
+    message_result = await db.execute(
+        select(AiAssistantMessage, AiAssistantSession.id)
+        .join(AiAssistantSession, AiAssistantMessage.session_id == AiAssistantSession.id)
+        .where(*session_filters)
+        .order_by(AiAssistantMessage.created_at.desc())
+        .limit(history_limit)
+    )
+    rows = list(reversed(message_result.all()))
+    messages = [
+        {
+            "id": message.id,
+            "session_id": session_id,
+            "role": "ai" if message.role == "assistant" else message.role,
+            "content": message.content,
+            "content_type": message.content_type,
+            "created_at": message.created_at.isoformat() if message.created_at else None,
+        }
+        for message, session_id in rows
+        if message.role in {"user", "assistant"} and not _is_worker_ai_action_history_message(message)
+    ][-limit:]
+    visible_session_id = messages[-1]["session_id"] if messages else None
+    return {
+        "assistant": "维小修",
+        "ticket_id": work_order.ticket_id,
+        "session_id": visible_session_id or latest_session_id,
+        "messages": messages,
+    }
+
+
+def _is_worker_ai_action_history_message(message: AiAssistantMessage) -> bool:
+    content = _clean_text(getattr(message, "content", None))
+    content_type = str(getattr(message, "content_type", "") or "")
+    role = str(getattr(message, "role", "") or "")
+    if not content:
+        return True
+    if content_type == "tool_result":
+        return True
+    if content_type in {"guidance_observation", "guidance_reply"}:
+        return False
+
+    action_assistant_fragments = (
+        "你要执行“",
+        "确认后我就替你提交",
+        "确认后我会提交",
+        "已完成“",
+        "无需重复",
+        "当前工单已",
+        "当前还未",
+        "当前派工阶段不支持",
+        "我正在等待你确认是否执行上一条动作",
+        "请回复“确认”执行",
+        "好的，我已取消这次动作",
+        "流程语",
+        "状态机",
+        "我在，咱们直接看现场",
+        "这张单已经在处理中",
+        "我先按你看到的现场来判断",
+        "你把现象、读数、报警码或照片发我一个就行",
+        "先把一个现象发我就行",
+        "先看这个：",
+    )
+    if role == "assistant" and any(fragment in content for fragment in action_assistant_fragments):
+        return True
+
+    action_user_texts = {
+        "确认",
+        "取消",
+        "开始处理",
+        "开始维修",
+        "开始排查",
+        "确认接单",
+        "接单",
+        "我接了",
+        "确认到场",
+        "我已到场",
+        "已到场",
+        "到场了",
+    }
+    if role == "user" and content in action_user_texts:
+        return True
+
+    return False
+
+
 def _assert_worker_permission(
     user: User,
     work_order: WorkOrder | None,
@@ -483,6 +679,162 @@ def _validate_worker_action_availability(
     return None
 
 
+def _dispatch_status(dispatch_task: DispatchTask | None) -> str:
+    return (getattr(dispatch_task, "dispatch_status", None) or "").strip().lower()
+
+
+def _contextual_worker_chat_answer(
+    *,
+    work_order: WorkOrder | None,
+    dispatch_task: DispatchTask | None,
+    hall_entry: DispatchHallEntry | None,
+    fallback: str | None = None,
+) -> str:
+    if fallback:
+        return fallback
+    if hall_entry is not None:
+        return "我在。你现在是在协同任务里，可以把现场能支援的内容、限制条件或照片发我；如果要接受或拒绝协同，再直接说“确认协同”或“无法支援，因为...”。"
+
+    status = _dispatch_status(dispatch_task)
+    if work_order is not None and (
+        getattr(work_order, "processing_started_at", None)
+        or status in {"processing", "waiting_support", "supporting"}
+    ):
+        return "我在，咱们直接看现场。你现在看到的是传感器、控制屏，还是报警记录？先把一个现象发我就行。"
+    if status == "assigned":
+        return "我在。这张单还没正式接下，你准备接就跟我说一声；想先看看风险点也可以先问。"
+    if status == "accepted":
+        return "我在。这张单已经接下来了，路上可以先问我重点看哪里；到现场后跟我说一声就行。"
+    if status == "arrived":
+        return "我在。既然已经到场，先告诉我眼前看到什么：设备状态、屏幕读数，或者有没有报警。"
+    if status in {"completed", "closed"} or getattr(work_order, "status", None) in {"completed", "closed"}:
+        return "这张单已经收尾了。我可以帮你回看处理记录、现场备注和后续注意点。"
+    return "我在。你先说现场看到什么，我再陪你判断下一步。"
+
+
+async def _generate_worker_chat_reply_with_model(
+    *,
+    message: str,
+    work_order: WorkOrder | None,
+    dispatch_task: DispatchTask | None,
+    hall_entry: DispatchHallEntry | None,
+    client_context: dict[str, Any] | None,
+) -> str | None:
+    provider = get_model_provider()
+    if provider is None:
+        return None
+
+    work_order_context: dict[str, Any] = {}
+    if work_order is not None:
+        work_order_context = {
+            "ticket_id": work_order.ticket_id,
+            "building_id": work_order.building_id,
+            "device_id": work_order.device_id,
+            "issue_description": work_order.issue_description,
+            "suggested_action": work_order.suggested_action,
+            "priority": work_order.priority,
+            "status": work_order.status,
+            "accepted_at": work_order.accepted_at.isoformat() if work_order.accepted_at else None,
+            "arrived_at": work_order.arrived_at.isoformat() if work_order.arrived_at else None,
+            "processing_started_at": work_order.processing_started_at.isoformat() if work_order.processing_started_at else None,
+        }
+
+    dispatch_context: dict[str, Any] = {}
+    if dispatch_task is not None:
+        dispatch_context = {
+            "dispatch_id": dispatch_task.id,
+            "dispatch_status": dispatch_task.dispatch_status,
+            "accepted_at": dispatch_task.accepted_at.isoformat() if dispatch_task.accepted_at else None,
+            "arrived_at": dispatch_task.arrived_at.isoformat() if dispatch_task.arrived_at else None,
+            "processing_started_at": dispatch_task.processing_started_at.isoformat() if dispatch_task.processing_started_at else None,
+        }
+
+    hall_context: dict[str, Any] = {}
+    if hall_entry is not None:
+        hall_context = {
+            "hall_entry_id": hall_entry.id,
+            "status": hall_entry.status,
+            "entry_type": hall_entry.entry_type,
+        }
+
+    system_prompt = (
+        "你是维修端 AI 助手维小修，正在陪现场维修人员处理一张工单。"
+        "普通聊天、现场观察、不会做、还没开始、新手求助、下一步怎么走，都由你自然回答。"
+        "接单、到场、开始处理、请求协同、处理完成等状态动作由独立动作层执行；"
+        "除非用户明确要求执行这些动作，否则不要把回答写成动作菜单，也不要说已提交或已记录。"
+        "不要提后端、状态机、规则、步骤卡片、流程控制这些实现词。"
+        "先回应用户当下处境，再给一个安全、可观察、非侵入的第一步；如果缺关键信息，只问一个最重要的问题。"
+        "如果用户说自己是新手或还没开始，要先降低压力，再帮他定位当前位置，最后给第一步。"
+        "回答要像一位耐心的维修师傅在旁边说话，尽量 2 到 4 句，不要编号长清单。"
+        "不能编造读数、报警码、设备铭牌、维修记录或已经发生的现场事实。"
+        "涉及带电、压力、制冷剂、泄漏、冒烟、异味、异常噪声时先提醒停下观察并找有资质人员协助。"
+        "必须只输出 JSON 对象，字段 answer 是给用户看的中文回复。"
+    )
+    user_prompt = {
+        "worker_message": message,
+        "work_order": work_order_context,
+        "dispatch": dispatch_context,
+        "hall_entry": hall_context,
+        "client_context": client_context or {},
+        "output_schema": {"answer": "string"},
+    }
+    try:
+        raw = await provider.chat(
+            [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": json.dumps(user_prompt, ensure_ascii=False, default=str)},
+            ],
+            response_schema={"type": "object"},
+            temperature=0.35,
+        )
+    except Exception as exc:
+        logger.info("维小修自然对话生成降级为本地回复: %s", exc)
+        return None
+
+    parsed = parse_json_object(raw) or {}
+    answer = _clean_text(parsed.get("answer"))
+    if answer:
+        return answer[:1200]
+    return None
+
+
+def _friendly_invalid_action_answer(
+    *,
+    action: str | None,
+    invalid_message: str,
+    work_order: WorkOrder | None,
+    dispatch_task: DispatchTask | None,
+    hall_entry: DispatchHallEntry | None,
+) -> str:
+    status = _dispatch_status(dispatch_task)
+    if action == "accept" and status in {"processing", "waiting_support", "supporting"}:
+        return "这张单已经进入处理了，我就不重复提交接单。我们继续看现场：你现在做到哪一步，或者下一步想先看哪里？"
+    if action == "start" and status in {"processing", "waiting_support", "supporting"}:
+        return "开始处理已经记录过了，不需要再点一次。你把当前读数、报警或第一步结果告诉我，我接着往下带。"
+    if action == "arrive" and status in {"processing", "waiting_support", "supporting"}:
+        return "到场已经记录过了，现在重点是现场排查。你可以把面板读数、报警码或照片发我，我帮你判断下一步。"
+    if action == "accept" and status in {"accepted", "arrived"}:
+        return "这张单已经接下来了，不用重复接单。我们继续往下走：到场后说“我已到场”，已经到场就可以描述现场情况。"
+    if action == "arrive" and status == "assigned":
+        return "我看这张单还没接单。你准备接的话先说“确认接单”，接下来我再陪你走到场和处理。"
+    if action == "start" and status == "assigned":
+        return "现在还没接单，先别直接开始处理。你准备接的话说“确认接单”，我会按顺序帮你推进。"
+    if action == "start" and status == "accepted":
+        return "已经接单但还没到场。到现场后先告诉我“我已到场”，再开始处理会更稳。"
+    if action == "complete" and status in {"assigned", "accepted"}:
+        return "现在还没进入现场处理，先不要提交完成。你可以先接单、到场，或者把现场情况发我，我帮你判断要不要继续。"
+    if "无需重复" in invalid_message:
+        return f"{invalid_message.rstrip('。')}，我就不重复提交了。我们继续看现场：你可以问我下一步，或直接补充读数、报警和照片。"
+    if "不能再" in invalid_message or "不支持" in invalid_message:
+        return f"{invalid_message} 我们先别强行改状态，你把现场情况发我，我帮你判断该走协同、升级还是补充记录。"
+    return _contextual_worker_chat_answer(
+        work_order=work_order,
+        dispatch_task=dispatch_task,
+        hall_entry=hall_entry,
+        fallback=invalid_message,
+    )
+
+
 def _build_pending_action(
     *,
     intent: WorkerIntent,
@@ -521,7 +873,7 @@ def _confirmation_answer(pending: dict[str, Any]) -> str:
         result = pending.get("result") or "fixed"
         result_label = {"fixed": "已修复", "false_alarm": "误报", "escalated": "升级处理"}.get(result, result)
         suffix = f"处理结果：{result_label}。{suffix}"
-    return f"你要执行“{label}”吗？{suffix}确认后我会提交到后端状态机。"
+    return f"你要执行“{label}”吗？{suffix}确认后我就替你提交这一步。"
 
 
 async def _execute_pending_action(
@@ -785,7 +1137,13 @@ async def handle_worker_ai_chat(
                 _PENDING_ACTIONS.pop(session_id, None)
                 if exc.status_code >= 500:
                     raise
-                answer = str(exc.detail or "当前动作执行失败，请稍后重试")
+                answer = _friendly_invalid_action_answer(
+                    action=pending.get("action"),
+                    invalid_message=str(exc.detail or "当前动作执行失败，请稍后重试"),
+                    work_order=work_order,
+                    dispatch_task=dispatch_task,
+                    hall_entry=hall_entry,
+                )
                 await _record_action_audit(
                     db,
                     session_id=session_id,
@@ -818,7 +1176,7 @@ async def handle_worker_ai_chat(
             elif action_result["action"] == "arrive":
                 answer += " 准备排查时，你可以对我说“开始处理”。"
             elif action_result["action"] == "start":
-                answer += " 已进入处理阶段。阶段二会继续接入维修步骤指导。"
+                answer += " 我会按当前工单生成现场排查步骤，接下来你可以直接问我下一步看哪里。"
             await _append_message(db, session_id=session_id, role="assistant", content=answer, content_type="tool_result")
             await db.commit()
             return {
@@ -857,7 +1215,17 @@ async def handle_worker_ai_chat(
     await _append_message(db, session_id=session_id, role="user", content=text)
 
     if intent.action is None or intent.confidence < 0.65:
-        answer = intent.reply or "我可以帮你执行接单、到场、开始处理、请求协同和完成等工单动作。你也可以继续描述现场情况。"
+        answer = await _generate_worker_chat_reply_with_model(
+            message=text,
+            work_order=work_order,
+            dispatch_task=dispatch_task,
+            hall_entry=hall_entry,
+            client_context=client_context,
+        ) or _contextual_worker_chat_answer(
+            work_order=work_order,
+            dispatch_task=dispatch_task,
+            hall_entry=hall_entry,
+        )
         await _append_message(db, session_id=session_id, role="assistant", content=answer)
         await db.commit()
         return {
@@ -876,13 +1244,20 @@ async def handle_worker_ai_chat(
         hall_entry=hall_entry,
     )
     if invalid_message:
-        await _append_message(db, session_id=session_id, role="assistant", content=invalid_message)
+        answer = _friendly_invalid_action_answer(
+            action=intent.action,
+            invalid_message=invalid_message,
+            work_order=work_order,
+            dispatch_task=dispatch_task,
+            hall_entry=hall_entry,
+        )
+        await _append_message(db, session_id=session_id, role="assistant", content=answer)
         await db.commit()
         return {
             "assistant": "维小修",
             "session_id": session_id,
             "message_type": "chat",
-            "answer": invalid_message,
+            "answer": answer,
             "pending_action": None,
             "executed": False,
         }

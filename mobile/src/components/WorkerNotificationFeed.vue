@@ -52,6 +52,8 @@
           <view v-if="!item.read_at" class="feed-unread"></view>
         </view>
       </view>
+
+      <view class="worker-tabbar-spacer" />
     </scroll-view>
 
     <TabBar :tabs="WORKER_TABS" current="messages" theme="worker" />
@@ -172,8 +174,12 @@ onMounted(() => {
 
 .page-scroll {
   height: calc(100vh - 132rpx);
-  padding: 24rpx 24rpx calc(168rpx + env(safe-area-inset-bottom, 0px));
+  padding: 24rpx 24rpx 0;
   box-sizing: border-box;
+}
+
+.worker-tabbar-spacer {
+  height: calc(276rpx + env(safe-area-inset-bottom, 0px));
 }
 
 .header-card,

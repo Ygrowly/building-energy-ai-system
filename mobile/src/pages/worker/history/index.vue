@@ -47,6 +47,8 @@
           </view>
         </view>
       </view>
+
+      <view class="worker-tabbar-spacer" />
     </scroll-view>
 
     <TabBar v-if="false" :tabs="WORKER_TABS" current="messages" theme="worker" />
@@ -167,8 +169,12 @@ onUnmounted(() => {
 
 .page-scroll {
   height: calc(100vh - 132rpx);
-  padding: 24rpx 24rpx calc(168rpx + env(safe-area-inset-bottom, 0px));
+  padding: 24rpx 24rpx 0;
   box-sizing: border-box;
+}
+
+.worker-tabbar-spacer {
+  height: calc(276rpx + env(safe-area-inset-bottom, 0px));
 }
 
 .card-grid {

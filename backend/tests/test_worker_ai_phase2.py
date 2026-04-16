@@ -10,6 +10,7 @@ from app.services.ai_media_service import build_tts_response, normalize_transcri
 from app.services.maintenance_guidance_service import (
     _fallback_guidance_reply,
     _fallback_step_plan,
+    _is_guidance_ready,
     _normalize_step_plan,
 )
 
@@ -67,6 +68,13 @@ def test_worker_ai_phase2_normalize_drops_invalid_model_steps():
     assert normalized["summary"] == "排查供水温度"
     assert normalized["steps"][0]["id"] == "custom_1"
     assert normalized["steps"][0]["status"] == "pending"
+
+
+def test_worker_ai_phase2_guidance_ready_accepts_dispatch_processing_start_time():
+    work_order = _work_order(processing_started_at=None)
+    dispatch_task = SimpleNamespace(dispatch_status="accepted", processing_started_at="2026-04-09T04:47:00Z")
+
+    assert _is_guidance_ready(work_order, dispatch_task) is True
 
 
 @pytest.mark.asyncio

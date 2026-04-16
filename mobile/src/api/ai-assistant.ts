@@ -57,6 +57,22 @@ export interface WorkerAiGuidanceChatResponse {
   safety_level?: 'normal' | 'caution' | 'danger' | string
 }
 
+export interface WorkerAiHistoryMessage {
+  id: string
+  session_id: string
+  role: 'user' | 'ai'
+  content: string
+  content_type?: string | null
+  created_at?: string | null
+}
+
+export interface WorkerAiHistoryResponse {
+  assistant: '维小修'
+  ticket_id: string
+  session_id: string | null
+  messages: WorkerAiHistoryMessage[]
+}
+
 export interface OperatorAiChatResponse {
   assistant: '运小维'
   session_id: string
@@ -78,6 +94,52 @@ export interface OperatorAiChatRequest {
   scope?: Record<string, any> | null
   include_evidence?: boolean
   include_chart?: boolean
+}
+
+export interface AssistantStreamThinkingEvent {
+  type: 'thinking'
+  agent?: string
+  message: string
+  hop_count?: number
+}
+
+export interface AssistantStreamTextEvent {
+  type: 'text'
+  content: string
+  is_final: boolean
+}
+
+export interface AssistantStreamResultEvent<T> {
+  type: 'result'
+  payload: T
+}
+
+export interface AssistantStreamDoneEvent {
+  type: 'done'
+  session_id: string
+  hop_count?: number
+}
+
+export interface AssistantStreamErrorEvent {
+  type: 'error'
+  message: string
+  recoverable: boolean
+}
+
+export type AssistantStreamEvent<T> =
+  | AssistantStreamThinkingEvent
+  | AssistantStreamTextEvent
+  | AssistantStreamResultEvent<T>
+  | AssistantStreamDoneEvent
+  | AssistantStreamErrorEvent
+
+export interface AssistantStreamHandlers<T> {
+  onThinking?: (event: AssistantStreamThinkingEvent) => void
+  onText?: (event: AssistantStreamTextEvent) => void
+  onResult?: (event: AssistantStreamResultEvent<T>) => void
+  onDone?: (event: AssistantStreamDoneEvent) => void
+  onError?: (event: AssistantStreamErrorEvent) => void
+  onNetworkError?: (error: Error) => void
 }
 
 export type WorkerAiStepStatus = 'pending' | 'completed' | 'skipped' | 'needs_support' | 'uncertain'
@@ -157,6 +219,144 @@ export interface WorkerAiTtsResponse {
 
 function getToken(): string | null {
   return uni.getStorageSync('access_token') || null
+}
+
+function dispatchStreamEvent<T>(
+  event: AssistantStreamEvent<T>,
+  handlers: AssistantStreamHandlers<T>,
+) {
+  switch (event.type) {
+    case 'thinking':
+      handlers.onThinking?.(event)
+      break
+    case 'text':
+      handlers.onText?.(event)
+      break
+    case 'result':
+      handlers.onResult?.(event)
+      break
+    case 'done':
+      handlers.onDone?.(event)
+      break
+    case 'error':
+      handlers.onError?.(event)
+      break
+  }
+}
+
+function parseAssistantStreamChunk<T>(
+  chunk: string,
+  handlers: AssistantStreamHandlers<T>,
+) {
+  for (const line of chunk.split('\n')) {
+    if (!line.startsWith('data: ')) continue
+    const raw = line.slice(6).trim()
+    if (!raw) continue
+    try {
+      dispatchStreamEvent(JSON.parse(raw) as AssistantStreamEvent<T>, handlers)
+    } catch {
+      // ignore malformed partial chunks
+    }
+  }
+}
+
+async function streamAssistantH5<T>(
+  path: string,
+  payload: Record<string, unknown>,
+  handlers: AssistantStreamHandlers<T>,
+): Promise<string> {
+  const token = getToken()
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  if (token) headers.Authorization = `Bearer ${token}`
+
+  const response = await fetch(`${BASE_URL}${path}`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(payload),
+  })
+
+  if (!response.ok) {
+    handlers.onNetworkError?.(new Error(`HTTP ${response.status}`))
+    return String(payload.session_id || '')
+  }
+
+  const sessionId = response.headers.get('x-session-id') ?? String(payload.session_id || '')
+  const reader = response.body?.getReader()
+  if (!reader) return sessionId
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const parts = buffer.split('\n\n')
+      buffer = parts.pop() ?? ''
+      for (const part of parts) parseAssistantStreamChunk(part, handlers)
+    }
+    if (buffer) parseAssistantStreamChunk(buffer, handlers)
+  } catch (err) {
+    handlers.onNetworkError?.(err as Error)
+  }
+
+  return sessionId
+}
+
+function streamAssistantApp<T>(
+  path: string,
+  payload: Record<string, unknown>,
+  handlers: AssistantStreamHandlers<T>,
+): Promise<string> {
+  return new Promise((resolve) => {
+    const token = getToken()
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+    if (token) headers.Authorization = `Bearer ${token}`
+
+    let resolvedSessionId = String(payload.session_id || '')
+    let buffer = ''
+
+    const task = (uni as any).request({
+      url: `${BASE_URL}${path}`,
+      method: 'POST',
+      header: headers,
+      data: JSON.stringify(payload),
+      enableChunked: true,
+      responseType: 'text',
+      success() {
+        resolve(resolvedSessionId)
+      },
+      fail(err: any) {
+        handlers.onNetworkError?.(new Error(err?.errMsg || 'request failed'))
+        resolve(resolvedSessionId)
+      },
+    })
+
+    task.onChunkReceived?.((res: { data: ArrayBuffer }) => {
+      buffer += new TextDecoder().decode(res.data)
+      const parts = buffer.split('\n\n')
+      buffer = parts.pop() ?? ''
+      for (const part of parts) parseAssistantStreamChunk(part, handlers)
+    })
+
+    task.onHeadersReceived?.((res: { header: Record<string, string> }) => {
+      resolvedSessionId = res.header?.['x-session-id'] ?? resolvedSessionId
+    })
+  })
+}
+
+async function streamAssistantRequest<T>(
+  path: string,
+  payload: Record<string, unknown>,
+  handlers: AssistantStreamHandlers<T>,
+): Promise<string> {
+  // #ifdef H5
+  return streamAssistantH5<T>(path, payload, handlers)
+  // #endif
+
+  // #ifndef H5
+  return streamAssistantApp<T>(path, payload, handlers)
+  // #endif
 }
 
 async function uploadWorkerAiBlob<T>(
@@ -240,11 +440,20 @@ export const workerAiApi = {
   chat(payload: WorkerAiChatRequest): Promise<WorkerAiChatResponse> {
     return post<WorkerAiChatResponse>('/api/worker-ai/chat', payload)
   },
+  chatStream(payload: WorkerAiChatRequest, handlers: AssistantStreamHandlers<WorkerAiChatResponse>): Promise<string> {
+    return streamAssistantRequest<WorkerAiChatResponse>('/api/worker-ai/chat/stream', payload as Record<string, unknown>, handlers)
+  },
   guidanceChat(payload: WorkerAiGuidanceChatRequest): Promise<WorkerAiGuidanceChatResponse> {
     return post<WorkerAiGuidanceChatResponse>('/api/worker-ai/guidance/chat', payload)
   },
+  guidanceChatStream(payload: WorkerAiGuidanceChatRequest, handlers: AssistantStreamHandlers<WorkerAiGuidanceChatResponse>): Promise<string> {
+    return streamAssistantRequest<WorkerAiGuidanceChatResponse>('/api/worker-ai/guidance/chat/stream', payload as Record<string, unknown>, handlers)
+  },
   getSteps(ticketId: string, params?: { auto_generate?: boolean; dispatch_id?: string | null }): Promise<WorkerAiStepPlan> {
     return get<WorkerAiStepPlan>(`/api/worker-ai/work-orders/${ticketId}/steps`, params as Record<string, unknown>)
+  },
+  history(ticketId: string, params?: { dispatch_id?: string | null; hall_entry_id?: string | null; limit?: number }): Promise<WorkerAiHistoryResponse> {
+    return get<WorkerAiHistoryResponse>(`/api/worker-ai/work-orders/${ticketId}/history`, params as Record<string, unknown>)
   },
   updateStep(ticketId: string, stepId: string, payload: {
     plan_id: string
@@ -301,5 +510,8 @@ export const workerAiApi = {
 export const operatorAiApi = {
   chat(payload: OperatorAiChatRequest): Promise<OperatorAiChatResponse> {
     return post<OperatorAiChatResponse>('/api/operator-ai/chat', payload)
+  },
+  chatStream(payload: OperatorAiChatRequest, handlers: AssistantStreamHandlers<OperatorAiChatResponse>): Promise<string> {
+    return streamAssistantRequest<OperatorAiChatResponse>('/api/operator-ai/chat/stream', payload as Record<string, unknown>, handlers)
   },
 }

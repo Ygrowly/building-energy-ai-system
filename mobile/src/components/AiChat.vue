@@ -185,109 +185,107 @@
                 class="chart-scroll"
                 show-scrollbar="false"
               >
-                <view class="chart-scroll-inner">
-                  <view class="chart-visual-canvas" :style="{ width: `${msg.chartVisual.canvasWidth}px` }">
-                    <svg
-                      class="chart-svg"
-                      :viewBox="`0 0 ${msg.chartVisual.canvasWidth} ${msg.chartVisual.canvasHeight}`"
-                      preserveAspectRatio="none"
-                    >
-                      <defs>
-                        <linearGradient id="chartBarGradient" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="0%" stop-color="#8cbf7d" />
-                          <stop offset="100%" stop-color="#5f9e87" />
-                        </linearGradient>
-                      </defs>
-                      <line
-                        v-for="grid in msg.chartVisual?.gridLines || []"
-                        :key="`grid_${grid}`"
-                        :x1="msg.chartVisual.paddingLeft"
-                        :x2="msg.chartVisual.canvasWidth - msg.chartVisual.paddingRight"
-                        :y1="grid"
-                        :y2="grid"
-                        class="chart-grid-line"
+                <view class="chart-visual-canvas" :style="{ width: `${msg.chartVisual.canvasWidth}px` }">
+                  <svg
+                    class="chart-svg"
+                    :viewBox="`0 0 ${msg.chartVisual.canvasWidth} ${msg.chartVisual.canvasHeight}`"
+                    preserveAspectRatio="none"
+                  >
+                    <defs>
+                      <linearGradient id="chartBarGradient" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stop-color="#8cbf7d" />
+                        <stop offset="100%" stop-color="#5f9e87" />
+                      </linearGradient>
+                    </defs>
+                    <line
+                      v-for="grid in msg.chartVisual?.gridLines || []"
+                      :key="`grid_${grid}`"
+                      :x1="msg.chartVisual.paddingLeft"
+                      :x2="msg.chartVisual.canvasWidth - msg.chartVisual.paddingRight"
+                      :y1="grid"
+                      :y2="grid"
+                      class="chart-grid-line"
+                    />
+                    <text
+                      v-for="tick in msg.chartVisual?.yTicks || []"
+                      :key="tick.key"
+                      :x="msg.chartVisual.paddingLeft - 8"
+                      :y="tick.y + 4"
+                      text-anchor="end"
+                      class="chart-y-tick"
+                    >{{ tick.label }}</text>
+                    <line
+                      v-if="msg.chartVisual?.zeroY != null"
+                      :x1="msg.chartVisual.paddingLeft"
+                      :x2="msg.chartVisual.canvasWidth - msg.chartVisual.paddingRight"
+                      :y1="msg.chartVisual.zeroY"
+                      :y2="msg.chartVisual.zeroY"
+                      class="chart-axis-baseline"
+                    />
+                    <line
+                      v-if="msg.chartVisual?.activeGuide"
+                      :x1="msg.chartVisual.activeGuide.x"
+                      :x2="msg.chartVisual.activeGuide.x"
+                      :y1="msg.chartVisual.paddingTop"
+                      :y2="msg.chartVisual.canvasHeight - msg.chartVisual.paddingBottom"
+                      class="chart-active-guide"
+                    />
+                    <template v-if="msg.chartVisual?.kind === 'line'">
+                      <polyline
+                        :points="msg.chartVisual?.fillPoints"
+                        class="chart-area"
                       />
-                      <text
-                        v-for="tick in msg.chartVisual?.yTicks || []"
-                        :key="tick.key"
-                        :x="msg.chartVisual.paddingLeft - 8"
-                        :y="tick.y + 4"
-                        text-anchor="end"
-                        class="chart-y-tick"
-                      >{{ tick.label }}</text>
-                      <line
-                        v-if="msg.chartVisual?.zeroY != null"
-                        :x1="msg.chartVisual.paddingLeft"
-                        :x2="msg.chartVisual.canvasWidth - msg.chartVisual.paddingRight"
-                        :y1="msg.chartVisual.zeroY"
-                        :y2="msg.chartVisual.zeroY"
-                        class="chart-axis-baseline"
+                      <polyline
+                        :points="msg.chartVisual?.linePoints"
+                        class="chart-line"
                       />
-                      <line
-                        v-if="msg.chartVisual?.activeGuide"
-                        :x1="msg.chartVisual.activeGuide.x"
-                        :x2="msg.chartVisual.activeGuide.x"
-                        :y1="msg.chartVisual.paddingTop"
-                        :y2="msg.chartVisual.canvasHeight - msg.chartVisual.paddingBottom"
-                        class="chart-active-guide"
+                      <circle
+                        v-for="point in msg.chartVisual?.points || []"
+                        :key="`${point.key}_hit`"
+                        :cx="point.x"
+                        :cy="point.y"
+                        r="12"
+                        class="chart-point-hit"
+                        @click="selectChartDatum(idx, point.index)"
                       />
-                      <template v-if="msg.chartVisual?.kind === 'line'">
-                        <polyline
-                          :points="msg.chartVisual?.fillPoints"
-                          class="chart-area"
-                        />
-                        <polyline
-                          :points="msg.chartVisual?.linePoints"
-                          class="chart-line"
-                        />
-                        <circle
-                          v-for="point in msg.chartVisual?.points || []"
-                          :key="`${point.key}_hit`"
-                          :cx="point.x"
-                          :cy="point.y"
-                          r="12"
-                          class="chart-point-hit"
-                          @click="selectChartDatum(idx, point.index)"
-                        />
-                        <circle
-                          v-for="point in msg.chartVisual?.points || []"
-                          :key="point.key"
-                          :cx="point.x"
-                          :cy="point.y"
-                          :r="point.active ? 6 : 4.5"
-                          class="chart-point"
-                          :class="{ active: point.active }"
-                          @click="selectChartDatum(idx, point.index)"
-                        />
-                      </template>
-                      <template v-else>
-                        <rect
-                          v-for="bar in msg.chartVisual?.bars || []"
-                          :key="bar.key"
-                          :x="bar.x"
-                          :y="bar.y"
-                          :width="bar.width"
-                          :height="bar.height"
-                          rx="8"
-                          fill="url(#chartBarGradient)"
-                          class="chart-bar-rect"
-                          :class="{ active: bar.active }"
-                          @click="selectChartDatum(idx, bar.index)"
-                        />
-                      </template>
-                    </svg>
-                    <view
-                      class="chart-axis-row"
-                      :style="{ width: `${msg.chartVisual.canvasWidth}px` }"
-                    >
-                      <text
-                        v-for="axisItem in msg.chartVisual?.axisLabels || []"
-                        :key="axisItem.key"
-                        class="chart-axis-label"
-                        :style="{ width: `${axisItem.width}px`, left: `${axisItem.left}px` }"
-                        @click="selectChartDatum(idx, axisItem.index)"
-                      >{{ axisItem.label }}</text>
-                    </view>
+                      <circle
+                        v-for="point in msg.chartVisual?.points || []"
+                        :key="point.key"
+                        :cx="point.x"
+                        :cy="point.y"
+                        :r="point.active ? 6 : 4.5"
+                        class="chart-point"
+                        :class="{ active: point.active }"
+                        @click="selectChartDatum(idx, point.index)"
+                      />
+                    </template>
+                    <template v-else>
+                      <rect
+                        v-for="bar in msg.chartVisual?.bars || []"
+                        :key="bar.key"
+                        :x="bar.x"
+                        :y="bar.y"
+                        :width="bar.width"
+                        :height="bar.height"
+                        rx="8"
+                        fill="url(#chartBarGradient)"
+                        class="chart-bar-rect"
+                        :class="{ active: bar.active }"
+                        @click="selectChartDatum(idx, bar.index)"
+                      />
+                    </template>
+                  </svg>
+                  <view
+                    class="chart-axis-row"
+                    :style="{ width: `${msg.chartVisual.canvasWidth}px` }"
+                  >
+                    <text
+                      v-for="axisItem in msg.chartVisual?.axisLabels || []"
+                      :key="axisItem.key"
+                      class="chart-axis-label"
+                      :style="{ width: `${axisItem.width}px`, left: `${axisItem.left}px` }"
+                      @click="selectChartDatum(idx, axisItem.index)"
+                    >{{ axisItem.label }}</text>
                   </view>
                 </view>
               </scroll-view>
@@ -1511,6 +1509,9 @@ function buildChartVisualModel(
     width: Number(axisLabelWidth.toFixed(2)),
     left: 0,
   }))
+  const clampAxisLeft = (left: number, width: number) => Number(
+    Math.max(0, Math.min(left, canvasWidth - width)).toFixed(2),
+  )
 
   if (kind === 'line') {
     const points = values.map((value, index) => {
@@ -1527,7 +1528,7 @@ function buildChartVisualModel(
       }
     })
     points.forEach((point, index) => {
-      axisLabels[index].left = Number((point.x - axisLabelWidth / 2).toFixed(2))
+      axisLabels[index].left = clampAxisLeft(point.x - axisLabelWidth / 2, axisLabels[index].width)
     })
     const linePoints = points.map(point => `${point.x},${point.y}`).join(' ')
     const fillPoints = [
@@ -1572,7 +1573,7 @@ function buildChartVisualModel(
     }
   })
   bars.forEach((bar, index) => {
-    axisLabels[index].left = Number((bar.x + bar.width / 2 - axisLabelWidth / 2).toFixed(2))
+    axisLabels[index].left = clampAxisLeft(bar.x + bar.width / 2 - axisLabelWidth / 2, axisLabels[index].width)
   })
   return {
     kind: 'bar',
@@ -4521,17 +4522,9 @@ onBeforeUnmount(() => {
   box-sizing: border-box;
 }
 
-.chart-scroll-inner {
-  width: 100%;
-  min-width: 100%;
-  display: inline-flex;
-  justify-content: center;
-  box-sizing: border-box;
-}
-
 .chart-visual-canvas {
-  display: inline-block;
-  flex: 0 0 auto;
+  display: block;
+  margin: 0 auto;
 }
 
 .chart-svg {

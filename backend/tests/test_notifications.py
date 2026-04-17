@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -528,6 +529,59 @@ async def test_realtime_ticket_is_single_use_without_redis(
 
     assert first_user_id == "ops-1"
     assert second_user_id is None
+
+
+@pytest.mark.asyncio
+async def test_stream_user_events_cleans_up_background_tasks_after_disconnect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _DisconnectingWebSocket:
+        def __init__(self) -> None:
+            self.closed = False
+
+        async def send_text(self, _message: str) -> None:
+            if self.closed:
+                raise RuntimeError("Unexpected ASGI message 'websocket.send', after sending 'websocket.close'.")
+
+        async def receive_text(self) -> str:
+            self.closed = True
+            raise WebSocketDisconnect(code=1000)
+
+    tracked_tasks: list[asyncio.Task] = []
+    original_create_task = notification_realtime_service.asyncio.create_task
+
+    def _track_task(coro):
+        task = original_create_task(coro)
+        tracked_tasks.append(task)
+        return task
+
+    monkeypatch.setattr(
+        notification_realtime_service,
+        "get_redis_client",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(notification_realtime_service.asyncio, "create_task", _track_task)
+
+    try:
+        await notification_realtime_service.stream_user_events(
+            "ops-1",
+            _DisconnectingWebSocket(),
+            ping_interval_seconds=0.01,
+        )
+        await asyncio.sleep(0.03)
+
+        assert tracked_tasks
+        assert all(task.done() for task in tracked_tasks)
+        assert all(task.cancelled() or task.exception() is None for task in tracked_tasks)
+    finally:
+        for task in tracked_tasks:
+            if not task.done():
+                task.cancel()
+        for task in tracked_tasks:
+            try:
+                await task
+            except (asyncio.CancelledError, RuntimeError, WebSocketDisconnect):
+                pass
 
 
 @pytest.mark.asyncio

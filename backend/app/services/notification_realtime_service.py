@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import Any
 
 from fastapi import WebSocket
+from starlette.websockets import WebSocketDisconnect
 
 from app.core.cache import get_redis_client
 
@@ -127,23 +128,40 @@ async def stream_user_events(user_id: str, websocket: WebSocket, *, ping_interva
     await register_local_connection(user_id, websocket)
     redis_client = await get_redis_client()
     pubsub = None
+    stop_event = asyncio.Event()
+
+    async def _send_text(message: str) -> bool:
+        if stop_event.is_set():
+            return False
+        try:
+            await websocket.send_text(message)
+            return True
+        except (RuntimeError, WebSocketDisconnect):
+            stop_event.set()
+            return False
 
     async def _ping_loop() -> None:
-        while True:
+        while not stop_event.is_set():
             await asyncio.sleep(ping_interval_seconds)
-            await websocket.send_text(build_ws_message("system.ping", {"ts": int(time.time())}))
+            if stop_event.is_set():
+                return
+            await _send_text(build_ws_message("system.ping", {"ts": int(time.time())}))
 
     async def _receive_loop() -> None:
-        while True:
-            await websocket.receive_text()
+        try:
+            while not stop_event.is_set():
+                await websocket.receive_text()
+        except WebSocketDisconnect:
+            stop_event.set()
 
     async def _redis_loop() -> None:
         nonlocal pubsub
         if redis_client is None:
-            await asyncio.Future()
+            await stop_event.wait()
+            return
         pubsub = redis_client.pubsub(ignore_subscribe_messages=True)
         await pubsub.subscribe(f"{_CHANNEL_PREFIX}{user_id}")
-        while True:
+        while not stop_event.is_set():
             message = await pubsub.get_message(timeout=1.0)
             if not message:
                 await asyncio.sleep(0.1)
@@ -153,7 +171,8 @@ async def stream_user_events(user_id: str, websocket: WebSocket, *, ping_interva
                 data = data.decode("utf-8")
             if not data:
                 continue
-            await websocket.send_text(str(data))
+            if not await _send_text(str(data)):
+                return
 
     tasks = [
         asyncio.create_task(_ping_loop()),
@@ -161,14 +180,19 @@ async def stream_user_events(user_id: str, websocket: WebSocket, *, ping_interva
         asyncio.create_task(_redis_loop()),
     ]
     try:
-        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
+        done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
         for task in done:
-            task.result()
-        for task in pending:
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
+            exc = task.exception()
+            if exc is not None and not isinstance(exc, WebSocketDisconnect):
+                raise exc
     finally:
+        stop_event.set()
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        for task in tasks:
+            with contextlib.suppress(asyncio.CancelledError, WebSocketDisconnect, RuntimeError):
+                await task
         if pubsub is not None:
             with contextlib.suppress(Exception):
                 await pubsub.unsubscribe(f"{_CHANNEL_PREFIX}{user_id}")

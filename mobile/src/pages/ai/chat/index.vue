@@ -1,24 +1,18 @@
 <template>
-  <view class="page">
-    <NavBar title="AI 对话" bg-color="#ffffff" text-color="#202024" :show-back="true">
+  <view class="page" :class="{ 'page-operator': isOperatorMode }">
+    <NavBar :title="pageTitle" :bg-color="navBgColor" :text-color="navTextColor" :show-back="true">
       <template #right>
         <text class="nav-tag">{{ roleText }}</text>
       </template>
     </NavBar>
 
-    <scroll-view scroll-y class="page-scroll">
-      <view class="intro">
-        <text class="intro-kicker">AI Assistant</text>
-        <text class="intro-title">{{ assistantMode === 'operator' ? '今天想分析什么？' : '今天想查什么？' }}</text>
-        <text class="intro-copy">{{ assistantMode === 'operator' ? '可按时间、楼宇、班组、人员做只读运营分析。' : '能耗、派工、维修流程都可以直接问。' }}</text>
-      </view>
-
+    <view class="page-body">
       <AiChat
-        title="AI 对话"
-        hint="输入问题即可开始"
+        :title="pageTitle"
+        :hint="chatHint"
         :mode="assistantMode"
       />
-    </scroll-view>
+    </view>
   </view>
 </template>
 
@@ -33,14 +27,20 @@ import { useRouteGuard } from '../../../utils/route-guard'
 useRouteGuard(ALLOWED_ROLES)
 
 const authStore = useAuthStore()
+const role = computed(() => authStore.user?.role as UserRole | undefined)
+const isOperatorMode = computed(() => Boolean(role.value && isOperatorRole(role.value)))
 const roleText = computed(() => {
-  const role = authStore.user?.role as UserRole | undefined
-  return role ? ROLE_LABEL[role] : 'AI'
+  return role.value ? ROLE_LABEL[role.value] : 'AI'
 })
-const assistantMode = computed(() => {
-  const role = authStore.user?.role as UserRole | undefined
-  return role && isOperatorRole(role) ? 'operator' : 'general'
-})
+const assistantMode = computed(() => (isOperatorMode.value ? 'operator' : 'general'))
+const pageTitle = computed(() => (isOperatorMode.value ? '运小维' : 'AI 对话'))
+const chatHint = computed(() => (
+  isOperatorMode.value
+    ? '直接输入问题或点击快捷问法'
+    : '输入问题即可开始'
+))
+const navBgColor = computed(() => (isOperatorMode.value ? '#f5faf3' : '#ffffff'))
+const navTextColor = computed(() => (isOperatorMode.value ? '#294434' : '#202024'))
 </script>
 
 <style lang="scss" scoped>
@@ -52,55 +52,39 @@ const assistantMode = computed(() => {
     linear-gradient(180deg, #f7f9fb 0%, #ffffff 100%);
 }
 
+.page-operator {
+  background:
+    radial-gradient(circle at 18% 0%, rgba(142, 188, 116, 0.16), transparent 30%),
+    radial-gradient(circle at 84% 14%, rgba(200, 224, 166, 0.22), transparent 28%),
+    linear-gradient(180deg, #f6f9ef 0%, #ffffff 100%);
+}
+
 .nav-tag {
-  max-width: 88rpx;
+  max-width: 120rpx;
   font-size: 20rpx;
-  line-height: 1.2;
+  line-height: 1.3;
   color: #626973;
   text-align: right;
 }
 
-.page-scroll {
+.page-body {
   height: calc(100vh - 132rpx);
-  padding: 28rpx 24rpx calc(56rpx + env(safe-area-inset-bottom, 0px));
+  padding: 24rpx 24rpx calc(24rpx + env(safe-area-inset-bottom, 0px));
   box-sizing: border-box;
 }
 
-.intro {
-  padding: 16rpx 4rpx 28rpx;
-}
-
-.intro-kicker {
-  display: block;
-  font-size: 22rpx;
-  color: #6f7682;
-  letter-spacing: 0;
-  margin-bottom: 12rpx;
-}
-
-.intro-title {
-  display: block;
-  font-size: 44rpx;
-  line-height: 1.18;
-  font-weight: 800;
-  color: #202024;
-}
-
-.intro-copy {
-  display: block;
-  margin-top: 14rpx;
-  font-size: 26rpx;
-  line-height: 1.55;
-  color: #747b86;
-}
-
 :deep(.ai-chat) {
-  border-radius: 28rpx;
-  box-shadow: 0 18rpx 42rpx rgba(43, 52, 66, 0.08);
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  border-radius: 32rpx;
+  box-shadow: 0 22rpx 52rpx rgba(43, 52, 66, 0.08);
+  overflow: hidden;
 }
 
 :deep(.chat-messages) {
-  height: calc(100vh - 560rpx);
-  min-height: 480rpx;
+  flex: 1;
+  min-height: 0;
+  height: auto;
 }
 </style>

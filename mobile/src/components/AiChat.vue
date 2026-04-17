@@ -3,12 +3,20 @@
   从 workorder-detail 页抽出，独立管理对话状态和 SSE 流
 -->
 <template>
-  <view class="ai-chat" :class="{ 'input-docked': dockInput, 'has-floating-step-entry': showFloatingWorkflowEntry }">
-    <view class="chat-header">
+  <view
+    class="ai-chat"
+    :class="{
+      'input-docked': dockInput,
+      'has-floating-step-entry': showFloatingWorkflowEntry,
+      'operator-workbench-chat': isOperatorWorkbench,
+      'operator-workbench-empty': showOperatorWorkbenchHero,
+    }"
+  >
+    <view v-if="showChatHeader" class="chat-header">
       <text class="chat-title">{{ chatTitle }}</text>
       <text class="chat-hint">{{ chatHint }}</text>
     </view>
-    <view v-if="isOperatorMode && operatorQuickPrompts.length" class="quick-prompt-bar">
+    <view v-if="showTopQuickPromptBar" class="quick-prompt-bar">
       <text class="quick-prompt-title">{{ props.order ? '工单追问' : '运营分析快捷问法' }}</text>
       <view class="quick-prompt-list">
         <text
@@ -20,67 +28,38 @@
         >{{ prompt }}</text>
       </view>
     </view>
-    <view v-if="isOperatorWorkbench" class="operator-filter-panel">
-      <view class="operator-filter-head">
-        <text class="operator-filter-title">运小维 · 只读分析模式</text>
-        <text class="operator-filter-sub">{{ operatorFilterLoading ? '加载筛选项中...' : '可先选时间、楼宇、班组、人员，再发起问询' }}</text>
+    <view v-if="showOperatorWorkbenchHero" class="operator-hero-shell">
+      <view class="operator-hero-visual">
+        <view class="operator-hero-icon-shell">
+          <DotLottieVue
+            class="operator-hero-lottie"
+            src="/static/lottie/ai-chat.lottie"
+            autoplay
+            loop
+          />
+        </view>
       </view>
-      <view class="operator-filter-grid">
-        <picker class="operator-picker" :range="operatorDateOptions" range-key="label" :value="operatorDateOptions.findIndex(item => item.value === operatorDatePreset)" @change="operatorDatePreset = operatorDateOptions[$event.detail.value].value as any">
-          <view class="operator-picker-box">
-            <view class="operator-picker-meta">
-              <text class="operator-picker-label">时间范围</text>
-              <text class="operator-picker-action">选择</text>
-            </view>
-            <text class="operator-picker-value">{{ selectedOptionLabel(operatorDateOptions, operatorDatePreset, '本月') }}</text>
-          </view>
-        </picker>
-        <picker class="operator-picker" :range="operatorBuildingOptions" range-key="label" :value="operatorBuildingOptions.findIndex(item => item.value === operatorBuildingId)" @change="operatorBuildingId = operatorBuildingOptions[$event.detail.value].value">
-          <view class="operator-picker-box">
-            <view class="operator-picker-meta">
-              <text class="operator-picker-label">楼宇</text>
-              <text class="operator-picker-action">选择</text>
-            </view>
-            <text class="operator-picker-value">{{ selectedOptionLabel(operatorBuildingOptions, operatorBuildingId, '全部楼宇') }}</text>
-          </view>
-        </picker>
-        <picker class="operator-picker" :range="operatorTeamOptions" range-key="label" :value="operatorTeamOptions.findIndex(item => item.value === operatorTeamId)" @change="operatorTeamId = operatorTeamOptions[$event.detail.value].value">
-          <view class="operator-picker-box">
-            <view class="operator-picker-meta">
-              <text class="operator-picker-label">班组</text>
-              <text class="operator-picker-action">选择</text>
-            </view>
-            <text class="operator-picker-value">{{ selectedOptionLabel(operatorTeamOptions, operatorTeamId, '全部班组') }}</text>
-          </view>
-        </picker>
-        <picker class="operator-picker" :range="operatorWorkerOptions" range-key="label" :value="operatorWorkerOptions.findIndex(item => item.value === operatorWorkerId)" @change="operatorWorkerId = operatorWorkerOptions[$event.detail.value].value">
-          <view class="operator-picker-box">
-            <view class="operator-picker-meta">
-              <text class="operator-picker-label">人员</text>
-              <text class="operator-picker-action">选择</text>
-            </view>
-            <text class="operator-picker-value">{{ selectedOptionLabel(operatorWorkerOptions, operatorWorkerId, '全部人员') }}</text>
-          </view>
-        </picker>
-      </view>
-      <view v-if="operatorScopePreview.length" class="operator-scope-preview">
+      <view class="operator-hero-tabs">
         <text
-          v-for="item in operatorScopePreview"
-          :key="item"
-          class="operator-scope-chip"
-        >{{ item }}</text>
+          v-for="prompt in operatorQuickPrompts"
+          :key="prompt"
+          class="operator-hero-chip"
+          :class="{ disabled: sending }"
+          @click="sendPresetMessage(prompt)"
+        >{{ prompt }}</text>
       </view>
     </view>
 
     <!-- 消息列表 -->
     <scroll-view
+      v-if="showMessageList"
       scroll-y
       :scroll-top="scrollTop"
       class="chat-messages"
       :scroll-with-animation="true"
     >
       <!-- 欢迎消息 -->
-      <view class="msg ai-msg">
+      <view v-if="showWelcomeBubble" class="msg ai-msg">
         <view class="msg-bubble ai">
           <text>{{ welcomeLead }}</text>
           <text v-if="orderIntro" class="bold">{{ orderIntro }}</text>
@@ -184,127 +163,131 @@
                 @click="selectChartSeries(idx, seriesIndex)"
               >{{ seriesItem.label }}</text>
             </view>
-            <view v-if="msg.chartVisual" class="chart-visual-shell">
-              <view class="chart-axis-meta">
-                <text class="chart-axis-meta-item">X轴：{{ chartXAxisUnit(msg) }}</text>
-                <text class="chart-axis-meta-item">Y轴：{{ chartYAxisLabel(msg) }}</text>
-              </view>
-              <view v-if="activeChartDatum(msg)" class="chart-focus-card">
-                <text class="chart-focus-kicker">点击图表查看数据</text>
-                <view class="chart-focus-main">
-                  <text class="chart-focus-label">{{ activeChartDatum(msg)?.label }}</text>
-                  <text class="chart-focus-value">{{ activeChartDatum(msg)?.primaryValue }}</text>
+            <view v-if="msg.chartVisual || buildChartTableRows(msg.chart).length" class="chart-visual-shell">
+              <template v-if="msg.chartVisual">
+                <view class="chart-axis-meta">
+                  <text class="chart-axis-meta-item">X轴：{{ chartXAxisUnit(msg) }}</text>
+                  <text class="chart-axis-meta-item">Y轴：{{ chartYAxisLabel(msg) }}</text>
                 </view>
-                <text v-if="activeChartDatum(msg)?.secondaryValues" class="chart-focus-sub">{{ activeChartDatum(msg)?.secondaryValues }}</text>
-              </view>
-              <view v-if="msg.chartCollapsed" class="chart-collapsed-tip">图表已收起，点击右上角“展开”查看。</view>
+                <view v-if="activeChartDatum(msg)" class="chart-focus-card">
+                  <text class="chart-focus-kicker">点击图表查看数据</text>
+                  <view class="chart-focus-main">
+                    <text class="chart-focus-label">{{ activeChartDatum(msg)?.label }}</text>
+                    <text class="chart-focus-value">{{ activeChartDatum(msg)?.primaryValue }}</text>
+                  </view>
+                  <text v-if="activeChartDatum(msg)?.secondaryValues" class="chart-focus-sub">{{ activeChartDatum(msg)?.secondaryValues }}</text>
+                </view>
+              </template>
+              <view v-if="msg.chartCollapsed && msg.chartVisual" class="chart-collapsed-tip">图表已收起，点击右上角“展开”查看。</view>
               <scroll-view
-                v-else-if="(msg.chartView || 'chart') === 'chart'"
+                v-else-if="(msg.chartView || 'chart') === 'chart' && msg.chartVisual"
                 scroll-x
                 class="chart-scroll"
                 show-scrollbar="false"
               >
-                <view class="chart-visual-canvas" :style="{ width: `${msg.chartVisual.canvasWidth}px` }">
-                  <svg
-                    class="chart-svg"
-                    :viewBox="`0 0 ${msg.chartVisual.canvasWidth} ${msg.chartVisual.canvasHeight}`"
-                    preserveAspectRatio="none"
-                  >
-                    <defs>
-                      <linearGradient id="chartBarGradient" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stop-color="#8cbf7d" />
-                        <stop offset="100%" stop-color="#5f9e87" />
-                      </linearGradient>
-                    </defs>
-                    <line
-                      v-for="grid in msg.chartVisual?.gridLines || []"
-                      :key="`grid_${grid}`"
-                      :x1="msg.chartVisual.paddingLeft"
-                      :x2="msg.chartVisual.canvasWidth - msg.chartVisual.paddingRight"
-                      :y1="grid"
-                      :y2="grid"
-                      class="chart-grid-line"
-                    />
-                    <text
-                      v-for="tick in msg.chartVisual?.yTicks || []"
-                      :key="tick.key"
-                      :x="msg.chartVisual.paddingLeft - 8"
-                      :y="tick.y + 4"
-                      text-anchor="end"
-                      class="chart-y-tick"
-                    >{{ tick.label }}</text>
-                    <line
-                      v-if="msg.chartVisual?.zeroY != null"
-                      :x1="msg.chartVisual.paddingLeft"
-                      :x2="msg.chartVisual.canvasWidth - msg.chartVisual.paddingRight"
-                      :y1="msg.chartVisual.zeroY"
-                      :y2="msg.chartVisual.zeroY"
-                      class="chart-axis-baseline"
-                    />
-                    <line
-                      v-if="msg.chartVisual?.activeGuide"
-                      :x1="msg.chartVisual.activeGuide.x"
-                      :x2="msg.chartVisual.activeGuide.x"
-                      :y1="msg.chartVisual.paddingTop"
-                      :y2="msg.chartVisual.canvasHeight - msg.chartVisual.paddingBottom"
-                      class="chart-active-guide"
-                    />
-                    <template v-if="msg.chartVisual?.kind === 'line'">
-                      <polyline
-                        :points="msg.chartVisual?.fillPoints"
-                        class="chart-area"
+                <view class="chart-scroll-inner">
+                  <view class="chart-visual-canvas" :style="{ width: `${msg.chartVisual.canvasWidth}px` }">
+                    <svg
+                      class="chart-svg"
+                      :viewBox="`0 0 ${msg.chartVisual.canvasWidth} ${msg.chartVisual.canvasHeight}`"
+                      preserveAspectRatio="none"
+                    >
+                      <defs>
+                        <linearGradient id="chartBarGradient" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stop-color="#8cbf7d" />
+                          <stop offset="100%" stop-color="#5f9e87" />
+                        </linearGradient>
+                      </defs>
+                      <line
+                        v-for="grid in msg.chartVisual?.gridLines || []"
+                        :key="`grid_${grid}`"
+                        :x1="msg.chartVisual.paddingLeft"
+                        :x2="msg.chartVisual.canvasWidth - msg.chartVisual.paddingRight"
+                        :y1="grid"
+                        :y2="grid"
+                        class="chart-grid-line"
                       />
-                      <polyline
-                        :points="msg.chartVisual?.linePoints"
-                        class="chart-line"
+                      <text
+                        v-for="tick in msg.chartVisual?.yTicks || []"
+                        :key="tick.key"
+                        :x="msg.chartVisual.paddingLeft - 8"
+                        :y="tick.y + 4"
+                        text-anchor="end"
+                        class="chart-y-tick"
+                      >{{ tick.label }}</text>
+                      <line
+                        v-if="msg.chartVisual?.zeroY != null"
+                        :x1="msg.chartVisual.paddingLeft"
+                        :x2="msg.chartVisual.canvasWidth - msg.chartVisual.paddingRight"
+                        :y1="msg.chartVisual.zeroY"
+                        :y2="msg.chartVisual.zeroY"
+                        class="chart-axis-baseline"
                       />
-                      <circle
-                        v-for="point in msg.chartVisual?.points || []"
-                        :key="`${point.key}_hit`"
-                        :cx="point.x"
-                        :cy="point.y"
-                        r="12"
-                        class="chart-point-hit"
-                        @click="selectChartDatum(idx, point.index)"
+                      <line
+                        v-if="msg.chartVisual?.activeGuide"
+                        :x1="msg.chartVisual.activeGuide.x"
+                        :x2="msg.chartVisual.activeGuide.x"
+                        :y1="msg.chartVisual.paddingTop"
+                        :y2="msg.chartVisual.canvasHeight - msg.chartVisual.paddingBottom"
+                        class="chart-active-guide"
                       />
-                      <circle
-                        v-for="point in msg.chartVisual?.points || []"
-                        :key="point.key"
-                        :cx="point.x"
-                        :cy="point.y"
-                        :r="point.active ? 6 : 4.5"
-                        class="chart-point"
-                        :class="{ active: point.active }"
-                        @click="selectChartDatum(idx, point.index)"
-                      />
-                    </template>
-                    <template v-else>
-                      <rect
-                        v-for="bar in msg.chartVisual?.bars || []"
-                        :key="bar.key"
-                        :x="bar.x"
-                        :y="bar.y"
-                        :width="bar.width"
-                        :height="bar.height"
-                        rx="8"
-                        fill="url(#chartBarGradient)"
-                        class="chart-bar-rect"
-                        :class="{ active: bar.active }"
-                        @click="selectChartDatum(idx, bar.index)"
-                      />
-                    </template>
-                  </svg>
-                  <view
-                    class="chart-axis-row"
-                    :style="{ width: `${msg.chartVisual.canvasWidth}px` }"
-                  >
-                    <text
-                      v-for="axisItem in msg.chartVisual?.axisLabels || []"
-                      :key="axisItem.key"
-                      class="chart-axis-label"
-                      :style="{ width: `${axisItem.width}px`, left: `${axisItem.left}px` }"
-                      @click="selectChartDatum(idx, axisItem.index)"
-                    >{{ axisItem.label }}</text>
+                      <template v-if="msg.chartVisual?.kind === 'line'">
+                        <polyline
+                          :points="msg.chartVisual?.fillPoints"
+                          class="chart-area"
+                        />
+                        <polyline
+                          :points="msg.chartVisual?.linePoints"
+                          class="chart-line"
+                        />
+                        <circle
+                          v-for="point in msg.chartVisual?.points || []"
+                          :key="`${point.key}_hit`"
+                          :cx="point.x"
+                          :cy="point.y"
+                          r="12"
+                          class="chart-point-hit"
+                          @click="selectChartDatum(idx, point.index)"
+                        />
+                        <circle
+                          v-for="point in msg.chartVisual?.points || []"
+                          :key="point.key"
+                          :cx="point.x"
+                          :cy="point.y"
+                          :r="point.active ? 6 : 4.5"
+                          class="chart-point"
+                          :class="{ active: point.active }"
+                          @click="selectChartDatum(idx, point.index)"
+                        />
+                      </template>
+                      <template v-else>
+                        <rect
+                          v-for="bar in msg.chartVisual?.bars || []"
+                          :key="bar.key"
+                          :x="bar.x"
+                          :y="bar.y"
+                          :width="bar.width"
+                          :height="bar.height"
+                          rx="8"
+                          fill="url(#chartBarGradient)"
+                          class="chart-bar-rect"
+                          :class="{ active: bar.active }"
+                          @click="selectChartDatum(idx, bar.index)"
+                        />
+                      </template>
+                    </svg>
+                    <view
+                      class="chart-axis-row"
+                      :style="{ width: `${msg.chartVisual.canvasWidth}px` }"
+                    >
+                      <text
+                        v-for="axisItem in msg.chartVisual?.axisLabels || []"
+                        :key="axisItem.key"
+                        class="chart-axis-label"
+                        :style="{ width: `${axisItem.width}px`, left: `${axisItem.left}px` }"
+                        @click="selectChartDatum(idx, axisItem.index)"
+                      >{{ axisItem.label }}</text>
+                    </view>
                   </view>
                 </view>
               </scroll-view>
@@ -326,6 +309,9 @@
                     </view>
                   </view>
                 </view>
+              </view>
+              <view v-else-if="(msg.chartView || 'chart') === 'chart'" class="chart-empty-state">
+                图表暂未生成可视化，先切换到“明细”查看数据。
               </view>
             </view>
           </view>
@@ -388,7 +374,7 @@
               <text
                 v-for="followup in msg.suggestedFollowups"
                 :key="followup"
-                class="followup-chip"
+                class="followup-chip followup-chip--embedded"
                 :class="{ disabled: sending }"
                 @click="sendPresetMessage(followup)"
               >{{ followup }}</text>
@@ -774,6 +760,7 @@
 
 <script setup lang="ts">
 import { ref, nextTick, computed, onBeforeUnmount, onMounted, watch, getCurrentInstance } from 'vue'
+import { DotLottieVue } from '@lottiefiles/dotlottie-vue'
 import type { WorkOrder } from '../api/workorder'
 import {
   sendChatMessage,
@@ -899,8 +886,26 @@ const isWorkerMode = computed(() => props.mode === 'worker' && !!props.order)
 const isOperatorMode = computed(() => props.mode === 'operator')
 const isOperatorWorkbench = computed(() => isOperatorMode.value && !props.order)
 const dockInput = computed(() => props.dockInput)
+const showOperatorWorkbenchHero = computed(() => Boolean(
+  isOperatorWorkbench.value
+    && isFirstMessage.value
+    && !messages.value.length
+    && !sending.value,
+))
+const showMessageList = computed(() => !showOperatorWorkbenchHero.value)
+const showChatHeader = computed(() => !isOperatorWorkbench.value)
+const showTopQuickPromptBar = computed(() => Boolean(
+  isOperatorMode.value
+    && operatorQuickPrompts.value.length
+    && !isOperatorWorkbench.value,
+))
+const showWelcomeBubble = computed(() => !isOperatorWorkbench.value)
 const inputPlaceholder = computed(() => (
-  isWorkerMode.value && dockInput.value ? '发消息...' : '描述现场情况或提问...'
+  isOperatorWorkbench.value
+    ? '直接输入问题或点击快捷问法'
+    : isWorkerMode.value && dockInput.value
+      ? '发消息...'
+      : '描述现场情况或提问...'
 ))
 const chatHint = computed(() => props.hint || (
   isWorkerMode.value
@@ -1465,16 +1470,16 @@ function buildChartVisualModel(
   if (!rows.length) return null
   const values = rows.map(item => Number(item.rawValue || 0))
   const kind = String(chart.type || '').toLowerCase() === 'line' ? 'line' : 'bar'
-  const paddingLeft = 58
-  const paddingRight = 20
+  const paddingLeft = 36
+  const paddingRight = 12
   const paddingTop = 22
   const paddingBottom = 44
   const canvasHeight = 204
   const minStepWidth = kind === 'line'
-    ? (rows.length > 6 ? 58 : 76)
-    : (rows.length > 6 ? 70 : 94)
+    ? (rows.length > 6 ? 48 : 64)
+    : (rows.length > 6 ? 54 : 76)
   const spanCount = kind === 'line' ? Math.max(rows.length - 1, 1) : rows.length
-  const canvasWidth = Math.max(320, paddingLeft + paddingRight + spanCount * minStepWidth)
+  const canvasWidth = Math.max(260, paddingLeft + paddingRight + spanCount * minStepWidth)
   const usableWidth = canvasWidth - paddingLeft - paddingRight
   const usableHeight = canvasHeight - paddingTop - paddingBottom
   const slotWidth = kind === 'line'
@@ -1482,7 +1487,7 @@ function buildChartVisualModel(
     : usableWidth / rows.length
   const axisLabelWidth = kind === 'line'
     ? (rows.length === 1 ? usableWidth : Math.min(112, Math.max(72, usableWidth / rows.length)))
-    : slotWidth
+    : Math.min(slotWidth, 88)
   const maxValue = Math.max(...values, 0)
   const minValue = Math.min(...values, 0)
   const span = Math.max(maxValue - minValue, 1)
@@ -1603,6 +1608,22 @@ function syncMessageChartVisual(message: ChatMsg | undefined, resetActiveIndex =
   message.chartVisual = message.chart
     ? buildChartVisualModel(message.chart, message.selectedSeriesIndex ?? 0, message.activeChartIndex ?? 0)
     : null
+}
+
+function initializeChartMessageState(message: ChatMsg | undefined) {
+  if (!message?.chart) return
+  if (message.selectedSeriesIndex == null) {
+    message.selectedSeriesIndex = resolveDefaultSeriesIndex(message.chart)
+  } else {
+    message.selectedSeriesIndex = clampSeriesIndex(message.chart, message.selectedSeriesIndex)
+  }
+  if (!message.chartView) {
+    message.chartView = 'chart'
+  }
+  if (typeof message.chartCollapsed !== 'boolean') {
+    message.chartCollapsed = false
+  }
+  syncMessageChartVisual(message, message.activeChartIndex == null)
 }
 
 function buildChartTableRows(chart: Record<string, any> | null | undefined) {
@@ -2299,10 +2320,12 @@ function finalizeStreamingMessage(message: ChatMsg | null, fallbackContent = '')
   const content = String(streamingText.value || fallbackContent || '').trim()
   streamingText.value = ''
   if (message && content) {
-    messages.value.push({
+    const nextMessage: ChatMsg = {
       ...message,
       content,
-    })
+    }
+    initializeChartMessageState(nextMessage)
+    messages.value.push(nextMessage)
   } else if (content) {
     messages.value.push({ role: 'ai', content })
   }
@@ -2317,6 +2340,10 @@ function buildOperatorAiMessage(response: OperatorAiChatResponse, fallbackConten
     experienceItems: normalizeExperienceItems(response.facts),
     suggestedFollowups: response.suggested_followups || [],
     chart: response.chart || null,
+    metrics: response.metrics || null,
+    scope: response.facts && typeof response.facts === 'object' && !Array.isArray(response.facts)
+      ? ((response.facts as Record<string, any>).scope || null)
+      : null,
     evidenceClaims: normalizeEvidenceClaims(response.facts, response.evidence_refs || []),
     evidenceRefs: response.evidence_refs || [],
     blockedActions: response.blocked_actions || [],
@@ -2700,6 +2727,12 @@ onBeforeUnmount(() => {
   box-shadow: 0 2rpx 12rpx rgba(0,0,0,0.06);
 }
 
+.operator-workbench-chat {
+  background:
+    radial-gradient(circle at 50% 16%, rgba(197, 220, 137, 0.2), transparent 28%),
+    linear-gradient(180deg, #fbfdf7 0%, #ffffff 100%);
+}
+
 .chat-header {
   padding: 20rpx 24rpx 16rpx;
   border-bottom: 1rpx solid #f0f0f0;
@@ -2715,6 +2748,80 @@ onBeforeUnmount(() => {
   background:
     linear-gradient(180deg, rgba(246, 249, 251, 0.72) 0%, rgba(255, 255, 255, 0) 120rpx),
     #fff;
+}
+
+.operator-hero-shell {
+  flex: 1;
+  min-height: 0;
+  padding: 56rpx 34rpx 24rpx;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 42rpx;
+}
+
+.operator-hero-visual {
+  width: 260rpx;
+  height: 260rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.operator-hero-icon-shell {
+  width: 196rpx;
+  height: 196rpx;
+  border-radius: 999rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background: radial-gradient(circle, rgba(248, 252, 232, 0.98) 0%, rgba(233, 244, 193, 0.94) 72%, rgba(216, 232, 156, 0.92) 100%);
+  box-shadow:
+    0 24rpx 54rpx rgba(155, 176, 90, 0.16),
+    inset 0 1rpx 0 rgba(255, 255, 255, 0.9);
+}
+
+.operator-hero-lottie {
+  width: 164rpx;
+  height: 164rpx;
+  pointer-events: none;
+}
+
+.operator-hero-lottie :deep(canvas),
+.operator-hero-lottie :deep(svg) {
+  width: 100% !important;
+  height: 100% !important;
+  display: block;
+}
+
+.operator-hero-tabs {
+  width: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 14rpx;
+}
+
+.operator-hero-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 54rpx;
+  padding: 0 22rpx;
+  border-radius: 999rpx;
+  background: rgba(246, 248, 232, 0.96);
+  border: 1rpx solid #dde6b8;
+  color: #65743a;
+  font-size: 22rpx;
+  font-weight: 700;
+  box-shadow: 0 10rpx 22rpx rgba(152, 172, 88, 0.08);
+}
+
+.operator-hero-chip.disabled {
+  opacity: 0.45;
 }
 
 .msg {
@@ -2771,36 +2878,46 @@ onBeforeUnmount(() => {
 }
 
 .analysis-summary-card {
-  width: calc(100% - 32rpx);
-  max-width: calc(100% - 32rpx);
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
   padding: 18rpx 18rpx 16rpx;
   border-radius: 24rpx;
   background: linear-gradient(180deg, #ffffff 0%, #f7fafc 100%);
   border: 1rpx solid #e4ecf1;
   box-shadow: 0 12rpx 30rpx rgba(40, 55, 71, 0.07);
+  box-sizing: border-box;
 }
 
 .analysis-summary-head {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 14rpx;
+  flex-wrap: wrap;
 }
 
 .analysis-summary-title {
+  flex: 1;
+  min-width: 0;
+  display: block;
   font-size: 24rpx;
+  line-height: 1.45;
   color: #22333c;
   font-weight: 800;
+  word-break: break-word;
 }
 
 .analysis-summary-mode {
   flex-shrink: 0;
+  max-width: 100%;
   padding: 6rpx 14rpx;
   border-radius: 999rpx;
   background: #eef6e6;
   color: #4c6a43;
   font-size: 18rpx;
   font-weight: 700;
+  box-sizing: border-box;
 }
 
 .analysis-summary-chip-list {
@@ -3345,6 +3462,12 @@ onBeforeUnmount(() => {
   background: #fff;
   width: 100%;
   box-sizing: border-box;
+}
+
+.operator-workbench-empty .chat-input-area {
+  padding-top: 8rpx;
+  border-top: 0;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.12) 0%, #ffffff 100%);
 }
 
 .media-tools {
@@ -3913,11 +4036,13 @@ onBeforeUnmount(() => {
 }
 
 .msg-extensions {
-  width: calc(100% - 32rpx);
-  max-width: calc(100% - 32rpx);
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
   margin-top: 12rpx;
   display: grid;
   gap: 12rpx;
+  box-sizing: border-box;
 }
 
 .experience-card-list {
@@ -4131,11 +4256,15 @@ onBeforeUnmount(() => {
 }
 
 .analysis-card {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
   padding: 16rpx 18rpx;
   border-radius: 20rpx;
   background: linear-gradient(180deg, #fbfdff 0%, #f6f9fc 100%);
   border: 1rpx solid #e2e8ef;
   box-shadow: 0 10rpx 26rpx rgba(38, 52, 67, 0.05);
+  box-sizing: border-box;
 }
 
 .warning-card {
@@ -4160,29 +4289,32 @@ onBeforeUnmount(() => {
   align-items: flex-start;
   justify-content: space-between;
   gap: 16rpx;
+  flex-wrap: wrap;
 }
 
 .analysis-card-head--stack {
-  flex-wrap: wrap;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
   gap: 12rpx;
 }
 
 .analysis-card-title-wrap {
-  flex: 1;
+  width: 100%;
   min-width: 0;
 }
 
 .analysis-card-title {
-  flex: 1;
+  display: block;
   font-size: 24rpx;
   line-height: 1.5;
   color: #23323b;
   font-weight: 800;
+  word-break: break-word;
 }
 
 .analysis-card-source {
-  display: inline-flex;
-  align-items: center;
+  display: inline-block;
   margin-top: 8rpx;
   padding: 4rpx 12rpx;
   border-radius: 999rpx;
@@ -4190,15 +4322,22 @@ onBeforeUnmount(() => {
   color: #6a7882;
   font-size: 19rpx;
   line-height: 1.4;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  box-sizing: border-box;
 }
 
 .analysis-card-toggle,
 .analysis-card-copy {
   display: block;
+  max-width: 100%;
   margin-top: 8rpx;
   font-size: 21rpx;
   line-height: 1.55;
   color: #6a7882;
+  word-break: break-word;
 }
 
 .analysis-card-toggle {
@@ -4214,11 +4353,12 @@ onBeforeUnmount(() => {
 }
 
 .chart-toolbar-row {
-  display: inline-flex;
+  display: flex;
   align-items: center;
+  width: 100%;
   gap: 10rpx;
   flex-wrap: wrap;
-  justify-content: flex-end;
+  justify-content: space-between;
 }
 
 .chart-view-switch {
@@ -4277,11 +4417,15 @@ onBeforeUnmount(() => {
 }
 
 .chart-visual-shell {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
   margin-top: 16rpx;
   padding: 14rpx;
   border-radius: 18rpx;
   background: rgba(255, 255, 255, 0.94);
   border: 1rpx solid #e4ebf1;
+  box-sizing: border-box;
 }
 
 .chart-axis-meta {
@@ -4358,14 +4502,36 @@ onBeforeUnmount(() => {
   text-align: center;
 }
 
+.chart-empty-state {
+  margin-top: 14rpx;
+  padding: 18rpx 16rpx;
+  border-radius: 16rpx;
+  background: #f7fafc;
+  border: 1rpx dashed #d8e2ea;
+  color: #71808b;
+  font-size: 20rpx;
+  text-align: center;
+}
+
 .chart-scroll {
+  width: 100%;
+  max-width: 100%;
   margin-top: 14rpx;
   white-space: nowrap;
+  box-sizing: border-box;
+}
+
+.chart-scroll-inner {
+  width: 100%;
+  min-width: 100%;
+  display: inline-flex;
+  justify-content: center;
+  box-sizing: border-box;
 }
 
 .chart-visual-canvas {
   display: inline-block;
-  min-width: 100%;
+  flex: 0 0 auto;
 }
 
 .chart-svg {
@@ -4589,6 +4755,21 @@ onBeforeUnmount(() => {
 }
 
 .followup-chip-list--embedded {
-  margin-top: 14rpx;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12rpx;
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.followup-chip--embedded {
+  flex: 0 1 auto;
+  max-width: 100%;
+  white-space: normal;
+  line-height: 1.4;
+  padding-top: 10rpx;
+  padding-bottom: 10rpx;
+  text-align: center;
 }
 </style>

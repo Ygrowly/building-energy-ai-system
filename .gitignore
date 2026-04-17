@@ -6,8 +6,12 @@ __pycache__/
 venv/
 .venv/
 .venv-forecast/
+.conda-env/
+.conda-packed-env/
 backend/.venv/
 backend/.venv-forecast/
+backend/.conda-env/
+backend/.conda-packed-env/
 .env
 .env.local
 
@@ -29,6 +33,7 @@ dataset/output/knowledge_vectors/
 backend/tests/.tmp/
 backend/tests/.pytest-tmp/
 backend/.pytest_cache/
+backend/dist/conda-pack/
 
 # OS
 .DS_Store

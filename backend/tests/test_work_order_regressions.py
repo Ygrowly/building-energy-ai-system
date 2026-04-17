@@ -207,7 +207,10 @@ async def test_worker_feedback_allows_current_dispatch_assignee_when_legacy_proj
     db.commit.assert_awaited_once()
 
 
-def test_build_connect_args_uses_tls_for_remote_hosts_by_default() -> None:
+def test_build_connect_args_uses_tls_for_remote_hosts_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(db_session_module._settings, "DATABASE_SSL_MODE", "auto")
+    monkeypatch.setattr(db_session_module._settings, "DATABASE_SSL_CA_FILE", "")
+
     remote_args = _build_connect_args("postgresql+asyncpg://user:pass@db.example.com:5432/app")
     local_args = _build_connect_args("postgresql+asyncpg://user:pass@localhost:5432/app")
 

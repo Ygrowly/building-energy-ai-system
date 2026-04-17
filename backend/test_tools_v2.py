@@ -1,7 +1,15 @@
 """验证：动态 building_id + 新增工具（list + compare）"""
-import asyncio, ssl
+import asyncio
 from datetime import datetime, timezone
+from pathlib import Path
+
+from dotenv import load_dotenv
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+
+load_dotenv(Path(__file__).resolve().parent / ".env", override=False)
+
+from app.core.config import get_settings
+from app.db.session import _build_connect_args
 
 from app.schemas.mcp_schemas import (
     TimeRange, MetricType,
@@ -14,14 +22,15 @@ from app.mcp.tools.data_query import (
 )
 from app.mcp.tools.physics_calc import detect_energy_anomalies, calculate_system_cop
 
-DATABASE_URL = (
-    "postgresql+asyncpg://postgres.qbtwwbkqlwwhchlbzwis:bhzd%21FWWB%2101"
-    "@aws-1-ap-south-1.pooler.supabase.com:5432/postgres"
+get_settings.cache_clear()
+settings = get_settings()
+
+DATABASE_URL = settings.DATABASE_URL
+engine = create_async_engine(
+    DATABASE_URL,
+    connect_args=_build_connect_args(DATABASE_URL),
+    echo=False,
 )
-_ssl = ssl.create_default_context()
-_ssl.check_hostname = False
-_ssl.verify_mode = ssl.CERT_NONE
-engine = create_async_engine(DATABASE_URL, connect_args={"ssl": _ssl}, echo=False)
 Session = async_sessionmaker(engine, expire_on_commit=False)
 
 TR = TimeRange(

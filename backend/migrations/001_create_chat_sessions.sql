@@ -1,6 +1,6 @@
--- =============================================================================
+﻿-- =============================================================================
 -- 迁移：创建多智能体控制台会话管理表
--- 执行方式：在 Supabase SQL 编辑器中粘贴并运行
+-- 执行方式：在 PostgreSQL 客户端/psql中粘贴并运行
 -- 执行顺序：在现有 buildings / energy_data 表已建好之后执行
 -- =============================================================================
 
@@ -42,7 +42,7 @@ CREATE TRIGGER trg_chat_sessions_updated_at
     FOR EACH ROW
     EXECUTE FUNCTION update_chat_sessions_updated_at();
 
--- 5. 授权（将 your_app_user 替换为实际 Supabase 应用账号角色名）
+-- 5. 授权（将 your_app_user 替换为实际 PostgreSQL 应用账号角色名）
 -- 执行前先确认账号名：SELECT current_user;
 -- GRANT SELECT, INSERT, UPDATE, DELETE ON chat_sessions TO your_app_user;
 
@@ -50,3 +50,5 @@ CREATE TRIGGER trg_chat_sessions_updated_at
 SELECT 'chat_sessions 表创建成功' AS status,
        COUNT(*) AS row_count
 FROM chat_sessions;
+
+

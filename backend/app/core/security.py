@@ -1,4 +1,4 @@
-"""
+﻿"""
 安全工具集合：
   1. API Key 校验（旧机制，保留兼容）
   2. 密码哈希 / 校验（原生 bcrypt，避免 passlib 与 bcrypt 4.x 不兼容）
@@ -279,7 +279,7 @@ async def get_current_user_optional(
     可选认证依赖：有有效 Token 时返回当前用户，否则返回 None（不抛异常）。
     用于对话等接口：开发环境可不带 Token，生产环境由路由层校验非空并拒绝请求。
 
-    性能优化：命中内存缓存（TTL=5min）时跳过 DB 查询，避免每次请求都查 Supabase。
+    性能优化：命中内存缓存（TTL=5min）时跳过 DB 查询，避免每次请求都查 共享 PostgreSQL。
     """
     from app.db.models import User as UserModel
 
@@ -304,3 +304,4 @@ async def get_current_user_optional(
         return None
     _set_cached_user(user_id, user)
     return user
+

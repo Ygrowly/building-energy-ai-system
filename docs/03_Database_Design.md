@@ -1,6 +1,6 @@
 # 03 数据库设计
 
-> 数据库：PostgreSQL（托管于 Supabase）  
+> 数据库：PostgreSQL（通过 Tailscale 连接到共享开发库）  
 > 最后更新：2026-03-24  
 > 共 **14 张表**，按层次组织。
 

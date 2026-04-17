@@ -1,7 +1,7 @@
-"""
+﻿"""
 端到端冒烟测试：数据异常预测（forecast）
 =========================================
-直连 Supabase 数据库，验证完整的预测链路：
+直连 共享 PostgreSQL 数据库，验证完整的预测链路：
   1. 生产工具 building_kpi_forecast_6h_12h（通过 MCP call_tool）
   2. 调试工具 building_kpi_forecast_from_features（直传特征）
 
@@ -11,18 +11,25 @@
   & "e:/code/work/construction-management/.venv-forecast/Scripts/python.exe" test_forecast_e2e.py
 """
 import asyncio
-import ssl
+from pathlib import Path
 
+from dotenv import load_dotenv
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 
-DATABASE_URL = (
-    "postgresql+asyncpg://postgres.qbtwwbkqlwwhchlbzwis:bhzd%21FWWB%2101"
-    "@aws-1-ap-south-1.pooler.supabase.com:5432/postgres"
+load_dotenv(Path(__file__).resolve().parent / ".env", override=False)
+
+from app.core.config import get_settings
+from app.db.session import _build_connect_args
+
+get_settings.cache_clear()
+settings = get_settings()
+
+DATABASE_URL = settings.DATABASE_URL
+engine = create_async_engine(
+    DATABASE_URL,
+    connect_args=_build_connect_args(DATABASE_URL),
+    echo=False,
 )
-_ssl = ssl.create_default_context()
-_ssl.check_hostname = False
-_ssl.verify_mode = ssl.CERT_NONE
-engine = create_async_engine(DATABASE_URL, connect_args={"ssl": _ssl}, echo=False)
 Session = async_sessionmaker(engine, expire_on_commit=False)
 
 
@@ -150,3 +157,4 @@ async def main():
 
 
 asyncio.run(main())
+

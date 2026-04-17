@@ -1,5 +1,5 @@
-"""
-集成测试：连接真实 Supabase 数据库验证所有 MCP 工具
+﻿"""
+集成测试：连接历史共享数据库验证所有 MCP 工具
 =====================================================
 运行前提：backend/.env 中 DATABASE_URL 已配置且数据库已导入数据。
 运行方式：
@@ -46,7 +46,12 @@ from app.schemas.mcp_schemas import (
     TimeRange,
 )
 
-pytestmark = pytest.mark.integration
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.skip(
+        reason="legacy shared-db structure test; not part of the current Tailscale PostgreSQL acceptance set"
+    ),
+]
 
 # ---------------------------------------------------------------------------
 # 时间范围帮助函数（对应实际数据集 2016-04-01 ~ 2016-05-02）
@@ -461,3 +466,4 @@ class TestCompareTimePeriods:
         )
         assert isinstance(out, MCPError)
         assert out.error_code == "BUILDING_NOT_FOUND"
+

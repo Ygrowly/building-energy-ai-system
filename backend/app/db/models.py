@@ -1,12 +1,12 @@
-"""
-SQLAlchemy ORM 表定义（与 Supabase DDL 严格对齐）。
+﻿"""
+SQLAlchemy ORM 表定义（与 PostgreSQL DDL 严格对齐）。
 energy_data / buildings / daily_energy_summary：Data Agent 只读账号（SELECT only）。
 anomaly_events：后台检测服务拥有完整读写权限。
 
 数据库四层架构：
   物理实体（buildings/devices） + 时序事实（energy_data） + 业务闭环（anomaly_events）
 
-energy_data 实际列（以 Supabase schema 为准）：
+energy_data 实际列（以 PostgreSQL schema 为准）：
   timestamp, building_id, electricity_kwh, water_m3, hac_energy,
   sim_supply_temp_c, sim_return_temp_c, air_temp_c, dew_temp_c,
   humidity_rh_pct, anomaly_status
@@ -88,7 +88,7 @@ class Device(Base):
 
 # ---------------------------------------------------------------------------
 # energy_data — 核心数据日志（时序宽表）
-# 实际 DDL 列（以 Supabase schema 为准）：
+# 实际 DDL 列（以 PostgreSQL schema 为准）：
 #   timestamp, building_id, source_timestamp, electricity_kwh, water_m3, hac_energy,
 #   sim_supply_temp_c, sim_return_temp_c,
 #   air_temp_c, dew_temp_c, humidity_rh_pct, anomaly_status
@@ -1672,3 +1672,5 @@ class NotificationRecipient(Base):
         Index("idx_notification_recipient_user_read", "user_id", "is_read"),
         Index("idx_notification_recipient_notification", "notification_id"),
     )
+
+

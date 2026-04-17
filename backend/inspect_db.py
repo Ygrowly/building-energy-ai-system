@@ -1,14 +1,30 @@
 """检查真实数据库表结构与数据"""
-import asyncio, ssl
-import asyncpg
+import asyncio
+from pathlib import Path
 
-URL = "postgresql://postgres.qbtwwbkqlwwhchlbzwis:bhzd!FWWB!01@aws-1-ap-south-1.pooler.supabase.com:5432/postgres"
+import asyncpg
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).resolve().parent / ".env", override=False)
+
+from app.core.config import get_settings
+from app.db.session import _build_connect_args
+
+get_settings.cache_clear()
+settings = get_settings()
+
+URL = settings.SYNC_DATABASE_URL or settings.DATABASE_URL.replace(
+    "postgresql+asyncpg://",
+    "postgresql://",
+)
+CONNECT_ARGS = {
+    key: value
+    for key, value in _build_connect_args(settings.DATABASE_URL).items()
+    if key in {"ssl", "server_settings"}
+}
 
 async def main():
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
-    conn = await asyncpg.connect(URL, ssl=ctx)
+    conn = await asyncpg.connect(URL, **CONNECT_ARGS)
 
     print("=" * 60)
     print("buildings 表结构")

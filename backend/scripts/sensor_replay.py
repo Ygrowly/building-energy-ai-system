@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import argparse
 import asyncio
@@ -250,7 +250,7 @@ async def validate_building_ids(rounds: list[ReplayRound]) -> None:
     except (OSError, SQLAlchemyError) as exc:
         raise RuntimeError(
             "数据库连接失败。请先确认 backend/.env 中的 DATABASE_URL 可达，"
-            "并确认目标 PostgreSQL/Supabase 实例已允许当前机器连接。"
+            "并确认目标 PostgreSQL 实例已允许当前机器连接。"
         ) from exc
 
     invalid = [bid for bid in csv_buildings if bid not in db_buildings]
@@ -705,3 +705,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

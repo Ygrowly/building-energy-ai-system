@@ -1,10 +1,14 @@
 """真实数据库 MCP 工具集成测试"""
 import asyncio
-import sys
-import os
+from pathlib import Path
 
-import ssl
+from dotenv import load_dotenv
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+
+load_dotenv(Path(__file__).resolve().parent / ".env", override=False)
+
+from app.core.config import get_settings
+from app.db.session import _build_connect_args
 
 from app.schemas.mcp_schemas import (
     BuildingID, MetricType, QueryEnergyMetricsInput, TimeRange,
@@ -19,15 +23,15 @@ from datetime import datetime, timezone
 
 
 # ── 构建 Session Pooler 引擎 ──────────────────────────────────────────────
-_ssl = ssl.create_default_context()
-_ssl.check_hostname = False
-_ssl.verify_mode = ssl.CERT_NONE
+get_settings.cache_clear()
+settings = get_settings()
 
-DATABASE_URL = (
-    "postgresql+asyncpg://postgres.qbtwwbkqlwwhchlbzwis:bhzd%21FWWB%2101"
-    "@aws-1-ap-south-1.pooler.supabase.com:5432/postgres"
+DATABASE_URL = settings.DATABASE_URL
+engine = create_async_engine(
+    DATABASE_URL,
+    connect_args=_build_connect_args(DATABASE_URL),
+    echo=False,
 )
-engine = create_async_engine(DATABASE_URL, connect_args={"ssl": _ssl}, echo=False)
 SessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 
 

@@ -1,5 +1,5 @@
-技术栈
-FastAPI + LangGraph + PostgreSQL（Supabase）+ 阿里云通义 Qwen
+﻿技术栈
+FastAPI + LangGraph + PostgreSQL（通过 Tailscale 连接共享开发库）+ 阿里云通义 Qwen
 
 目录
 backend/
@@ -16,4 +16,5 @@ backend/
 │   ├── schemas/               # Pydantic Schema + SSE 协议
 │   └── services/              # RAGFlow 封装 + 降级策略
 └── tests/                     # 测试套件
+
 

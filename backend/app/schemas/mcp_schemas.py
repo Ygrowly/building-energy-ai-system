@@ -1,4 +1,4 @@
-"""
+﻿"""
 阶段一：接口契约 —— MCP 工具出入参规范（12 个核心工具）
 ==========================================================
 所有工具参数必须通过 Pydantic v2 严格校验，禁止裸 dict 传参。
@@ -63,7 +63,7 @@ class BuildingID(str, Enum):
 class MetricType(str, Enum):
     """
     energy_data 表中的真实列名映射，杜绝大模型编造列名。
-    以 Supabase 实际 schema 为准：
+    以 当前 PostgreSQL 实际 schema 为准：
       - hac_energy        → 暖通空调综合能耗（Heating/Air-Conditioning）
       - sim_supply_temp_c → 模拟供水温度（送水端）
       - sim_return_temp_c → 模拟回水温度（回水端）
@@ -836,3 +836,4 @@ class WebSearchInput(BaseModel):
         max_length=200,
         description="搜索关键词，应为简洁的中文或英文短语，如'建筑空调系统节能优化方案'"
     )
+

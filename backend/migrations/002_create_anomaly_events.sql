@@ -1,6 +1,6 @@
--- =============================================================================
+﻿-- =============================================================================
 -- 迁移：创建异常事件持久化表 anomaly_events
--- 执行方式：在 Supabase SQL 编辑器中粘贴并运行
+-- 执行方式：在 PostgreSQL 客户端/psql中粘贴并运行
 -- 执行顺序：在 buildings / energy_data / 001_create_chat_sessions 之后执行
 -- =============================================================================
 
@@ -41,7 +41,7 @@ CREATE INDEX IF NOT EXISTS idx_anomaly_events_unresolved
     ON anomaly_events (data_timestamp DESC)
     WHERE is_resolved = FALSE;
 
--- 6. 授权（将 your_app_user 替换为实际 Supabase 应用账号角色名）
+-- 6. 授权（将 your_app_user 替换为实际 PostgreSQL 应用账号角色名）
 -- 注意：anomaly_events 需要完整读写权限（后台服务需要 INSERT）
 -- 执行前先确认账号名：SELECT current_user;
 -- GRANT SELECT, INSERT, UPDATE ON anomaly_events TO your_app_user;
@@ -50,3 +50,5 @@ CREATE INDEX IF NOT EXISTS idx_anomaly_events_unresolved
 SELECT 'anomaly_events 表创建成功' AS status,
        COUNT(*) AS row_count
 FROM anomaly_events;
+
+

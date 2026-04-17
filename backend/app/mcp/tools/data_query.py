@@ -1,4 +1,4 @@
-"""
+﻿"""
 阶段二：原子能力库 —— 数据查询工具（Tool 1 / 2 / 4 / 9 / 10 / 11）
 =====================================================================
 工具清单：
@@ -51,7 +51,7 @@ from app.schemas.mcp_schemas import (
 
 logger = logging.getLogger(__name__)
 
-# 指标 → (DB列名, 单位) 映射表（与 Supabase energy_data 实际列名严格一致）
+# 指标 → (DB列名, 单位) 映射表（与 当前 energy_data 实际列名严格一致）
 _METRIC_META: dict[MetricType, tuple[str, str]] = {
     MetricType.ELECTRICITY_KWH:   ("electricity_kwh",   "kWh"),
     MetricType.WATER_M3:          ("water_m3",          "m³"),
@@ -718,3 +718,4 @@ async def compare_time_periods(
         data_points_a=cnt_a,
         data_points_b=cnt_b,
     )
+

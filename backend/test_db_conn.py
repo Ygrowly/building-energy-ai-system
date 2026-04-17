@@ -1,22 +1,32 @@
-"""临时测试脚本：验证 Supabase Session Pooler 连接"""
+﻿"""临时测试脚本：验证 当前共享 PostgreSQL 连接"""
 import asyncio
-import ssl
+from pathlib import Path
 import asyncpg
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).resolve().parent / ".env", override=False)
+
+from app.core.config import get_settings
+from app.db.session import _build_connect_args
+
+get_settings.cache_clear()
+settings = get_settings()
 
 POOL_URL = (
-    "postgresql://postgres.qbtwwbkqlwwhchlbzwis:bhzd!FWWB!01"
-    "@aws-1-ap-south-1.pooler.supabase.com:5432/postgres"
+    settings.SYNC_DATABASE_URL
+    or settings.DATABASE_URL.replace("postgresql+asyncpg://", "postgresql://")
 )
+CONNECT_ARGS = {
+    key: value
+    for key, value in _build_connect_args(settings.DATABASE_URL).items()
+    if key in {"ssl", "server_settings"}
+}
 
 async def main():
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
-
-    print("正在连接 Supabase Session Pooler ...")
+    print("正在连接 当前共享 PostgreSQL ...")
     try:
         conn = await asyncio.wait_for(
-            asyncpg.connect(POOL_URL, ssl=ctx),
+            asyncpg.connect(POOL_URL, **CONNECT_ARGS),
             timeout=15,
         )
         print("✅ 连接成功！")
@@ -46,3 +56,4 @@ async def main():
         print(f"❌ 连接失败: {type(e).__name__}: {e}")
 
 asyncio.run(main())
+

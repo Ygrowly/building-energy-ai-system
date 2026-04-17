@@ -4,7 +4,10 @@ __pycache__/
 *.egg-info/
 .eggs/
 venv/
+.venv/
 .venv-forecast/
+backend/.venv/
+backend/.venv-forecast/
 .env
 .env.local
 
@@ -25,6 +28,7 @@ dataset/output/knowledge_vectors/
 *.log
 backend/tests/.tmp/
 backend/tests/.pytest-tmp/
+backend/.pytest_cache/
 
 # OS
 .DS_Store

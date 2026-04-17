@@ -1,60 +1,197 @@
-前端启动
+# 项目运行说明
+
+## 目标
+
+这份说明解决的是后端 **Python 启动环境和依赖安装**，不是 `.env` 配置。
+
+可以提交到 Git 的内容是：
+
+- `backend/requirements.txt`
+- `backend/requirements-forecast.txt`
+- `backend/scripts/setup_backend_venv.ps1`
+- `backend/scripts/run_backend.ps1`
+- 本文档 `run.md`
+
+不要把真实虚拟环境目录提交到 Git：
+
+- `backend/.venv/`
+- `backend/.venv-forecast/`
+
+## 推荐做法：用脚本创建后端虚拟环境
+
+### 1. 创建主后端环境
+
+在仓库根目录执行：
+
+```powershell
+cd backend
+powershell -ExecutionPolicy Bypass -File .\scripts\setup_backend_venv.ps1
 ```
+
+脚本会自动完成：
+
+- 优先使用 `py -3.11`，没有就退回到 `python`
+- 创建 `backend/.venv`
+- 升级 `pip / setuptools / wheel`
+- 安装 `requirements.txt` 中的后端依赖
+
+### 2. 如需预测功能，再创建预测专用环境
+
+```powershell
+cd backend
+powershell -ExecutionPolicy Bypass -File .\scripts\setup_backend_venv.ps1 -IncludeForecast
+```
+
+这会额外创建：
+
+- `backend/.venv-forecast`
+
+并安装：
+
+- `backend/requirements-forecast.txt`
+
+说明：
+
+- 主后端接口环境使用 `backend/.venv`
+- 预测 worker 会优先使用 `backend/.venv-forecast`
+- 如果你们当前只开发普通接口，不涉及预测模型，可以先只创建 `backend/.venv`
+
+### 3. 启动后端
+
+```powershell
+cd backend
+powershell -ExecutionPolicy Bypass -File .\scripts\run_backend.ps1
+```
+
+默认启动参数：
+
+- Host: `0.0.0.0`
+- Port: `8000`
+- 开启 `--reload`
+
+自定义端口示例：
+
+```powershell
+cd backend
+powershell -ExecutionPolicy Bypass -File .\scripts\run_backend.ps1 -Port 18000
+```
+
+关闭热重载示例：
+
+```powershell
+cd backend
+powershell -ExecutionPolicy Bypass -File .\scripts\run_backend.ps1 -NoReload
+```
+
+## 手工做法：不用脚本也能创建
+
+如果本机限制 PowerShell 脚本执行，可以直接手工执行。
+
+### 主后端环境
+
+```powershell
+cd backend
+py -3.11 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --upgrade pip setuptools wheel
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+```
+
+如果机器上没有 `py -3.11`，可改成：
+
+```powershell
+cd backend
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --upgrade pip setuptools wheel
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+```
+
+### 预测专用环境
+
+```powershell
+cd backend
+py -3.11 -m venv .venv-forecast
+.\.venv-forecast\Scripts\python.exe -m pip install --upgrade pip setuptools wheel
+.\.venv-forecast\Scripts\python.exe -m pip install -r requirements-forecast.txt
+```
+
+### 手工启动后端
+
+```powershell
+cd backend
+.\.venv\Scripts\python.exe -m uvicorn main:app --reload --host 0.0.0.0 --port 8000
+```
+
+## 同事拿到代码后的最短路径
+
+```powershell
+git clone <仓库地址>
+cd construction-management\backend
+powershell -ExecutionPolicy Bypass -File .\scripts\setup_backend_venv.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\run_backend.ps1
+```
+
+如果需要预测能力：
+
+```powershell
+cd backend
+powershell -ExecutionPolicy Bypass -File .\scripts\setup_backend_venv.ps1 -IncludeForecast
+```
+
+## 启动前建议检查
+
+确认 Python 版本：
+
+```powershell
+python --version
+py -0p
+```
+
+建议优先使用 Python `3.11` 或 `3.12`。
+
+安装完成后可检查：
+
+```powershell
+cd backend
+.\.venv\Scripts\python.exe --version
+.\.venv\Scripts\python.exe -m pip list
+```
+
+## 常用验证命令
+
+### 后端健康检查
+
+启动后访问：
+
+```text
+http://127.0.0.1:8000/health
+http://127.0.0.1:8000/health/db
+```
+
+### 跑默认测试
+
+```powershell
+cd backend
+.\.venv\Scripts\python.exe -m pytest -m "not integration and not e2e"
+```
+
+### 启动前端
+
+```powershell
 cd frontend
 pnpm install
-pnpm run dev
+pnpm dev
 ```
 
-后端启动
-```
-cd backend
-pip install -r requirements.txt
-# 若曾误装过 jwt 包，请先卸载：pip uninstall jwt，再安装 PyJWT
-# 注册 500 / failed to fetch：密码哈希已改为原生 bcrypt，无需再折腾 passlib 版本
-# 若日志里 buildings.meter_device_id does not exist：在库里执行 migrations/005_buildings_meter_device_id.sql
-uvicorn main:app --reload --host 0.0.0.0 --port 8000
+### 启动移动端 H5
 
-docker compose up -d --build
-
+```powershell
+cd mobile
+pnpm install
+pnpm dev:h5
 ```
 
-数据库迁移（若 psql 不在 PATH，用 Python 脚本代替）
-```
-cd backend
-# 执行 014_predicted_anomaly_events 迁移（创建预测预警表）
-python scripts/run_migration_014.py
-```
+## 说明
 
-预测模型环境（.venv-forecast，ML 库隔离运行）
-```
-cd backend
-# 首次创建隔离环境
-python -m venv .venv-forecast
-.venv-forecast\Scripts\activate
-pip install "scikit-learn>=1.7.2,<1.8.0" "numpy>=2.0" "joblib>=1.4"
-deactivate
-
-# 验证模型可加载
-.venv-forecast\Scripts\python.exe -c "import joblib; a=joblib.load('forecast_multi_6_12h_bundle.pkl'); print(a['model_name'])"
-```
-
-手动触发批量预测
-```
-curl -X POST http://localhost:8000/api/admin/run-forecast
-```
-
-RAG 端到端测试（上传 PDF → 向量化 → 对话引用知识库）
-```
-# 1. 确保后端已启动；RAGFlow 已启动且 .env 中 RAGFLOW_API_URL、RAGFLOW_API_KEY、RAGFLOW_DATASET_ID 已配置
-cd backend
-python scripts/test_rag_e2e.py
-```
-- 若出现 **502 "RAGFlow 返回错误"**：先在本机跑诊断 `cd backend && python scripts/check_ragflow_connection.py`。  
-  - 若在 **RAGFlow 所在电脑** 上 `curl http://127.0.0.1:9380/` 得到 404（或 200）说明本机服务正常，502 多半是「从外网/Tailscale 访问 100.114.223.54:9380」时出的问题。请在该电脑上：  
-    1. **看谁在监听 9380**：`netstat -ano | findstr :9380`（Windows）或 `ss -tlnp | grep 9380`（Linux）。若只有 127.0.0.1:9380，则从 Tailscale IP 来的请求会连不上或由别的程序处理；RAGFlow 需监听 `0.0.0.0:9380` 才能被 Tailscale 访问。  
-    2. **防火墙**：放行 9380（如 Windows 防火墙 → 入站规则）。  
-    3. **从本机用 Tailscale IP 自测**：在 RAGFlow 机器上执行 `curl -v http://100.114.223.54:9380/`，若也 502 则说明本机通过 Tailscale 访问自己时就有问题（绑定/防火墙/代理）。
-- 运行 E2E 的 pytest（需先设环境变量）：  
-  - CMD: `set RAG_E2E_RUN=1 && python -m pytest tests/test_rag_e2e_real.py -v -s`  
-  - PowerShell: `$env:RAG_E2E_RUN="1"; python -m pytest tests/test_rag_e2e_real.py -v -s`  
-  - 注意：不要在同一行用 `#` 写注释，否则 pytest 会误把 `#` 后当路径。
+- 虚拟环境目录体积大、路径强依赖本机，不能作为可复用产物上传 Git。
+- 真正应该提交的是依赖清单和初始化脚本，这样同事拉代码后才能在自己的机器上重新生成可用环境。
+- 如果后端依赖安装完成但接口仍然起不来，再单独检查 `backend/.env`、数据库、Redis、RAGFlow 等外部服务。

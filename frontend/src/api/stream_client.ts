@@ -82,6 +82,7 @@ export interface StreamHandlers {
  */
 // 由 main.ts 注入，和 http.ts 共用同一个 auth provider
 let _getToken: () => string | null = () => null
+const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? ''
 export function setStreamAuthProvider(getToken: () => string | null) {
   _getToken = getToken
 }
@@ -95,10 +96,14 @@ export async function sendChatMessage(
   signal?: AbortSignal,
 ): Promise<string> {
   const token = _getToken()
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    Accept: 'text/event-stream',
+    'Cache-Control': 'no-cache',
+  }
   if (token) headers['Authorization'] = `Bearer ${token}`
 
-  const response = await fetch('/api/chat', {
+  const response = await fetch(`${API_BASE}/api/chat`, {
     method: 'POST',
     headers,
     body: JSON.stringify({
@@ -114,10 +119,19 @@ export async function sendChatMessage(
     throw new Error(`HTTP ${response.status}: ${await response.text()}`)
   }
 
+  const contentType = response.headers.get('Content-Type') ?? response.headers.get('content-type') ?? ''
+  if (!contentType.toLowerCase().includes('text/event-stream')) {
+    const preview = await response.text().catch(() => '')
+    throw new Error(
+      `聊天接口未返回 SSE 流，Content-Type=${contentType || 'unknown'}${preview ? `，响应预览：${preview.slice(0, 120)}` : ''}`,
+    )
+  }
+
   const newSessionId = response.headers.get('x-session-id') ?? sessionId ?? crypto.randomUUID()
   const reader = response.body!.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
+  let sawDoneEvent = false
 
   try {
     while (true) {
@@ -134,11 +148,15 @@ export async function sendChatMessage(
         if (!raw) continue
         try {
           const event = JSON.parse(raw) as SseEvent
+          if (event.type === 'done') sawDoneEvent = true
           dispatchEvent(event, handlers)
         } catch {
           // 忽略无效 JSON 行
         }
       }
+    }
+    if (!sawDoneEvent) {
+      throw new Error('聊天 SSE 流提前结束，未收到 done 事件')
     }
   } catch (err) {
     handlers.onNetworkError?.(err as Error)
@@ -169,7 +187,7 @@ export async function approveWorkOrder(
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
   if (token) headers['Authorization'] = `Bearer ${token}`
 
-  const res = await fetch('/api/chat/approve', {
+  const res = await fetch(`${API_BASE}/api/chat/approve`, {
     method: 'POST',
     headers,
     body: JSON.stringify({ session_id: sessionId, ticket_id: ticketId, approved, reason }),

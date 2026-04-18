@@ -479,7 +479,11 @@
         <Icon icon="mdi:alert-circle-outline" width="14" />
         {{ docError }}
       </div>
-      <div v-if="docSuccess" class="success-bar">
+      <div v-if="hasActiveDocProcessing" class="processing-bar">
+        <Icon icon="mdi:loading" width="14" class="spin" />
+        {{ docProcessingNotice }}
+      </div>
+      <div v-if="docSuccess && !hasActiveDocProcessing" class="success-bar">
         <Icon icon="mdi:check-circle-outline" width="14" />
         {{ docSuccess }}
       </div>
@@ -487,7 +491,7 @@
       <!-- 文档列表 -->
       <div class="doc-list-header">
         <span class="list-title">知识库文档</span>
-        <button class="icon-btn" @click="loadDocuments" title="刷新">
+        <button class="icon-btn" @click="loadDocuments()" title="刷新">
           <Icon icon="mdi:refresh" width="15" :class="{ spin: loadingDocs }" />
         </button>
       </div>
@@ -520,27 +524,27 @@
               </td>
               <td>{{ formatSize(doc.size) }}</td>
               <td>
-                <span class="status-badge" :class="getStatusClass(doc.run)">
-                  <Icon :icon="getStatusIcon(doc.run)" width="12" />
-                  {{ getStatusLabel(doc.run) }}
+                <span class="status-badge" :class="getStatusClass(getDocDisplayRun(doc))">
+                  <Icon :icon="getStatusIcon(getDocDisplayRun(doc))" width="12" :class="{ spin: isDocProcessing(doc) }" />
+                  {{ getStatusLabel(getDocDisplayRun(doc)) }}
                 </span>
               </td>
               <td>
-                <div class="progress-bar-wrap">
-                  <div class="progress-bar" :style="{ width: `${(doc.progress ?? 0) * 100}%` }"></div>
+                <div class="progress-bar-wrap" :class="{ running: isDocProcessing(doc) }">
+                  <div class="progress-bar" :class="{ running: isDocProcessing(doc) }" :style="{ width: `${getDocDisplayProgress(doc) * 100}%` }"></div>
                 </div>
-                <span class="progress-text">{{ Math.round((doc.progress ?? 0) * 100) }}%</span>
+                <span class="progress-text">{{ Math.round(getDocDisplayProgress(doc) * 100) }}%</span>
               </td>
               <td>{{ formatDate(new Date(doc.update_time).toISOString()) }}</td>
               <td>
                 <div class="action-btns">
                   <button
                     class="action-btn parse-btn"
-                    :disabled="getRunKey(doc.run) === 'running' || parsingByDoc[doc.id]"
+                    :disabled="isDocProcessing(doc)"
                     title="解析向量化"
                     @click="triggerParse(doc.id)"
                   >
-                    <Icon icon="mdi:vector-polyline" width="14" />
+                    <Icon :icon="isDocProcessing(doc) ? 'mdi:loading' : 'mdi:vector-polyline'" width="14" :class="{ spin: isDocProcessing(doc) }" />
                     解析
                   </button>
                   <button
@@ -583,7 +587,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { Icon } from '@iconify/vue'
 import * as api from '@/api/datacenter'
@@ -665,6 +669,9 @@ const docError = ref('')
 const docSuccess = ref('')
 const documents = ref<RagDocument[]>([])
 const parsingByDoc = ref<Record<string, boolean>>({})
+const pollingByDoc = ref<Record<string, boolean>>({})
+let docListRequest: Promise<void> | null = null
+let docSuccessTimer: ReturnType<typeof setTimeout> | null = null
 
 // 轮询任务取消：每次触发解析都会生成一个 jobId；删除文档时把 jobId 标记失效，轮询下一轮立刻退出。
 const pollJobIdByDoc = ref<Record<string, number>>({})
@@ -789,6 +796,46 @@ const totalPages = computed(() => Math.max(1, Math.ceil(energyDataTotal.value / 
 const previewStats = computed(() => {
   const s = selectedDataset.value?.stats ?? {}
   return Object.fromEntries(Object.entries(s).filter(([k]) => !k.startsWith('_')))
+})
+
+const activeDocIds = computed(() => {
+  const ids = new Set<string>()
+  for (const doc of documents.value) {
+    if (isDocProcessing(doc)) ids.add(doc.id)
+  }
+  for (const [docId, active] of Object.entries(pollingByDoc.value)) {
+    if (active) ids.add(docId)
+  }
+  for (const [docId, active] of Object.entries(parsingByDoc.value)) {
+    if (active) ids.add(docId)
+  }
+  return Array.from(ids)
+})
+
+const hasActiveDocProcessing = computed(() => activeDocIds.value.length > 0)
+
+const docProcessingNotice = computed(() => {
+  const count = activeDocIds.value.length
+  if (!count) return ''
+  return count === 1
+    ? '检测到 1 个文档正在解析，状态和进度会自动刷新。'
+    : `检测到 ${count} 个文档正在解析，状态和进度会自动刷新。`
+})
+
+watch(hasActiveDocProcessing, (hasActive) => {
+  if (hasActive) {
+    clearDocSuccessTimer()
+    return
+  }
+
+  if (isDocProcessingMessage(docSuccess.value)) {
+    clearDocSuccess()
+    return
+  }
+
+  if (docSuccess.value) {
+    scheduleDocSuccessClear()
+  }
 })
 
 // ── 数据集操作 ────────────────────────────────────────────────
@@ -1046,16 +1093,41 @@ async function runAIAnalysis() {
 }
 
 // ── 知识库操作 ────────────────────────────────────────────────
-async function loadDocuments() {
-  loadingDocs.value = true
-  docError.value = ''
-  try {
+async function loadDocuments(opts: { silent?: boolean } = {}) {
+  if (docListRequest) {
+    if (!opts.silent) {
+      loadingDocs.value = true
+      docError.value = ''
+    }
+    try {
+      await docListRequest
+    } catch (e) {
+      if (!opts.silent) docError.value = (e as Error).message
+    } finally {
+      if (!opts.silent) loadingDocs.value = false
+    }
+    return
+  }
+
+  if (!opts.silent) {
+    loadingDocs.value = true
+    docError.value = ''
+  }
+
+  docListRequest = (async () => {
     const res = await api.listDocuments()
-    documents.value = res?.data?.docs ?? []
+    const nextDocs = res?.data?.docs ?? []
+    documents.value = mergeDocuments(documents.value, nextDocs)
+    syncRunningDocumentPolls()
+  })()
+
+  try {
+    await docListRequest
   } catch (e) {
-    docError.value = (e as Error).message
+    if (!opts.silent) docError.value = (e as Error).message
   } finally {
-    loadingDocs.value = false
+    docListRequest = null
+    if (!opts.silent) loadingDocs.value = false
   }
 }
 
@@ -1073,17 +1145,17 @@ async function onDropDoc(e: DragEvent) {
 
 async function uploadDocFile(file: File) {
   docError.value = ''
-  docSuccess.value = ''
+  clearDocSuccess()
   uploadingDoc.value = true
   try {
     const uploadRes = await api.uploadDocument(file)
     const docId = extractDocIdFromUpload(uploadRes, file.name)
     if (docId) {
-      docSuccess.value = `「${file.name}」已上传，正在后台解析...`
+      setDocSuccess(`「${file.name}」已上传，正在后台解析...`)
       // 不阻塞上传 UI：上传完成后直接后台触发轮询直到 Done/失败
       void triggerParse(docId, { auto: true })
     } else {
-      docSuccess.value = `「${file.name}」已上传，需点击"解析"按钮进行向量化`
+      setDocSuccess(`「${file.name}」已上传，需点击"解析"按钮进行向量化`)
     }
 
     // 上传成功后不阻塞等待列表刷新；列表刷新只为更新表格展示
@@ -1116,13 +1188,16 @@ async function triggerParse(docId: string, opts?: { auto?: boolean }) {
     await api.parseDocument(docId)
     // 删除发生在 parseDocument 之后：避免继续轮询导致页面反复刷新
     if (pollJobIdByDoc.value[docId] !== jobId) return
-    docSuccess.value = opts?.auto ? '已提交解析任务，正在后台解析...' : '已提交解析任务，正在后台解析...'
+    setDocSuccess(opts?.auto ? '已提交解析任务，正在后台解析...' : '已提交解析任务，正在后台解析...')
+    pollingByDoc.value[docId] = true
     await pollDocStatus(docId, jobId)
   } catch (e) {
     docError.value = (e as Error).message
     await loadDocuments()
   } finally {
-    parsingByDoc.value[docId] = false
+    delete pollingByDoc.value[docId]
+    delete pollJobIdByDoc.value[docId]
+    delete parsingByDoc.value[docId]
   }
 }
 
@@ -1131,7 +1206,10 @@ function confirmDeleteDoc(docId: string, name: string) {
     message: `确认从知识库删除文档「${name}」？`,
     action: async () => {
       // 立刻取消该文档的轮询，避免删除后页面持续刷新（轮询里会触发 loadDocuments）
-      pollJobIdByDoc.value[docId] = -1
+      delete pollJobIdByDoc.value[docId]
+      delete pollingByDoc.value[docId]
+      delete parsingByDoc.value[docId]
+      clearDocMessageForDoc(name)
       await api.deleteDocument(docId)
       documents.value = documents.value.filter(d => d.id !== docId)
       showToast('文档已删除')
@@ -1186,6 +1264,168 @@ function getDocIcon(name: string): string {
   if (ext === 'docx' || ext === 'doc') return 'mdi:file-word-box'
   if (ext === 'txt') return 'mdi:file-document-outline'
   return 'mdi:file-outline'
+}
+
+function isDocQueued(docId: string): boolean {
+  return Boolean(parsingByDoc.value[docId])
+}
+
+function getDocDisplayRun(doc: RagDocument): string {
+  const runKey = getRunKey(doc.run)
+  if (runKey === 'unstart' && (isDocQueued(doc.id) || normalizeDocProgress(doc.progress) > 0)) return 'running'
+  return runKey
+}
+
+function isDocProcessing(doc: RagDocument): boolean {
+  return getRunKey(getDocDisplayRun(doc)) === 'running'
+}
+
+function getDocDisplayProgress(doc: RagDocument): number {
+  const normalized = normalizeDocProgress(doc.progress)
+  if (isDocProcessing(doc)) {
+    return normalized >= 1 ? 0.99 : Math.max(normalized, 0.01)
+  }
+  return normalized
+}
+
+function isDocProcessingMessage(message: string): boolean {
+  return message.includes('正在后台解析')
+}
+
+function clearDocSuccessTimer() {
+  if (docSuccessTimer) {
+    clearTimeout(docSuccessTimer)
+    docSuccessTimer = null
+  }
+}
+
+function clearDocSuccess() {
+  clearDocSuccessTimer()
+  docSuccess.value = ''
+}
+
+function scheduleDocSuccessClear(delay = 4000) {
+  clearDocSuccessTimer()
+  docSuccessTimer = setTimeout(() => {
+    docSuccess.value = ''
+    docSuccessTimer = null
+  }, delay)
+}
+
+function setDocSuccess(message: string, opts: { autoClearMs?: number } = {}) {
+  clearDocSuccessTimer()
+  docSuccess.value = message
+  if (opts.autoClearMs && opts.autoClearMs > 0) {
+    scheduleDocSuccessClear(opts.autoClearMs)
+  }
+}
+
+function clearDocMessageForDoc(docName: string) {
+  if (docSuccess.value.includes(docName) || isDocProcessingMessage(docSuccess.value)) {
+    clearDocSuccess()
+  }
+  if (docError.value.includes(docName)) {
+    docError.value = ''
+  }
+}
+
+function normalizeDocProgress(progress: unknown): number {
+  const raw = Number(progress ?? 0)
+  return Number.isFinite(raw) ? Math.max(0, Math.min(raw, 1)) : 0
+}
+
+function getRunPriority(run: string): number {
+  const key = getRunKey(run)
+  if (key === 'unstart') return 0
+  if (key === 'running') return 1
+  return 2
+}
+
+function mergeDocuments(currentDocs: RagDocument[], nextDocs: RagDocument[]): RagDocument[] {
+  const currentById = new Map(currentDocs.map(doc => [doc.id, doc]))
+  return nextDocs.map(doc => mergeDocument(currentById.get(doc.id), doc))
+}
+
+function mergeDocument(currentDoc: RagDocument | undefined, nextDoc: RagDocument): RagDocument {
+  if (!currentDoc) {
+    return {
+      ...nextDoc,
+      progress: normalizeDocProgress(nextDoc.progress),
+    }
+  }
+
+  const currentKey = getRunKey(currentDoc.run)
+  const nextKey = getRunKey(nextDoc.run)
+  const currentPriority = getRunPriority(currentKey)
+  const nextPriority = getRunPriority(nextKey)
+  const currentProgress = normalizeDocProgress(currentDoc.progress)
+  const nextProgress = normalizeDocProgress(nextDoc.progress)
+
+  const merged: RagDocument = {
+    ...currentDoc,
+    ...nextDoc,
+    progress: nextProgress,
+  }
+
+  if (currentPriority > nextPriority) {
+    merged.run = currentDoc.run
+    merged.progress = currentProgress
+    merged.update_time = currentDoc.update_time
+    return merged
+  }
+
+  if (currentPriority < nextPriority) {
+    if (nextKey === 'running') {
+      merged.progress = Math.max(currentProgress, nextProgress)
+    } else if (nextKey === 'done') {
+      merged.progress = 1
+    }
+    return merged
+  }
+
+  if (nextKey === 'running') {
+    merged.progress = Math.max(currentProgress, nextProgress)
+    return merged
+  }
+
+  if (nextKey === 'done') {
+    merged.progress = 1
+    return merged
+  }
+
+  if (nextKey === 'fail' || nextKey === 'CANCEL') {
+    merged.progress = Math.max(currentProgress, nextProgress)
+    return merged
+  }
+
+  merged.progress = Math.max(currentProgress, nextProgress)
+  return merged
+}
+
+function syncRunningDocumentPolls() {
+  for (const doc of documents.value) {
+    if (!isDocProcessing(doc)) continue
+    if (pollingByDoc.value[doc.id] || parsingByDoc.value[doc.id]) continue
+    void startDocumentStatusPolling(doc.id)
+  }
+}
+
+async function startDocumentStatusPolling(docId: string) {
+  if (pollingByDoc.value[docId]) return
+
+  pollJobCounter += 1
+  const jobId = pollJobCounter
+  pollJobIdByDoc.value[docId] = jobId
+  pollingByDoc.value[docId] = true
+
+  try {
+    await pollDocStatus(docId, jobId)
+  } finally {
+    if (pollJobIdByDoc.value[docId] === jobId) {
+      delete pollJobIdByDoc.value[docId]
+    }
+    delete pollingByDoc.value[docId]
+  }
 }
 
 function getStatusClass(run: string): string {
@@ -1302,19 +1542,19 @@ async function pollDocStatus(docId: string, jobId: number) {
 
     const idx = documents.value.findIndex(d => d.id === docId)
     if (idx !== -1) {
-      documents.value[idx] = {
+      documents.value[idx] = mergeDocument(documents.value[idx], {
         ...documents.value[idx],
         run: runKey,
         progress: status.progress ?? documents.value[idx].progress,
         update_time: status.update_time ?? documents.value[idx].update_time,
-      }
+      })
     } else {
       // 如果当前列表还没包含该 doc，避免“删除后轮询不断触发刷新”
       const now = Date.now()
       if (now - lastListRefreshAt >= listRefreshIntervalMs) {
         if (pollJobIdByDoc.value[docId] !== jobId) return
         lastListRefreshAt = now
-        await loadDocuments()
+        await loadDocuments({ silent: true })
       }
     }
 
@@ -1328,17 +1568,28 @@ async function pollDocStatus(docId: string, jobId: number) {
   const doc = documents.value.find(d => d.id === docId)
   const docName = doc?.name ?? docId
   if (finalRunKey === 'done') {
-    docSuccess.value = `「${docName}」已解析完成`
+    setDocSuccess(`「${docName}」已解析完成`, { autoClearMs: 4000 })
   } else if (finalRunKey === 'fail') {
+    clearDocSuccess()
     docError.value = `「${docName}」解析失败`
   } else if (finalRunKey === 'CANCEL') {
-    docSuccess.value = `「${docName}」解析已取消`
+    setDocSuccess(`「${docName}」解析已取消`, { autoClearMs: 4000 })
+  } else if (isDocProcessingMessage(docSuccess.value)) {
+    clearDocSuccess()
   }
 
   await loadDocuments()
 }
 
 /** 极简 Markdown → HTML 转换（仅支持标题、加粗、换行、有序/无序列表）。 */
+onUnmounted(() => {
+  pollJobIdByDoc.value = {}
+  pollingByDoc.value = {}
+  parsingByDoc.value = {}
+  clearDocSuccessTimer()
+  if (toastTimer) clearTimeout(toastTimer)
+})
+
 function markdownToHtml(md: string): string {
   return md
     .replace(/^### (.+)$/gm, '<h4>$1</h4>')
@@ -1446,7 +1697,7 @@ html[data-theme="light"] .datacenter {
 .upload-sub { font-size: 12px; color: var(--text-muted); }
 
 /* ── 消息栏 ── */
-.error-bar, .success-bar {
+.error-bar, .success-bar, .processing-bar {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -1456,6 +1707,7 @@ html[data-theme="light"] .datacenter {
 }
 .error-bar { background: rgba(248,113,113,0.1); color: var(--danger); border: 1px solid rgba(248,113,113,0.2); }
 .success-bar { background: rgba(74,222,128,0.08); color: var(--success); border: 1px solid rgba(74,222,128,0.18); }
+.processing-bar { background: rgba(34,197,94,0.08); color: var(--accent); border: 1px solid var(--border-accent); }
 
 /* ── 主区域：列表+详情 ── */
 .main-area {
@@ -1803,7 +2055,21 @@ html[data-theme="light"] .datacenter {
   vertical-align: middle;
   margin-right: 6px;
 }
-.progress-bar { height: 100%; background: var(--accent); border-radius: 2px; transition: width 0.4s; }
+.progress-bar-wrap.running { background: rgba(34,197,94,0.16); }
+.progress-bar {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 2px;
+  transition: width 0.4s;
+  position: relative;
+}
+.progress-bar.running::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.22) 50%, transparent 100%);
+  animation: progress-shimmer 1.2s linear infinite;
+}
 .progress-text { font-size: 11px; color: var(--text-secondary); vertical-align: middle; }
 
 /* ── 操作按钮 ── */
@@ -2238,6 +2504,10 @@ html[data-theme="light"] .datacenter {
 
 /* ── 动画 ── */
 .spin { animation: spin 1s linear infinite; }
+@keyframes progress-shimmer {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(100%); }
+}
 @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 
 /* ── 全局 Toast ── */

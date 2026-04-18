@@ -47,6 +47,7 @@
                   type="text"
                   placeholder="请输入用户名"
                   autocomplete="username"
+                  :disabled="loading"
                   spellcheck="false"
                   @focus="f.username = true"
                   @blur="f.username = false"
@@ -65,26 +66,33 @@
                   :type="showPw ? 'text' : 'password'"
                   placeholder="请输入密码"
                   autocomplete="current-password"
+                  :disabled="loading"
                   @focus="f.password = true"
                   @blur="f.password = false"
                 />
-                <button type="button" class="eye" @click="showPw = !showPw" tabindex="-1">
+                <button
+                  type="button"
+                  class="eye"
+                  :disabled="loading"
+                  @click="showPw = !showPw"
+                  tabindex="-1"
+                >
                   <Icon :icon="showPw ? 'mdi:eye-off-outline' : 'mdi:eye-outline'" width="16" />
                 </button>
               </div>
               <span v-if="e.password" class="ferr">{{ e.password }}</span>
             </div>
 
-            <button type="submit" class="btn-primary" :disabled="loading">
+            <button type="submit" class="btn-primary" :disabled="loading" :aria-busy="loading">
               <Icon v-if="loading" icon="mdi:loading" width="16" class="spin" />
               <Icon v-else icon="mdi:login" width="16" />
-              {{ loading ? '登录中...' : '登录' }}
+              {{ loading ? '校验中...' : '登录' }}
             </button>
           </form>
 
           <p class="switch-hint">
             还没有账号？
-            <button class="link" @click="switchMode('register')">立即注册</button>
+            <button class="link" :disabled="loading" @click="switchMode('register')">立即注册</button>
           </p>
         </div>
       </div>
@@ -215,7 +223,7 @@
 
         <p class="switch-hint">
           已有账号？
-          <button class="link" @click="switchMode('login')">去登录</button>
+          <button class="link" :disabled="loading" @click="switchMode('login')">去登录</button>
         </p>
       </div>
     </div>
@@ -302,6 +310,8 @@ function validatePhone(): boolean {
 
 // ── 提交 ─────────────────────────────────────────────────
 async function handleSubmit() {
+  if (loading.value) return
+
   errorMsg.value = ''
   const ok =
     validateUsername() &&
@@ -609,6 +619,10 @@ async function handleSubmit() {
   transition: color 0.18s;
 }
 .eye:hover { color: #4a5568; }
+.eye:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
 .ferr {
   font-size: 11.5px;
   color: #e53e3e;
@@ -641,7 +655,11 @@ async function handleSubmit() {
   box-shadow: 0 6px 24px rgba(59,124,244,0.38);
 }
 .btn-primary:active:not(:disabled) { transform: translateY(0); }
-.btn-primary:disabled { opacity: 0.6; cursor: not-allowed; }
+.btn-primary:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  pointer-events: none;
+}
 
 /* 切换提示 */
 .switch-hint {
@@ -662,6 +680,11 @@ async function handleSubmit() {
   transition: opacity 0.18s;
 }
 .link:hover { opacity: 0.75; text-decoration: underline; }
+.link:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  text-decoration: none;
+}
 
 /* loading spin */
 @keyframes spin { to { transform: rotate(360deg); } }

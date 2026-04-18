@@ -4,6 +4,7 @@
  * 解析后端推送的 SSE 事件，按类型分发到对应处理器。
  * 事件类型：thinking | text | artifact | error | done
  */
+import { generateId } from '@/utils/id'
 
 export type SseEventType = 'thinking' | 'text' | 'artifact' | 'evidence' | 'error' | 'done'
 
@@ -127,7 +128,7 @@ export async function sendChatMessage(
     )
   }
 
-  const newSessionId = response.headers.get('x-session-id') ?? sessionId ?? crypto.randomUUID()
+  const newSessionId = response.headers.get('x-session-id') ?? sessionId ?? generateId()
   const reader = response.body!.getReader()
   const decoder = new TextDecoder()
   let buffer = ''

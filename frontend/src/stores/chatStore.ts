@@ -12,6 +12,7 @@ import { ref, computed, watch } from 'vue'
 import { sendChatMessage, approveWorkOrder } from '@/api/stream_client'
 import { apiFetch } from '@/api/http'
 import type { ArtifactEvent, EvidenceSource } from '@/api/stream_client'
+import { generateId } from '@/utils/id'
 
 export type MessageRole = 'user' | 'ai' | 'artifact' | 'error'
 
@@ -278,7 +279,7 @@ export const useChatStore = defineStore('chat', () => {
       }>(`/api/chat/sessions/${sessionId}/messages`)
 
       const parsed: ChatMessage[] = res.messages.map(m => ({
-        id: crypto.randomUUID(),
+        id: generateId(),
         role: (m.role === 'user' ? 'user' : 'ai') as MessageRole,
         content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
         timestamp: new Date(),
@@ -326,7 +327,7 @@ export const useChatStore = defineStore('chat', () => {
   // ── 新建会话（纯本地，直接用真实 UUID，无需预先写后端）────────────────────
   // 会话记录在首条消息发送时由后端懒加载创建，彻底消除新建会话时的 DB 等待。
   function newSession(title = '新对话') {
-    const sessionId = crypto.randomUUID()
+    const sessionId = generateId()
     const now = new Date().toISOString()
 
     const newSess: SessionInfo = {
@@ -421,7 +422,7 @@ export const useChatStore = defineStore('chat', () => {
   // ── 内部：追加消息（支持指定目标会话 ID，实现跨 Tab 写入隔离） ──────────────
   function _addMsg(role: MessageRole, content: string, extra?: Partial<ChatMessage>, targetSessionId?: string) {
     const msg: ChatMessage = {
-      id: crypto.randomUUID(), role, content, timestamp: new Date(), ...extra,
+      id: generateId(), role, content, timestamp: new Date(), ...extra,
     }
     if (role === 'artifact' && isHiddenChatArtifact(msg.artifact)) return
     const sid = targetSessionId ?? currentSessionId.value
@@ -470,7 +471,7 @@ export const useChatStore = defineStore('chat', () => {
     }
 
     // 立即创建 AI 占位消息（在任何异步操作之前，让 UI 立刻显示思考状态）
-    const aiMsgId = crypto.randomUUID()
+    const aiMsgId = generateId()
     const thinkingStart = performance.now()
     _addMsg('ai', '', {
       id: aiMsgId, thinkingSteps: [], thinkingFinished: false,
@@ -519,7 +520,7 @@ export const useChatStore = defineStore('chat', () => {
               _streamStepIdx = m.thinkingSteps.length
               _streamStepAgent = e.agent
               m.thinkingSteps.push({
-                id: crypto.randomUUID(),
+                id: generateId(),
                 agent: e.agent,
                 message: '正在推理...',
                 streamContent: e.content,
@@ -530,7 +531,7 @@ export const useChatStore = defineStore('chat', () => {
             _streamStepIdx = -1
             _streamStepAgent = ''
             _agentStatusBySession.value[originSessionId] = { name: e.agent, label, status: 'thinking', message: e.message }
-            m.thinkingSteps.push({ id: crypto.randomUUID(), agent: e.agent, message: e.message, displayLabel: stepLabel })
+            m.thinkingSteps.push({ id: generateId(), agent: e.agent, message: e.message, displayLabel: stepLabel })
           }
         },
         onText(e) {
@@ -646,7 +647,7 @@ export const useChatStore = defineStore('chat', () => {
     _msgCache.set(originSessionId, messages.value)
 
     // 创建新的 AI 占位消息
-    const aiMsgId = crypto.randomUUID()
+    const aiMsgId = generateId()
     const regenThinkingStart = performance.now()
     _addMsg('ai', '', {
       id: aiMsgId, thinkingSteps: [], thinkingFinished: false,
@@ -686,7 +687,7 @@ export const useChatStore = defineStore('chat', () => {
               _regenStreamIdx = m.thinkingSteps.length
               _regenStreamAgent = e.agent
               m.thinkingSteps.push({
-                id: crypto.randomUUID(),
+                id: generateId(),
                 agent: e.agent,
                 message: '正在推理...',
                 streamContent: e.content,
@@ -697,7 +698,7 @@ export const useChatStore = defineStore('chat', () => {
             _regenStreamIdx = -1
             _regenStreamAgent = ''
             _agentStatusBySession.value[originSessionId] = { name: e.agent, label, status: 'thinking', message: e.message }
-            m.thinkingSteps.push({ id: crypto.randomUUID(), agent: e.agent, message: e.message, displayLabel: stepLabel })
+            m.thinkingSteps.push({ id: generateId(), agent: e.agent, message: e.message, displayLabel: stepLabel })
           }
         },
         onText(e) {

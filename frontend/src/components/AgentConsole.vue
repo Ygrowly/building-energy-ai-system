@@ -329,6 +329,7 @@
                   >
                     <Icon icon="mdi:file-document-outline" width="13" class="evidence-file-icon" />
                     <span class="evidence-doc">{{ src.source_doc }}</span>
+                    <span v-if="src.backend === 'local_kb'" class="evidence-badge">本地降级</span>
                     <span v-if="src.page" class="evidence-page">P.{{ src.page }}</span>
                     <span v-if="src.similarity" class="evidence-score">{{ (src.similarity * 100).toFixed(0) }}%</span>
                   </div>
@@ -623,6 +624,7 @@ import ChartSkeleton from '@/generative-ui/ChartSkeleton.vue'
 import type { ArtifactEvent } from '@/api/stream_client'
 import { apiFetch } from '@/api/http'
 import { renderMarkdown as sharedRenderMarkdown } from '@/utils/markdown'
+import { buildElementAnalysisPrompt } from '@/utils/elementPickerContext'
 
 import { useDataRangeStore } from '@/stores/dataRangeStore'
 import { useReportStore } from '@/stores/reportStore'
@@ -1153,17 +1155,16 @@ function regenerate(msg: ChatMessage) {
 // ── 发送消息 ────────────────────────────────────────────────────────────────
 function handleSend() {
   if (!inputText.value.trim() || store.isLoading) return
-  let text = inputText.value.trim()
+  const text = inputText.value.trim()
+  let requestText = text
 
   // 附带选中元素的上下文信息
   if (pickerStore.selectedElement) {
-    const el = pickerStore.selectedElement
-    const ctx = `[关于页面元素「${el.title}」${el.subtitle ? '（' + el.subtitle + '）' : ''}，类型：${el.type}]\n`
-    text = ctx + text
+    requestText = buildElementAnalysisPrompt(pickerStore.selectedElement, text)
     pickerStore.clearSelection()
   }
 
-  store.sendMessage(text)
+  store.sendMessage(text, requestText)
   inputText.value = ''
 }
 
@@ -2243,50 +2244,47 @@ html[data-theme="light"] .tab.active .tab-close {
 /* 无序列表 */
 .ai-bubble :deep(ul) {
   margin: 4px 0;
-  padding-left: 0;
-  list-style: none;
+  padding-left: 20px;
+  list-style: disc;
 }
 .ai-bubble :deep(ul li) {
-  padding: 1px 0 1px 16px;
+  padding: 0;
   line-height: 1.7;
-  position: relative;
+  margin: 4px 0;
 }
-.ai-bubble :deep(ul li::before) {
-  content: '•';
-  position: absolute;
-  left: 4px;
+.ai-bubble :deep(ul li::marker) {
   color: var(--accent);
 }
 .ai-bubble :deep(ul ul) {
-  margin: 0;
-  padding-left: 14px;
+  margin: 4px 0;
+  padding-left: 18px;
+  list-style: circle;
 }
-.ai-bubble :deep(ul ul li::before) {
-  content: '–';
+.ai-bubble :deep(ul ul li::marker) {
   color: var(--text-muted);
 }
 
 /* 有序列表 */
 .ai-bubble :deep(ol) {
   margin: 4px 0;
-  padding-left: 0;
-  list-style: none;
-  counter-reset: md-ol;
+  padding-left: 22px;
+  list-style: decimal;
 }
 .ai-bubble :deep(ol li) {
-  padding: 1px 0 1px 24px;
+  padding: 0;
   line-height: 1.7;
-  position: relative;
-  counter-increment: md-ol;
+  margin: 4px 0;
 }
-.ai-bubble :deep(ol li::before) {
-  content: counter(md-ol) ".";
-  position: absolute;
-  left: 2px;
+.ai-bubble :deep(ol li::marker) {
   color: var(--text-secondary);
   font-size: 0.9em;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
+}
+.ai-bubble :deep(ol ol) {
+  margin: 4px 0;
+  padding-left: 20px;
+  list-style: lower-alpha;
 }
 
 /* 引用块 */
@@ -2510,6 +2508,16 @@ html[data-theme="light"] .tab.active .tab-close {
   white-space: nowrap;
   color: var(--text-primary);
   font-weight: 500;
+}
+
+.evidence-badge {
+  flex-shrink: 0;
+  font-size: 10px;
+  color: #b45309;
+  background: rgba(245, 158, 11, 0.16);
+  border: 1px solid rgba(245, 158, 11, 0.28);
+  padding: 1px 5px;
+  border-radius: 999px;
 }
 
 .evidence-page {

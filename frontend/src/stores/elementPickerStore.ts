@@ -6,13 +6,9 @@
  */
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
+import type { PickedElementContext } from '@/utils/elementPickerContext'
 
-export interface PickedElement {
-  id: string
-  type: string        // 'kpi' | 'chart' | 'heatmap' | 'weather'
-  title: string
-  subtitle?: string
-}
+export interface PickedElement extends PickedElementContext {}
 
 export const useElementPickerStore = defineStore('elementPicker', () => {
   const isPickerActive = ref(false)

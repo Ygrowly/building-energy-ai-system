@@ -10,10 +10,15 @@ interface RenderMarkdownOptions {
   preservePlaceholders?: boolean
 }
 
+const RAW_HTML_TAG_RE = /<\/?[A-Za-z][^>]*>/g
+
 function escapeRawHtml(text: string): string {
-  // `marked` keeps raw HTML by default. Escaping angle brackets prevents
-  // model/user-provided HTML from breaking out of chat bubbles or reports.
-  return text.replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  // `marked` keeps raw HTML by default. Escape actual HTML tags, but keep
+  // markdown blockquote markers (`>`) intact so quoted sections render correctly.
+  return text.replace(
+    RAW_HTML_TAG_RE,
+    (tag) => tag.replace(/</g, '&lt;').replace(/>/g, '&gt;'),
+  )
 }
 
 function injectChartSlots(text: string, preservePlaceholders: boolean): string {

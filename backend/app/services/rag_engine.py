@@ -7,6 +7,7 @@ RAG 检索引擎服务层。
 from __future__ import annotations
 
 import httpx
+from typing import Any
 
 from app.core.config import get_settings
 from app.schemas.mcp_schemas import (
@@ -18,12 +19,13 @@ from app.schemas.mcp_schemas import (
 # ---------------------------------------------------------------------------
 # 内嵌本地知识库（RAGFlow 不可用时的演示降级内容）
 # ---------------------------------------------------------------------------
-_LOCAL_KB: list[tuple[list[str], str, str, str]] = [
-    (
-        ["能耗异常", "能耗高", "用电异常", "异常原因", "凌晨", "夜间"],
-        "第3章 能耗异常诊断",
-        "楼宇能耗运维手册.pdf",
-        """能耗异常常见原因与排查步骤（基于 energy_data 表与 anomaly_events 表）：
+_LOCAL_KB: list[dict[str, Any]] = [
+    {
+        "keywords": ["能耗异常", "能耗高", "用电异常", "异常原因", "凌晨", "夜间"],
+        "section": "第3章 能耗异常诊断",
+        "doc": "楼宇能耗运维手册.pdf",
+        "doc_category": "maintenance_manual",
+        "content": """能耗异常常见原因与排查步骤（基于 energy_data 表与 anomaly_events 表）：
 
 1. 夜间/无人高能耗（本地时间 00:00-06:00，electricity_kwh > 50 kWh）
    - 告警规则：night_high_power（来自 anomaly_events.rule_triggered）
@@ -46,12 +48,13 @@ _LOCAL_KB: list[tuple[list[str], str, str, str]] = [
    - 处理：通过 devices.device_id 定位具体设备，申请传感器校准工单
 
 所有异常事件统一存储在 anomaly_events 表，由 GB 物理双阈值规则检测生成。""",
-    ),
-    (
-        ["COP", "能效比", "制冷效率", "空调", "HVAC", "制冷"],
-        "第5章 空调能效管理",
-        "楼宇能耗运维手册.pdf",
-        """空调系统 COP（能效比）说明与基准：
+    },
+    {
+        "keywords": ["COP", "能效比", "制冷效率", "空调", "HVAC", "制冷", "国标", "标准"],
+        "section": "第5章 空调能效管理",
+        "doc": "楼宇能耗运维手册.pdf",
+        "doc_category": "energy_standard",
+        "content": """空调系统 COP（能效比）说明与基准：
 
 定义：COP = 制冷量 / 空调系统耗电量
   本系统计算公式：COP_proxy = (供回水温差 × 流量系数) / chilledwater_kwh
@@ -74,12 +77,13 @@ _LOCAL_KB: list[tuple[list[str], str, str, str]] = [
   - 冷却塔清洗：每半年一次 → device_type='HVAC' 的相关设备
   - 冷凝器管道除垢：每年一次
   - 制冷剂检漏：每季度一次""",
-    ),
-    (
-        ["用电趋势", "能耗趋势", "月度", "周度", "季节", "节能", "强度", "面积"],
-        "第2章 能耗趋势分析",
-        "能耗数据字典与分析指南.pdf",
-        """楼宇能耗趋势分析方法：
+    },
+    {
+        "keywords": ["用电趋势", "能耗趋势", "月度", "周度", "季节", "节能", "强度", "面积"],
+        "section": "第2章 能耗趋势分析",
+        "doc": "能耗数据字典与分析指南.pdf",
+        "doc_category": "analysis_guide",
+        "content": """楼宇能耗趋势分析方法：
 
 1. 日趋势：查询 daily_energy_summary 物化视图（字段：day, building_id, total_electricity_kwh）
    - 工作日 vs 节假日的基准差（教育建筑差异最大，通常节假日低 60-70%）
@@ -98,12 +102,13 @@ _LOCAL_KB: list[tuple[list[str], str, str, str]] = [
    1st: HVAC 时间表优化（节省 10-20%）— devices.device_type='HVAC'
    2nd: 照明 LED 替换 + 人感控制（节省 8-15%）
    3rd: 水泵变频改造（节省 15-25%）— devices.device_type='WaterMeter' 监控用水""",
-    ),
-    (
-        ["设备", "维护", "维修", "工单", "巡检", "故障", "device", "meter"],
-        "第4章 设备运维规范",
-        "楼宇能耗运维手册.pdf",
-        """设备运维标准操作规程（SOP）：
+    },
+    {
+        "keywords": ["设备", "维护", "维修", "工单", "巡检", "故障", "device", "meter"],
+        "section": "第4章 设备运维规范",
+        "doc": "楼宇能耗运维手册.pdf",
+        "doc_category": "maintenance_manual",
+        "content": """设备运维标准操作规程（SOP）：
 
 【设备注册体系】
   数据库 devices 表记录所有计量设备：
@@ -130,12 +135,13 @@ _LOCAL_KB: list[tuple[list[str], str, str, str]] = [
   - 设备跳停：立即用 create_work_order_draft 创建 P1 级工单（30分钟内响应）
   - 电力超限（electricity_kwh > 额定功率 110%）：联系电力公司，检查负载分配
   - anomaly_events 异常告警后 2 小时内现场确认，完成后更新 is_resolved=TRUE""",
-    ),
-    (
-        ["水耗", "水量", "用水", "water", "供水", "耗水", "water_m3"],
-        "第6章 水耗管理",
-        "能耗数据字典与分析指南.pdf",
-        """楼宇水耗管理指南：
+    },
+    {
+        "keywords": ["水耗", "水量", "用水", "water", "供水", "耗水", "water_m3"],
+        "section": "第6章 水耗管理",
+        "doc": "能耗数据字典与分析指南.pdf",
+        "doc_category": "analysis_guide",
+        "content": """楼宇水耗管理指南：
 
 数据字段：energy_data.water_m3（单位：立方米/小时）
 相关设备：devices 表中 device_type='WaterMeter' 的设备
@@ -160,41 +166,111 @@ _LOCAL_KB: list[tuple[list[str], str, str, str]] = [
   - 冷却塔安装变频风机（节水 15-20%）
   - 中水回用系统（降低自来水消耗 20-30%）
   - 漏水检测仪安装在主给水管前段""",
-    ),
+    },
 ]
 
 
-def local_search(query: str, top_k: int = 3) -> list[RAGSearchResult]:
+def _normalize_filter_dict(metadata_filter: dict[str, Any] | None) -> dict[str, str]:
+    if not metadata_filter:
+        return {}
+    normalized: dict[str, str] = {}
+    for key, value in metadata_filter.items():
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            normalized[key] = text
+    return normalized
+
+
+def _infer_doc_category(doc_name: str, content: str = "") -> str | None:
+    merged = f"{doc_name} {content}".lower()
+    if any(token in merged for token in ("标准", "规范", "gb ", "gb-", "gb/", "jgj", "设计标准")):
+        return "energy_standard"
+    if any(token in merged for token in ("运维", "维护", "维修", "巡检", "sop", "工单")):
+        return "maintenance_manual"
+    if any(token in merged for token in ("指南", "分析", "趋势", "水耗", "能耗")):
+        return "analysis_guide"
+    return None
+
+
+def _matches_metadata(
+    doc_name: str,
+    content: str,
+    item_metadata: dict[str, Any] | None,
+    metadata_filter: dict[str, str],
+) -> bool:
+    if not metadata_filter:
+        return True
+
+    metadata = {k: str(v).strip() for k, v in (item_metadata or {}).items() if v is not None}
+    inferred_doc_category = metadata.get("doc_category") or _infer_doc_category(doc_name, content)
+
+    requested_doc_category = metadata_filter.get("doc_category")
+    if requested_doc_category:
+        if not inferred_doc_category or inferred_doc_category != requested_doc_category:
+            return False
+
+    # 本地降级知识库是通用资料，device/building 维度缺少细粒度元数据时不强行过滤为空结果。
+    for key in ("device_id", "building_type"):
+        requested = metadata_filter.get(key)
+        actual = metadata.get(key)
+        if requested and actual and requested != actual:
+            return False
+
+    return True
+
+
+def local_search(
+    query: str,
+    top_k: int = 3,
+    metadata_filter: dict[str, Any] | None = None,
+) -> list[RAGSearchResult]:
     """基于关键词匹配的本地知识库检索（RAGFlow 不可用时的 fallback）。"""
     query_lower = query.lower()
-    scored: list[tuple[float, tuple]] = []
+    normalized_filter = _normalize_filter_dict(metadata_filter)
+    scored: list[tuple[float, dict[str, Any]]] = []
     for entry in _LOCAL_KB:
-        keywords, section, doc, content = entry
+        keywords = entry["keywords"]
+        section = entry["section"]
+        doc = entry["doc"]
+        content = entry["content"]
+        entry_metadata = {"doc_category": entry.get("doc_category")}
+
+        if not _matches_metadata(doc, content, entry_metadata, normalized_filter):
+            continue
+
         hits = sum(1 for kw in keywords if kw.lower() in query_lower)
         if hits > 0:
             scored.append((hits / len(keywords), entry))
 
     scored.sort(key=lambda x: x[0], reverse=True)
     results = []
-    for score, (keywords, section, doc, content) in scored[:top_k]:
+    for score, entry in scored[:top_k]:
         results.append(RAGSearchResult(
-            content=content,
-            parent_section=section,
-            source_doc=doc,
+            content=entry["content"],
+            parent_section=entry["section"],
+            source_doc=entry["doc"],
+            doc_category=entry.get("doc_category"),
             page=1,
             similarity=round(score, 3),
             rerank_score=None,
         ))
 
     if not results:
+        filter_desc = (
+            f"（过滤条件：{', '.join(f'{k}={v}' for k, v in normalized_filter.items())}）"
+            if normalized_filter else ""
+        )
         results.append(RAGSearchResult(
             content=(
-                "未在本地知识库中找到直接相关内容。\n"
+                f"未在本地知识库中找到直接相关内容{filter_desc}。\n"
                 "可查询方向：能耗异常、COP能效比、设备维护规程、用电/用水趋势分析。\n"
                 "如需更详细的技术支持，请联系楼宇能源管理专家。"
             ),
             parent_section="通用提示",
             source_doc="本地知识库",
+            doc_category=normalized_filter.get("doc_category"),
             page=1,
             similarity=0.0,
             rerank_score=None,
@@ -224,14 +300,17 @@ async def search_ragflow(
     若 RAGFlow 未配置（API_KEY 为空），自动降级到本地关键词知识库。
     """
     settings = get_settings()
+    normalized_filter = _normalize_filter_dict(metadata_filter)
 
     if not settings.RAGFLOW_API_KEY or not settings.RAGFLOW_DATASET_ID:
-        results = local_search(query, top_k=top_k)
+        results = local_search(query, top_k=top_k, metadata_filter=normalized_filter)
         return RAGHybridSearchOutput(
             results=results,
             query=query,
             total_retrieved=len(results),
             reranked=False,
+            search_backend="local_kb",
+            metadata_filter_applied=normalized_filter or None,
         )
 
     # 构造请求体，严格对照 /api/v1/retrieval 文档
@@ -280,11 +359,33 @@ async def search_ragflow(
         if "doc_id" in agg and "doc_name" in agg
     }
 
+    if normalized_filter:
+        filtered_chunks: list[dict[str, Any]] = []
+        for chunk in raw_chunks:
+            doc_id = chunk.get("document_id", "")
+            doc_name = (
+                doc_id_to_name.get(doc_id)
+                or chunk.get("document_keyword")
+                or chunk.get("document_name", "unknown.pdf")
+            )
+            chunk_metadata = chunk.get("metadata") if isinstance(chunk.get("metadata"), dict) else {}
+            if _matches_metadata(
+                doc_name,
+                str(chunk.get("content") or ""),
+                chunk_metadata,
+                normalized_filter,
+            ):
+                filtered_chunks.append(chunk)
+        raw_chunks = filtered_chunks
+        total_retrieved = len(filtered_chunks)
+
     results = []
     for c in raw_chunks:
         doc_id = c.get("document_id", "")
         # document_keyword 和 doc_aggs.doc_name 实际上是同一个文件名
         doc_name = doc_id_to_name.get(doc_id) or c.get("document_keyword") or c.get("document_name", "unknown.pdf")
+        chunk_metadata = c.get("metadata") if isinstance(c.get("metadata"), dict) else {}
+        doc_category = chunk_metadata.get("doc_category") or _infer_doc_category(doc_name, str(c.get("content") or ""))
 
         # similarity：RAGFlow 返回的综合相似度（向量 + 关键词加权，或已经过重排）
         similarity_val = min(float(c.get("similarity", 0.0)), 1.0)
@@ -300,6 +401,7 @@ async def search_ragflow(
             content=c.get("content") or "",
             parent_section=doc_name,   # RAGFlow 不返回章节信息，以文档名代替
             source_doc=doc_name,
+            doc_category=doc_category,
             page=1,                    # positions 字段为字符偏移量，非页码，统一置 1
             similarity=similarity_val,
             rerank_score=rerank_score_val,
@@ -310,4 +412,6 @@ async def search_ragflow(
         query=query,
         total_retrieved=total_retrieved,
         reranked=actually_reranked,
+        search_backend="ragflow",
+        metadata_filter_applied=normalized_filter or None,
     )

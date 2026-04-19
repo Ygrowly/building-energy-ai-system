@@ -30,6 +30,8 @@ export interface ChatMessage {
   id: string
   role: MessageRole
   content: string
+  /** 实际发给后端的文本；支持附加上下文而不污染用户气泡。 */
+  requestContent?: string
   artifact?: ArtifactEvent
   /** 内嵌在该 AI 消息气泡中的 artifacts（图表/卡片），按到达顺序排列 */
   attachedArtifacts?: ArtifactEvent[]
@@ -445,7 +447,7 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   // ── 发送消息 ───────────────────────────────────────────────────────────────
-  async function sendMessage(userText: string) {
+  async function sendMessage(userText: string, requestText = userText) {
     if (!userText.trim()) return
     if (!currentSessionId.value) newSession()
 
@@ -457,7 +459,7 @@ export const useChatStore = defineStore('chat', () => {
     _loadingBySession.value[originSessionId] = true
 
     // 先添加用户消息，让 UI 立即显示发送内容
-    _addMsg('user', userText, undefined, originSessionId)
+    _addMsg('user', userText, { requestContent: requestText }, originSessionId)
 
     // 首条消息时用用户输入作为临时标题
     {
@@ -502,7 +504,7 @@ export const useChatStore = defineStore('chat', () => {
     _abortControllers.set(originSessionId, abortCtrl)
 
     try {
-      await sendChatMessage(userText, originSessionId, {
+      await sendChatMessage(requestText, originSessionId, {
         onThinking(e) {
           // 如果后端传来了动态标签，缓存起来供后续步骤使用
           const label = resolveThinkingLabel(e.agent, e.display_label)
@@ -623,9 +625,11 @@ export const useChatStore = defineStore('chat', () => {
 
     // 找到 AI 消息前面最近的用户消息
     let userText = ''
+    let requestText = ''
     for (let i = aiMsgIndex - 1; i >= 0; i--) {
       if (messages.value[i].role === 'user') {
         userText = messages.value[i].content
+        requestText = messages.value[i].requestContent ?? messages.value[i].content
         break
       }
     }
@@ -670,7 +674,7 @@ export const useChatStore = defineStore('chat', () => {
     _abortControllers.set(originSessionId, abortCtrl)
 
     try {
-      await sendChatMessage(userText, originSessionId, {
+      await sendChatMessage(requestText || userText, originSessionId, {
         onThinking(e) {
           const label = resolveThinkingLabel(e.agent, e.display_label)
           const m = findAiMsg()

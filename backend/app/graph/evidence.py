@@ -14,6 +14,7 @@ def extract_evidence(payload: dict[str, Any]) -> list[dict[str, Any]]:
     # RAG: payload like {"results":[{"source_doc":..., "page":..., "similarity":...}, ...], ...}
     results = payload.get("results")
     if isinstance(results, list):
+        search_backend = payload.get("search_backend")
         for r in results:
             if not isinstance(r, dict):
                 continue
@@ -26,6 +27,8 @@ def extract_evidence(payload: dict[str, Any]) -> list[dict[str, Any]]:
                     "source_doc": source_doc,
                     "page": page,
                     "similarity": similarity,
+                    "doc_category": r.get("doc_category"),
+                    "backend": search_backend,
                 })
 
     # DB query/view: most MCP tools include source_table/source_view.
@@ -55,4 +58,3 @@ def extract_evidence(payload: dict[str, Any]) -> list[dict[str, Any]]:
         })
 
     return evidence
-

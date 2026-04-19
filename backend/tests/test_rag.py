@@ -135,6 +135,15 @@ class TestLocalSearch:
         results = local_search("月度用电趋势节能分析")
         assert len(results) >= 1
 
+    def test_doc_category_filter_limits_local_results(self):
+        """doc_category 过滤应在本地降级知识库中生效。"""
+        results = local_search(
+            "空调COP能效比下降是什么原因",
+            metadata_filter={"doc_category": "energy_standard"},
+        )
+        assert len(results) >= 1
+        assert all(r.doc_category == "energy_standard" for r in results if r.similarity > 0)
+
     def test_unrelated_query_returns_fallback(self):
         """完全无关的查询返回通用提示，similarity=0。"""
         # 使用不含任何领域关键词的查询
@@ -179,6 +188,7 @@ class TestSearchRagflow:
         assert isinstance(result, RAGHybridSearchOutput)
         assert result.reranked is False
         assert len(result.results) <= 2
+        assert result.search_backend == "local_kb"
 
     @pytest.mark.asyncio
     async def test_fallback_when_no_dataset_id(self):
@@ -442,6 +452,46 @@ class TestSearchRagflow:
         payload = call_kwargs.kwargs.get("json", {})
         assert "rerank_id" not in payload
 
+    @pytest.mark.asyncio
+    async def test_doc_category_filter_applied_to_ragflow_results(self):
+        """doc_category 过滤应在 RAGFlow 结果映射阶段生效。"""
+        mock_settings = _make_settings()
+        chunks = [
+            {
+                "document_id": "doc-001",
+                "content": "《公共建筑节能设计标准》相关条文。",
+                "similarity": 0.88,
+                "document_keyword": "公共建筑节能设计标准.pdf",
+            },
+            {
+                "document_id": "doc-002",
+                "content": "设备运维检查单。",
+                "similarity": 0.82,
+                "document_keyword": "楼宇运维手册.pdf",
+            },
+        ]
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = _make_ragflow_response(chunks)
+        mock_resp.raise_for_status = MagicMock()
+
+        mock_client = AsyncMock()
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=None)
+        mock_client.post = AsyncMock(return_value=mock_resp)
+
+        with (
+            patch("app.services.rag_engine.get_settings", return_value=mock_settings),
+            patch("app.services.rag_engine.httpx.AsyncClient", return_value=mock_client),
+        ):
+            result = await search_ragflow(
+                "标准条文",
+                metadata_filter={"doc_category": "energy_standard"},
+            )
+
+        assert len(result.results) == 1
+        assert result.results[0].doc_category == "energy_standard"
+        assert result.metadata_filter_applied == {"doc_category": "energy_standard"}
+
 
 # ===========================================================================
 # Part 2：RAG MCP 工具层
@@ -456,6 +506,7 @@ class TestRAGHybridSearchTool:
         top_k: int = 3,
         device_id: str = "",
         building_type: str = "",
+        doc_category: str = "",
         enable_rerank: bool = True,
     ) -> RAGHybridSearchInput:
         return RAGHybridSearchInput(
@@ -464,6 +515,7 @@ class TestRAGHybridSearchTool:
             metadata_filter=MetadataFilter(
                 device_id=device_id,
                 building_type=building_type,
+                doc_category=doc_category,
             ),
             enable_rerank=enable_rerank,
         )
@@ -540,6 +592,19 @@ class TestRAGHybridSearchTool:
         _, call_kwargs = mock_search.call_args
         mf = call_kwargs.get("metadata_filter")
         assert mf == {"device_id": "M-OFF-001", "building_type": "Office"}
+
+    @pytest.mark.asyncio
+    async def test_doc_category_filter_passed(self):
+        """有 doc_category 时应透传到 metadata_filter。"""
+        expected = RAGHybridSearchOutput(results=[], query="查询", total_retrieved=0, reranked=False)
+        with patch(
+            "app.mcp.tools.rag_search.search_ragflow",
+            AsyncMock(return_value=expected),
+        ) as mock_search:
+            await rag_hybrid_search(self._make_inp(doc_category="energy_standard"))
+
+        _, call_kwargs = mock_search.call_args
+        assert call_kwargs.get("metadata_filter") == {"doc_category": "energy_standard"}
 
     @pytest.mark.asyncio
     async def test_enable_rerank_passed_through(self):

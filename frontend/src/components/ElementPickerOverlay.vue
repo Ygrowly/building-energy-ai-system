@@ -29,6 +29,7 @@
 <script setup lang="ts">
 import { ref, watch, nextTick } from 'vue'
 import { useElementPickerStore } from '@/stores/elementPickerStore'
+import { buildPickedElementContext } from '@/utils/elementPickerContext'
 
 const pickerStore = useElementPickerStore()
 const overlayEl = ref<HTMLElement>()
@@ -89,12 +90,7 @@ function onClickSelect(e: MouseEvent) {
   }
 
   const el = hoveredDom.value
-  pickerStore.selectElement({
-    id: el.dataset.pickId ?? '',
-    type: el.dataset.pickType ?? '',
-    title: el.dataset.pickTitle ?? '',
-    subtitle: el.dataset.pickSubtitle,
-  })
+  pickerStore.selectElement(buildPickedElementContext(el))
 }
 
 const highlightStyle = ref<Record<string, string>>({})

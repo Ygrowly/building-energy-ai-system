@@ -32,6 +32,8 @@ async def rag_hybrid_search(
         metadata_filter["device_id"] = inp.metadata_filter.device_id
     if inp.metadata_filter.building_type:
         metadata_filter["building_type"] = inp.metadata_filter.building_type
+    if inp.metadata_filter.doc_category:
+        metadata_filter["doc_category"] = inp.metadata_filter.doc_category
 
     return await search_ragflow(
         query=inp.query,

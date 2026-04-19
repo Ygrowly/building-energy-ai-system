@@ -258,6 +258,8 @@ function rgbToHex(
     data-pick-type="chart"
     data-pick-title="首页各项能耗楼宇占比"
     data-pick-subtitle="按用电、用水、暖通查看教学楼、办公楼、公共楼的当日分配结构"
+    data-pick-purpose="用于查看不同楼宇在电、水、暖通三个维度上的当日占比结构，判断负荷是否集中在某一楼宇。"
+    data-pick-business-meaning="单个楼宇占比持续偏高，通常意味着该楼宇在当前时段对总能耗贡献更大，需要结合业务场景判断是否合理。"
   >
     <div class="cpanel-hd share-card-head">
       <div class="share-card-copy">

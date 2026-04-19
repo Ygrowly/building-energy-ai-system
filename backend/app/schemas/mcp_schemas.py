@@ -440,6 +440,7 @@ class RAGSearchResult(BaseModel):
     content: str = Field(description="匹配的段落原文")
     parent_section: str = Field(description="父章节标题，如 '4.2 常见故障排除'")
     source_doc: str = Field(description="如 'Chiller_Maintenance_Manual_V2.pdf'")
+    doc_category: Optional[str] = Field(default=None, description="文档分类标签")
     page: int = Field(ge=1)
     similarity: float = Field(ge=0.0, le=1.0, description="向量相似度")
     rerank_score: Optional[float] = Field(default=None, ge=0.0, le=1.0, description="重排序分数")
@@ -450,6 +451,14 @@ class RAGHybridSearchOutput(BaseModel):
     query: str
     total_retrieved: int = Field(description="向量召回的总数量（精排前）")
     reranked: bool
+    search_backend: Literal["ragflow", "local_kb"] = Field(
+        default="ragflow",
+        description="检索结果来源：RAGFlow 或本地降级知识库",
+    )
+    metadata_filter_applied: Optional[dict[str, str]] = Field(
+        default=None,
+        description="实际应用到本次检索的元数据过滤条件",
+    )
 
 
 # ===========================================================================

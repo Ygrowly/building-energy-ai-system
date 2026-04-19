@@ -494,6 +494,8 @@ onUnmounted(() => {
     data-pick-type="chart"
     :data-pick-title="`首页${chartMeta.title}`"
     :data-pick-subtitle="`首页总览：${chartMeta.subtitle}`"
+    data-pick-purpose="用于对比首页近 7 天综合能耗的实际值与额定期望值，帮助识别运行偏差是否持续扩大。"
+    data-pick-business-meaning="实际值反映真实运行负荷，额定期望值反映基线/期望水平；两者差值越大，越说明当前运行状态偏离基线。"
   >
     <div class="cpanel-hd overview-energy-panel-head">
       <div class="overview-chart-copy">

@@ -57,6 +57,8 @@ export interface EvidenceSource {
   page?: number | null
   similarity?: number | null
   parent_section?: string | null
+  doc_category?: string | null
+  backend?: string | null
 }
 
 export interface DoneEvent {

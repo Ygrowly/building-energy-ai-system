@@ -276,7 +276,7 @@ export const useChatStore = defineStore('chat', () => {
   async function _loadMessages(sessionId: string) {
     try {
       const res = await apiFetch<{
-        messages: { role: string; content: string }[]
+        messages: { role: string; content: string; request_content?: string | null }[]
         total: number
       }>(`/api/chat/sessions/${sessionId}/messages`)
 
@@ -284,6 +284,9 @@ export const useChatStore = defineStore('chat', () => {
         id: generateId(),
         role: (m.role === 'user' ? 'user' : 'ai') as MessageRole,
         content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
+        requestContent: m.role === 'user' && typeof m.request_content === 'string'
+          ? m.request_content
+          : undefined,
         timestamp: new Date(),
         thinkingSteps: [],
         thinkingFinished: true,
@@ -607,7 +610,7 @@ export const useChatStore = defineStore('chat', () => {
           _addMsg('error', `网络错误：${err.message}`, undefined, originSessionId)
           _loadingBySession.value[originSessionId] = false
         },
-      }, webSearchEnabled.value, thinkingMode.value, abortCtrl.signal)
+      }, webSearchEnabled.value, thinkingMode.value, abortCtrl.signal, userText)
     } catch (err) {
       if (!abortCtrl.signal.aborted) {
         _addMsg('error', `请求失败：${(err as Error).message}`, undefined, originSessionId)
@@ -751,7 +754,7 @@ export const useChatStore = defineStore('chat', () => {
           _addMsg('error', `网络错误：${err.message}`, undefined, originSessionId)
           _loadingBySession.value[originSessionId] = false
         },
-      }, webSearchEnabled.value, thinkingMode.value, abortCtrl.signal)
+      }, webSearchEnabled.value, thinkingMode.value, abortCtrl.signal, userText)
     } catch (err) {
       if (!abortCtrl.signal.aborted) {
         _addMsg('error', `请求失败：${(err as Error).message}`, undefined, originSessionId)

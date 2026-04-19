@@ -8,6 +8,7 @@ API 接口单元测试 — Phase 4。
 """
 from __future__ import annotations
 
+import asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -315,6 +316,60 @@ class TestChatEndpoint:
         assert resp.status_code == 200
         # 响应头中包含 session id
         assert "x-session-id" in resp.headers
+
+    @pytest.mark.asyncio
+    async def test_chat_history_uses_display_message_for_hidden_element_context(self, client):
+        """页面元素隐藏提示词应仅用于请求，历史记录只展示可见文案。"""
+        from langchain_core.messages import AIMessage
+
+        raw_message = (
+            "[页面元素分析上下文]\n"
+            "元素标题：首页各项能耗楼宇占比\n"
+            "元素详细数据：\n"
+            "- 办公楼 369.4 m³，占比 35.1%\n"
+            "[用户问题]\n"
+            "分析这个页面元素"
+        )
+        display_message = "【首页各项能耗楼宇占比页面元素】分析这个页面元素"
+        mock_graph = AsyncMock()
+
+        async def _mock_events(state, version):
+            msgs = list(state.get("messages", []))
+            ai_reply = AIMessage(content="当前页面主要展示三类楼宇在电、水、暖通三个维度上的当日分配结构。")
+            yield {
+                "event": "on_chain_end",
+                "name": "LangGraph",
+                "data": {"output": {
+                    "messages": msgs + [ai_reply],
+                    "hop_count": 1,
+                    "artifacts": [],
+                    "pending_action": None,
+                }},
+            }
+
+        mock_graph.astream_events = _mock_events
+        mock_graph.ainvoke = AsyncMock(return_value={
+            "messages": [], "hop_count": 1, "artifacts": [], "pending_action": None,
+        })
+
+        with patch("app.api.routes_chat.get_graph", return_value=mock_graph):
+            resp = await client.post(
+                "/api/chat",
+                json={"message": raw_message, "display_message": display_message},
+            )
+
+        assert resp.status_code == 200
+        session_id = resp.headers.get("x-session-id")
+        assert session_id is not None
+
+        await asyncio.sleep(0.1)
+
+        history_resp = await client.get(f"/api/chat/sessions/{session_id}/messages")
+        assert history_resp.status_code == 200
+        payload = history_resp.json()
+        assert payload["messages"][0]["role"] == "user"
+        assert payload["messages"][0]["content"] == display_message
+        assert payload["messages"][0]["request_content"] == raw_message
 
     @pytest.mark.asyncio
     async def test_session_not_found_returns_404(self, client):

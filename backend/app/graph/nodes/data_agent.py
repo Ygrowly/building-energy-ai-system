@@ -24,6 +24,7 @@ from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
 from pydantic import BaseModel
 
+from app.core.chat_message_utils import get_human_display_content
 from app.core.config import get_settings
 from app.core.data_range import get_data_range
 from app.db.session import AsyncSessionLocal
@@ -338,7 +339,6 @@ async def data_react_node(state: AgentState) -> dict[str, Any]:
         (str(m.content) for m in reversed(list(history)) if isinstance(m, HumanMessage)),
         "",
     )
-
     include_list = not bool(state.get("available_buildings"))
     agent = _get_react_agent(include_list_available_buildings=include_list)
 
@@ -551,6 +551,10 @@ async def data_synthesis_node(state: AgentState) -> dict[str, Any]:
         (str(m.content) for m in reversed(list(history)) if isinstance(m, HumanMessage)),
         "",
     )
+    summary_user_q = next(
+        (get_human_display_content(m) for m in reversed(list(history)) if isinstance(m, HumanMessage)),
+        user_q,
+    )
 
     from app.core.time_context import get_today
     system_content = SYNTHESIS_PROMPT.format(
@@ -576,7 +580,7 @@ async def data_synthesis_node(state: AgentState) -> dict[str, Any]:
 
     existing_summary = state.get("context_summary", "")
     new_summary = update_context_summary(
-        existing_summary, state.get("intent"), user_q, answer_text,
+        existing_summary, state.get("intent"), summary_user_q, answer_text,
     )
 
     return {

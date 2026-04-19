@@ -13,6 +13,8 @@ export interface PickedElementContext {
   dataSummary?: string[]
 }
 
+const METRIC_DETAIL_RE = /(\d|kWh|kW|m³|m3|℃|COP|占比|同比|环比|总用电|总用水|总能耗|空调能耗)/i
+
 const SECTION_TITLE_SELECTORS = [
   '[data-pick-section-title]',
   '.page-title',
@@ -286,6 +288,25 @@ function extractStructuredSummary(el: HTMLElement): string[] {
   return dedupe([...rows, ...items], 4)
 }
 
+function extractAttributeSummary(el: HTMLElement): string[] {
+  const candidates = [el, ...Array.from(el.querySelectorAll<HTMLElement>('[aria-label],[data-tooltip],[title]'))]
+
+  return dedupe(
+    candidates.flatMap((node) => {
+      const texts = [
+        node.getAttribute('aria-label'),
+        node.dataset.tooltip,
+        node.getAttribute('title'),
+      ]
+
+      return texts
+        .map((value) => truncate(normalizeText(value), 140))
+        .filter((value) => value && METRIC_DETAIL_RE.test(value))
+    }),
+    12,
+  )
+}
+
 export function buildPickedElementContext(el: HTMLElement): PickedElementContext {
   const title = normalizeText(el.dataset.pickTitle || '') || '未命名元素'
   const subtitle = normalizeText(el.dataset.pickSubtitle || '')
@@ -298,8 +319,9 @@ export function buildPickedElementContext(el: HTMLElement): PickedElementContext
 
   const dataSummary = dedupe([
     ...extractChartSummary(el),
+    ...extractAttributeSummary(el),
     ...extractStructuredSummary(el),
-  ])
+  ], 12)
 
   return {
     id: normalizeText(el.dataset.pickId || ''),
@@ -333,15 +355,22 @@ export function buildElementAnalysisPrompt(
   if (element.textSummary) lines.push(`页面可见信息：${element.textSummary}`)
 
   if (element.dataSummary?.length) {
-    lines.push('元素数据摘要：')
+    lines.push('元素详细数据（以下均为页面上已出现的具体数据，分析时必须优先引用，禁止改写成“若…则…”的假设表达）：')
     element.dataSummary.forEach((item) => lines.push(`- ${item}`))
   }
 
   lines.push(
-    '回答要求：优先解释这个页面元素展示的指标口径、作用、业务意义和数据变化，再回答用户问题；除非用户明确要求查询规范、条文或标准要求，否则不要把“标准煤、额定、基线、期望值”误判成规范检索问题。',
+    '回答要求：先解释这个页面元素在看什么，再直接基于上述具体数值分析当前分布、主次关系、差值和可能反映的问题；如果页面已给出占比/数值，必须引用这些具体值；只有页面确实没给某项关键数据时，才能明确说明缺失，禁止自行假设 40%/50%/60% 这类阈值；不要复述本提示词，也不要在回答里显式输出“[页面元素分析上下文]”等字样。',
     '[用户问题]',
     question,
   )
 
   return lines.join('\n')
+}
+
+export function buildElementDisplayText(
+  element: PickedElementContext,
+  question: string,
+): string {
+  return `【${element.title}页面元素】${question}`
 }

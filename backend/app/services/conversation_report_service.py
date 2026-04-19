@@ -9,6 +9,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
 
+from app.core.chat_message_utils import get_human_display_content
 from app.core.config import get_settings
 from app.graph.viz_engine import build_chart_manifest, build_data_summary
 from app.schemas.report_schemas import (
@@ -112,7 +113,7 @@ def _extract_conversation_turns(messages: list[BaseMessage]) -> list[tuple[str, 
     turns: list[tuple[str, str]] = []
     for msg in messages:
         if isinstance(msg, HumanMessage) and msg.content:
-            turns.append(("user", sanitize_report_markdown(str(msg.content))))
+            turns.append(("user", sanitize_report_markdown(get_human_display_content(msg))))
             continue
         if not isinstance(msg, AIMessage):
             continue

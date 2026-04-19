@@ -97,6 +97,7 @@ export async function sendChatMessage(
   enableWebSearch = false,
   thinkingMode: 'fast' | 'deep' = 'fast',
   signal?: AbortSignal,
+  displayMessage?: string,
 ): Promise<string> {
   const token = _getToken()
   const headers: Record<string, string> = {
@@ -111,6 +112,7 @@ export async function sendChatMessage(
     headers,
     body: JSON.stringify({
       message,
+      display_message: displayMessage,
       session_id: sessionId,
       enable_web_search: enableWebSearch,
       thinking_mode: thinkingMode,

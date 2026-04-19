@@ -264,7 +264,7 @@
                   <!-- 文字片段 -->
                   <div v-if="seg.type === 'html'" :key="'h'+sIdx" class="md-block" v-html="seg.html || ''"></div>
 
-                  <!-- 流式阶段：anchor 已检测到但 artifact 尚未到达 → 骨架屏 -->
+                  <!-- 流式阶段：真实 artifact 已到达但尚未切换为图表 → 骨架屏 -->
                   <div v-else-if="seg.type === 'placeholder'" :key="'p'+sIdx" class="inline-artifact-wrap placeholder-phase">
                     <Transition name="skeleton-in" appear>
                       <ChartSkeleton />
@@ -624,7 +624,7 @@ import ChartSkeleton from '@/generative-ui/ChartSkeleton.vue'
 import type { ArtifactEvent } from '@/api/stream_client'
 import { apiFetch } from '@/api/http'
 import { renderMarkdown as sharedRenderMarkdown } from '@/utils/markdown'
-import { buildElementAnalysisPrompt } from '@/utils/elementPickerContext'
+import { buildElementAnalysisPrompt, buildElementDisplayText } from '@/utils/elementPickerContext'
 
 import { useDataRangeStore } from '@/stores/dataRangeStore'
 import { useReportStore } from '@/stores/reportStore'
@@ -1157,14 +1157,16 @@ function handleSend() {
   if (!inputText.value.trim() || store.isLoading) return
   const text = inputText.value.trim()
   let requestText = text
+  let displayText = text
 
   // 附带选中元素的上下文信息
   if (pickerStore.selectedElement) {
     requestText = buildElementAnalysisPrompt(pickerStore.selectedElement, text)
+    displayText = buildElementDisplayText(pickerStore.selectedElement, text)
     pickerStore.clearSelection()
   }
 
-  store.sendMessage(text, requestText)
+  store.sendMessage(displayText, requestText)
   inputText.value = ''
 }
 
@@ -1411,8 +1413,6 @@ function buildInlineSegments(msg: ChatMessage): InlineSegment[] {
       } else {
         segments.push({ type: 'placeholder', artifactId: artId, anchor })
       }
-    } else if (isStreaming) {
-      segments.push({ type: 'placeholder', artifactId: artId, anchor })
     }
 
     lastIndex = match.index + match[0].length

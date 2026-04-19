@@ -25,6 +25,7 @@ from langchain_core.tools import StructuredTool
 from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
 
+from app.core.chat_message_utils import get_human_display_content
 from app.core.config import get_settings
 from app.db.session import AsyncSessionLocal
 from app.graph.state import AgentState, update_context_summary
@@ -127,6 +128,8 @@ _DIAGNOSE_PROMPT_TEMPLATE = """你是一个楼宇能耗管理系统的专家（D
    - 系统提示里的 GB 50189-2015 基准仅可作为诊断背景知识，不能冒充成本轮检索命中的文档来源。
    - 如果 search_backend=local_kb，必须明确说明“当前依据来自系统本地降级知识库，不等同于原始标准全文”。
 5. 如果用户是在解读页面元素、图表、KPI 或热力图，要先解释指标口径、图表作用、业务含义和数据变化，再决定是否需要补充规范依据。
+   - 若上下文已经给出具体数值、占比、排名或明细，必须直接引用这些数值分析，禁止改写成“若 A > 40%”之类的假设表达。
+   - 若当前页面上下文没有给出某项关键数据，只能明确说明“页面未提供”，禁止自行补阈值、基线或期望值。
 
 - 若检索结果 similarity < 0.2 或结果不充分：
   - 若 web_search 工具可用（联网模式），调用 web_search 搜索相关规范/标准/技术方案作为补充
@@ -618,9 +621,13 @@ async def diagnose_agent_node(state: AgentState) -> dict[str, Any]:
         (str(m.content) for m in reversed(list(history)) if isinstance(m, HumanMessage)),
         "",
     )
+    summary_user_q = next(
+        (get_human_display_content(m) for m in reversed(list(history)) if isinstance(m, HumanMessage)),
+        user_q,
+    )
     answer_text = str(global_msg[0].content) if global_msg else "（已生成诊断报告/工单）"
     new_summary = update_context_summary(
-        existing_summary, state.get("intent"), user_q, answer_text
+        existing_summary, state.get("intent"), summary_user_q, answer_text
     )
 
     return {

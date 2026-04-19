@@ -36,6 +36,11 @@ from fastapi.responses import StreamingResponse
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from pydantic import BaseModel, Field, field_validator
 
+from app.core.chat_message_utils import (
+    build_human_message,
+    get_human_display_content,
+    normalize_user_display_content,
+)
 from app.core.buildings import get_building_label
 from app.core.cache import delete_cache_by_prefix, get_or_compute_json
 from app.core.config import get_settings
@@ -173,6 +178,7 @@ def _validate_session_id(v: str | None) -> str | None:
 
 class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=2000, description="用户消息")
+    display_message: str | None = Field(None, max_length=2000, description="用户可见消息文案")
     session_id: str | None = Field(None, description="会话 ID，为空则新建")
     enable_web_search: bool = Field(False, description="是否启用 Tavily 联网搜索")
     thinking_mode: str = Field("fast", description="思考模式：fast（快速）/ deep（深度）")
@@ -497,6 +503,7 @@ def _build_session_info(row: Any, in_memory_state: dict[str, Any] | None = None)
 async def _stream_graph(
     session_id: str,
     user_message: str,
+    display_message: str | None = None,
     user_id: str | None = None,
     request_id: str | None = None,
     enable_web_search: bool = False,
@@ -510,6 +517,7 @@ async def _stream_graph(
     enable_web_search：若为 True，注入到 graph state，Agent 可自主调用 web_search 工具。
     """
     request_id = request_id or str(uuid.uuid4())
+    visible_user_message = normalize_user_display_content(display_message, user_message)
 
     # ── 路由层快速通道（第一时间推流，跳过所有 DB 调用和 LangGraph）───────────
     # 对"你好"/"谢谢"等简单问候，立即推流回复，DB 持久化放到后台任务。
@@ -521,6 +529,7 @@ async def _stream_graph(
             asyncio.create_task(_ensure_fast_session(
                 session_id=session_id,
                 user_message=user_message,
+                display_message=visible_user_message,
                 reply=fast_reply,
                 user_id=user_id,
             ))
@@ -535,7 +544,7 @@ async def _stream_graph(
         session_store.get(session_id),
     )
     if db_row is None:
-        auto_title = user_message[:30] + ("…" if len(user_message) > 30 else "")
+        auto_title = visible_user_message[:30] + ("…" if len(visible_user_message) > 30 else "")
         # 后台创建会话记录，不阻塞流式响应
         asyncio.create_task(session_store.create(session_id, title=auto_title, user_id=user_id))
 
@@ -552,7 +561,7 @@ async def _stream_graph(
     state["enable_web_search"] = enable_web_search
 
     # ── 始终将原始消息写入 state（持久化到 DB 的历史）────────────────────────
-    state["messages"] = list(state["messages"]) + [HumanMessage(content=user_message)]
+    state["messages"] = list(state["messages"]) + [build_human_message(user_message, visible_user_message)]
 
     graph_input = state
 
@@ -931,6 +940,7 @@ async def _stream_graph(
         session_id=session_id,
         state=merged,
         user_message=user_message,
+        display_message=visible_user_message,
         is_first_message=is_first_message,
     ))
     def _on_persist_done(t: asyncio.Task[None]) -> None:
@@ -948,6 +958,7 @@ async def _stream_graph(
 async def _ensure_fast_session(
     session_id: str,
     user_message: str,
+    display_message: str | None,
     reply: str,
     user_id: str | None,
 ) -> None:
@@ -956,20 +967,21 @@ async def _ensure_fast_session(
     将会话记录和本轮消息写入数据库，不阻塞 SSE 响应。
     """
     try:
+        visible_user_message = normalize_user_display_content(display_message, user_message)
         db_row = await session_store.get(session_id)
         if db_row is None:
-            auto_title = user_message[:30] + ("…" if len(user_message) > 30 else "")
+            auto_title = visible_user_message[:30] + ("…" if len(visible_user_message) > 30 else "")
             await session_store.create(session_id, title=auto_title, user_id=user_id)
         state = await _get_or_create_state(session_id)
         state["messages"] = list(state.get("messages", [])) + [
-            HumanMessage(content=user_message),
+            build_human_message(user_message, visible_user_message),
             AIMessage(content=reply),
         ]
         _sessions[session_id] = state
         await session_store.save_state(
             session_id=session_id,
             state=state,
-            last_message=user_message,
+            last_message=visible_user_message,
         )
     except Exception as exc:
         logger.error("快速通道后台持久化失败 %s: %s", session_id, exc)
@@ -979,6 +991,7 @@ async def _persist_session(
     session_id: str,
     state: dict[str, Any],
     user_message: str,
+    display_message: str | None,
     is_first_message: bool,
 ) -> None:
     """
@@ -986,14 +999,15 @@ async def _persist_session(
     作为后台任务执行，不影响 SSE 推流延迟。
     """
     try:
+        visible_user_message = normalize_user_display_content(display_message, user_message)
         await session_store.save_state(
             session_id=session_id,
             state=state,
-            last_message=user_message,
+            last_message=visible_user_message,
         )
         # 首条消息：自动用消息摘要作为会话标题
         if is_first_message:
-            auto_title = user_message[:30] + ("…" if len(user_message) > 30 else "")
+            auto_title = visible_user_message[:30] + ("…" if len(visible_user_message) > 30 else "")
             await session_store.update(session_id, title=auto_title)
             logger.debug("会话标题自动更新: %s → %s", session_id, auto_title)
     except Exception as exc:
@@ -1019,10 +1033,12 @@ async def chat(
     session_id = req.session_id or str(uuid.uuid4())
     user_id = current_user.id if current_user else None
     request_id = str(uuid.uuid4())
+    visible_user_message = normalize_user_display_content(req.display_message, req.message)
 
     return StreamingResponse(
         _stream_graph(
             session_id, req.message,
+            display_message=visible_user_message,
             user_id=user_id,
             request_id=request_id,
             enable_web_search=req.enable_web_search,
@@ -1292,7 +1308,12 @@ async def get_session_messages(
         result = []
         for msg in messages:
             if isinstance(msg, HumanMessage):
-                result.append({"role": "user", "content": msg.content})
+                display_content = get_human_display_content(msg)
+                entry: dict[str, Any] = {"role": "user", "content": display_content}
+                request_content = str(msg.content)
+                if request_content != display_content:
+                    entry["request_content"] = request_content
+                result.append(entry)
             elif isinstance(msg, AIMessage) and msg.content:
                 if "[Router]" in str(msg.content):
                     continue

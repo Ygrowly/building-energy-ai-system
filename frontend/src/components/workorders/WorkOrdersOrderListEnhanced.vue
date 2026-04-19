@@ -102,7 +102,7 @@
 import { Icon } from '@iconify/vue'
 import { PropType } from 'vue'
 import WorkOrderTimeline from '@/components/workorders/WorkOrderTimeline.vue'
-import { sanitizeBuildingText } from '@/constants/buildings'
+import { formatWorkOrderIssueTitle } from '@/utils/workOrderIssue'
 
 defineEmits<{
   'toggle-expand': [ticketId: string]
@@ -203,10 +203,7 @@ const timelineErrorValue = (ticketId: string) => props.timelineError(ticketId)
 const actionsForOrderValue = (wo: any) => props.actionsForOrder(wo)
 
 function displayTitleValue(wo: any) {
-  const rawTitle = String(wo.issue_description || wo.ticket_id || '').trim()
-  if (!rawTitle) return wo.ticket_id
-
-  return sanitizeBuildingText(rawTitle)
+  return formatWorkOrderIssueTitle(wo.issue_description || wo.ticket_id, wo.ticket_id)
 }
 </script>
 

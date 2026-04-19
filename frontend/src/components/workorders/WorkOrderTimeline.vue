@@ -199,13 +199,13 @@ function toggleHistory() {
 
 .timeline-skeleton {
   display: flex;
-  gap: 16px;
+  gap: 12px;
   overflow: hidden;
 }
 
 .timeline-skeleton-step {
-  width: 128px;
-  height: 54px;
+  width: 110px;
+  height: 48px;
   border-radius: 14px;
   flex-shrink: 0;
   background: linear-gradient(90deg, rgba(148, 163, 184, 0.1), rgba(148, 163, 184, 0.2), rgba(148, 163, 184, 0.1));
@@ -230,7 +230,7 @@ function toggleHistory() {
   position: relative;
   display: flex;
   align-items: flex-start;
-  gap: 16px;
+  gap: 12px;
   min-width: max-content;
   padding: 10px 2px 4px;
 }
@@ -249,8 +249,8 @@ function toggleHistory() {
 .timeline-collapse {
   position: relative;
   z-index: 1;
-  min-width: 136px;
-  max-width: 160px;
+  min-width: 112px;
+  max-width: 136px;
   padding: 0;
   border: none;
   background: transparent;
@@ -262,7 +262,7 @@ function toggleHistory() {
 .timeline-step {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
 }
 
 .timeline-collapse {
@@ -321,7 +321,7 @@ function toggleHistory() {
   border: 1px solid var(--wo-border, var(--border));
   border-left-width: 4px;
   border-radius: 14px;
-  padding: 14px 16px;
+  padding: 12px 14px;
   background: rgba(255, 255, 255, 0.55);
 }
 
@@ -391,8 +391,8 @@ function toggleHistory() {
 @media (max-width: 720px) {
   .timeline-step,
   .timeline-collapse {
-    min-width: 120px;
-    max-width: 132px;
+    min-width: 98px;
+    max-width: 118px;
   }
 
   .timeline-detail-head {

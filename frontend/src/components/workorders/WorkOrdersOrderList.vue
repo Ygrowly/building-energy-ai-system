@@ -1,10 +1,10 @@
 <template>
   <div class="order-list">
     <div
-      class="order-card"
       v-for="wo in orders"
-      :key="wo.ticket_id"
       :id="`work-order-${wo.ticket_id}`"
+      :key="wo.ticket_id"
+      class="order-card"
       :class="statusCardClassValue(wo)"
     >
       <div class="card-header" @click="$emit('toggle-expand', wo.ticket_id)">
@@ -12,17 +12,25 @@
           <span class="priority-badge" :class="'p-' + (wo.priority ?? 'medium').toLowerCase()">
             {{ priorityLabels[wo.priority] ?? wo.priority ?? '普通' }}
           </span>
+
           <div class="card-title-block">
-            <p class="card-title">{{ wo.issue_description || wo.ticket_id }}</p>
+            <p class="card-title">{{ displayTitleValue(wo) }}</p>
+
+            <div v-if="titleTagsValue(wo).length" class="title-tags">
+              <span v-for="tag in titleTagsValue(wo)" :key="tag" class="title-tag">{{ tag }}</span>
+            </div>
+
             <p class="card-meta">
               工单 {{ wo.ticket_id }} · {{ buildingNameValue(wo.building_id) }} · {{ formatTimeValue(wo.created_at) }}
             </p>
           </div>
         </div>
+
         <div class="card-header-right">
           <span class="status-chip" :class="statusChipClassValue(wo.status)">
             {{ statusLabels[wo.status] ?? wo.status }}
           </span>
+
           <span
             v-if="executionStatusForOrderValue(wo)"
             class="execution-chip"
@@ -30,16 +38,17 @@
           >
             {{ executionLabels[executionStatusForOrderValue(wo)] ?? executionStatusForOrderValue(wo) }}
           </span>
+
           <button class="expand-btn" type="button" @click.prevent.stop="$emit('toggle-expand', wo.ticket_id)">
-            {{ expandedId === wo.ticket_id ? '收起 ▲' : '展开 ▼' }}
+            {{ expandedId === wo.ticket_id ? '收起' : '展开' }}
           </button>
         </div>
       </div>
 
       <Transition name="slide">
-        <div class="card-body" v-if="expandedId === wo.ticket_id">
+        <div v-if="expandedId === wo.ticket_id" class="card-body">
           <div class="detail-grid">
-            <div class="detail-row" v-for="row in detailRowsValue(wo)" :key="row.label">
+            <div v-for="row in detailRowsValue(wo)" :key="row.label" class="detail-row">
               <span class="detail-label">{{ row.label }}</span>
               <span class="detail-val" :class="row.cls">{{ row.value }}</span>
             </div>
@@ -50,58 +59,54 @@
             :review="autoDispatchReviewValue(wo)"
           />
 
-          <div class="timeline-block" v-if="timelineRowsValue(wo).length || isTimelineLoadingValue(wo.ticket_id) || timelineErrorValue(wo.ticket_id)">
-            <p class="section-title">执行时间线</p>
-            <p v-if="isTimelineLoadingValue(wo.ticket_id)" class="timeline-hint">加载完整派工历史...</p>
-            <p v-if="timelineErrorValue(wo.ticket_id)" class="timeline-hint error">{{ timelineErrorValue(wo.ticket_id) }}</p>
-            <div class="timeline-item" v-for="item in timelineRowsValue(wo)" :key="item.time + item.label">
-              <span class="timeline-dot" />
-              <div class="timeline-content">
-                <span class="timeline-time">{{ item.time }}</span>
-                <span class="timeline-label">{{ item.label }}</span>
-                <span v-if="item.note" class="timeline-note">{{ item.note }}</span>
-              </div>
-            </div>
-          </div>
+          <WorkOrderTimeline
+            v-if="timelineRowsValue(wo).length || isTimelineLoadingValue(wo.ticket_id) || timelineErrorValue(wo.ticket_id)"
+            class="timeline-block"
+            :items="timelineRowsValue(wo)"
+            :loading="isTimelineLoadingValue(wo.ticket_id)"
+            :error="timelineErrorValue(wo.ticket_id)"
+          />
 
-          <div class="action-bar" v-if="actionsForOrderValue(wo).length">
+          <div v-if="actionsForOrderValue(wo).length" class="action-bar">
             <template v-for="action in actionsForOrderValue(wo)" :key="action.action">
               <button
                 v-if="action.action !== 'reject_pending'"
                 class="action-btn"
                 :class="action.className"
-                @click="$emit('run-action', wo, action.action)"
                 :disabled="actionLoading === wo.ticket_id + ':' + action.action"
+                @click="$emit('run-action', wo, action.action)"
               >
                 {{ actionLoading === wo.ticket_id + ':' + action.action ? '处理中...' : action.label }}
               </button>
+
               <button
                 v-else
                 class="action-btn danger"
-                @click="$emit('start-reject', wo.ticket_id)"
                 :disabled="actionLoading === wo.ticket_id + ':' + action.action"
+                @click="$emit('start-reject', wo.ticket_id)"
               >
                 驳回
               </button>
             </template>
           </div>
 
-          <div class="reject-area" v-if="rejectingId === wo.ticket_id">
+          <div v-if="rejectingId === wo.ticket_id" class="reject-area">
             <input
               :value="rejectReason"
+              class="reject-input"
               placeholder="输入驳回原因"
               @input="$emit('update-reject-reason', ($event.target as HTMLInputElement).value)"
               @keyup.enter="$emit('run-action', wo, 'reject_pending')"
-              class="reject-input"
             />
             <button class="btn-reject-confirm" @click="$emit('run-action', wo, 'reject_pending')">确认驳回</button>
             <button class="btn-cancel" @click="$emit('cancel-reject')">取消</button>
           </div>
 
-          <div class="action-result success" v-if="actionResult[wo.ticket_id]?.type === 'success'">
+          <div v-if="actionResult[wo.ticket_id]?.type === 'success'" class="action-result success">
             <Icon icon="mdi:check-circle" width="14" class="bar-icon" /> {{ actionResult[wo.ticket_id].message }}
           </div>
-          <div class="action-result error" v-if="actionResult[wo.ticket_id]?.type === 'error'">
+
+          <div v-if="actionResult[wo.ticket_id]?.type === 'error'" class="action-result error">
             <Icon icon="mdi:alert" width="14" class="bar-icon" /> {{ actionResult[wo.ticket_id].message }}
           </div>
         </div>
@@ -113,7 +118,9 @@
 <script setup lang="ts">
 import { Icon } from '@iconify/vue'
 import { PropType } from 'vue'
+import WorkOrderTimeline from './WorkOrderTimeline.vue'
 import WorkOrdersAutoDispatchReview from './WorkOrdersAutoDispatchReview.vue'
+import { formatWorkOrderIssueTags, formatWorkOrderIssueTitle } from '@/utils/workOrderIssue'
 
 defineEmits<{
   'toggle-expand': [ticketId: string]
@@ -217,10 +224,13 @@ const timelineRowsValue = (wo: any) => props.timelineRows(wo)
 const isTimelineLoadingValue = (ticketId: string) => props.isTimelineLoading(ticketId)
 const timelineErrorValue = (ticketId: string) => props.timelineError(ticketId)
 const actionsForOrderValue = (wo: any) => props.actionsForOrder(wo)
+const displayTitleValue = (wo: any) => formatWorkOrderIssueTitle(wo.issue_description || wo.ticket_id, wo.ticket_id)
+const titleTagsValue = (wo: any) => formatWorkOrderIssueTags(wo.issue_description)
 
 function autoDispatchReviewValue(wo: any) {
   const dispatch = wo.current_dispatch
   if (!dispatch) return null
+
   const reviewState = autoDispatchReviewStateValue(wo, dispatch)
   if (dispatch.auto_dispatch_review) {
     return {
@@ -240,7 +250,9 @@ function autoDispatchReviewValue(wo: any) {
     confidence: snapshot?.confidence,
     confidence_label: snapshot?.confidence === 'high' ? '高置信' : snapshot?.confidence,
     review_state: reviewState,
-    review_hint: isFallback ? '低置信兜底派工，请管理员复核候选人、负载与现场响应情况' : '高置信自动派工，可抽查候选排序、分数与负载',
+    review_hint: isFallback
+      ? '低置信兜底派工，请管理员复核候选人、负载与现场响应情况'
+      : '高置信自动派工，可抽查候选排序、分数与负载',
     selection_reason: dispatch.selection_reason,
     rules: snapshot?.rules || {},
     score_gap: snapshot?.score_gap,
@@ -255,12 +267,15 @@ function autoDispatchReviewStateValue(wo: any, dispatch: any) {
   if (dispatch.auto_dispatch_review_state || wo.auto_dispatch_review_state) {
     return dispatch.auto_dispatch_review_state || wo.auto_dispatch_review_state
   }
+
   if (wo.admin_action === 'auto_dispatch_reviewed') {
     return { status: 'reviewed', status_label: '已复核', notes: wo.admin_notes, reviewed_at: wo.admin_reviewed_at }
   }
+
   if (wo.admin_action === 'auto_dispatch_needs_reassign') {
     return { status: 'needs_reassign', status_label: '需改派', notes: wo.admin_notes, reviewed_at: wo.admin_reviewed_at }
   }
+
   return { status: 'pending', status_label: '待复核' }
 }
 </script>
@@ -279,8 +294,8 @@ function autoDispatchReviewStateValue(wo: any, dispatch: any) {
   --wo-chip-info-bg: rgba(59, 130, 246, 0.14);
   --wo-chip-info-border: rgba(59, 130, 246, 0.28);
   --wo-chip-info-text: var(--accent);
-  --wo-chip-success-bg: rgba(16, 185, 129, 0.14);
-  --wo-chip-success-border: rgba(16, 185, 129, 0.28);
+  --wo-chip-success-bg: rgba(36, 160, 119, 0.14);
+  --wo-chip-success-border: rgba(33, 159, 117, 0.28);
   --wo-chip-success-text: var(--success);
   --wo-chip-warning-bg: rgba(251, 191, 36, 0.16);
   --wo-chip-warning-border: rgba(251, 191, 36, 0.28);
@@ -348,7 +363,7 @@ function autoDispatchReviewStateValue(wo: any, dispatch: any) {
 }
 
 :global(html[data-theme="light"]) .order-card .card-header {
-  background: linear-gradient(180deg, rgba(34, 197, 94, 0.04), rgba(255, 255, 255, 0));
+  background: linear-gradient(180deg, rgba(23, 183, 82, 0.04), rgba(255, 255, 255, 0));
 }
 
 .card-header-left {
@@ -393,34 +408,55 @@ function autoDispatchReviewStateValue(wo: any, dispatch: any) {
   color: var(--wo-chip-danger-text);
 }
 
-.card-title-block { min-width: 0; }
+.card-title-block {
+  min-width: 0;
+}
 
 .card-title {
+  margin-bottom: 6px;
+  color: var(--wo-text-strong);
   font-size: 15px;
   font-weight: 700;
   line-height: 1.55;
-  margin-bottom: 4px;
-  color: var(--wo-text-strong);
+}
+
+.title-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.title-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 9px;
+  border: 1px solid var(--wo-border);
+  border-radius: 999px;
+  background: var(--wo-surface-alt);
+  color: var(--wo-text);
+  font-size: 11px;
+  line-height: 1.4;
 }
 
 .card-meta {
-  font-size: 12px;
   color: var(--wo-text);
+  font-size: 12px;
 }
 
 .card-header-right {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 8px;
   flex-wrap: wrap;
-  justify-content: flex-end;
 }
 
 .status-chip,
 .execution-chip {
+  padding: 4px 10px;
   font-size: 11px;
   font-weight: 700;
-  padding: 4px 10px;
 }
 
 .chip-pending-review {
@@ -478,25 +514,25 @@ function autoDispatchReviewStateValue(wo: any, dispatch: any) {
 }
 
 .expand-btn {
+  padding: 5px 10px;
   border: 1px solid var(--wo-border);
   border-radius: 8px;
   background: var(--wo-surface);
   color: var(--wo-text-subtle);
   font-size: 12px;
   font-weight: 700;
-  padding: 5px 10px;
   cursor: pointer;
 }
 
 .expand-btn:hover {
-  color: var(--wo-chip-info-text);
   border-color: var(--wo-chip-info-border);
   background: var(--wo-chip-info-bg);
+  color: var(--wo-chip-info-text);
 }
 
 .card-body {
-  border-top: 1px solid var(--wo-border);
   padding: 18px 20px;
+  border-top: 1px solid var(--wo-border);
   background: var(--wo-surface-alt);
 }
 
@@ -516,7 +552,9 @@ function autoDispatchReviewStateValue(wo: any, dispatch: any) {
   font-size: 13px;
 }
 
-.detail-row:last-child { border-bottom: none; }
+.detail-row:last-child {
+  border-bottom: none;
+}
 
 .detail-label {
   color: var(--wo-text);
@@ -531,14 +569,18 @@ function autoDispatchReviewStateValue(wo: any, dispatch: any) {
   word-break: break-word;
 }
 
-.detail-val.mono { font-family: monospace; }
+.detail-val.mono {
+  font-family: monospace;
+}
 
 .detail-val.accent {
   color: var(--wo-chip-success-text);
   font-weight: 700;
 }
 
-.detail-val.wrap { white-space: pre-wrap; }
+.detail-val.wrap {
+  white-space: pre-wrap;
+}
 
 .detail-val.warning-text {
   color: var(--wo-chip-warning-text);
@@ -556,73 +598,22 @@ function autoDispatchReviewStateValue(wo: any, dispatch: any) {
   border-top: 1px solid var(--wo-border);
 }
 
-.section-title {
-  font-size: 13px;
-  font-weight: 700;
-  margin-bottom: 10px;
-  color: var(--wo-text-strong);
-}
-
-.timeline-hint {
-  font-size: 12px;
-  color: var(--wo-text);
-  margin-bottom: 10px;
-}
-
-.timeline-hint.error { color: var(--wo-chip-danger-text); }
-
-.timeline-item {
-  display: flex;
-  gap: 12px;
-  padding: 8px 0;
-}
-
-.timeline-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: var(--wo-chip-info-text);
-  margin-top: 6px;
-  flex-shrink: 0;
-}
-
-.timeline-content {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.timeline-time {
-  font-size: 11px;
-  color: var(--wo-text-subtle);
-}
-
-.timeline-label {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--wo-text-strong);
-}
-
-.timeline-note {
-  font-size: 12px;
-  color: var(--wo-text);
-}
-
 .action-bar {
   display: flex;
-  gap: 8px;
   align-items: center;
+  gap: 8px;
   margin-top: 16px;
   padding-top: 14px;
   border-top: 1px solid var(--wo-border);
+  flex-wrap: wrap;
 }
 
 .action-btn {
+  padding: 8px 16px;
   border: 1px solid transparent;
   border-radius: 8px;
   font-size: 13px;
   font-weight: 600;
-  padding: 8px 16px;
   cursor: pointer;
 }
 
@@ -644,31 +635,33 @@ function autoDispatchReviewStateValue(wo: any, dispatch: any) {
 }
 
 .action-btn:disabled {
-  opacity: 0.6;
   cursor: not-allowed;
+  opacity: 0.6;
 }
 
 .reject-area {
   display: flex;
-  gap: 8px;
   align-items: center;
+  gap: 8px;
   margin-top: 12px;
+  flex-wrap: wrap;
 }
 
 .reject-input {
   flex: 1;
-  background: var(--wo-surface);
+  min-width: 220px;
+  padding: 8px 12px;
   border: 1px solid var(--wo-border);
   border-radius: 8px;
+  background: var(--wo-surface);
   color: var(--wo-text-strong);
-  padding: 8px 12px;
 }
 
 .btn-reject-confirm,
 .btn-cancel {
+  padding: 8px 14px;
   border-radius: 8px;
   font-size: 13px;
-  padding: 8px 14px;
   cursor: pointer;
 }
 
@@ -692,29 +685,23 @@ function autoDispatchReviewStateValue(wo: any, dispatch: any) {
 }
 
 .action-result.success {
+  border: 1px solid var(--wo-chip-success-border);
   background: var(--wo-chip-success-bg);
   color: var(--wo-chip-success-text);
-  border: 1px solid var(--wo-chip-success-border);
 }
 
 .action-result.error {
+  border: 1px solid var(--wo-chip-danger-border);
   background: var(--wo-chip-danger-bg);
   color: var(--wo-chip-danger-text);
-  border: 1px solid var(--wo-chip-danger-border);
 }
 
-.slide-enter-active,
-.slide-leave-active {
-  transition: all 0.2s ease;
+.bar-icon {
+  margin-right: 4px;
+  vertical-align: -2px;
 }
 
-.slide-enter-from,
-.slide-leave-to {
-  opacity: 0;
-  transform: translateY(-8px);
-}
-
-@media (max-width: 720px) {
+@media (max-width: 960px) {
   .card-header {
     align-items: flex-start;
     flex-direction: column;
@@ -726,13 +713,28 @@ function autoDispatchReviewStateValue(wo: any, dispatch: any) {
   }
 
   .detail-row {
-    grid-template-columns: 1fr;
-    gap: 4px;
+    grid-template-columns: 96px 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .card-header,
+  .card-body {
+    padding: 16px;
   }
 
-  .reject-area {
+  .card-header-left {
+    align-items: flex-start;
     flex-direction: column;
-    align-items: stretch;
+  }
+
+  .detail-row {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+
+  .reject-input {
+    min-width: 0;
   }
 }
 </style>

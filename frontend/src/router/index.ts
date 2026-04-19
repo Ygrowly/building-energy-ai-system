@@ -21,12 +21,6 @@ const router = createRouter({
       meta: { title: '首页', requiresAuth: true },
     },
     {
-      path: '/operations',
-      name: 'Operations',
-      component: () => import('@/views/Operations.vue'),
-      meta: { title: '智慧运维', requiresAuth: true },
-    },
-    {
       path: '/workorders',
       name: 'WorkOrders',
       component: () => import('@/views/WorkOrders.vue'),
@@ -73,7 +67,6 @@ const router = createRouter({
 
 const KEEP_ALIVE_ROUTE_NAMES = new Set([
   'Home',
-  'Operations',
   'WorkOrders',
   'WorkOrderReview',
   'WorkOrderDispatchCenter',

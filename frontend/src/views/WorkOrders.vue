@@ -827,7 +827,7 @@ watch(
   display: flex;
   align-items: center;
   gap: 8px;
-  color: #166534;
+  color: #0e5328;
 }
 .subtitle { color: var(--text-secondary); font-size: 13px; }
 .workspace-pills {

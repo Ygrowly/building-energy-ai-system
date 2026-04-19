@@ -1,5 +1,6 @@
 import { computed, type Ref } from 'vue'
 import { apiFetch } from '@/api/http'
+import { formatWorkOrderIssueTitle } from '@/utils/workOrderIssue'
 
 interface UseDispatchHallAdminOptions {
   hallEntries: Ref<any[]>
@@ -20,11 +21,14 @@ export function useDispatchHallAdmin(options: UseDispatchHallAdminOptions) {
   }
 
   function hallEntryTitle(entry: any) {
-    return entry.support_reason || entry.reason || entry.work_order?.issue_description || '共享事项待处理'
+    return formatWorkOrderIssueTitle(
+      entry.support_reason || entry.reason || entry.work_order?.issue_description,
+      '共享事项待处理',
+    )
   }
 
   function hallEntryOwner(entry: any) {
-    return entry.source_dispatch?.assigned_to_name || '主责任人待确认'
+    return entry.source_dispatch?.assigned_to_name || '责任人待确认'
   }
 
   function hallEntryReason(entry: any) {

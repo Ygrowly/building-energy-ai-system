@@ -61,7 +61,7 @@ html[data-theme="light"] {
   --info:           #34d399;
 
   /* Text for dark-green backgrounds (sidebar, KPI) */
-  --text-primary:   #d4edda;
+  --text-primary:   #96d5a5;
   --text-secondary: #7ab89a;
   --text-muted:     rgba(212,237,218,0.45);
   --thinking-color: #86efac;

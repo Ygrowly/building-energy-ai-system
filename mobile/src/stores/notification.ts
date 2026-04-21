@@ -35,7 +35,8 @@ export const useNotificationStore = defineStore('mobile-notification-center', ()
   })
 
   const isEligibleUser = computed(() => (
-    authStore.isLoggedIn
+    authStore.sessionReady
+    && authStore.isLoggedIn
     && Boolean(authStore.user?.role)
     && ELIGIBLE_ROLES.has(authStore.user?.role as string)
   ))

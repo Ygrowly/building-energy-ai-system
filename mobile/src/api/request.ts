@@ -1,3 +1,5 @@
+import { clearAuthRuntimeState } from '../utils/auth-session'
+
 /**
  * 统一请求封装
  * - 自动携带 Bearer Token
@@ -39,16 +41,21 @@ function getRefreshToken(): string | null {
   return uni.getStorageSync('refresh_token') || null
 }
 
-function clearAuth() {
+function clearStoredAuth() {
   uni.removeStorageSync('access_token')
   uni.removeStorageSync('refresh_token')
   uni.removeStorageSync('user_info')
 }
 
+async function clearRuntimeAuthState() {
+  clearStoredAuth()
+  await clearAuthRuntimeState()
+}
+
 let isRedirectingToLogin = false
 
 function redirectToLogin() {
-  clearAuth()
+  void clearRuntimeAuthState()
   if (isRedirectingToLogin) return
   isRedirectingToLogin = true
   uni.showToast({ title: '登录已过期，请重新登录', icon: 'none', duration: 2000 })

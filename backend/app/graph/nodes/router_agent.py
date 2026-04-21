@@ -120,6 +120,7 @@ _ROUTER_SYSTEM_PROMPT_TEMPLATE = """你是楼宇能耗管理系统的智能助�
   - "教学楼和办公楼的用电量分别是多少？为什么差异这么大？" → data_query + needs_diagnosis=true
   - "对比三栋楼用电趋势，并给出优化建议" → data_query + needs_diagnosis=true
   - "查一下办公楼上个月用电，有没有异常？" → data_query + needs_diagnosis=true
+  - "4月18日办公楼总能耗为什么这么高？" → data_query + needs_diagnosis=true
 - 仅查数据不需要分析时，needs_diagnosis=false
 
 ## 输出格式（严格 JSON，不要加 Markdown 代码块）
@@ -245,6 +246,13 @@ _FAST_ROUTE_RULES: list[tuple[re.Pattern[str], str]] = [
         re.compile(
             r'(?:用电|用水|电量|水量|空调|能耗|冷量)'
             r'.*(?:对比|趋势|走势|多少|情况|数据|查询|统计|汇总)',
+            re.IGNORECASE,
+        ),
+        "data_query",
+    ),
+    (
+        re.compile(
+            r'(?:总能耗|总用电|总电耗|总耗电|日电耗|日电量|日用电|日能耗)',
             re.IGNORECASE,
         ),
         "data_query",
@@ -493,6 +501,7 @@ async def router_node(state: AgentState) -> dict[str, Any]:
                 "building_id": fast_building or state.get("building_id"),
                 "device_id": state.get("device_id"),
                 "time_context": state.get("time_context"),
+                "needs_diagnosis": bool(fast_result.get("needs_diagnosis", False)),
             }
 
     # ── 准备历史消息（history 已在快速通道处取出）──

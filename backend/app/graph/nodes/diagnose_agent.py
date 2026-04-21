@@ -4,6 +4,7 @@ Diagnose Agent（故障诊断专家）节点。
 职责：
 - 混合 RAG 检索运维手册（rag_hybrid_search）
 - 基于规则的异常检测（detect_energy_anomalies）
+- 查询诊断必需的日汇总/时序事实数据（query_daily_energy_summary / query_energy_metrics）
 - 综合数据 + 知识库进行归因分析
 - 生成工单草稿（create_work_order_draft）—— 必须 Human-in-the-loop 审批
 - 渲染诊断报告 / 工单卡片（render_ui_component）
@@ -11,12 +12,14 @@ Diagnose Agent（故障诊断专家）节点。
 边界：
 - 不自行下结论，必须引用知识库依据
 - 所有工单操作必须通过 HITL 授权，不直接写入数据库
-- 不查询纯数据（那是 Data Agent 的职责）
+- 不承担通用报表类查询，但为完成诊断可主动查询必要的总量/时序数据
 """
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import re
 import time
 from typing import Any
 
@@ -38,6 +41,7 @@ from app.schemas.mcp_schemas import (
     DetectEnergyAnomaliesInput,
     GetBuildingRatedValuesInput,
     GetDeviceLiveStatusInput,
+    QueryDailyEnergySummaryInput,
     QueryEnergyMetricsInput,
     RAGHybridSearchInput,
     RenderUIComponentInput,
@@ -76,14 +80,15 @@ _DIAGNOSE_PROMPT_TEMPLATE = """你是一个楼宇能耗管理系统的专家（D
 ⚠️ 重要：device_id 必须严格使用上表中的值，禁止自行编造或修改！
 
 ## 你的专属工具
-1. query_energy_metrics         — 查询时序原始数据（事实核查用）
-2. get_device_live_status       — 查询楼宇下所有设备实时状态（device_id、online_status、power_kw 等）
-3. get_building_rated_values    — ⭐ 查询国标（GB）期望值 vs 实际值逐小时对比（解释异常的核心依据）
-4. detect_energy_anomalies      — 基于 GB 双阈值规则检测异常，输出根因诊断码
-5. rag_hybrid_search            — 检索建筑规范/运维手册/技术标准
-6. render_ui_component          — 渲染诊断报告卡片或工单卡片
-7. create_work_order_draft      — 生成维修工单草稿（须人工确认才能提交）
-8. web_search（仅联网模式可用）  — 联网搜索补充信息，RAG 知识库不足时使用
+1. query_daily_energy_summary   — 查询单栋楼按天/周/月汇总的能耗数据（确认"总量是否真的偏高"的首选）
+2. query_energy_metrics         — 查询时序原始数据（事实核查用）
+3. get_device_live_status       — 查询楼宇下所有设备实时状态（device_id、online_status、power_kw 等）
+4. get_building_rated_values    — ⭐ 查询国标（GB）期望值 vs 实际值逐小时对比（解释异常的核心依据）
+5. detect_energy_anomalies      — 基于 GB 双阈值规则检测异常，输出根因诊断码
+6. rag_hybrid_search            — 检索建筑规范/运维手册/技术标准
+7. render_ui_component          — 渲染诊断报告卡片或工单卡片
+8. create_work_order_draft      — 生成维修工单草稿（须人工确认才能提交）
+9. web_search（仅联网模式可用）  — 联网搜索补充信息，RAG 知识库不足时使用
 
 ---
 
@@ -141,6 +146,9 @@ _DIAGNOSE_PROMPT_TEMPLATE = """你是一个楼宇能耗管理系统的专家（D
 
 **执行步骤**（Chain of Thought）：
 
+0. 【总量核实】凡是用户问"为什么这么高/低""总能耗""总电耗""某天是否异常"：
+   - 必须先调用 query_daily_energy_summary 或 query_energy_metrics，确认该时段实际总量/峰值；
+   - 如果 detect_energy_anomalies 没有触发，也不能直接结束，仍要给出"实际总量、期望值、偏差"。
 1. 【异常发现】调用 detect_energy_anomalies 获取 rule_triggered 和 hvac_root_cause
 2. 【期望对比】⭐ 调用 get_building_rated_values 获取国标期望值 vs 实际值，
    定量告诉用户"期望应该是多少，实际是多少，偏差多少"
@@ -155,6 +163,11 @@ _DIAGNOSE_PROMPT_TEMPLATE = """你是一个楼宇能耗管理系统的专家（D
 6. 【结论输出】格式见下方
 7. 【工单建议】在诊断结论中告知用户"如需生成维修工单，请回复'派单'或'生成工单'"。
    **禁止主动调用 create_work_order_draft**，仅当用户在后续消息中明确请求时才执行。
+
+**输出要求（强约束）**：
+- 禁止输出 `待补充`、`需调用`、`请继续执行哪项操作`、`[X]` 这类占位符或流程提示
+- 如果工具结果不足，必须明确写出哪个工具返回空结果/错误，以及因此无法确认的点
+- 如果 detect_energy_anomalies 未触发异常，必须明确说明"规则未触发"与"总量是否偏高"是两个不同判断，不能混为一谈
 
 **诊断结论格式**：
 > **诊断结论**：[X类故障]（根因：[hvac_root_cause 或 rule]）
@@ -208,6 +221,254 @@ def _truncate_tool_response(text: str, max_chars: int = _TOOL_RESPONSE_MAX_CHARS
     )
 
 
+_INCOMPLETE_DIAGNOSIS_PATTERNS = [
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in (
+        r"待补充",
+        r"需调用",
+        r"需要继续执行",
+        r"哪项操作",
+        r"query_[a-z_]+",
+        r"\[X[^\]]*\]",
+        r"\[Y[^\]]*\]",
+        r"\[Z[^\]]*\]",
+        r"\[N[^\]]*\]",
+    )
+]
+
+
+def _extract_tool_triples(messages: list[Any]) -> list[tuple[str, dict[str, Any], dict[str, Any]]]:
+    """从 Diagnose ReAct 消息链中提取 (tool_name, tool_args, tool_result) 三元组。"""
+    call_meta: dict[str, dict[str, Any]] = {}
+    for msg in messages:
+        if isinstance(msg, AIMessage):
+            for tc in getattr(msg, "tool_calls", None) or []:
+                call_meta[tc["id"]] = {
+                    "name": tc.get("name", "") or "",
+                    "args": tc.get("args", {}) or {},
+                }
+
+    triples: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
+    for msg in messages:
+        if not isinstance(msg, ToolMessage):
+            continue
+        tool_call_meta = call_meta.get(getattr(msg, "tool_call_id", ""), {})
+        tool_name = getattr(msg, "name", "") or tool_call_meta.get("name", "") or ""
+        result = extract_tool_payload(msg)
+        if (
+            isinstance(result, dict)
+            and result.get("type") == "tool"
+            and isinstance(result.get("content"), str)
+        ):
+            try:
+                decoded = json.loads(result["content"])
+                if isinstance(decoded, dict):
+                    result = decoded
+            except json.JSONDecodeError:
+                pass
+        if not isinstance(result, dict):
+            continue
+        if "error" in result and "error_code" in result:
+            continue
+        triples.append((tool_name, tool_call_meta.get("args", {}), result))
+
+    return triples
+
+
+def _is_incomplete_diagnosis_answer(text: str) -> bool:
+    stripped = (text or "").strip()
+    if not stripped:
+        return True
+    return any(pattern.search(stripped) for pattern in _INCOMPLETE_DIAGNOSIS_PATTERNS)
+
+
+def _sum_metric_records(payload: dict[str, Any], metric: str) -> float | None:
+    records = payload.get("records")
+    if not isinstance(records, list):
+        return None
+    values = [
+        float(row.get("value"))
+        for row in records
+        if isinstance(row, dict)
+        and row.get("metric") == metric
+        and isinstance(row.get("value"), (int, float))
+    ]
+    return round(sum(values), 4) if values else None
+
+
+def _extract_daily_total(payload: dict[str, Any], field: str) -> float | None:
+    records = payload.get("records")
+    if not isinstance(records, list) or not records:
+        return None
+    values = [
+        float(row.get(field))
+        for row in records
+        if isinstance(row, dict) and isinstance(row.get(field), (int, float))
+    ]
+    if not values:
+        return None
+    return round(values[0] if len(values) == 1 else sum(values), 4)
+
+
+def _summarize_rated_payload(payload: dict[str, Any]) -> dict[str, float | int | str] | None:
+    records = payload.get("records")
+    if not isinstance(records, list) or not records:
+        return None
+
+    actual_elec = 0.0
+    rated_elec = 0.0
+    actual_hac = 0.0
+    max_elec_dev: float | None = None
+    first_ts = ""
+
+    for row in records:
+        if not isinstance(row, dict):
+            continue
+        if not first_ts:
+            first_ts = str(row.get("timestamp", ""))[:10]
+        if isinstance(row.get("actual_electricity_kwh"), (int, float)):
+            actual_elec += float(row["actual_electricity_kwh"])
+        if isinstance(row.get("rated_electricity_kwh"), (int, float)):
+            rated_elec += float(row["rated_electricity_kwh"])
+        if isinstance(row.get("actual_hac_energy"), (int, float)):
+            actual_hac += float(row["actual_hac_energy"])
+        dev = row.get("electricity_deviation_pct")
+        if isinstance(dev, (int, float)):
+            max_elec_dev = dev if max_elec_dev is None else max(max_elec_dev, float(dev))
+
+    deviation_pct: float | None = None
+    if abs(rated_elec) > 1e-9:
+        deviation_pct = round((actual_elec - rated_elec) / abs(rated_elec) * 100, 2)
+
+    return {
+        "date": first_ts,
+        "actual_electricity_kwh": round(actual_elec, 4),
+        "rated_electricity_kwh": round(rated_elec, 4),
+        "actual_hac_energy": round(actual_hac, 4),
+        "deviation_pct": deviation_pct if deviation_pct is not None else 0.0,
+        "anomaly_hours": int(payload.get("anomaly_hours") or 0),
+        "total_hours": int(payload.get("total_hours") or len(records)),
+        "max_electricity_deviation_pct": round(max_elec_dev or 0.0, 2),
+    }
+
+
+def _build_diagnosis_fallback_answer(
+    *,
+    user_question: str,
+    tool_triples: list[tuple[str, dict[str, Any], dict[str, Any]]],
+) -> str | None:
+    """基于已获取的工具结果兜底生成完整诊断文本，避免输出占位符。"""
+    anomalies_payload: dict[str, Any] | None = None
+    rated_payload: dict[str, Any] | None = None
+    daily_payload: dict[str, Any] | None = None
+    energy_payload: dict[str, Any] | None = None
+
+    for tool_name, _args, payload in tool_triples:
+        if tool_name == "detect_energy_anomalies":
+            anomalies_payload = payload
+        elif tool_name == "get_building_rated_values":
+            rated_payload = payload
+        elif tool_name == "query_daily_energy_summary":
+            daily_payload = payload
+        elif tool_name == "query_energy_metrics":
+            energy_payload = payload
+
+    rated_summary = _summarize_rated_payload(rated_payload) if rated_payload else None
+    if rated_summary is None and daily_payload is None and energy_payload is None:
+        return None
+
+    date_label = ""
+    if daily_payload:
+        records = daily_payload.get("records")
+        if isinstance(records, list) and records:
+            first = records[0]
+            if isinstance(first, dict):
+                date_label = str(first.get("day", ""))[:10]
+    if not date_label and rated_summary:
+        date_label = str(rated_summary.get("date") or "")
+
+    actual_total = None
+    actual_hac = None
+    if daily_payload:
+        actual_total = _extract_daily_total(daily_payload, "total_electricity_kwh")
+        actual_hac = _extract_daily_total(daily_payload, "total_hac_energy")
+    if actual_total is None and rated_summary is not None:
+        actual_total = float(rated_summary["actual_electricity_kwh"])
+    if actual_hac is None and rated_summary is not None:
+        actual_hac = float(rated_summary["actual_hac_energy"])
+    if actual_total is None and energy_payload:
+        actual_total = _sum_metric_records(energy_payload, "electricity_kwh")
+
+    rated_total = None
+    deviation_pct = None
+    anomaly_hours = None
+    total_hours = None
+    peak_dev = None
+    if rated_summary is not None:
+        rated_total = float(rated_summary["rated_electricity_kwh"])
+        deviation_pct = float(rated_summary["deviation_pct"])
+        anomaly_hours = int(rated_summary["anomaly_hours"])
+        total_hours = int(rated_summary["total_hours"])
+        peak_dev = float(rated_summary["max_electricity_deviation_pct"])
+
+    anomalies = []
+    total_anomalies = 0
+    if anomalies_payload:
+        anomalies = anomalies_payload.get("anomalies", []) if isinstance(anomalies_payload.get("anomalies"), list) else []
+        total_anomalies = int(anomalies_payload.get("total_anomalies") or len(anomalies))
+
+    building_id = ""
+    for payload in (daily_payload, rated_payload, anomalies_payload, energy_payload):
+        if isinstance(payload, dict) and payload.get("building_id"):
+            building_id = str(payload["building_id"])
+            break
+
+    diagnosis = "未发现符合国标阈值的显著能耗异常"
+    root_cause = "无规则触发"
+    if anomalies:
+        first = anomalies[0] if isinstance(anomalies[0], dict) else {}
+        rule = str(first.get("rule_triggered") or "unknown")
+        hvac_root = str(first.get("hvac_root_cause") or "")
+        diagnosis = "检测到能耗异常"
+        root_cause = hvac_root or rule
+
+    qty_lines: list[str] = []
+    if date_label or building_id:
+        subject = f"{date_label} {building_id}".strip()
+        if subject:
+            qty_lines.append(f"- 诊断对象：{subject}")
+    if actual_total is not None:
+        qty_lines.append(f"- 当日电耗合计：{actual_total:.2f} kWh")
+    if actual_hac is not None and actual_hac > 0:
+        qty_lines.append(f"- 当天空调能耗合计：{actual_hac:.2f} kWh")
+    if rated_total is not None:
+        qty_lines.append(f"- 国标期望电耗合计：{rated_total:.2f} kWh")
+    if deviation_pct is not None:
+        qty_lines.append(f"- 电耗总偏差：{deviation_pct:+.2f}%")
+    if anomaly_hours is not None and total_hours is not None:
+        qty_lines.append(f"- 超限小时：{anomaly_hours}/{total_hours}")
+    if peak_dev is not None and peak_dev > 0:
+        qty_lines.append(f"- 单小时最大电耗偏差：{peak_dev:+.2f}%")
+    qty_lines.append(f"- 规则检测结果：{total_anomalies} 条异常记录")
+
+    suggest_lines = [
+        "- 优先核对前端口径是否把“总能耗”和“电耗/空调能耗”混用",
+        "- 核对日边界和业务时区，避免按 UTC 截断导致 4 月 18 日日总量失真",
+    ]
+    if not anomalies:
+        suggest_lines.append("- 如仍认为偏高，继续查看 24 小时功率曲线和前后 3 天日汇总对比")
+    else:
+        suggest_lines.append("- 继续结合异常小时的设备状态和运维知识库做根因排查")
+
+    return (
+        f"诊断结论：{diagnosis}（根因：{root_cause}）\n"
+        "量化依据：\n"
+        + "\n".join(qty_lines)
+        + "\n建议操作：\n"
+        + "\n".join(suggest_lines)
+    )
+
+
 def _make_mcp_tool(
     tool_name: str,
     description: str,
@@ -245,6 +506,12 @@ def _build_diagnose_base_tools() -> list[StructuredTool]:
     _s = _gs()
     _tr = f"{_s.DATA_TIME_START} ~ {_s.DATA_TIME_END}"
     return [
+    _make_mcp_tool(
+        "query_daily_energy_summary",
+        "查询单栋楼按天/周/月汇总的能耗数据。"
+        "当用户问'总能耗/总电耗为什么高'时优先使用，用于核实实际总量。",
+        args_schema=QueryDailyEnergySummaryInput,
+    ),
     _make_mcp_tool(
         "query_energy_metrics",
         "查询指定建筑在时间范围内的能耗指标时序数据（事实核查用）。"
@@ -581,7 +848,20 @@ async def diagnose_agent_node(state: AgentState) -> dict[str, Any]:
             if rc:
                 final_ai_msgs = [AIMessage(content=rc)]
                 break
+    tool_triples = _extract_tool_triples(new_messages)
     global_msg = [final_ai_msgs[-1]] if final_ai_msgs else []
+    current_answer = str(global_msg[0].content) if global_msg else ""
+    if _is_incomplete_diagnosis_answer(current_answer):
+        fallback_answer = _build_diagnosis_fallback_answer(
+            user_question=next(
+                (str(m.content) for m in reversed(list(history)) if isinstance(m, HumanMessage)),
+                "",
+            ),
+            tool_triples=tool_triples,
+        )
+        if fallback_answer:
+            logger.warning("Diagnose Agent 最终回答不完整，使用程序化兜底结果替换")
+            global_msg = [AIMessage(content=fallback_answer)]
 
     # 收集 artifacts + 检测工单草稿（HITL）
     artifacts = list(state.get("artifacts", []))

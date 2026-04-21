@@ -12,7 +12,7 @@ import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from app.graph.state import initial_state
 from app.graph.workflow import build_graph, _route_from_router
@@ -237,6 +237,13 @@ class TestRouterAgent:
         # 降级为 clarify
         assert result["intent"] == "clarify"
 
+    def test_fast_path_defers_aggregate_anomaly_question_to_llm(self):
+        """“总能耗为什么高”类问题应视为复合意图，不应被快速路由为纯诊断。"""
+        from app.graph.nodes.router_agent import _try_fast_path
+
+        result = _try_fast_path("4月18日办公楼总能耗为什么这么高？")
+        assert result is None
+
 
 # ===========================================================================
 # 3. 条件路由函数测试（纯逻辑，无 LLM）
@@ -340,7 +347,9 @@ class TestDiagnoseAgent:
     async def test_diagnose_agent_creates_work_order_pending(self):
         """Diagnose Agent 生成工单后，pending_action 应为 pending_approval。"""
         from langchain_core.messages import ToolMessage
+        from app.graph.nodes.diagnose_agent import reset_diagnose_agent_cache
 
+        reset_diagnose_agent_cache()
         state = initial_state()
         state["messages"] = [
             HumanMessage(content="办公楼凌晨3点耗电异常，帮我派单处理。"),
@@ -383,6 +392,9 @@ class TestDiagnoseAgent:
     @pytest.mark.asyncio
     async def test_diagnose_agent_error_graceful_degradation(self):
         """Diagnose Agent 执行失败时优雅降级。"""
+        from app.graph.nodes.diagnose_agent import reset_diagnose_agent_cache
+
+        reset_diagnose_agent_cache()
         state = initial_state()
         state["messages"] = [HumanMessage(content="诊断故障")]
 
@@ -400,6 +412,111 @@ class TestDiagnoseAgent:
         assert result["error"] is not None
         ai_messages = [m for m in result["messages"] if isinstance(m, AIMessage)]
         assert "故障诊断专家" in ai_messages[0].content
+
+    @pytest.mark.asyncio
+    async def test_diagnose_agent_replaces_incomplete_answer_with_fallback_summary(self):
+        """最终回答含“待补充/需调用”占位符时，应自动替换为完整兜底诊断。"""
+        from app.graph.nodes.diagnose_agent import reset_diagnose_agent_cache
+
+        reset_diagnose_agent_cache()
+        state = initial_state()
+        state["intent"] = "fault_diagnosis"
+        state["messages"] = [HumanMessage(content="4月18日办公楼总能耗为什么这么高？")]
+
+        anomaly_tool_call_id = "tool_call_anomaly"
+        rated_tool_call_id = "tool_call_rated"
+        daily_tool_call_id = "tool_call_daily"
+
+        mock_agent_result = {
+            "messages": [
+                *state["messages"],
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": daily_tool_call_id,
+                            "name": "query_daily_energy_summary",
+                            "args": {
+                                "building_id": "Office",
+                                "date_range": {
+                                    "start": "2026-04-18T00:00:00Z",
+                                    "end": "2026-04-19T00:00:00Z",
+                                },
+                                "granularity": "day",
+                            },
+                        }
+                    ],
+                ),
+                ToolMessage(
+                    content='{"building_id":"Office","records":[{"day":"2026-04-18","building_id":"Office","total_electricity_kwh":113.3049,"avg_ambient_temp":23.6,"total_water_m3":0.0,"total_hac_energy":33.852,"avg_supply_temp":0.0,"avg_return_temp":0.0,"avg_humidity":0.0,"avg_dew_temp":0.0}],"granularity":"day","date_range_days":1}',
+                    tool_call_id=daily_tool_call_id,
+                    name="query_daily_energy_summary",
+                ),
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": anomaly_tool_call_id,
+                            "name": "detect_energy_anomalies",
+                            "args": {
+                                "building_id": "Office",
+                                "time_range": {
+                                    "start": "2026-04-18T00:00:00Z",
+                                    "end": "2026-04-19T00:00:00Z",
+                                },
+                                "rules": ["electricity_overload", "hvac_overconsumption"],
+                            },
+                        }
+                    ],
+                ),
+                ToolMessage(
+                    content='{"anomalies":[],"total_anomalies":0,"building_id":"Office","period_start":"2026-04-18T00:00:00Z","period_end":"2026-04-19T00:00:00Z"}',
+                    tool_call_id=anomaly_tool_call_id,
+                    name="detect_energy_anomalies",
+                ),
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": rated_tool_call_id,
+                            "name": "get_building_rated_values",
+                            "args": {
+                                "building_id": "Office",
+                                "time_range": {
+                                    "start": "2026-04-18T00:00:00Z",
+                                    "end": "2026-04-19T00:00:00Z",
+                                },
+                                "metrics": ["electricity"],
+                            },
+                        }
+                    ],
+                ),
+                ToolMessage(
+                    content='{"building_id":"Office","primary_space_usage":"Office","sqm":5000,"records":[{"timestamp":"2026-04-18T00:00:00Z","hvac_mode":"Cooling","schedule_factor":0.5,"rated_water_m3":0.0,"rated_electricity_kwh":120.0,"rated_hac_energy":0.0,"expected_supply_temp":7.0,"expected_return_temp":12.0,"actual_water_m3":0.0,"actual_electricity_kwh":113.3049,"actual_hac_energy":33.852,"actual_supply_temp":null,"actual_return_temp":null,"water_deviation_pct":0.0,"electricity_deviation_pct":-5.58,"hac_deviation_pct":0.0}],"total_hours":24,"anomaly_hours":0,"period_start":"2026-04-18T00:00:00Z","period_end":"2026-04-19T00:00:00Z"}',
+                    tool_call_id=rated_tool_call_id,
+                    name="get_building_rated_values",
+                ),
+                AIMessage(
+                    content="诊断结论：未发现异常。\n量化依据：总电耗实际值：[需调用 query_energy_metrics 获取具体数值]\n建议操作：需要继续执行哪项操作？"
+                ),
+            ],
+        }
+
+        with patch("app.graph.nodes.diagnose_agent.create_react_agent") as mock_create:
+            mock_agent = AsyncMock()
+            mock_agent.ainvoke = AsyncMock(return_value=mock_agent_result)
+            mock_create.return_value = mock_agent
+
+            from app.graph.nodes.diagnose_agent import diagnose_agent_node
+            result = await diagnose_agent_node(state)
+
+        ai_messages = [m for m in result["messages"] if isinstance(m, AIMessage)]
+        assert ai_messages
+        final_text = ai_messages[0].content
+        assert "待补充" not in final_text
+        assert "需要继续执行" not in final_text
+        assert "113.30 kWh" in final_text
+        assert "0 条异常记录" in final_text
 
 
 # ===========================================================================

@@ -266,7 +266,9 @@ import * as echarts from '@/utils/echarts'
 import { useReportExport } from '@/composables/useReportExport'
 
 // ── 报表集成 ──
-const { registerSection, captureChart, setReportMeta } = useReportExport('querystats')
+const { registerSection, removeSection, captureChart, setReportMeta } = useReportExport('querystats', {
+  activateScopePrefixes: ['querystats'],
+})
 
 const dataRangeStore = useDataRangeStore()
 
@@ -648,6 +650,7 @@ const analysisInsights = computed<AnalysisInsight[]>(() => {
 // ── ECharts 多实例管理 ──
 const chartRefs = new Map<string, HTMLElement>()
 const chartInstances = new Map<string, echarts.ECharts>()
+const chartCaptureTimers = new Map<string, number>()
 
 function setChartRef(groupId: string, el: any) {
   if (el) chartRefs.set(groupId, el as HTMLElement)
@@ -669,11 +672,34 @@ const PARAM_COLORS: Record<string, string> = {
   supply_return_delta: '#ea7ccc',
 }
 
+const QUERY_STATS_CHART_SECTION_IDS = [
+  'qs-chart-energy',
+  'qs-chart-temperature',
+  'qs-chart-cop',
+  'qs-chart-device',
+] as const
+const QUERY_STATS_REPORT_CAPTURE_PADDING = { top: 18 } as const
+
+function clearCapturedChartSections() {
+  for (const id of QUERY_STATS_CHART_SECTION_IDS) {
+    removeSection(id)
+  }
+}
+
+function buildReportInsightItems() {
+  return analysisInsights.value.map(item => ({
+    tag: item.tag,
+    title: item.title,
+    text: item.text,
+  }))
+}
+
 // ── 统一查询 ──
 async function handleQuery() {
   const params = checkedParams.value
   if (params.length === 0) return
 
+  clearCapturedChartSections()
   loading.value = true
   queryResult.value = null
 
@@ -713,6 +739,15 @@ function registerReportSections(params: typeof allParams) {
     content: `楼宇：${buildingLabel.value}  |  日期范围：${startDate.value} ~ ${endDate.value}  |  监测参数：${params.map(p => p.label).join('、') || '无'}`,
   })
 
+  registerSection({
+    id: 'qs-insight',
+    title: `${buildingLabel.value} 异常/结论区`,
+    description: '基于统计区间内的能耗、环境、COP 与设备运行数据提炼关键异常和结论。',
+    type: 'insights',
+    order: 60,
+    insights: buildReportInsightItems(),
+  })
+
   if (queryResult.value?.records?.length) {
     registerSection({
       id: 'qs-energy-table',
@@ -738,18 +773,6 @@ function registerReportSections(params: typeof allParams) {
     })
   }
 
-  if (viewMode.value === 'analysis') {
-    setTimeout(() => {
-      let order = 20
-      for (const group of activeChartGroups.value) {
-        const inst = chartInstances.get(group.id)
-        if (inst) {
-          captureChart(inst, `qs-chart-${group.id}`, group.title, order)
-          order += 10
-        }
-      }
-    }, 400)
-  }
 }
 
 const PARAM_FIELD_MAP: Record<string, string> = {
@@ -1005,7 +1028,7 @@ function sharedXAxis(days: string[], options: { boundaryGap?: boolean } = {}) {
       rotate: days.length > 36 ? 28 : 0,
       color: '#7e8792',
       fontSize: 10,
-      margin: 12,
+      margin: 8,
       hideOverlap: true,
       showMinLabel: true,
       showMaxLabel: true,
@@ -1021,10 +1044,10 @@ function sharedLegend(items: string[], bottom = 10) {
     bottom,
     left: 'center' as const,
     icon: 'roundRect',
-    itemWidth: 12,
-    itemHeight: 8,
-    textStyle: { color: '#8c939a', fontSize: 11 },
-    itemGap: 16,
+    itemWidth: 11,
+    itemHeight: 7,
+    textStyle: { color: '#8c939a', fontSize: 10 },
+    itemGap: 12,
   }
 }
 
@@ -1033,8 +1056,8 @@ function sharedZoom() {
     {
       type: 'slider' as const,
       xAxisIndex: 0,
-      bottom: 6,
-      height: 18,
+      bottom: 0,
+      height: 12,
       borderColor: 'transparent',
       backgroundColor: '#f3f6f8',
       dataBackground: {
@@ -1042,7 +1065,7 @@ function sharedZoom() {
         areaStyle: { color: 'rgba(226,232,240,0.65)' },
       },
       fillerColor: 'rgba(76,175,80,0.14)',
-      handleSize: 14,
+      handleSize: 10,
       handleIcon: 'M8.7,11.9v-1.2H7.3v1.2H8.7z M8.7,9.4V8.1H7.3v1.2H8.7z M8.7,6.9V5.6H7.3v1.2H8.7z',
       handleStyle: {
         color: '#ffffff',
@@ -1061,6 +1084,33 @@ function sharedZoom() {
     { type: 'inside' as const, xAxisIndex: 0 },
   ]
 }
+
+function chartLegendBottom(hasZoom: boolean) {
+  return hasZoom ? 18 : 2
+}
+
+function sharedGrid(options: { hasZoom: boolean; left?: number; right?: number }) {
+  return {
+    left: options.left ?? 42,
+    right: options.right ?? 16,
+    top: 26,
+    bottom: options.hasZoom ? 42 : 22,
+    containLabel: true,
+  }
+}
+
+function computeNiceAxisMax(values: Array<number | null>, fallback = 10) {
+  const valid = values.filter((value): value is number => value != null && Number.isFinite(value) && value >= 0)
+  if (!valid.length) return fallback
+
+  const rawMax = Math.max(...valid)
+  if (rawMax <= 0) return fallback
+
+  const padded = rawMax * 1.08
+  const magnitude = 10 ** Math.floor(Math.log10(padded))
+  return Math.ceil(padded / magnitude) * magnitude
+}
+
 function makeSeriesData(records: any[], paramKey: string) {
   return records.map((r: any) => {
     const v = getRowValue(r, paramKey)
@@ -1073,11 +1123,17 @@ function renderAllCharts() {
   const data = queryResult.value
   if (!data?.records?.length) return
 
+  for (const timer of chartCaptureTimers.values()) {
+    window.clearTimeout(timer)
+  }
+  chartCaptureTimers.clear()
+
   for (const [id, inst] of chartInstances) {
     inst.dispose()
     chartInstances.delete(id)
   }
 
+  let reportOrder = 20
   for (const group of activeChartGroups.value) {
     const el = chartRefs.get(group.id)
     if (!el) continue
@@ -1089,7 +1145,42 @@ function renderAllCharts() {
     else if (group.id === 'cop') renderCOPChart(inst, data)
     else if (group.id === 'temperature') renderTempChart(inst, data)
     else if (group.id === 'device') renderDeviceChart(inst, data)
+
+    queueReportChartCapture(group, inst, reportOrder)
+    reportOrder += 10
   }
+}
+
+function queueReportChartCapture(group: ChartGroup, inst: echarts.ECharts, order: number) {
+  const sectionId = `qs-chart-${group.id}`
+  const existingTimer = chartCaptureTimers.get(sectionId)
+  if (existingTimer) {
+    window.clearTimeout(existingTimer)
+    chartCaptureTimers.delete(sectionId)
+  }
+
+  let captured = false
+  const captureOnce = () => {
+    if (captured) return
+    captured = true
+    inst.off('finished', captureOnce)
+
+    const timer = chartCaptureTimers.get(sectionId)
+    if (timer) {
+      window.clearTimeout(timer)
+      chartCaptureTimers.delete(sectionId)
+    }
+
+    captureChart(inst, sectionId, group.title, order, {
+      padding: QUERY_STATS_REPORT_CAPTURE_PADDING,
+    })
+  }
+
+  inst.off('finished', captureOnce)
+  inst.on('finished', captureOnce)
+
+  const timer = window.setTimeout(captureOnce, 1400)
+  chartCaptureTimers.set(sectionId, timer)
 }
 
 // ── 图表 1: 能耗总览 ──
@@ -1101,10 +1192,13 @@ function renderEnergyChart(inst: echarts.ECharts, data: any) {
   const kwhKeys = ['electricity_kwh', 'hac_energy'].filter(k => checked.has(k))
   const hasWater = checked.has('water_m3')
   const kwhLabels: Record<string, string> = { electricity_kwh: '日用电 (kWh)', hac_energy: '暖通空调能耗 (kWh)' }
+  const kwhSeriesValues = kwhKeys.flatMap(key => makeSeriesData(records, key))
+  const waterSeriesValues = hasWater ? makeSeriesData(records, 'water_m3') : []
 
   const yAxis: any[] = []
   if (kwhKeys.length > 0) yAxis.push({
     type: 'value', name: 'kWh', position: 'left',
+    max: computeNiceAxisMax(kwhSeriesValues, 100),
     nameTextStyle: { color: '#8c939a', fontSize: 12 },
     axisLine: { show: false }, axisTick: { show: false },
     splitLine: { lineStyle: { color: '#f0f2f5', type: 'dashed' } },
@@ -1112,6 +1206,7 @@ function renderEnergyChart(inst: echarts.ECharts, data: any) {
   })
   if (hasWater) yAxis.push({
     type: 'value', name: 'm³', position: kwhKeys.length > 0 ? 'right' : 'left',
+    max: computeNiceAxisMax(waterSeriesValues, 10),
     nameTextStyle: { color: '#5470c6', fontSize: 12 },
     axisLine: { show: false }, axisTick: { show: false },
     splitLine: kwhKeys.length > 0 ? { show: false } : { lineStyle: { color: '#f0f2f5', type: 'dashed' } },
@@ -1143,8 +1238,8 @@ function renderEnergyChart(inst: echarts.ECharts, data: any) {
   const hasZoom = days.length > 14
   inst.setOption({
     tooltip: sharedTooltip(),
-    legend: sharedLegend(series.map(s => s.name), hasZoom ? 42 : 18),
-    grid: { left: 54, right: hasWater && kwhKeys.length > 0 ? 52 : 18, top: 44, bottom: hasZoom ? 88 : 62, containLabel: false },
+    legend: sharedLegend(series.map(s => s.name), chartLegendBottom(hasZoom)),
+    grid: sharedGrid({ hasZoom, left: 42, right: hasWater && kwhKeys.length > 0 ? 38 : 12 }),
     xAxis: sharedXAxis(days, { boundaryGap: true }),
     yAxis,
     dataZoom: hasZoom ? sharedZoom() : [],
@@ -1169,8 +1264,8 @@ function renderCOPChart(inst: echarts.ECharts, data: any) {
 
   inst.setOption({
     tooltip: sharedTooltip(),
-    legend: sharedLegend(['COP值', 'AC功率 (kW)', '供回水温差 (°C)'], hasZoom ? 42 : 18),
-    grid: { left: 54, right: 54, top: 44, bottom: hasZoom ? 88 : 62, containLabel: false },
+    legend: sharedLegend(['COP值', 'AC功率 (kW)', '供回水温差 (°C)'], chartLegendBottom(hasZoom)),
+    grid: sharedGrid({ hasZoom, left: 42, right: 42 }),
     xAxis: sharedXAxis(days, { boundaryGap: true }),
     yAxis: [
       {
@@ -1284,8 +1379,8 @@ function renderTempChart(inst: echarts.ECharts, data: any) {
 
   inst.setOption({
     tooltip: sharedTooltip(),
-    legend: sharedLegend(series.map(s => s.name), hasZoom ? 42 : 18),
-    grid: { left: 54, right: hasHumidity && tempKeys.length > 0 ? 54 : 18, top: 44, bottom: hasZoom ? 88 : 62, containLabel: false },
+    legend: sharedLegend(series.map(s => s.name), chartLegendBottom(hasZoom)),
+    grid: sharedGrid({ hasZoom, left: 42, right: hasHumidity && tempKeys.length > 0 ? 38 : 12 }),
     xAxis: sharedXAxis(days),
     yAxis,
     dataZoom: hasZoom ? sharedZoom() : [],
@@ -1304,8 +1399,8 @@ function renderDeviceChart(inst: echarts.ECharts, data: any) {
 
   inst.setOption({
     tooltip: sharedTooltip(),
-    legend: sharedLegend(['设备正常率', 'AC平均功率 (kW)'], hasZoom ? 42 : 18),
-    grid: { left: 54, right: 54, top: 44, bottom: hasZoom ? 88 : 62, containLabel: false },
+    legend: sharedLegend(['设备正常率', 'AC平均功率 (kW)'], chartLegendBottom(hasZoom)),
+    grid: sharedGrid({ hasZoom, left: 42, right: 42 }),
     xAxis: sharedXAxis(days, { boundaryGap: true }),
     yAxis: [
       {
@@ -1385,6 +1480,10 @@ onMounted(async () => {
 onUnmounted(() => {
   window.removeEventListener('resize', onResize)
   document.removeEventListener('click', closeQsDropdowns)
+  for (const timer of chartCaptureTimers.values()) {
+    window.clearTimeout(timer)
+  }
+  chartCaptureTimers.clear()
   for (const inst of chartInstances.values()) inst.dispose()
   chartInstances.clear()
 })
@@ -1755,11 +1854,11 @@ onUnmounted(() => {
   font-weight: 600;
 }
 .chart-container--analysis {
-  min-height: 320px;
-  padding-top: 6px;
+  min-height: 280px;
+  padding-top: 2px;
 }
 .analysis-card--full .chart-container--analysis {
-  min-height: 300px;
+  min-height: 260px;
 }
 .insight-card {
   overflow: visible;

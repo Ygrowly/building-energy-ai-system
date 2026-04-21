@@ -107,7 +107,9 @@ const chatStore = useChatStore()
 const buildingStore = useBuildingStore()
 const route = useRoute()
 const router = useRouter()
-const { registerSection, setReportMeta } = useReportExport('workorders')
+const { registerSection, setReportMeta } = useReportExport('workorders', {
+  activateScopePrefixes: ['workorders'],
+})
 
 const actionLoading = ref<string | null>(null)
 const rejectingId = ref<string | null>(null)

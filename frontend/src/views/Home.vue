@@ -145,7 +145,9 @@ import type { ReportCardItem } from '@/stores/reportStore'
 const buildingStore = useBuildingStore()
 const authStore     = useAuthStore()
 const notifStore    = useNotificationStore()
-const { registerSection, setReportMeta } = useReportExport('home')
+const { registerSection, setReportMeta } = useReportExport('home', {
+  activateScopePrefixes: ['home'],
+})
 
 const displayName = computed(() => authStore.user?.username ?? '访客')
 

@@ -67,10 +67,10 @@
           <text class="chip-title">服务楼宇</text>
           <view class="chip-row">
             <text
-              v-for="building in profile?.service_buildings || []"
-              :key="building"
+              v-for="building in serviceBuildingChips"
+              :key="building.raw"
               class="building-chip"
-            >{{ building }}</text>
+            >{{ building.label }}</text>
             <text v-if="!profile?.service_buildings?.length" class="empty-chip">当前按跨楼宇支援处理</text>
           </view>
         </view>
@@ -142,6 +142,7 @@ import { useAuthStore } from '../../../stores/auth'
 import { useRouteGuard } from '../../../utils/route-guard'
 import { WORKER_ROLES } from '../../../constants/roles'
 import { workerProfileApi, type WorkerProfileItem } from '../../../api/workerProfile'
+import { formatBuildingLabel } from '../../../utils/display'
 
 useRouteGuard(WORKER_ROLES)
 
@@ -170,6 +171,12 @@ const capacityText = computed(() => {
   if (typeof ratio !== 'number') return '0%'
   return `${Math.round(ratio * 100)}%`
 })
+const serviceBuildingChips = computed(() =>
+  (profile.value?.service_buildings || []).map((building) => ({
+    raw: building,
+    label: formatBuildingLabel(building),
+  })),
+)
 
 function fillForm(nextProfile: WorkerProfileItem) {
   form.shift_status = nextProfile.shift_status || 'on_duty'

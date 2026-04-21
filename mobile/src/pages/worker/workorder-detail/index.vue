@@ -684,7 +684,7 @@ const canOpenWorkerAi = computed(() => Boolean(
 ))
 const workerAiEntryText = computed(() => {
   if (canOpenWorkerAi.value) {
-    return '已经进入现场处理阶段。维小修现在负责现场排查、图片/语音判断、备注整理和经验建议，流程动作仍在本页完成。'
+    return '已经进入现场处理阶段。维小修现在负责现场排查、图片/语音判断、备注整理和经验参考，流程动作仍在本页完成。'
   }
   if (hallEntry.value?.status === 'assigned') {
     return '请先在本页确认协同任务。确认后再接入维小修看现场。'

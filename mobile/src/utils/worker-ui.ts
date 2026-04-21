@@ -1,6 +1,6 @@
 import type { Incident, IncidentCurrentWorkOrder } from '../api/incident'
 import { formatDateTime, formatRelativeTime } from './format'
-import { formatBuildingLabel, formatDeviceLabel, formatRuleLabel, formatSystemLabel, sanitizeDisplayText } from './display'
+import { formatBuildingLabel, formatDeviceLabel, formatRuleLabel, formatSystemLabel, sanitizeDisplayText, formatWorkOrderTitle } from './display'
 
 export type WorkerOrderBucket = 'pending_start' | 'in_progress' | 'completed'
 
@@ -16,6 +16,7 @@ export interface WorkerFeatureOrder {
   ticketId: string
   incidentId?: string
   dispatchId?: string
+  anomalyType?: string
   title: string
   building: string
   location: string
@@ -211,7 +212,12 @@ export function getWorkerFeatureOrder(incidents: Incident[]): WorkerFeatureOrder
     ticketId: order?.ticket_id || target.incident_id,
     incidentId: target.incident_id,
     dispatchId: dispatch?.id || undefined,
-    title: sanitizeDisplayText(target.summary_text) || formatRuleLabel(target.rule_triggered),
+    anomalyType: formatSystemLabel(target.rule_triggered),
+    title: formatWorkOrderTitle({
+      ruleTriggered: target.rule_triggered,
+      summaryText: target.summary_text,
+      buildingId: target.building_id,
+    }) || formatRuleLabel(target.rule_triggered),
     building,
     location,
     time: formatDateTime(dispatch?.dispatch_at || order?.dispatch_at || target.created_at),

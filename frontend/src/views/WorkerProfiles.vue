@@ -211,6 +211,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { Icon } from '@iconify/vue'
+import { getBuildingLabel } from '@/constants/buildings'
 import {
   getWorkerProfileOptions,
   listWorkerProfiles,
@@ -310,7 +311,7 @@ function capacityClass(profile: WorkerProfileItem) {
 }
 
 function buildingLabel(buildingId: string) {
-  return buildingId
+  return getBuildingLabel(buildingId, buildingId)
 }
 
 function skillDraft(skillId: string) {

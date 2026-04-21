@@ -31,6 +31,10 @@ export function useDispatchHallAdmin(options: UseDispatchHallAdminOptions) {
     return entry.reason || entry.support_reason || entry.work_order?.dispatch_blocked_reason || '共享事项待处理'
   }
 
+  function hallEntryIssue(entry: any) {
+    return entry.work_order?.issue_description || '现场异常情况待确认'
+  }
+
   function hallEmptyHint(entry: any) {
     if (entry.entry_type === 'takeover_candidate') {
       return '当前没有接管申请，系统已开放待接管，可先查看改派建议或催办责任人。'
@@ -179,6 +183,7 @@ export function useDispatchHallAdmin(options: UseDispatchHallAdminOptions) {
     hallEntryTitle,
     hallEntryOwner,
     hallEntryReason,
+    hallEntryIssue,
     hallEmptyHint,
     canSuggestHallTakeover,
     canNudgeHallOwner,

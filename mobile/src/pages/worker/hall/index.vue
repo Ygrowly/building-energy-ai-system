@@ -70,6 +70,10 @@
             <text class="detail-value multiline">{{ reasonText(entry) }}</text>
           </view>
           <view class="detail-line">
+            <text class="detail-label">异常情况</text>
+            <text class="detail-value multiline">{{ issueText(entry) }}</text>
+          </view>
+          <view class="detail-line">
             <text class="detail-label">建议措施</text>
             <text class="detail-value multiline">{{ suggestionText(entry) }}</text>
           </view>
@@ -238,6 +242,10 @@ function reasonText(entry: DispatchHallEntry) {
     return detail || overdueText || '当前派工已超时，进入共享接管池'
   }
   return sanitizeDisplayText(entry.support_reason || entry.reason || '') || '主责任人正在请求协同支援'
+}
+
+function issueText(entry: DispatchHallEntry) {
+  return sanitizeDisplayText(entry.work_order?.issue_description) || '现场异常情况待确认'
 }
 
 function suggestionText(entry: DispatchHallEntry) {

@@ -50,6 +50,7 @@
     :hall-entry-title="hallEntryTitle"
     :hall-entry-owner="hallEntryOwner"
     :hall-entry-reason="hallEntryReason"
+    :hall-entry-issue="hallEntryIssue"
     :hall-empty-hint="hallEmptyHint"
     :can-suggest-hall-takeover="canSuggestHallTakeover"
     :can-nudge-hall-owner="canNudgeHallOwner"
@@ -180,6 +181,10 @@ defineProps({
     required: true,
   },
   hallEntryReason: {
+    type: Function as PropType<(entry: any) => string>,
+    required: true,
+  },
+  hallEntryIssue: {
     type: Function as PropType<(entry: any) => string>,
     required: true,
   },

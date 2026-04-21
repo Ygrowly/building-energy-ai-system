@@ -98,7 +98,7 @@
         <!-- 思考中动画 -->
         <view v-if="msg.role === 'ai' && msg.thinking" class="msg-bubble ai thinking-bubble">
           <view class="dot" /><view class="dot" /><view class="dot" />
-          <text v-if="msg.content" class="thinking-text">{{ msg.content }}</text>
+          <text v-if="msg.content" class="thinking-text">{{ formatAiDisplayText(msg.content) }}</text>
         </view>
         <view v-else-if="shouldRenderOperatorSummaryCard(msg)" class="analysis-summary-card">
           <view class="analysis-summary-head">
@@ -113,7 +113,7 @@
             >{{ chip }}</text>
           </view>
           <text
-            v-for="(paragraph, paragraphIndex) in splitMessageContent(msg.content)"
+            v-for="(paragraph, paragraphIndex) in splitMessageContent(msg.content, true)"
             :key="`summary_${idx}_${paragraphIndex}`"
             class="analysis-summary-text"
           >{{ paragraph }}</text>
@@ -134,10 +134,10 @@
           class="msg-bubble"
           :id="msg.role === 'ai' ? messageBubbleId(idx) : undefined"
           :class="msg.role"
-          @longpress="msg.role === 'ai' && msg.content ? openAiMessageMenu(msg.content, idx) : undefined"
+          @longpress="msg.role === 'ai' && msg.content ? openAiMessageMenu(formatAiDisplayText(msg.content), idx) : undefined"
         >
           <text
-            v-for="(paragraph, paragraphIndex) in splitMessageContent(msg.content)"
+            v-for="(paragraph, paragraphIndex) in splitMessageContent(msg.content, msg.role === 'ai')"
             :key="`${idx}_${paragraphIndex}`"
             class="msg-paragraph"
           >{{ paragraph }}</text>
@@ -156,8 +156,8 @@
           <view v-if="msg.chart" class="analysis-card chart-card">
             <view class="analysis-card-head analysis-card-head--stack">
               <view class="analysis-card-title-wrap">
-                <text class="analysis-card-title">{{ msg.chart?.title || '运营图表' }}</text>
-                <text v-if="msg.chart?.source" class="analysis-card-source">{{ msg.chart.source }}</text>
+                <text class="analysis-card-title">{{ formatAiDisplayText(msg.chart?.title || '运营图表') }}</text>
+                <text v-if="msg.chart?.source" class="analysis-card-source">{{ formatAiDisplayText(msg.chart.source) }}</text>
               </view>
               <view class="chart-toolbar-row">
                 <view class="chart-view-switch">
@@ -336,7 +336,7 @@
             </view>
             <view v-if="msg.showEvidence" class="evidence-list">
               <view v-for="claim in msg.evidenceClaims" :key="claim.claim" class="evidence-item">
-                <text class="evidence-claim">{{ claim.claim }}</text>
+                <text class="evidence-claim">{{ formatAiDisplayText(claim.claim) }}</text>
                 <text class="evidence-ref">{{ claim.evidence_refs.join(' · ') }}</text>
               </view>
             </view>
@@ -348,14 +348,14 @@
               class="experience-card"
             >
               <view class="experience-card-head">
-                <text class="experience-card-title">{{ item.organized_text || item.source_text || '经验记录' }}</text>
+                <text class="experience-card-title">{{ formatAiDisplayText(item.organized_text || item.source_text || '经验记录') }}</text>
                 <text v-if="item.score != null" class="experience-card-score">匹配 {{ formatExperienceScore(item.score) }}</text>
               </view>
               <text v-if="item.source_work_order_id" class="experience-card-meta">来源工单：{{ item.source_work_order_id }}</text>
-              <text v-if="item.suggested_steps?.length" class="experience-card-copy">建议：{{ item.suggested_steps.join('，') }}</text>
-              <text v-if="item.safety_notes?.length" class="experience-card-copy warn">注意：{{ item.safety_notes.join('，') }}</text>
+              <text v-if="item.suggested_steps?.length" class="experience-card-copy">建议：{{ formatDisplayList(item.suggested_steps) }}</text>
+              <text v-if="item.safety_notes?.length" class="experience-card-copy warn">注意：{{ formatDisplayList(item.safety_notes) }}</text>
               <text v-if="item.conflict_flags?.length" class="experience-card-copy risk">
-                风险：{{ item.conflict_flags.map(flag => flag.message).filter(Boolean).join('，') }}
+                风险：{{ formatDisplayList(item.conflict_flags.map(flag => flag.message).filter(Boolean)) }}
               </text>
               <view class="experience-card-footer">
                 <text class="experience-card-stats">有用 {{ item.helpful_count || 0 }} · 引用 {{ item.usage_count || 0 }}</text>
@@ -390,8 +390,8 @@
                 :key="followup"
                 class="followup-chip"
                 :class="{ disabled: sending }"
-                @click="sendPresetMessage(followup)"
-              >{{ followup }}</text>
+                @click="sendPresetMessage(formatAiDisplayText(followup))"
+              >{{ formatAiDisplayText(followup) }}</text>
             </view>
           </view>
         </view>
@@ -400,7 +400,7 @@
       <!-- 娴佸紡杈撳嚭涓?-->
       <view v-if="streamingText" class="msg ai-msg">
         <view class="msg-bubble ai streaming">
-          <text>{{ streamingText }}</text>
+          <text>{{ formatAiDisplayText(streamingText) }}</text>
           <view class="cursor" />
         </view>
       </view>
@@ -415,7 +415,7 @@
             <text class="step-panel-tag">维修流程</text>
             <text class="step-panel-index">{{ completedStepCount }}/{{ workflowSteps.length }} 已完成</text>
           </view>
-          <text class="step-panel-title">{{ guidanceStep?.title || '现场排查步骤' }}</text>
+          <text class="step-panel-title">{{ formatAiDisplayText(guidanceStep?.title || '现场排查步骤') }}</text>
           <view class="step-panel-pills">
             <text class="step-panel-pill current">第 {{ activeStepIndex + 1 }} 步</text>
             <text class="step-panel-pill">{{ guidanceStep ? stepStatusLabel(guidanceStep.status) : '待处理' }}</text>
@@ -470,13 +470,13 @@
                   <view class="flow-step-head">
                     <view>
                       <text class="step-panel-tag">{{ step.id === currentStep?.id ? '当前步骤' : stepStatusLabel(step.status) }}</text>
-                      <text class="flow-step-title">{{ step.title }}</text>
+                      <text class="flow-step-title">{{ formatAiDisplayText(step.title) }}</text>
                     </view>
                     <text class="flow-step-index">第 {{ index + 1 }} 步</text>
                   </view>
-                  <text class="step-panel-text">{{ step.instruction }}</text>
-                  <text v-if="step.expected_result" class="step-panel-sub">预期：{{ step.expected_result }}</text>
-                  <text v-if="step.risk_note" class="step-panel-sub warn">注意：{{ step.risk_note }}</text>
+                  <text class="step-panel-text">{{ formatAiDisplayText(step.instruction) }}</text>
+                  <text v-if="step.expected_result" class="step-panel-sub">预期：{{ formatAiDisplayText(step.expected_result) }}</text>
+                  <text v-if="step.risk_note" class="step-panel-sub warn">注意：{{ formatAiDisplayText(step.risk_note) }}</text>
                   <textarea
                     v-model="stepNotes[step.id]"
                     class="step-note-input"
@@ -510,11 +510,11 @@
       </view>
     </view>
 
-    <!-- 经验推荐 -->
+    <!-- 经验参考 -->
     <view v-if="isWorkerMode && experienceRecommendations.length" class="recommend-panel">
       <view class="recommend-panel-head">
-        <text class="recommend-panel-title">经验推荐</text>
-        <text class="recommend-panel-subtitle">基于当前工单和维修步骤召回的历史经验</text>
+        <text class="recommend-panel-title">经验参考</text>
+        <text class="recommend-panel-subtitle">基于当前工单召回的历史相似处理经验，仅供现场参考</text>
       </view>
       <view
         v-for="item in experienceRecommendations"
@@ -522,13 +522,13 @@
         class="recommend-card"
       >
         <view class="recommend-card-head">
-          <text class="recommend-card-title">{{ item.organized_text || '经验记录' }}</text>
+          <text class="recommend-card-title">{{ formatAiDisplayText(item.organized_text || '经验记录') }}</text>
           <text v-if="item.confidence != null" class="recommend-card-score">匹配 {{ formatExperienceScore(item.confidence) }}</text>
         </view>
         <text v-if="item.source_work_order_id" class="recommend-card-meta">来源工单：{{ item.source_work_order_id }}</text>
-        <text v-if="item.safety_notes?.length" class="recommend-card-copy warn">注意：{{ item.safety_notes.join('，') }}</text>
+        <text v-if="item.safety_notes?.length" class="recommend-card-copy warn">注意：{{ formatDisplayList(item.safety_notes) }}</text>
         <text v-if="item.conflict_flags?.length" class="recommend-card-copy risk">
-          风险：{{ item.conflict_flags.map(flag => flag.message).filter(Boolean).join('，') }}
+          风险：{{ formatDisplayList(item.conflict_flags.map(flag => flag.message).filter(Boolean)) }}
         </text>
         <view class="recommend-card-footer">
           <text class="recommend-card-stats">已有 {{ item.helpful_count || 0 }} 次正向反馈</text>
@@ -562,7 +562,7 @@
             <view class="floating-step-popover-head">
               <view class="floating-step-popover-copy">
                 <text class="floating-step-popover-tag">维修流程</text>
-                <text class="floating-step-popover-title">{{ guidanceStep?.title || '现场排查步骤' }}</text>
+                <text class="floating-step-popover-title">{{ formatAiDisplayText(guidanceStep?.title || '现场排查步骤') }}</text>
                 <text class="floating-step-popover-sub">{{ completedStepCount }}/{{ workflowSteps.length }} 已完成，左右滑动查看不同步骤</text>
               </view>
               <text class="floating-step-popover-close" @click.stop="toggleStepPanel">收起</text>
@@ -611,13 +611,13 @@
                         <view class="flow-step-head">
                           <view>
                             <text class="step-panel-tag">{{ step.id === currentStep?.id ? '当前步骤' : stepStatusLabel(step.status) }}</text>
-                            <text class="flow-step-title">{{ step.title }}</text>
+                            <text class="flow-step-title">{{ formatAiDisplayText(step.title) }}</text>
                           </view>
                           <text class="flow-step-index">第 {{ index + 1 }} 步</text>
                         </view>
-                        <text class="step-panel-text">{{ step.instruction }}</text>
-                        <text v-if="step.expected_result" class="step-panel-sub">预期：{{ step.expected_result }}</text>
-                        <text v-if="step.risk_note" class="step-panel-sub warn">注意：{{ step.risk_note }}</text>
+                        <text class="step-panel-text">{{ formatAiDisplayText(step.instruction) }}</text>
+                        <text v-if="step.expected_result" class="step-panel-sub">预期：{{ formatAiDisplayText(step.expected_result) }}</text>
+                        <text v-if="step.risk_note" class="step-panel-sub warn">注意：{{ formatAiDisplayText(step.risk_note) }}</text>
                         <textarea
                           v-model="stepNotes[step.id]"
                           class="step-note-input"
@@ -801,6 +801,7 @@ import {
 } from '../api/maintenance-experience'
 import { workerProfileApi } from '../api/workerProfile'
 import { getBuildingLabel } from '../constants/buildings'
+import { sanitizeDisplayText } from '../utils/display'
 
 interface ChatMsg {
   role: 'user' | 'ai'
@@ -911,8 +912,9 @@ const chatHint = computed(() => props.hint || (
 ))
 const orderIntro = computed(() => {
   if (!props.order) return ''
-  const issue = props.order.issue_description?.slice(0, 60) || '现场情况待补充'
-  return `${props.order.building_id} - ${issue}`
+  const buildingLabel = getBuildingLabel(props.order.building_id, props.order.building_id || '未知建筑')
+  const issue = sanitizeDisplayText(props.order.issue_description?.slice(0, 60) || '现场情况待补充')
+  return `${buildingLabel} - ${issue}`
 })
 const welcomeLead = computed(() => props.order ? '您好！我已了解当前工单情况：' : '您好，我是楼宇运维 AI 助手。')
 const welcomeBody = computed(() => (
@@ -1054,6 +1056,17 @@ function pushUniqueAiMessage(content: string) {
   messages.value.push({ role: 'ai', content })
 }
 
+function formatAiDisplayText(value?: string | null) {
+  return sanitizeDisplayText(value)
+}
+
+function formatDisplayList(values?: Array<string | null | undefined>) {
+  return (values || [])
+    .map(item => formatAiDisplayText(item))
+    .filter(Boolean)
+    .join('，')
+}
+
 function shouldPreferWorkerGeneralChat(text: string) {
   const normalized = String(text || '').trim().toLowerCase()
   if (!normalized) return true
@@ -1104,8 +1117,9 @@ function selectedOptionLabel(options: OperatorFilterOption[], value: string, fal
   return options.find(item => item.value === value)?.label || fallback
 }
 
-function splitMessageContent(text: string) {
-  const paragraphs = String(text || '')
+function splitMessageContent(text: string, sanitize = false) {
+  const source = sanitize ? formatAiDisplayText(text) : String(text || '')
+  const paragraphs = source
     .split(/\n+/)
     .map(item => item.trim())
     .filter(Boolean)
@@ -1148,16 +1162,16 @@ function normalizeScopeStatusLabels(statusValue: unknown) {
   return values
     .map(item => String(item || '').trim())
     .filter(Boolean)
-    .map(item => labels[item] || item)
+    .map(item => labels[item] || formatAiDisplayText(item))
 }
 
 function analysisScopeChips(msg: ChatMsg) {
   const scope = msg.scope || {}
   const chips = [
-    scope.date_label ? String(scope.date_label) : '',
+    scope.date_label ? formatAiDisplayText(String(scope.date_label)) : '',
     scope.building_id ? getBuildingLabel(String(scope.building_id), String(scope.building_id)) : '',
-    scope.team_name ? String(scope.team_name) : '',
-    scope.worker_name ? String(scope.worker_name) : '',
+    scope.team_name ? formatAiDisplayText(String(scope.team_name)) : '',
+    scope.worker_name ? formatAiDisplayText(String(scope.worker_name)) : '',
     ...normalizeScopeStatusLabels(scope.status).map(item => `状态 · ${item}`),
   ].filter(Boolean)
   return chips as string[]
@@ -1169,7 +1183,7 @@ function formatSummaryValue(value: unknown, unit = '') {
     const normalized = Number.isInteger(value) ? String(value) : value.toFixed(1)
     return `${normalized}${unit}`
   }
-  return `${String(value)}${unit}`
+  return `${formatAiDisplayText(String(value))}${unit}`
 }
 
 function analysisSummaryStats(msg: ChatMsg) {
@@ -1234,7 +1248,7 @@ function analysisSummaryStats(msg: ChatMsg) {
   const fallbackEntries = Object.entries(summary)
     .filter(([, value]) => ['number', 'string'].includes(typeof value))
     .slice(0, 4)
-    .map(([key, value]) => ({ label: key, value: formatSummaryValue(value) }))
+    .map(([key, value]) => ({ label: formatAiDisplayText(key), value: formatSummaryValue(value) }))
   return fallbackEntries.filter(item => item.value !== '--')
 }
 
@@ -1316,7 +1330,7 @@ function chartSeriesTabs(chart: Record<string, any> | null | undefined) {
   const series = Array.isArray(chart?.series) ? chart.series : []
   return series.map((entry: any, index: number) => ({
     key: `${entry?.name || 'series'}_${index}`,
-    label: String(entry?.name || `系列 ${index + 1}`),
+    label: formatAiDisplayText(String(entry?.name || `系列 ${index + 1}`)),
   }))
 }
 
@@ -1330,7 +1344,7 @@ function chartSeriesName(chart: Record<string, any> | null | undefined, selected
   const series = Array.isArray(chart?.series) ? chart.series : []
   if (!series.length) return '数值'
   const seriesIndex = clampSeriesIndex(chart, selectedSeriesIndex)
-  return String(series[seriesIndex]?.name || `系列 ${seriesIndex + 1}`)
+  return formatAiDisplayText(String(series[seriesIndex]?.name || `系列 ${seriesIndex + 1}`))
 }
 
 function inferChartNumericUnit(seriesName: string) {
@@ -1362,28 +1376,29 @@ function buildChartRows(chart: Record<string, any> | null | undefined, selectedS
   const seriesIndex = clampSeriesIndex(chart, selectedSeriesIndex)
   const primarySeries = series[seriesIndex] || series[0]
   const primary = Array.isArray(primarySeries?.data) ? primarySeries.data : []
-  const unit = inferChartNumericUnit(String(primarySeries?.name || ''))
+  const primarySeriesName = formatAiDisplayText(String(primarySeries?.name || '值'))
+  const unit = inferChartNumericUnit(primarySeriesName)
   return x.map((label: string, index: number) => {
     const secondaryValues = series
       .filter((_: any, currentIndex: number) => currentIndex !== seriesIndex)
       .map((entry: any) => {
-        const entryName = String(entry?.name || '值')
+        const entryName = formatAiDisplayText(String(entry?.name || '值'))
         return `${entryName} ${formatChartNumber(entry?.data?.[index] ?? 0, inferChartNumericUnit(entryName))}`
       })
       .join(' · ')
     const rawValue = primary[index] ?? 0
     return {
       index,
-      label,
+      label: formatAiDisplayText(label),
       rawValue: Number(rawValue || 0),
-      primaryValue: `${primarySeries?.name || '值'} ${formatChartNumber(rawValue, unit)}`,
+      primaryValue: `${primarySeriesName} ${formatChartNumber(rawValue, unit)}`,
       secondaryValues,
     }
   })
 }
 
 function truncateChartAxisLabel(label: string) {
-  const value = String(label || '')
+  const value = formatAiDisplayText(String(label || ''))
   return value.length > 8 ? `${value.slice(0, 8)}...` : value
 }
 
@@ -1611,11 +1626,11 @@ function buildChartTableRows(chart: Record<string, any> | null | undefined) {
   const series = Array.isArray(chart.series) ? chart.series : []
   if (!x.length || !series.length) return []
   return x.map((label: string, index: number) => ({
-    label,
+    label: formatAiDisplayText(label),
     values: series.map((entry: any, seriesIndex: number) => ({
       key: `${label}_${seriesIndex}`,
-      label: String(entry?.name || `系列 ${seriesIndex + 1}`),
-      value: String(entry?.data?.[index] ?? 0),
+      label: formatAiDisplayText(String(entry?.name || `系列 ${seriesIndex + 1}`)),
+      value: formatAiDisplayText(String(entry?.data?.[index] ?? 0)),
     })),
   }))
 }
@@ -1749,12 +1764,7 @@ function isActionFlowHistoryMessage(message: WorkerAiHistoryMessage, content: st
       '请回复“确认”执行',
       '好的，我已取消这次动作',
       '状态机',
-      '我在，咱们直接看现场',
       '这张单已经在处理中',
-      '我先按你看到的现场来判断',
-      '你把现象、读数、报警码或照片发我一个就行',
-      '先把一个现象发我就行',
-      '先看这个：',
     ].some(fragment => content.includes(fragment))
   }
   return [

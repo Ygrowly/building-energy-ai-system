@@ -6,7 +6,7 @@ import re
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Literal
+from typing import Any, Callable, Literal
 
 from fastapi import HTTPException
 from sqlalchemy import select
@@ -89,6 +89,52 @@ class WorkerIntent:
 
 def _clean_text(text: str | None) -> str:
     return (text or "").strip()
+
+
+def _humanize_worker_reply_text(text: str | None) -> str:
+    cleaned = _clean_text(text)
+    if not cleaned:
+        return ""
+
+    direct_replacements = (
+        ('BMS说“下班了”', 'BMS 显示当前不是正常占用时段'),
+        ('BMS说"下班了"', 'BMS 显示当前不是正常占用时段'),
+        ("流程卡", "维修建议"),
+        ("步骤卡片", "维修建议"),
+        ("当前步骤", "这一步"),
+        ("命中规则", "判断到"),
+        ("闭环", "把关键信息补齐"),
+    )
+    for source, target in direct_replacements:
+        cleaned = cleaned.replace(source, target)
+
+    regex_replacements: list[tuple[re.Pattern[str], str | Callable[[re.Match[str]], str]]] = [
+        (re.compile(r"step[_\s-]*(\d+)", re.IGNORECASE), lambda match: f"第{match.group(1)}步"),
+        (re.compile(r"completed", re.IGNORECASE), "已完成"),
+        (re.compile(r"pending", re.IGNORECASE), "待确认"),
+        (re.compile(r"needs_support", re.IGNORECASE), "需要协同"),
+        (re.compile(r"uncertain", re.IGNORECASE), "待核实"),
+        (re.compile(r"worker_observation", re.IGNORECASE), "现场记录"),
+        (re.compile(r"event_type", re.IGNORECASE), ""),
+        (re.compile(r"plan_id", re.IGNORECASE), ""),
+        (re.compile(r"dispatch_id", re.IGNORECASE), ""),
+        (re.compile(r"status", re.IGNORECASE), ""),
+        (re.compile(r"(?:咱们|我们)?还在第\d+步[，,、]?\s*别跳步[，,、]?", re.IGNORECASE), "先别急着往后跳，"),
+        (re.compile(r"(?:现在|目前|当前)?第\d+步才刚开始[，,、]?", re.IGNORECASE), "眼下先把这一步的关键信息补齐，"),
+        (re.compile(r"(?:现在|目前|当前)?还在第\d+步(?:，也就是第\d+步)?[:：]?", re.IGNORECASE), "眼下先别急着往后跳，"),
+        (re.compile(r"(?:咱们|我们)?仍处在第\d+步[^，。；]*协同前[，,、]?", re.IGNORECASE), "先把眼前这几个关键信息补齐，"),
+        (re.compile(r"第\d+步的", re.IGNORECASE), "这一步的"),
+        (re.compile(r"第\d+步才算把关键信息补齐", re.IGNORECASE), "这一步才算把关键信息补齐"),
+        (re.compile(r"(?:但|不过)?系统里只确认", re.IGNORECASE), "从你现在补充的情况看，"),
+        (re.compile(r"虽标了已完成却没传回实际读数", re.IGNORECASE), "但关键读数还没补齐"),
+    ]
+    for pattern, replacement in regex_replacements:
+        cleaned = pattern.sub(replacement, cleaned)
+
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+    cleaned = re.sub(r"([，。；！？])\1+", r"\1", cleaned)
+    cleaned = re.sub(r"([，。；！？])\s+([，。；！？])", r"\2", cleaned)
+    return cleaned.strip()
 
 
 def _is_confirm(text: str) -> bool:
@@ -763,10 +809,13 @@ async def _generate_worker_chat_reply_with_model(
         "接单、到场、开始处理、请求协同、处理完成等状态动作由独立动作层执行；"
         "除非用户明确要求执行这些动作，否则不要把回答写成动作菜单，也不要说已提交或已记录。"
         "不要提后端、状态机、规则、步骤卡片、流程控制这些实现词。"
+        "绝对不要输出或复述 step_1、step_2、completed、pending、needs_support、uncertain、event_type、plan_id、dispatch_id 这类内部字段。"
+        "如果用户在问进度，不要回答内部步骤编号；改用自然说法，例如“前面外观看过了，眼下更该核对读数和显示链路”。"
         "先回应用户当下处境，再给一个安全、可观察、非侵入的第一步；如果缺关键信息，只问一个最重要的问题。"
         "如果用户说自己是新手或还没开始，要先降低压力，再帮他定位当前位置，最后给第一步。"
         "回答要像一位耐心的维修师傅在旁边说话，尽量 2 到 4 句，不要编号长清单。"
         "不能编造读数、报警码、设备铭牌、维修记录或已经发生的现场事实。"
+        "不要编造教室号、房间号、楼层、BA 工作站位置、百分比、时间差、温度值或控制画面细节，除非这些信息已在输入里明确给出。"
         "涉及带电、压力、制冷剂、泄漏、冒烟、异味、异常噪声时先提醒停下观察并找有资质人员协助。"
         "必须只输出 JSON 对象，字段 answer 是给用户看的中文回复。"
     )
@@ -792,7 +841,7 @@ async def _generate_worker_chat_reply_with_model(
         return None
 
     parsed = parse_json_object(raw) or {}
-    answer = _clean_text(parsed.get("answer"))
+    answer = _humanize_worker_reply_text(parsed.get("answer"))
     if answer:
         return answer[:1200]
     return None

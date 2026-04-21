@@ -22,6 +22,10 @@
           <span class="detail-val wrap">{{ hallEntryReasonValue(entry) }}</span>
         </div>
         <div class="detail-row">
+          <span class="detail-label">异常情况</span>
+          <span class="detail-val wrap">{{ hallEntryIssueValue(entry) }}</span>
+        </div>
+        <div class="detail-row">
           <span class="detail-label">可见范围</span>
           <span class="detail-val wrap">{{ visibilityText(entry) }}</span>
         </div>
@@ -140,6 +144,10 @@ const props = defineProps({
     type: Function as PropType<(entry: any) => string>,
     required: true,
   },
+  hallEntryIssue: {
+    type: Function as PropType<(entry: any) => string>,
+    required: true,
+  },
   hallEmptyHint: {
     type: Function as PropType<(entry: any) => string>,
     required: true,
@@ -170,6 +178,7 @@ const pendingApplications = (entry: any) => props.hallPendingApplications(entry)
 const hallEntryTitleValue = (entry: any) => props.hallEntryTitle(entry)
 const hallEntryOwnerValue = (entry: any) => props.hallEntryOwner(entry)
 const hallEntryReasonValue = (entry: any) => props.hallEntryReason(entry)
+const hallEntryIssueValue = (entry: any) => props.hallEntryIssue(entry)
 const hallEmptyHintValue = (entry: any) => props.hallEmptyHint(entry)
 const canSuggestHallTakeoverValue = (entry: any) => props.canSuggestHallTakeover(entry)
 const canNudgeHallOwnerValue = (entry: any) => props.canNudgeHallOwner(entry)

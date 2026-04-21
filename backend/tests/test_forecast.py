@@ -12,7 +12,7 @@
 from __future__ import annotations
 
 import math
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import numpy as np
 import pytest
@@ -454,3 +454,131 @@ class TestStrictBaselineMatching:
         assert m.expected_value == 2000.0
         assert m.risk_level == "warning"
         assert m.rule_triggered == "water_leak"
+
+
+class _FakeResult:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def first(self):
+        return self._rows[0] if self._rows else None
+
+    def fetchall(self):
+        return list(self._rows)
+
+
+class _FakeBuildingInfoSession:
+    def __init__(self, rows_per_call: list[list[tuple]]):
+        self._rows_per_call = rows_per_call
+        self.calls = 0
+
+    async def execute(self, _stmt):
+        if self.calls >= len(self._rows_per_call):
+            raise AssertionError("unexpected execute call")
+        rows = self._rows_per_call[self.calls]
+        self.calls += 1
+        return _FakeResult(rows)
+
+
+@pytest.mark.asyncio
+async def test_get_building_info_accepts_actual_building_id():
+    from app.mcp.tools.data_query import get_building_info
+
+    session = _FakeBuildingInfoSession([
+        [("Fox_office_Alice",)],
+        [("EM_ELE_Fox_office_Alice",)],
+    ])
+
+    meter_id, actual_bid = await get_building_info(session, "Fox_office_Alice")
+
+    assert meter_id == "EM_ELE_Fox_office_Alice"
+    assert actual_bid == "Fox_office_Alice"
+    assert session.calls == 2
+
+
+@pytest.mark.asyncio
+async def test_get_building_info_falls_back_to_primary_space_usage():
+    from app.mcp.tools.data_query import get_building_info
+
+    session = _FakeBuildingInfoSession([
+        [],
+        [("Fox_office_Alice",)],
+        [("EM_ELE_Fox_office_Alice",)],
+    ])
+
+    meter_id, actual_bid = await get_building_info(session, "Office")
+
+    assert meter_id == "EM_ELE_Fox_office_Alice"
+    assert actual_bid == "Fox_office_Alice"
+    assert session.calls == 3
+
+
+@pytest.mark.asyncio
+async def test_forecast_persists_resolved_building_id(monkeypatch: pytest.MonkeyPatch):
+    import app.services.forecast_service as mod
+    from app.schemas.mcp_schemas import ForecastKPIOutput
+
+    async def fake_get_building_info(_session, _building_ref):
+        return "EM_ELE_Fox_office_Alice", "Fox_office_Alice"
+
+    async def fake_build_features_async(_df, _feature_cols):
+        return pd.DataFrame([{"f1": 1.0}])
+
+    async def fake_predict_async(_feature_row, _feature_cols):
+        return [100.0]
+
+    persisted_args: dict[str, object] = {}
+
+    async def fake_persist_predictions(*, building_id, as_of, metrics, model_name, session):
+        persisted_args["building_id"] = building_id
+        persisted_args["as_of"] = as_of
+        persisted_args["metrics"] = metrics
+        persisted_args["model_name"] = model_name
+        persisted_args["session"] = session
+        return 1
+
+    class FakeForecastSession:
+        def __init__(self):
+            self._energy_rows = self._make_energy_rows()
+            self._expected_rows = [
+                (self._energy_rows[0][0] + timedelta(hours=6), None, 50.0, None, None, None),
+            ]
+            self.calls = 0
+
+        def _make_energy_rows(self):
+            latest = datetime(2025, 6, 1, 12, 0, tzinfo=timezone.utc)
+            rows = []
+            for offset in range(25):
+                ts = latest - timedelta(hours=offset)
+                rows.append((ts, 10.0, 20.0, 7.0, 12.0, 15.0, 26.0, 18.0, 60.0))
+            return rows
+
+        async def execute(self, _stmt):
+            self.calls += 1
+            if self.calls == 1:
+                return _FakeResult(self._energy_rows)
+            if self.calls == 2:
+                return _FakeResult(self._expected_rows)
+            raise AssertionError("unexpected execute call")
+
+    monkeypatch.setattr("app.mcp.tools.data_query.get_building_info", fake_get_building_info)
+    monkeypatch.setattr(mod, "_load_metadata", lambda: {
+        "feature_cols": ["f1"],
+        "target_cols": ["y_electricity_kwh_tplus6h"],
+        "target_kpis": ["electricity_kwh"],
+        "model_name": "test-model",
+        "horizons_h": [6],
+    })
+    monkeypatch.setattr(mod, "_build_features_async", fake_build_features_async)
+    monkeypatch.setattr(mod, "_predict_async", fake_predict_async)
+    monkeypatch.setattr(mod, "_persist_predictions", fake_persist_predictions)
+
+    result = await mod.forecast_building_kpi(
+        building_id="Office",
+        session=FakeForecastSession(),
+    )
+
+    assert isinstance(result, ForecastKPIOutput)
+    assert result.persisted is True
+    assert result.warnings_count == 1
+    assert persisted_args["building_id"] == "Fox_office_Alice"

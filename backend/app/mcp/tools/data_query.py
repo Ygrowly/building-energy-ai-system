@@ -75,21 +75,29 @@ _METRIC_META: dict[MetricType, tuple[str, str]] = {
 # ---------------------------------------------------------------------------
 
 async def get_building_info(
-    session: AsyncSession, building_type: str
+    session: AsyncSession, building_ref: str
 ) -> tuple[str, str] | tuple[None, None]:
     """
-    通过 primary_space_usage（如 'Office'）查找对应建筑。
+    通过 building_id 或 primary_space_usage（如 'Office'）查找对应建筑。
     返回 (meter_device_id, actual_building_id)，找不到返回 (None, None)。
 
     meter_device_id 优先取 devices 表中该楼宇的 electricity 类型设备 ID；
     若 devices 表为空或无电表设备，退化为 building_id（向后兼容）。
-    支持动态扩展：数据库新增楼宇后无需修改代码。
+    解析顺序：
+      1. 优先按真实 building_id 精确匹配，兼容后台批处理/调度任务
+      2. 未命中时再按 primary_space_usage 匹配，兼容 MCP 工具和旧调用方
     """
     result = await session.execute(
         select(Building.building_id)
-        .where(Building.primary_space_usage == building_type)
+        .where(Building.building_id == building_ref)
     )
     row = result.first()
+    if row is None:
+        result = await session.execute(
+            select(Building.building_id)
+            .where(Building.primary_space_usage == building_ref)
+        )
+        row = result.first()
     if row is None:
         return None, None
     actual_bid = row[0]

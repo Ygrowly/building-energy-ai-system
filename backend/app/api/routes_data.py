@@ -2019,6 +2019,7 @@ async def _get_recent_predictions_payload(
             "predictions": [],
             "total": 0,
             "check_period": {"start": None, "end": None, "hours": hours},
+            "module_status": "no_data",
             "message": "predicted_anomaly_events 暂无数据，请先调用 /api/admin/run-forecast",
         }
 
@@ -2094,6 +2095,7 @@ async def _get_recent_predictions_payload(
     return {
         "predictions": predictions,
         "total": len(predictions),
+        "module_status": "ok",
         "check_period": {
             "start": window_start.isoformat(),
             "end": max_ts.isoformat(),

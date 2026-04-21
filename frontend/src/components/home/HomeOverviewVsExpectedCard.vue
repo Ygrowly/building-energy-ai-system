@@ -57,7 +57,7 @@ const chartMeta = computed(() => {
   if (metricTab.value === 'energy') {
     return {
       title: '总能耗 vs 额定期望',
-      subtitle: '近 7 天总电与总水统一折算为标准煤（kgce）',
+      subtitle: '总电与总水统一折算为标准煤（kgce）',
       unit: 'kgce',
       actualLabel: '真实总能耗',
       expectedLabel: '额定期望',
@@ -70,7 +70,7 @@ const chartMeta = computed(() => {
 
   return {
     title: '碳排放 vs 额定期望',
-    subtitle: '近 7 天按总用电折算碳排放（kg）',
+    subtitle: '按总用电折算碳排放（kg）',
     unit: 'kg',
     actualLabel: '真实碳排放',
     expectedLabel: '额定期望',
@@ -109,9 +109,58 @@ function formatDayLabel(day: string): string {
   return day.slice(5)
 }
 
+function normalizeIsoDate(value: string | null | undefined): string | null {
+  if (!value) return null
+  const normalized = value.slice(0, 10)
+  return /^\d{4}-\d{2}-\d{2}$/.test(normalized) ? normalized : null
+}
+
+function getLatestBundleDate(): string | null {
+  let latest: string | null = null
+
+  for (const buildingType of BUILDING_TYPES) {
+    const bundled = props.overviewSeriesBundle?.[buildingType] ?? {}
+    const energyRecords: any[] = bundled.energy?.records ?? []
+    const ratedElectricityRecords: any[] = bundled.rated_electricity?.records ?? []
+    const ratedWaterRecords: any[] = bundled.rated_water?.records ?? []
+
+    for (const record of energyRecords) {
+      const day = normalizeIsoDate(record?.day)
+      if (day && (!latest || day > latest)) latest = day
+    }
+
+    for (const record of [...ratedElectricityRecords, ...ratedWaterRecords]) {
+      const day = normalizeIsoDate(record?.timestamp)
+      if (day && (!latest || day > latest)) latest = day
+    }
+  }
+
+  return latest
+}
+
+const resolvedEndDate = computed(() => {
+  return (
+    getLatestBundleDate() ??
+    normalizeIsoDate(props.overviewData?.data_date) ??
+    isoDate(new Date())
+  )
+})
+
+const chartWindowText = computed(() => {
+  const endD = new Date(`${resolvedEndDate.value}T12:00:00Z`)
+  const startD = new Date(endD)
+  startD.setUTCDate(startD.getUTCDate() - 6)
+  return `${isoDate(startD).slice(5)} 至 ${isoDate(endD).slice(5)}`
+})
+
+const chartWindowLabel = computed(() => {
+  const today = isoDate(new Date())
+  const prefix = resolvedEndDate.value < today ? '最近可用 7 天' : '近 7 天'
+  return `${prefix}（${chartWindowText.value}）`
+})
+
 function getDateRange() {
-  const dataDate = props.overviewData?.data_date
-  const endD = dataDate ? new Date(`${dataDate}T12:00:00Z`) : new Date()
+  const endD = new Date(`${resolvedEndDate.value}T12:00:00Z`)
   const startD = new Date(endD)
   startD.setUTCDate(startD.getUTCDate() - 6)
   return {
@@ -502,6 +551,7 @@ onUnmounted(() => {
         <span class="cpanel-title">{{ chartMeta.title }}</span>
         <span class="cpanel-sub">
           {{ chartMeta.subtitle }}
+          <span class="overview-chart-window">{{ chartWindowLabel }}</span>
           <span v-if="overviewHint" class="overview-chart-hint">{{ overviewHint }}</span>
         </span>
       </div>
@@ -540,6 +590,11 @@ onUnmounted(() => {
 .overview-chart-hint {
   margin-left: 8px;
   color: var(--text-muted);
+}
+
+.overview-chart-window {
+  margin-left: 8px;
+  color: var(--text-secondary);
 }
 
 .overview-tabs {

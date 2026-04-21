@@ -9,22 +9,6 @@
                 <Icon icon="mdi:file-chart-outline" width="16" class="rp-toolbar-icon" />
                 {{ resolvedPayload?.title ?? '报表预览' }}
               </span>
-              <div class="rp-mode-toggle">
-                <button
-                  class="rp-mode-btn"
-                  :class="{ active: reportStore.previewMode === 'snapshot' }"
-                  @click="reportStore.setPreviewMode('snapshot')"
-                >
-                  快照
-                </button>
-                <button
-                  class="rp-mode-btn"
-                  :class="{ active: reportStore.previewMode === 'formal' }"
-                  @click="reportStore.setPreviewMode('formal')"
-                >
-                  正式报表
-                </button>
-              </div>
             </div>
             <div class="rp-toolbar-right">
               <button
@@ -239,32 +223,6 @@ function onPrint() {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-.rp-mode-toggle {
-  display: flex;
-  background: rgba(255, 255, 255, 0.06);
-  border-radius: 6px;
-  padding: 2px;
-  gap: 2px;
-  flex-shrink: 0;
-}
-
-.rp-mode-btn {
-  padding: 4px 12px;
-  font-size: 11px;
-  font-weight: 500;
-  border: none;
-  border-radius: 4px;
-  background: transparent;
-  color: #8c939a;
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s;
-}
-
-.rp-mode-btn.active {
-  background: var(--accent, #5b8dee);
-  color: #fff;
 }
 
 .rp-toolbar-right {

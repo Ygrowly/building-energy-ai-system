@@ -99,7 +99,10 @@ def _resolve_bundle_data_date(overview_payload: dict[str, Any] | None) -> date:
 
 async def _get_latest_energy_data_date(db: AsyncSession) -> date:
     result = await db.execute(
-        text('SELECT MAX("timestamp")::date AS latest_day FROM energy_data')
+        text(
+            'SELECT LEAST(MAX("timestamp")::date, CURRENT_DATE) AS latest_day '
+            'FROM energy_data'
+        )
     )
     latest_day = result.scalar()
     if isinstance(latest_day, date):
@@ -1506,22 +1509,12 @@ async def get_overview(
         if query_date:
             target_day = query_date
         else:
-            latest_ts_result = await db.execute(
-                text('SELECT MAX("timestamp")::date AS latest_day FROM energy_data')
-            )
-            row = latest_ts_result.fetchone()
-            target_day = row[0] if row else None
+            target_day = await _get_latest_energy_data_date(db)
         if not target_day:
             return {"error": "暂无能耗数据"}
 
-        # 用时间戳范围代替 ::date 转换，避免时区问题
-        day_start = datetime(
-            target_day.year,
-            target_day.month,
-            target_day.day,
-            tzinfo=timezone.utc,
-        )
-        day_end = day_start + timedelta(days=1)
+        # Keep the day boundary consistent with MAX(timestamp)::date.
+        day_params = {"target_day": target_day}
 
         # 按楼宇聚合当天数据（电、水、温度）
         daily_result = await db.execute(
@@ -1536,12 +1529,12 @@ async def get_overview(
                     SUM(e.hac_energy)       AS total_hac_energy
                 FROM energy_data e
                 JOIN buildings b ON e.building_id = b.building_id
-                WHERE e."timestamp" >= :day_start
-                  AND e."timestamp" <  :day_end
+                WHERE e."timestamp" >= CAST(:target_day AS date)
+                  AND e."timestamp" <  CAST(:target_day AS date) + INTERVAL '1 day'
                 GROUP BY e.building_id, b.primary_space_usage, b.sqm
                 ORDER BY b.primary_space_usage
             """),
-            {"day_start": day_start, "day_end": day_end},
+            day_params,
         )
         daily_rows = daily_result.fetchall()
 
@@ -1555,10 +1548,10 @@ async def get_overview(
                     AVG(e.air_temp_c)       AS avg_temp,
                     AVG(e.humidity_rh_pct)  AS avg_humidity
                 FROM energy_data e
-                WHERE e."timestamp" >= :day_start
-                  AND e."timestamp" <  :day_end
+                WHERE e."timestamp" >= CAST(:target_day AS date)
+                  AND e."timestamp" <  CAST(:target_day AS date) + INTERVAL '1 day'
             """),
-            {"day_start": day_start, "day_end": day_end},
+            day_params,
         )
         weather_row = weather_result.fetchone()
         global_avg_temp = (
@@ -1638,8 +1631,7 @@ async def get_overview(
             })
 
         # ---------- 昨日数据对比，计算变化百分比 ----------
-        yesterday_start = day_start - timedelta(days=1)
-        yesterday_end = day_start  # 即 today 的 day_start
+        yesterday_day = target_day - timedelta(days=1)
 
         yesterday_result = await db.execute(
             text("""
@@ -1650,11 +1642,11 @@ async def get_overview(
                     SUM(e.hac_energy)       AS total_hac_energy
                 FROM energy_data e
                 JOIN buildings b ON e.building_id = b.building_id
-                WHERE e."timestamp" >= :yday_start
-                  AND e."timestamp" <  :yday_end
+                WHERE e."timestamp" >= CAST(:target_day AS date)
+                  AND e."timestamp" <  CAST(:target_day AS date) + INTERVAL '1 day'
                 GROUP BY b.primary_space_usage
             """),
-            {"yday_start": yesterday_start, "yday_end": yesterday_end},
+            {"target_day": yesterday_day},
         )
         yesterday_rows = yesterday_result.fetchall()
 

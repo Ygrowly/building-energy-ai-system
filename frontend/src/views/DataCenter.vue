@@ -147,15 +147,6 @@
                     <Icon :icon="importing ? 'mdi:loading' : (importMeta ? 'mdi:database-check' : 'mdi:database-import')" width="15" :class="{ spin: importing }" />
                     {{ importing ? '导入中...' : (importMeta ? '重新导入' : '导入到 energy_data') }}
                   </button>
-                  <!-- AI 分析按钮 -->
-                  <button
-                    class="analyze-btn"
-                    :disabled="analyzing"
-                    @click="runAIAnalysis"
-                  >
-                    <Icon :icon="analyzing ? 'mdi:loading' : 'mdi:brain'" width="15" :class="{ spin: analyzing }" />
-                    {{ analyzing ? 'AI 分析中...' : 'AI 洞察' }}
-                  </button>
                 </div>
               </div>
               <div class="detail-meta-row">
@@ -291,16 +282,6 @@
               </div>
               </div><!-- end v-if="showCrud" -->
             </div><!-- end crud-section -->
-
-            <!-- AI 分析结果 -->
-            <div v-if="analysisResult || analyzing" class="analysis-box">
-              <div class="analysis-header">
-                <Icon icon="mdi:brain" width="14" />
-                AI 分析结果
-              </div>
-              <div class="analysis-content" v-html="renderedAnalysis"></div>
-              <div v-if="analyzing" class="analysis-cursor">|</div>
-            </div>
 
             <!-- 数据预览区（折叠） -->
             <div class="preview-section">
@@ -608,11 +589,9 @@ const isDraggingDataset = ref(false)
 const uploadingDataset = ref(false)
 const loadingDatasets = ref(false)
 const loadingDetail = ref(false)
-const analyzing = ref(false)
 const datasetError = ref('')
 const datasets = ref<DatasetSummary[]>([])
 const selectedDataset = ref<DatasetDetail | null>(null)
-const analysisResult = ref('')
 
 // 导入状态
 const importing = ref(false)
@@ -769,28 +748,12 @@ watch(energyDataRecords, (records) => {
   })
 })
 
-watch(analysisResult, (text) => {
-  if (!text) return
-  registerSection({
-    id: 'dc-ai-analysis',
-    title: 'AI 分析结果',
-    type: 'text',
-    content: text,
-    order: 40,
-  })
-})
-
 // ── 计算属性 ─────────────────────────────────────────────────
 const sampleColumns = computed(() =>
   selectedDataset.value?.sample_rows?.[0]
     ? Object.keys(selectedDataset.value.sample_rows[0])
     : [],
 )
-
-const renderedAnalysis = computed(() => {
-  if (!analysisResult.value) return ''
-  return markdownToHtml(analysisResult.value)
-})
 
 const totalPages = computed(() => Math.max(1, Math.ceil(energyDataTotal.value / energyPageSize)))
 
@@ -855,7 +818,6 @@ async function loadDatasets() {
 async function selectDataset(id: string) {
   if (selectedDataset.value?.id === id) return
   loadingDetail.value = true
-  analysisResult.value = ''
   importError.value = ''
   importSuccess.value = ''
   importMeta.value = null
@@ -1036,7 +998,6 @@ async function uploadDatasetFile(file: File) {
       uploaded_at: result.uploaded_at,
     })
     selectedDataset.value = result
-    analysisResult.value = ''
   } catch (e) {
     datasetError.value = (e as Error).message
   } finally {
@@ -1072,7 +1033,6 @@ function confirmDeleteDataset(id: string) {
       datasets.value = datasets.value.filter(d => d.id !== id)
       if (selectedDataset.value?.id === id) {
         selectedDataset.value = null
-        analysisResult.value = ''
         importMeta.value = null
         energyDataRecords.value = []
         energyDataTotal.value = 0
@@ -1080,18 +1040,6 @@ function confirmDeleteDataset(id: string) {
       showToast(res?.message ?? '数据集已删除')
     },
   }
-}
-
-async function runAIAnalysis() {
-  if (!selectedDataset.value || analyzing.value) return
-  analysisResult.value = ''
-  analyzing.value = true
-  await api.analyzeDataset(
-    selectedDataset.value.id,
-    (chunk) => { analysisResult.value += chunk },
-    () => { analyzing.value = false },
-    (err) => { datasetError.value = err; analyzing.value = false },
-  )
 }
 
 // ── 知识库操作 ────────────────────────────────────────────────
@@ -1591,18 +1539,6 @@ onUnmounted(() => {
   clearDocSuccessTimer()
   if (toastTimer) clearTimeout(toastTimer)
 })
-
-function markdownToHtml(md: string): string {
-  return md
-    .replace(/^### (.+)$/gm, '<h4>$1</h4>')
-    .replace(/^## (.+)$/gm, '<h3>$1</h3>')
-    .replace(/^# (.+)$/gm, '<h2>$1</h2>')
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/^- (.+)$/gm, '<li>$1</li>')
-    .replace(/^\d+\. (.+)$/gm, '<li>$1</li>')
-    .replace(/\n\n/g, '<br/><br/>')
-    .replace(/\n/g, '<br/>')
-}
 </script>
 
 <style scoped>
@@ -1841,24 +1777,6 @@ html[data-theme="light"] .datacenter {
 .import-btn:hover:not(:disabled) { background: #3b82f6; color: #fff; }
 .import-btn:disabled { opacity: 0.6; cursor: not-allowed; }
 
-/* ── AI 分析按钮 ── */
-.analyze-btn {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 7px 14px;
-  border-radius: 8px;
-  border: 1px solid var(--accent);
-  background: var(--accent-glow);
-  color: var(--accent);
-  font-size: 13px;
-  cursor: pointer;
-  width: fit-content;
-  transition: all 0.18s;
-}
-.analyze-btn:hover:not(:disabled) { background: var(--accent); color: #fff; }
-.analyze-btn:disabled { opacity: 0.6; cursor: not-allowed; }
-
 /* ── 已导入徽章 ── */
 .imported-badge {
   background: rgba(34,197,94,0.12) !important;
@@ -1868,46 +1786,6 @@ html[data-theme="light"] .datacenter {
   align-items: center;
   gap: 4px;
 }
-
-/* ── AI 分析结果框 ── */
-.analysis-box {
-  background: var(--bg-panel);
-  border: 1px solid var(--border-accent);
-  border-radius: 10px;
-  overflow: hidden;
-}
-.analysis-header {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 10px 14px;
-  border-bottom: 1px solid var(--border);
-  font-size: 12px;
-  color: var(--accent);
-  font-weight: 600;
-  background: var(--accent-glow);
-}
-.analysis-content {
-  padding: 14px 16px;
-  font-size: 13px;
-  color: var(--text-primary);
-  line-height: 1.8;
-}
-.analysis-content :deep(h2) { font-size: 15px; color: var(--text-primary); margin: 12px 0 6px; }
-.analysis-content :deep(h3) { font-size: 14px; color: var(--accent); margin: 10px 0 4px; }
-.analysis-content :deep(h4) { font-size: 13px; color: var(--text-primary); margin: 8px 0 4px; }
-.analysis-content :deep(strong) { color: var(--accent-2); }
-.analysis-content :deep(li) { margin-left: 16px; list-style: disc; margin-bottom: 3px; }
-.analysis-cursor {
-  display: inline-block;
-  width: 2px;
-  height: 14px;
-  background: var(--accent);
-  animation: blink 0.8s step-end infinite;
-  margin-left: 2px;
-  vertical-align: text-bottom;
-}
-@keyframes blink { 50% { opacity: 0; } }
 
 /* ── Section ── */
 .section { display: flex; flex-direction: column; gap: 10px; }

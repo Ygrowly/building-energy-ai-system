@@ -164,8 +164,9 @@ export const useReportStore = defineStore('report', () => {
   }
 
   function openPreview() {
+    previewMode.value = 'snapshot'
     previewSource.value = 'sections'
-    previewPayload.value = buildPayload(previewMode.value)
+    previewPayload.value = buildPayload('snapshot')
     previewVisible.value = true
   }
 

@@ -31,7 +31,7 @@
             :data-pick-subtitle="`温度 ${weatherTemp != null ? Number(weatherTemp).toFixed(1) + '°C' : '--'}，湿度 ${weatherHumi ?? '--'}%`">
           <div class="weather-date">
             <Icon icon="mdi:calendar-month" width="13" />
-            <span>{{ todayDisplay }}</span>
+            <span>{{ dataDateDisplay }}</span>
           </div>
           <div class="weather-divider"></div>
           <div class="weather-metrics">
@@ -151,13 +151,18 @@ const { registerSection, setReportMeta } = useReportExport('home', {
 
 const displayName = computed(() => authStore.user?.username ?? '访客')
 
-/** 始终显示客户端实际今天日期，与后端数据日期无关 */
-const todayDisplay = computed(() => {
-  const d = new Date()
+function formatClientDate(date = new Date()): string {
+  const d = date
   const y = d.getFullYear()
   const m = String(d.getMonth() + 1).padStart(2, '0')
   const day = String(d.getDate()).padStart(2, '0')
   return `${y}-${m}-${day}`
+}
+
+/** 优先展示后端数据日期，避免天气/KPI 与图表时间窗口错位 */
+const dataDateDisplay = computed(() => {
+  const snapshot = dataDate.value?.slice(0, 10)
+  return snapshot || formatClientDate()
 })
 
 const dataDate = ref('')
@@ -431,6 +436,77 @@ function formatPredictionValue(metric: string | null | undefined, value: unknown
   }
 }
 
+function clampValue(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value))
+}
+
+function buildAiStewardMockContent(
+  targetDate: string,
+  anomalyCount: number,
+  predictionCount: number,
+  optimizeText: string,
+) {
+  const totals = overviewData.value?.kpis ?? {}
+  const totalElectricity = Number(totals.total_electricity_kwh ?? 0)
+  const totalHvac = Number(totals.total_hac_energy_kwh ?? 0)
+  const buildings = [...(overviewData.value?.buildings ?? [])]
+  const topElectricityBuilding = [...buildings]
+    .sort((a, b) => Number(b?.total_electricity_kwh ?? 0) - Number(a?.total_electricity_kwh ?? 0))[0]
+  const topHvacBuilding = [...buildings]
+    .sort((a, b) => Number(b?.total_hac_energy_kwh ?? 0) - Number(a?.total_hac_energy_kwh ?? 0))[0]
+
+  const estimatedAvoidedKwh = Number(
+    clampValue(
+      Number((totalElectricity * 0.068 + totalHvac * 0.12).toFixed(1)) || 42,
+      32,
+      Math.max(72, Number((totalElectricity * 0.18).toFixed(1)) || 72),
+    ).toFixed(1),
+  )
+  const estimatedSavedCost = Number((estimatedAvoidedKwh * AI_STEWARD_ELECTRICITY_PRICE).toFixed(2))
+  const estimatedReducedCarbon = Number((estimatedAvoidedKwh * CARBON_FACTOR).toFixed(1))
+
+  let statusText = '状态: 极佳'
+  let statusTone: 'success' | 'warning' | 'danger' | 'neutral' = 'success'
+  if (anomalyCount > 0) {
+    statusText = anomalyCount >= 5 ? '状态: 关注' : '状态: 稳定'
+    statusTone = anomalyCount >= 5 ? 'danger' : 'warning'
+  } else if (predictionCount > 0) {
+    statusText = '状态: 稳定'
+    statusTone = 'warning'
+  }
+
+  const electricityLeadShare =
+    topElectricityBuilding && totalElectricity > 0
+      ? Number(topElectricityBuilding.total_electricity_kwh ?? 0) / totalElectricity * 100
+      : null
+
+  const mockForecastText = topElectricityBuilding
+    ? `${topElectricityBuilding.display_name} 预计仍将是接下来 6-12 小时的主要负荷来源，建议重点关注午后时段的照明与空调联动策略，避免综合负荷继续抬升。`
+    : '预计午后时段综合用能将温和抬升，建议继续保持现有开停机策略，并关注空调负荷波动。'
+
+  const mockOptimizeText = topHvacBuilding
+    ? `${topHvacBuilding.display_name} 当前 HVAC 能耗占比较高，建议优先复核其开停机时段、设定温度与末端运行状态；当前卡片展示值为演示估算值。`
+    : `${optimizeText} 当前卡片收益值为演示估算值，可在后续接入真实 AI 复盘结果后替换。`
+
+  return {
+    statusText,
+    statusTone,
+    reportTitle: `${targetDate || dataDateDisplay.value} AI 运行成效简报（演示）`,
+    reportDesc: topElectricityBuilding
+      ? `当前基于首页总览数据生成演示估算值。${topElectricityBuilding.display_name} 约贡献 ${electricityLeadShare?.toFixed(1) ?? '--'}% 的当日用电负荷，系统假设通过时段压缩与联动优化形成以下收益。`
+      : '当前基于首页总览数据生成演示估算值，系统整体运行平稳，并预留出一定节能优化空间。',
+    stats: [
+      { label: '节省电费', value: estimatedSavedCost.toFixed(2), prefix: '￥' },
+      { label: '减少碳排放', value: estimatedReducedCarbon.toFixed(1), suffix: 'kg' },
+      { label: '避免无效电耗', value: estimatedAvoidedKwh.toFixed(1), suffix: 'kWh' },
+    ],
+    forecastTitle: '近 12 小时运行前瞻',
+    forecastText: mockForecastText,
+    optimizeTitle: '深度寻优潜力',
+    optimizeText: mockOptimizeText,
+  }
+}
+
 const aiStewardCardData = computed(() => {
   const targetDate = dataDate.value?.slice(0, 10) ?? ''
   const overviewSeries = homeBundle.value?.overview_series ?? {}
@@ -522,6 +598,11 @@ const aiStewardCardData = computed(() => {
         `${hvacTopBuilding.display_name}当日空调能耗 ${Number(hvacTopBuilding.total_hac_energy_kwh ?? 0).toFixed(1)} kWh，` +
         '当前为全局 HVAC 重点关注楼宇。系统将继续跟踪其运行优化空间。'
     }
+  }
+
+  const useMockSteward = avoidedKwh <= 0.1
+  if (useMockSteward) {
+    return buildAiStewardMockContent(targetDate, anomalyCount, predictionCount, optimizeText)
   }
 
   return {

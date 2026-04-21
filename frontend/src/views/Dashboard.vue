@@ -391,7 +391,9 @@ import { useReportExport } from '@/composables/useReportExport'
 
 const buildingStore = useBuildingStore()
 const dataRangeStore = useDataRangeStore()
-const { registerSection, captureChart, setReportMeta } = useReportExport('dashboard')
+const { registerSection, captureChart, setReportMeta } = useReportExport('dashboard', {
+  activateScopePrefixes: ['dashboard'],
+})
 
 // ── 状态 ─────────────────────────────────────────────
 const loading = ref(true)

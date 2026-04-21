@@ -722,7 +722,7 @@ const reportGenerating = ref(false)
 const activeReportTemplateId = ref<string | null>(null)
 const rawDataPreview = ref<ArtifactEvent | null>(null)
 
-const isPageReportMode = computed(() => reportStore.sections.length > 0)
+const isPageReportMode = computed(() => reportStore.hasActiveSections)
 const activeReportTemplate = computed(() => (
   conversationReportTemplates.find(template => template.id === activeReportTemplateId.value) ?? null
 ))

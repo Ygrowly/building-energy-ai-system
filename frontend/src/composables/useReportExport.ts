@@ -1,54 +1,118 @@
 /**
  * useReportExport composable
  *
- * 各页面（及子组件）通过此 composable 向 reportStore 注册报表段落。
- * 每个调用方传入唯一 namespace，组件卸载时自动清理该命名空间的段落。
+ * Pages/components register report sections through this composable.
+ * Page-level callers can also mark the current active report scope so
+ * cached keep-alive pages do not leak sections into each other.
  */
-import { onUnmounted } from 'vue'
+import { onActivated, onDeactivated, onUnmounted } from 'vue'
 import type * as echarts from '@/utils/echarts'
 import { useReportStore } from '@/stores/reportStore'
-import type { ReportSection, KpiItem, TableColumn, SummaryItem } from '@/stores/reportStore'
+import type { ReportSection, KpiItem, TableColumn, SummaryItem, ReportInsightItem } from '@/stores/reportStore'
 
-export type { ReportSection, KpiItem, TableColumn, SummaryItem }
+export type { ReportSection, KpiItem, TableColumn, SummaryItem, ReportInsightItem }
 
-export function useReportExport(namespace: string) {
+interface UseReportExportOptions {
+  activateScopePrefixes?: string[]
+}
+
+interface ChartCapturePadding {
+  top?: number
+  right?: number
+  bottom?: number
+  left?: number
+}
+
+interface ChartCaptureOptions {
+  padding?: ChartCapturePadding
+}
+
+export function useReportExport(namespace: string, options: UseReportExportOptions = {}) {
   const reportStore = useReportStore()
+  const scopePrefixes = options.activateScopePrefixes ?? []
 
-  // 组件卸载时清理本命名空间的所有段落
+  const activateScope = () => {
+    if (!scopePrefixes.length) return
+    reportStore.setActiveNamespacePrefixes(scopePrefixes)
+  }
+
+  const deactivateScope = () => {
+    if (!scopePrefixes.length) return
+    reportStore.clearActiveNamespacePrefixes(scopePrefixes)
+  }
+
+  onActivated(activateScope)
+  onDeactivated(deactivateScope)
+
   onUnmounted(() => {
+    deactivateScope()
     reportStore.clearSectionsByNamespace(namespace)
   })
 
-  /** 注册或更新一个报表段落（相同 id 则覆盖） */
   function registerSection(section: Omit<ReportSection, 'namespace'>) {
     reportStore.registerSection({ ...section, namespace })
   }
 
-  /** 移除指定段落 */
   function removeSection(id: string) {
     reportStore.removeSection(id)
   }
 
-  /**
-   * 将 ECharts 实例截图为 base64 并注册为 chart 类型段落
-   * @param chartInstance - ECharts 实例
-   * @param id - 段落唯一 id
-   * @param title - 段落标题
-   * @param order - 排序权重
-   */
+  function buildChartDataUrl(chartInstance: echarts.ECharts, options: ChartCaptureOptions = {}) {
+    const pixelRatio = 2
+    const padding = options.padding ?? {}
+    const top = Math.max(0, padding.top ?? 0)
+    const right = Math.max(0, padding.right ?? 0)
+    const bottom = Math.max(0, padding.bottom ?? 0)
+    const left = Math.max(0, padding.left ?? 0)
+    const hasPadding = top > 0 || right > 0 || bottom > 0 || left > 0
+
+    if (hasPadding) {
+      try {
+        const renderedCanvas = (chartInstance as any).getRenderedCanvas?.({
+          pixelRatio,
+          backgroundColor: '#ffffff',
+        }) as HTMLCanvasElement | undefined
+
+        if (renderedCanvas) {
+          const scaledTop = top * pixelRatio
+          const scaledRight = right * pixelRatio
+          const scaledBottom = bottom * pixelRatio
+          const scaledLeft = left * pixelRatio
+
+          const outputCanvas = document.createElement('canvas')
+          outputCanvas.width = renderedCanvas.width + scaledLeft + scaledRight
+          outputCanvas.height = renderedCanvas.height + scaledTop + scaledBottom
+
+          const context = outputCanvas.getContext('2d')
+          if (context) {
+            context.fillStyle = '#ffffff'
+            context.fillRect(0, 0, outputCanvas.width, outputCanvas.height)
+            context.drawImage(renderedCanvas, scaledLeft, scaledTop)
+            return outputCanvas.toDataURL('image/png')
+          }
+        }
+      } catch {
+        // Fall back to ECharts native export below.
+      }
+    }
+
+    return chartInstance.getDataURL({
+      type: 'png',
+      pixelRatio,
+      backgroundColor: '#ffffff',
+    })
+  }
+
   function captureChart(
     chartInstance: echarts.ECharts | null | undefined,
     id: string,
     title: string,
     order = 100,
+    options: ChartCaptureOptions = {},
   ) {
     if (!chartInstance) return
     try {
-      const dataUrl = chartInstance.getDataURL({
-        type: 'png',
-        pixelRatio: 2,
-        backgroundColor: '#ffffff',
-      })
+      const dataUrl = buildChartDataUrl(chartInstance, options)
       registerSection({
         id,
         title,
@@ -57,16 +121,14 @@ export function useReportExport(namespace: string) {
         order,
       })
     } catch {
-      // 截图失败时静默跳过（图表可能尚未渲染）
+      // Ignore chart capture failures when the chart is not ready yet.
     }
   }
 
-  /** 打开报表预览弹窗（使用当前已注册的所有段落） */
   function openPreview() {
     reportStore.openPreview()
   }
 
-  /** 设置报表元信息（标题、楼宇、日期范围等） */
   function setReportMeta(meta: Parameters<typeof reportStore.setReportMeta>[0]) {
     reportStore.setReportMeta(meta)
   }

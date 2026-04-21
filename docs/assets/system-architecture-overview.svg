@@ -1,0 +1,105 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="760" viewBox="0 0 1280 760" role="img" aria-labelledby="title desc">
+  <title id="title">System Architecture Overview</title>
+  <desc id="desc">Overview of data, platform, AI and multi-terminal collaboration.</desc>
+  <defs>
+    <style>
+      .bg { fill: #f7faf8; }
+      .card { fill: #ffffff; stroke: #335c4a; stroke-width: 2; rx: 18; ry: 18; }
+      .data { fill: #e5f4ec; }
+      .platform { fill: #edf3ff; }
+      .ai { fill: #fff3dd; }
+      .terminal { fill: #f8e9e3; }
+      .title { font: 700 26px "Segoe UI", Arial, sans-serif; fill: #1d3a2f; }
+      .label { font: 700 18px "Segoe UI", Arial, sans-serif; fill: #1d3a2f; }
+      .sub { font: 400 13px "Segoe UI", Arial, sans-serif; fill: #466456; }
+      .line { stroke: #4e7a67; stroke-width: 3; fill: none; marker-end: url(#arrow); }
+      .lineThin { stroke: #7d8f86; stroke-width: 2.5; fill: none; marker-end: url(#arrow); }
+    </style>
+    <marker id="arrow" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="12" markerHeight="12" orient="auto-start-reverse">
+      <path d="M0,0 L12,6 L0,12 z" fill="#4e7a67"/>
+    </marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1280" height="760"/>
+  <text class="title" x="60" y="56">GreenHub Control - System Architecture Overview</text>
+
+  <rect class="card data" x="60" y="120" width="220" height="110"/>
+  <text class="label" x="88" y="160">Energy Samples</text>
+  <text class="sub" x="88" y="188">Open datasets / CSV / Excel</text>
+  <text class="sub" x="88" y="208">Building + hourly KPI records</text>
+
+  <rect class="card data" x="340" y="120" width="230" height="110"/>
+  <text class="label" x="370" y="160">DataCenter Import</text>
+  <text class="sub" x="370" y="188">Upload, preview, mapping</text>
+  <text class="sub" x="370" y="208">SSE import to energy_data</text>
+
+  <rect class="card platform" x="640" y="100" width="270" height="150"/>
+  <text class="label" x="675" y="145">PostgreSQL</text>
+  <text class="sub" x="675" y="175">buildings / devices / energy_data</text>
+  <text class="sub" x="675" y="197">daily_energy_summary / anomaly_events</text>
+  <text class="sub" x="675" y="219">predicted_anomaly_events / work_orders</text>
+
+  <rect class="card platform" x="960" y="120" width="220" height="110"/>
+  <text class="label" x="995" y="160">Redis Cache</text>
+  <text class="sub" x="995" y="188">Overview bundles</text>
+  <text class="sub" x="995" y="208">High-frequency reads</text>
+
+  <rect class="card ai" x="60" y="330" width="230" height="120"/>
+  <text class="label" x="92" y="372">RAGFlow KB</text>
+  <text class="sub" x="92" y="402">Manuals / specs / documents</text>
+  <text class="sub" x="92" y="422">Knowledge parsing and retrieval</text>
+
+  <rect class="card ai" x="340" y="310" width="300" height="160"/>
+  <text class="label" x="374" y="354">LangGraph + MCP + LLM</text>
+  <text class="sub" x="374" y="384">Operator AI / Worker AI orchestration</text>
+  <text class="sub" x="374" y="406">Query tools, diagnosis, workflow state</text>
+  <text class="sub" x="374" y="428">Read-only analysis and repair guidance</text>
+
+  <rect class="card platform" x="700" y="320" width="220" height="140"/>
+  <text class="label" x="734" y="364">Query &amp; Stats</text>
+  <text class="sub" x="734" y="394">Trend, COP, anomaly analysis</text>
+  <text class="sub" x="734" y="416">Charts and reports</text>
+
+  <rect class="card platform" x="960" y="320" width="220" height="140"/>
+  <text class="label" x="994" y="364">Smart O&amp;M</text>
+  <text class="sub" x="994" y="394">Realtime anomalies</text>
+  <text class="sub" x="994" y="416">6h / 12h forecast warnings</text>
+
+  <rect class="card platform" x="700" y="520" width="220" height="130"/>
+  <text class="label" x="734" y="562">Work Orders</text>
+  <text class="sub" x="734" y="592">AI review / dispatch / tracking</text>
+  <text class="sub" x="734" y="614">Repair feedback and experience</text>
+
+  <rect class="card terminal" x="60" y="540" width="210" height="110"/>
+  <text class="label" x="94" y="580">Web Admin</text>
+  <text class="sub" x="94" y="608">Home, DataCenter, QueryStats</text>
+
+  <rect class="card terminal" x="340" y="540" width="210" height="110"/>
+  <text class="label" x="372" y="580">Mobile Operator</text>
+  <text class="sub" x="372" y="608">Review, dispatch, tracking</text>
+
+  <rect class="card terminal" x="980" y="540" width="210" height="110"/>
+  <text class="label" x="1016" y="580">Mobile Worker</text>
+  <text class="sub" x="1016" y="608">Accept, arrive, process, guide</text>
+
+  <rect class="card ai" x="340" y="560" width="300" height="110"/>
+  <text class="label" x="372" y="600">AI Assistants</text>
+  <text class="sub" x="372" y="628">Yunxiaowei / Weixiaoxiu</text>
+
+  <path class="line" d="M280 175 L340 175"/>
+  <path class="line" d="M570 175 L640 175"/>
+  <path class="lineThin" d="M910 175 L960 175"/>
+  <path class="lineThin" d="M175 230 L175 330"/>
+  <path class="lineThin" d="M455 230 L455 310"/>
+  <path class="line" d="M775 250 L775 320"/>
+  <path class="line" d="M910 390 L960 390"/>
+  <path class="lineThin" d="M640 390 L700 390"/>
+  <path class="lineThin" d="M810 460 L810 520"/>
+  <path class="lineThin" d="M490 470 L490 560"/>
+  <path class="lineThin" d="M175 450 L175 540"/>
+  <path class="lineThin" d="M1040 460 L1040 540"/>
+  <path class="lineThin" d="M550 595 L700 595"/>
+  <path class="lineThin" d="M920 595 L980 595"/>
+  <path class="lineThin" d="M640 360 C680 360, 680 360, 700 360"/>
+  <path class="lineThin" d="M640 420 C680 420, 680 420, 700 420"/>
+</svg>

@@ -598,7 +598,9 @@ import { useReportExport } from '@/composables/useReportExport'
 const route = useRoute()
 const initialTab = route.query.tab === 'knowledge' ? 'knowledge' : 'datasets'
 const activeTab = ref<'datasets' | 'knowledge'>(initialTab)
-const { registerSection, setReportMeta } = useReportExport('datacenter')
+const { registerSection, setReportMeta } = useReportExport('datacenter', {
+  activateScopePrefixes: ['datacenter'],
+})
 
 // 数据集状态
 const datasetFileInput = ref<HTMLInputElement | null>(null)

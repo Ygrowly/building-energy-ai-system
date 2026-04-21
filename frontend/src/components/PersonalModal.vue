@@ -530,6 +530,7 @@
                   <div v-else-if="filteredPredictions.length === 0" class="empty-state ok">
                     <Icon icon="mdi:check-circle-outline" width="26" class="empty-icon" />
                     <p>{{ filterBuilding !== 'all' ? '该建筑在所选预测窗口内暂无异常预警' : `未来 ${filterHours} 小时暂无异常预警` }}</p>
+                    <p v-if="predictionEmptyHint" class="msg-detail">{{ predictionEmptyHint }}</p>
                   </div>
                   <div v-else class="msg-list">
                     <div
@@ -1134,9 +1135,17 @@ interface PredictionItem {
   is_confirmed: boolean | null
 }
 
+interface PredictionListResponse {
+  predictions?: PredictionItem[]
+  total?: number
+  module_status?: 'ok' | 'no_data'
+  message?: string
+}
+
 const predictions = ref<PredictionItem[]>([])
 const predictionLoading = ref(false)
 const predictionError = ref('')
+const predictionEmptyHint = ref('')
 const latestPredictionBatchAt = computed(() => {
   const timestamps = predictions.value
     .map(item => item.as_of_timestamp || item.created_at)
@@ -1154,8 +1163,9 @@ const riskHighCount = computed(() =>
 async function loadPredictions() {
   predictionLoading.value = true
   predictionError.value = ''
+  predictionEmptyHint.value = ''
   try {
-    const data = await apiFetch<{ predictions: PredictionItem[]; message?: string }>('/api/predictions/recent?hours=168')
+    const data = await apiFetch<PredictionListResponse>('/api/predictions/recent?hours=168')
     predictions.value = (data?.predictions ?? [])
       .filter(item => item.risk_level === 'warning' || item.risk_level === 'critical')
       .sort((a, b) => {
@@ -1164,8 +1174,10 @@ async function loadPredictions() {
         if (levelDiff !== 0) return levelDiff
         return Math.abs(b.deviation_pct ?? 0) - Math.abs(a.deviation_pct ?? 0)
       })
-    if (predictions.value.length === 0 && data?.message) {
-      predictionError.value = data.message
+    if (predictions.value.length === 0 && data?.module_status === 'no_data') {
+      predictionEmptyHint.value = '尚未生成预测预警，可点击“重新预测”获取最新结果。'
+    } else if (predictions.value.length === 0 && data?.message) {
+      predictionEmptyHint.value = data.message
     }
   } catch (e: unknown) {
     predictionError.value = (e as Error).message ?? '加载失败'
@@ -1181,12 +1193,43 @@ async function runForecast() {
   forecastLoading.value = true
   forecastResult.value  = ''
   predictionError.value = ''
+  predictionEmptyHint.value = ''
   try {
-    const res = await apiFetch<{ status: string; succeeded: number; total_buildings: number }>(
+    const res = await apiFetch<{
+      status: string
+      succeeded: number
+      failed: number
+      total_buildings: number
+      total_warnings: number
+      per_building?: Record<string, { status?: string; error?: string }>
+    }>(
       '/api/admin/run-forecast',
       { method: 'POST' },
     )
-    forecastResult.value = `预测完成：${res.succeeded ?? 0}/${res.total_buildings ?? 0} 栋楼`
+    const succeeded = res.succeeded ?? 0
+    const failed = res.failed ?? 0
+    const totalBuildings = res.total_buildings ?? 0
+    const totalWarnings = res.total_warnings ?? 0
+    const firstError = Object.values(res.per_building ?? {})
+      .find(item => item?.status === 'error' && item?.error)
+      ?.error
+
+    if (succeeded === 0 && failed > 0) {
+      predictionError.value = firstError
+        ? `预测执行失败：${failed}/${totalBuildings} 栋楼未完成。${firstError}`
+        : `预测执行失败：${failed}/${totalBuildings} 栋楼未完成，请检查预测模型和历史数据。`
+      return
+    }
+
+    if (totalWarnings > 0) {
+      forecastResult.value = failed > 0
+        ? `预测完成：${succeeded}/${totalBuildings} 栋楼，发现 ${totalWarnings} 条预警，另有 ${failed} 栋未完成`
+        : `预测完成：${succeeded}/${totalBuildings} 栋楼，发现 ${totalWarnings} 条预警`
+    } else if (failed > 0) {
+      forecastResult.value = `预测完成：${succeeded}/${totalBuildings} 栋楼，当前未发现异常预警，另有 ${failed} 栋未完成`
+    } else {
+      forecastResult.value = `预测完成：${succeeded}/${totalBuildings} 栋楼，当前未发现异常预警`
+    }
     await loadPredictions()
   } catch (e: unknown) {
     predictionError.value = (e as Error).message ?? '预测失败'

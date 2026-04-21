@@ -1,16 +1,15 @@
 /**
- * 报表状态管理 (Pinia)
+ * Report store (Pinia)
  *
- * 负责：
- *  - 各页面注册的报表段落（ReportSection）的增删管理
- *  - 预览弹窗的可见性与当前 payload
- *  - 支持直接传入 payload（用于 AI 对话报表、CSV 解析报表）
+ * Responsibilities:
+ * - manage sections registered by each page/component
+ * - manage preview dialog state
+ * - build page-report payloads from the active page scope
+ * - accept direct payloads for conversation / server-generated reports
  */
 import { defineStore } from 'pinia'
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import type { ArtifactEvent } from '@/api/stream_client'
-
-// ── 数据模型 ──────────────────────────────────────────────────
 
 export interface KpiItem {
   label: string
@@ -28,6 +27,12 @@ export interface TableColumn {
 export interface SummaryItem {
   label: string
   value: string
+}
+
+export interface ReportInsightItem {
+  tag: string
+  title: string
+  text: string
 }
 
 export interface ReportCardItem {
@@ -58,27 +63,21 @@ export interface FormalReportMeta {
 
 export interface ReportSection {
   id: string
-  namespace: string              // 注册方命名空间，用于页面切换时清理
+  namespace: string
   title: string
   description?: string
-  type: 'kpi' | 'table' | 'chart' | 'text' | 'summary' | 'artifact' | 'cards'
-  // type=kpi
+  type: 'kpi' | 'table' | 'chart' | 'text' | 'summary' | 'artifact' | 'cards' | 'insights'
   kpis?: KpiItem[]
-  // type=table
   columns?: TableColumn[]
   rows?: Record<string, any>[]
-  // type=chart
-  chartImage?: string            // base64 PNG data URL
-  // type=summary
+  chartImage?: string
   summaryItems?: SummaryItem[]
-  // type=cards
+  insights?: ReportInsightItem[]
   cards?: ReportCardItem[]
-  // type=text
   content?: string
   contentFormat?: 'plain' | 'markdown'
-  // type=artifact
   artifact?: ArtifactEvent
-  order?: number                 // 段落排序（越小越靠前），默认 100
+  order?: number
 }
 
 export interface ReportPayload {
@@ -95,64 +94,83 @@ export interface ReportPayload {
   formalMeta?: FormalReportMeta
 }
 
-// ── Store ─────────────────────────────────────────────────────
+function isSamePrefixList(left: string[], right: string[]) {
+  if (left.length !== right.length) return false
+  return left.every((item, index) => item === right[index])
+}
 
 export const useReportStore = defineStore('report', () => {
-  // 当前注册的所有段落（各页面各子组件写入）
   const sections = ref<ReportSection[]>([])
+  const activeNamespacePrefixes = ref<string[]>([])
 
-  // 预览弹窗状态
   const previewVisible = ref(false)
   const previewPayload = ref<ReportPayload | null>(null)
   const previewMode = ref<'snapshot' | 'formal'>('snapshot')
+  const previewSource = ref<'sections' | 'payload'>('sections')
 
-  // 报表元数据（页面设置）
   const reportMeta = ref<Omit<ReportPayload, 'sections' | 'mode' | 'generatedAt'>>({
     title: '楼宇能耗报表',
   })
 
-  // ── 段落管理 ────────────────────────────────────────────────
+  const matchesActiveScope = (section: ReportSection) => {
+    if (!activeNamespacePrefixes.value.length) return true
+    return activeNamespacePrefixes.value.some(prefix => section.namespace.startsWith(prefix))
+  }
+
+  const activeSections = computed(() => sections.value.filter(matchesActiveScope))
+  const hasActiveSections = computed(() => activeSections.value.length > 0)
 
   function registerSection(section: ReportSection) {
-    const idx = sections.value.findIndex(s => s.id === section.id)
-    if (idx !== -1) {
-      sections.value[idx] = section
-    } else {
-      sections.value.push(section)
+    const index = sections.value.findIndex(item => item.id === section.id)
+    if (index !== -1) {
+      sections.value[index] = section
+      return
     }
+    sections.value.push(section)
   }
 
   function removeSection(id: string) {
-    sections.value = sections.value.filter(s => s.id !== id)
+    sections.value = sections.value.filter(section => section.id !== id)
   }
 
   function clearSectionsByNamespace(namespace: string) {
-    sections.value = sections.value.filter(s => s.namespace !== namespace)
+    sections.value = sections.value.filter(section => section.namespace !== namespace)
   }
 
   function clearAllSections() {
     sections.value = []
   }
 
-  // ── 预览控制 ────────────────────────────────────────────────
+  function setActiveNamespacePrefixes(prefixes: string[]) {
+    activeNamespacePrefixes.value = [...prefixes]
+  }
+
+  function clearActiveNamespacePrefixes(prefixes?: string[]) {
+    if (!prefixes || isSamePrefixList(activeNamespacePrefixes.value, prefixes)) {
+      activeNamespacePrefixes.value = []
+    }
+  }
 
   function buildPayload(mode: 'snapshot' | 'formal'): ReportPayload {
-    const sorted = [...sections.value].sort((a, b) => (a.order ?? 100) - (b.order ?? 100))
+    const sortedSections = [...activeSections.value]
+      .sort((left, right) => (left.order ?? 100) - (right.order ?? 100))
+
     return {
       ...reportMeta.value,
       generatedAt: new Date().toLocaleString('zh-CN'),
-      sections: sorted,
+      sections: sortedSections,
       mode,
     }
   }
 
   function openPreview() {
+    previewSource.value = 'sections'
     previewPayload.value = buildPayload(previewMode.value)
     previewVisible.value = true
   }
 
-  /** 直接传入 payload 打开预览（用于 AI 对话报表、CSV 解析报表） */
   function openPreviewWithPayload(payload: ReportPayload) {
+    previewSource.value = 'payload'
     previewPayload.value = payload
     previewMode.value = payload.mode
     previewVisible.value = true
@@ -164,12 +182,14 @@ export const useReportStore = defineStore('report', () => {
 
   function setPreviewMode(mode: 'snapshot' | 'formal') {
     previewMode.value = mode
-    // 切换模式时重新构建 payload（如果当前是从页面段落构建的）
-    if (previewPayload.value && sections.value.length > 0) {
+    if (!previewPayload.value) return
+
+    if (previewSource.value === 'sections') {
       previewPayload.value = buildPayload(mode)
-    } else if (previewPayload.value) {
-      previewPayload.value = { ...previewPayload.value, mode }
+      return
     }
+
+    previewPayload.value = { ...previewPayload.value, mode }
   }
 
   function setReportMeta(meta: Partial<typeof reportMeta.value>) {
@@ -178,14 +198,20 @@ export const useReportStore = defineStore('report', () => {
 
   return {
     sections,
+    activeSections,
+    activeNamespacePrefixes,
+    hasActiveSections,
     previewVisible,
     previewPayload,
     previewMode,
+    previewSource,
     reportMeta,
     registerSection,
     removeSection,
     clearSectionsByNamespace,
     clearAllSections,
+    setActiveNamespacePrefixes,
+    clearActiveNamespacePrefixes,
     openPreview,
     openPreviewWithPayload,
     closePreview,

@@ -427,7 +427,7 @@ async def forecast_building_kpi(
     _meter_id, actual_bid = await get_building_info(session, building_id)
     if actual_bid is None:
         return MCPError(
-            error=f"未找到建筑类型 '{building_id}'，请先调用 list_available_buildings 确认合法值",
+            error=f"未找到建筑 '{building_id}'，请先调用 list_available_buildings 确认合法值",
             error_code="BUILDING_NOT_FOUND",
             tool_name="building_kpi_forecast_6h_12h",
         )
@@ -558,14 +558,14 @@ async def forecast_building_kpi(
     if warnings_count > 0:
         try:
             n = await _persist_predictions(
-                building_id=building_id,
+                building_id=actual_bid,
                 as_of=actual_as_of,
                 metrics=metrics,
                 model_name=model_name,
                 session=session,
             )
             persisted = n > 0
-            logger.info("forecast: 楼 %s 写入 %d 条预测预警", building_id, n)
+            logger.info("forecast: 楼 %s 写入 %d 条预测预警", actual_bid, n)
         except Exception as exc:
             logger.warning("forecast: 预测预警持久化失败（降级返回）: %s", exc)
 

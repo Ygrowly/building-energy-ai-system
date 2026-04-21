@@ -101,6 +101,26 @@
           </div>
         </div>
 
+        <div v-else-if="section.type === 'query-stats-chart-grid'" class="rr-section rr-section-chart-grid">
+          <h2 class="rr-section-title">{{ section.title }}</h2>
+          <p v-if="section.description" class="rr-section-desc">{{ section.description }}</p>
+          <div class="rr-query-chart-grid">
+            <article
+              v-for="chart in section.charts"
+              :key="chart.id"
+              :class="['rr-query-chart-card', `rr-query-chart-card--${chart.layout}`]"
+            >
+              <header class="rr-query-chart-card-head">
+                <h3 class="rr-query-chart-card-title">{{ chart.title }}</h3>
+                <p v-if="chart.description" class="rr-query-chart-card-desc">{{ chart.description }}</p>
+              </header>
+              <div class="rr-query-chart-media">
+                <img :src="chart.chartImage" :alt="chart.title" class="rr-query-chart-img" />
+              </div>
+            </article>
+          </div>
+        </div>
+
         <div v-else-if="section.type === 'chart' && section.chartImage" class="rr-section">
           <h2 class="rr-section-title">{{ section.title }}</h2>
           <p v-if="section.description" class="rr-section-desc">{{ section.description }}</p>
@@ -120,17 +140,27 @@
           </div>
         </div>
 
+        <div v-else-if="section.type === 'insights' && section.insights?.length" class="rr-section">
+          <h2 class="rr-section-title">{{ section.title }}</h2>
+          <p v-if="section.description" class="rr-section-desc">{{ section.description }}</p>
+          <div class="rr-finding-grid">
+            <article v-for="item in section.insights" :key="`${item.tag}-${item.title}`" class="rr-finding-card">
+              <div class="rr-finding-badge">{{ item.tag }}</div>
+              <div class="rr-finding-content">
+                <h3 class="rr-finding-title">{{ item.title }}</h3>
+                <p class="rr-finding-text">{{ item.text }}</p>
+              </div>
+            </article>
+          </div>
+        </div>
+
         <div v-else-if="section.id === 'home-insight' && section.type === 'text' && section.content" class="rr-section rr-section-insight">
           <h2 class="rr-section-title">{{ section.title }}</h2>
           <p v-if="section.description" class="rr-section-desc">{{ section.description }}</p>
           <div class="rr-insight-grid">
             <article v-for="block in parseInsightBlocks(section.content)" :key="block.title" class="rr-insight-card">
               <header class="rr-insight-card-head">{{ block.title }}</header>
-              <ul class="rr-insight-list">
-                <li v-for="(item, idx) in block.items" :key="`${block.title}-${idx}`" class="rr-insight-item">
-                  {{ item }}
-                </li>
-              </ul>
+              <div class="rr-insight-body rr-markdown" v-html="renderMarkdown(block.markdown)"></div>
             </article>
           </div>
         </div>
@@ -195,15 +225,34 @@ interface ChartGridSection {
   charts: ReportSection[]
 }
 
-type RenderSection = ReportSection | ChartGridSection
+interface QueryStatsChartItem extends ReportSection {
+  layout: 'featured' | 'standard' | 'wide'
+  chartImage: string
+}
+
+interface QueryStatsChartGridSection {
+  id: string
+  type: 'query-stats-chart-grid'
+  title: string
+  description?: string
+  charts: QueryStatsChartItem[]
+}
+
+type RenderSection = ReportSection | ChartGridSection | QueryStatsChartGridSection
 
 const props = defineProps<{ payload: ReportPayload }>()
 const homeChartOrder = ['home-chart-radar', 'home-chart-hvac', 'home-chart-compare', 'home-chart-sankey'] as const
+const queryStatsChartOrder = ['qs-chart-energy', 'qs-chart-cop', 'qs-chart-device', 'qs-chart-temperature'] as const
 
 const sectionsForRender = computed<RenderSection[]>(() => {
   const sections = props.payload.sections ?? []
+  if (isQueryStatsPayload()) return buildQueryStatsSections(sections)
   if (!isHomeOverviewPayload()) return sections
 
+  return buildHomeSections(sections)
+})
+
+function buildHomeSections(sections: ReportSection[]): RenderSection[] {
   const chartMap = new Map(sections.map(section => [section.id, section]))
   const homeCharts = homeChartOrder
     .map(id => chartMap.get(id))
@@ -233,7 +282,44 @@ const sectionsForRender = computed<RenderSection[]>(() => {
   }
 
   return output
-})
+}
+
+function buildQueryStatsSections(sections: ReportSection[]): RenderSection[] {
+  const chartMap = new Map(sections.map(section => [section.id, section]))
+  const queryCharts = queryStatsChartOrder
+    .map(id => chartMap.get(id))
+    .filter((section): section is ReportSection => !!section && section.type === 'chart' && !!section.chartImage)
+    .map((section): QueryStatsChartItem => ({
+      ...section,
+      chartImage: section.chartImage!,
+      layout: resolveQueryStatsChartLayout(section.id),
+    }))
+
+  if (queryCharts.length < 2) return sections
+
+  const consumed = new Set(queryCharts.map(section => section.id))
+  const output: RenderSection[] = []
+  let inserted = false
+
+  for (const section of sections) {
+    if (consumed.has(section.id)) {
+      if (!inserted) {
+        output.push({
+          id: 'query-stats-chart-grid',
+          type: 'query-stats-chart-grid',
+          title: '核心分析图表',
+          description: '能耗总览与 COP 并排展示，环境与温度固定放在最后，仅保留固定组件间距。',
+          charts: queryCharts,
+        })
+        inserted = true
+      }
+      continue
+    }
+    output.push(section)
+  }
+
+  return output
+}
 
 function formatCell(v: unknown): string {
   if (v == null || v === '') return '--'
@@ -266,28 +352,43 @@ function isHomeOverviewPayload(): boolean {
   return props.payload.title.includes('首页')
 }
 
-function parseInsightBlocks(content?: string): Array<{ title: string; items: string[] }> {
+function isQueryStatsPayload(): boolean {
+  return props.payload.sections.some(section => section.id.startsWith('qs-'))
+    || props.payload.title.includes('查询统计')
+}
+
+function resolveQueryStatsChartLayout(sectionId: string): QueryStatsChartItem['layout'] {
+  if (sectionId === 'qs-chart-device') return 'wide'
+  if (sectionId === 'qs-chart-temperature') return 'wide'
+  return 'standard'
+}
+
+function parseInsightBlocks(content?: string): Array<{ title: string; markdown: string }> {
   if (!content) return []
 
-  const blocks: Array<{ title: string; items: string[] }> = []
-  let current: { title: string; items: string[] } | null = null
+  const blocks: Array<{ title: string; lines: string[] }> = []
+  let current: { title: string; lines: string[] } | null = null
 
   for (const rawLine of content.split('\n')) {
-    const line = rawLine.trim()
-    if (!line) continue
-    if (line.startsWith('### ')) {
-      current = { title: line.slice(4).trim(), items: [] }
+    const trimmed = rawLine.trim()
+    if (trimmed.startsWith('### ')) {
+      current = { title: trimmed.slice(4).trim(), lines: [] }
       blocks.push(current)
       continue
     }
     if (!current) {
-      current = { title: '洞察摘要', items: [] }
+      current = { title: '洞察摘要', lines: [] }
       blocks.push(current)
     }
-    current.items.push(line.replace(/^[-*]\s*/, '').replace(/^\d+\.\s*/, ''))
+    current.lines.push(rawLine)
   }
 
   return blocks
+    .map(block => ({
+      title: block.title,
+      markdown: block.lines.join('\n').trim(),
+    }))
+    .filter(block => !!block.markdown)
 }
 </script>
 
@@ -518,6 +619,12 @@ function parseInsightBlocks(content?: string): Array<{ title: string; items: str
   gap: 16px;
 }
 
+.rr-query-chart-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
 .rr-chart-card {
   border: 1px solid #dbe5ef;
   border-radius: 16px;
@@ -558,6 +665,51 @@ function parseInsightBlocks(content?: string): Array<{ title: string; items: str
   background: #fff;
 }
 
+.rr-query-chart-card {
+  border: 1px solid #dbe5ef;
+  border-radius: 16px;
+  overflow: hidden;
+  background: linear-gradient(180deg, #fbfdff 0%, #ffffff 100%);
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.05);
+}
+
+.rr-query-chart-card--wide {
+  grid-column: 1 / -1;
+}
+
+.rr-query-chart-card-head {
+  padding: 14px 16px 10px;
+  border-bottom: 1px solid #e6edf5;
+  background: linear-gradient(135deg, rgba(239, 246, 255, 0.96) 0%, rgba(248, 250, 252, 0.98) 100%);
+}
+
+.rr-query-chart-card-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  color: #0f2742;
+}
+
+.rr-query-chart-card-desc {
+  margin: 6px 0 0;
+  font-size: 11px;
+  line-height: 1.6;
+  color: #64748b;
+}
+
+.rr-query-chart-media {
+  padding: 10px 10px 12px;
+  background: #fff;
+}
+
+.rr-query-chart-img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 0 0 10px 10px;
+  background: #fff;
+}
+
 .rr-summary-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -568,6 +720,58 @@ function parseInsightBlocks(content?: string): Array<{ title: string; items: str
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+
+.rr-finding-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.rr-finding-card {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 16px 18px;
+  border-radius: 16px;
+  border: 1px solid #dbe6f0;
+  background: linear-gradient(180deg, #fbfdff 0%, #f8fbff 100%);
+  box-shadow: 0 10px 22px rgba(15, 23, 42, 0.05);
+}
+
+.rr-finding-badge {
+  min-width: 48px;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #e8f0ff;
+  color: #1d4ed8;
+  font-size: 12px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.rr-finding-content {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.rr-finding-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  color: #102a43;
+}
+
+.rr-finding-text {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.8;
+  color: #475569;
 }
 
 .rr-summary-value {
@@ -609,16 +813,30 @@ function parseInsightBlocks(content?: string): Array<{ title: string; items: str
   background: linear-gradient(135deg, #eff6ff 0%, #f8fafc 100%);
 }
 
-.rr-insight-list {
-  margin: 0;
+.rr-insight-body {
   padding: 14px 18px 16px;
-  list-style: disc;
 }
 
-.rr-insight-item {
+.rr-insight-body :deep(p),
+.rr-insight-body :deep(ul),
+.rr-insight-body :deep(ol) {
+  margin: 0 0 10px;
+}
+
+.rr-insight-body :deep(ul),
+.rr-insight-body :deep(ol) {
+  padding-left: 20px;
+}
+
+.rr-insight-body :deep(li),
+.rr-insight-body :deep(p) {
   color: #334155;
   font-size: 12px;
   line-height: 1.8;
+}
+
+.rr-insight-body :deep(strong) {
+  color: #0f172a;
 }
 
 .rr-markdown :deep(p),
@@ -666,6 +884,8 @@ function parseInsightBlocks(content?: string): Array<{ title: string; items: str
   }
 
   .rr-chart-grid,
+  .rr-query-chart-grid,
+  .rr-finding-grid,
   .rr-insight-grid {
     grid-template-columns: 1fr;
   }

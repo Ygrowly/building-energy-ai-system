@@ -1,0 +1,92 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1320" height="540" viewBox="0 0 1320 540" role="img" aria-labelledby="title desc">
+  <title id="title">Data Flow Overview</title>
+  <desc id="desc">End to end data flow from raw samples to repair feedback and experience reuse.</desc>
+  <defs>
+    <style>
+      .bg { fill: #fbfcfb; }
+      .card { stroke: #355748; stroke-width: 2; rx: 18; ry: 18; }
+      .c1 { fill: #e6f4ea; }
+      .c2 { fill: #edf4ff; }
+      .c3 { fill: #fff4df; }
+      .c4 { fill: #f8ebe7; }
+      .title { font: 700 26px "Segoe UI", Arial, sans-serif; fill: #1d3a2f; }
+      .label { font: 700 18px "Segoe UI", Arial, sans-serif; fill: #1d3a2f; }
+      .sub { font: 400 13px "Segoe UI", Arial, sans-serif; fill: #4a675a; }
+      .line { stroke: #547c6a; stroke-width: 3; fill: none; marker-end: url(#arrow); }
+    </style>
+    <marker id="arrow" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="12" markerHeight="12" orient="auto-start-reverse">
+      <path d="M0,0 L12,6 L0,12 z" fill="#547c6a"/>
+    </marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1320" height="540"/>
+  <text class="title" x="60" y="56">GreenHub Control - End-to-End Data Flow</text>
+
+  <rect class="card c1" x="50" y="120" width="170" height="110"/>
+  <text class="label" x="76" y="162">Raw Samples</text>
+  <text class="sub" x="76" y="190">Open data / notebooks</text>
+  <text class="sub" x="76" y="210">CSV / Excel inputs</text>
+
+  <rect class="card c1" x="260" y="120" width="180" height="110"/>
+  <text class="label" x="286" y="162">Normalize</text>
+  <text class="sub" x="286" y="190">Field mapping</text>
+  <text class="sub" x="286" y="210">Timestamp / unit checks</text>
+
+  <rect class="card c2" x="480" y="120" width="180" height="110"/>
+  <text class="label" x="508" y="162">Upload &amp; Preview</text>
+  <text class="sub" x="508" y="190">Dataset analysis</text>
+  <text class="sub" x="508" y="210">Sample rows / stats</text>
+
+  <rect class="card c2" x="700" y="120" width="180" height="110"/>
+  <text class="label" x="728" y="162">Import</text>
+  <text class="sub" x="728" y="190">SSE progress stream</text>
+  <text class="sub" x="728" y="210">energy_data upsert</text>
+
+  <rect class="card c2" x="920" y="120" width="180" height="110"/>
+  <text class="label" x="944" y="162">Storage</text>
+  <text class="sub" x="944" y="190">buildings / devices</text>
+  <text class="sub" x="944" y="210">daily summaries and events</text>
+
+  <rect class="card c3" x="1140" y="120" width="140" height="110"/>
+  <text class="label" x="1164" y="162">Analytics</text>
+  <text class="sub" x="1164" y="190">Trend / COP</text>
+  <text class="sub" x="1164" y="210">Charts / reports</text>
+
+  <rect class="card c3" x="220" y="330" width="200" height="120"/>
+  <text class="label" x="248" y="374">Anomaly Detect</text>
+  <text class="sub" x="248" y="402">Realtime rules + baseline</text>
+  <text class="sub" x="248" y="422">HVAC diagnosis and flags</text>
+
+  <rect class="card c3" x="470" y="330" width="200" height="120"/>
+  <text class="label" x="500" y="374">Forecast</text>
+  <text class="sub" x="500" y="402">Offline bundle</text>
+  <text class="sub" x="500" y="422">6h / 12h warnings</text>
+
+  <rect class="card c4" x="720" y="330" width="200" height="120"/>
+  <text class="label" x="748" y="374">Incidents &amp; WO</text>
+  <text class="sub" x="748" y="402">AI review / pending dispatch</text>
+  <text class="sub" x="748" y="422">Unified work order surface</text>
+
+  <rect class="card c4" x="970" y="330" width="150" height="120"/>
+  <text class="label" x="996" y="374">Dispatch</text>
+  <text class="sub" x="996" y="402">Assign / reassign</text>
+  <text class="sub" x="996" y="422">SLA tracking</text>
+
+  <rect class="card c4" x="1160" y="330" width="120" height="120"/>
+  <text class="label" x="1182" y="374">Repair</text>
+  <text class="sub" x="1182" y="402">Accept / arrive</text>
+  <text class="sub" x="1182" y="422">Process / feedback</text>
+
+  <path class="line" d="M220 175 L260 175"/>
+  <path class="line" d="M440 175 L480 175"/>
+  <path class="line" d="M660 175 L700 175"/>
+  <path class="line" d="M880 175 L920 175"/>
+  <path class="line" d="M1100 175 L1140 175"/>
+
+  <path class="line" d="M1010 230 L1010 285 L320 285 L320 330"/>
+  <path class="line" d="M1010 230 L1010 285 L570 285 L570 330"/>
+  <path class="line" d="M420 390 L470 390"/>
+  <path class="line" d="M670 390 L720 390"/>
+  <path class="line" d="M920 390 L970 390"/>
+  <path class="line" d="M1120 390 L1160 390"/>
+</svg>

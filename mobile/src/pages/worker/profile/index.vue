@@ -103,10 +103,10 @@
           <text class="section-label">负责楼宇</text>
           <view class="chip-row">
             <text
-              v-for="building in workerProfile.service_buildings"
-              :key="building"
+              v-for="building in serviceBuildingChips"
+              :key="building.raw"
               class="building-chip"
-            >{{ building }}</text>
+            >{{ building.label }}</text>
             <text v-if="!workerProfile.service_buildings?.length" class="empty-chip">当前为跨楼宇支援模式</text>
           </view>
         </view>
@@ -162,6 +162,8 @@ import { WORKER_TABS } from '../../../constants/tabs'
 import { WORKER_ROLES } from '../../../constants/roles'
 import { incidentApi, type Incident } from '../../../api/incident'
 import { getWorkerDashboardStats } from '../../../utils/worker-ui'
+import { getStoredAvatarUrl, setStoredAvatarUrl } from '../../../utils/avatar'
+import { formatBuildingLabel } from '../../../utils/display'
 
 useRouteGuard(WORKER_ROLES)
 
@@ -174,6 +176,12 @@ const incidents = ref<Incident[]>([])
 
 const stats = computed(() => getWorkerDashboardStats(incidents.value))
 const teamName = computed(() => workerProfile.value?.team?.name || '综合运维班')
+const serviceBuildingChips = computed(() =>
+  (workerProfile.value?.service_buildings || []).map((building) => ({
+    raw: building,
+    label: formatBuildingLabel(building),
+  })),
+)
 const shiftLabel = computed(() => {
   const map: Record<string, string> = {
     on_duty: '值班中',
@@ -199,8 +207,7 @@ const SUB_PAGES: Record<string, string> = {
 }
 
 function loadAvatar() {
-  const uid = user.value?.id ?? 'guest'
-  avatarUrl.value = uni.getStorageSync(`avatar_${uid}`) || ''
+  avatarUrl.value = getStoredAvatarUrl(user.value?.id)
 }
 
 async function loadStats() {
@@ -244,8 +251,7 @@ function changeAvatar() {
 }
 
 function saveAvatar(url: string) {
-  const uid = user.value?.id ?? 'guest'
-  uni.setStorageSync(`avatar_${uid}`, url)
+  setStoredAvatarUrl(user.value?.id, url)
   avatarUrl.value = url
 }
 

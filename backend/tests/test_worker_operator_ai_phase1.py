@@ -4,6 +4,7 @@ from app.services.operator_ai_service import _detect_blocked_actions, _extract_t
 from app.services import worker_ai_service
 from app.services.worker_ai_service import (
     _generate_worker_chat_reply_with_model,
+    _humanize_worker_reply_text,
     classify_worker_intent,
     classify_worker_intent_by_rules,
 )
@@ -70,6 +71,41 @@ async def test_worker_ai_natural_chat_uses_model_reply(monkeypatch: pytest.Monke
     assert "从零开始" in answer
     assert "后端" not in answer
     assert "状态机" not in answer
+
+
+def test_worker_ai_reply_humanizer_rewrites_internal_progress_terms():
+    answer = _humanize_worker_reply_text(
+        "你刚问做到第几步了——现在还在step_1，别跳步。系统里只确认step_1完成，"
+        "step_2虽标了completed却没传回实际读数，这样step_1才算闭环。"
+    )
+
+    assert "step_1" not in answer
+    assert "completed" not in answer
+    assert "系统里只确认" not in answer
+    assert "闭环" not in answer
+    assert "先别急着往后跳" in answer
+
+
+@pytest.mark.asyncio
+async def test_worker_ai_model_reply_is_sanitized_before_return(monkeypatch: pytest.MonkeyPatch):
+    class FakeProvider:
+        async def chat(self, messages, **kwargs):
+            return '{"answer":"咱们还在step_1，别跳步，pending 的信息还没补齐。"}'
+
+    monkeypatch.setattr(worker_ai_service, "get_model_provider", lambda: FakeProvider())
+
+    answer = await _generate_worker_chat_reply_with_model(
+        message="你好 我现在该先看哪里",
+        work_order=None,
+        dispatch_task=None,
+        hall_entry=None,
+        client_context={},
+    )
+
+    assert answer is not None
+    assert "step_1" not in answer
+    assert "pending" not in answer
+    assert "先别急着往后跳" in answer
 
 
 def test_operator_ai_blocks_write_actions():

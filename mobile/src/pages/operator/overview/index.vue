@@ -12,7 +12,8 @@
     <view class="header">
       <view class="header-left">
         <view class="avatar-circle">
-          <text class="avatar-text">{{ (authStore.user?.username || '?')[0] }}</text>
+          <image v-if="avatarUrl" class="avatar-img" :src="avatarUrl" mode="aspectFill" />
+          <text v-else class="avatar-text">{{ (authStore.user?.username || '?')[0] }}</text>
         </view>
         <view class="header-info">
           <text class="header-greeting">{{ greeting }}</text>
@@ -374,6 +375,7 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
+import { onShow } from '@dcloudio/uni-app'
 import NavBar from '../../../components/NavBar.vue'
 import TabBar from '../../../components/TabBar.vue'
 import { useAuthStore } from '../../../stores/auth'
@@ -386,6 +388,7 @@ import { PRIORITY_LABEL, PRIORITY_COLOR } from '../../../constants/status'
 import { formatNum, formatPct } from '../../../utils/format'
 import { getCache, setCache } from '../../../utils/cache'
 import { formatBuildingLabel, formatDeviceLabel, sanitizeDisplayText } from '../../../utils/display'
+import { getStoredAvatarUrl } from '../../../utils/avatar'
 
 useRouteGuard(OPERATOR_ROLES)
 
@@ -393,6 +396,7 @@ const authStore = useAuthStore()
 const overview = ref<OverviewResponse | null>(null)
 const loading = ref(false)
 const currentTab = ref('all')
+const avatarUrl = ref('')
 
 const OVERVIEW_CACHE_KEY = 'operator_overview_data'
 const OVERVIEW_WORKORDERS_CACHE_KEY = 'operator_overview_rejected_workorders'
@@ -621,13 +625,21 @@ function formatFixed(value: number | null | undefined, digits = 1): string {
   return value.toFixed(digits)
 }
 
+function loadAvatar() {
+  avatarUrl.value = getStoredAvatarUrl(authStore.user?.id)
+}
+
 let timer: ReturnType<typeof setInterval>
 onMounted(() => {
   const cachedState = getCache<{ currentTab?: string }>(OVERVIEW_STATE_KEY, OVERVIEW_STATE_TTL)
   if (cachedState?.currentTab) currentTab.value = cachedState.currentTab
+  loadAvatar()
   loadData()
   loadWorkOrders()
   timer = setInterval(() => { loadData(); loadWorkOrders() }, 60000)
+})
+onShow(() => {
+  loadAvatar()
 })
 onUnmounted(() => clearInterval(timer))
 </script>
@@ -646,7 +658,9 @@ onUnmounted(() => clearInterval(timer))
   width: 64rpx; height: 64rpx; border-radius: 50%;
   background: linear-gradient(135deg, #22c55e, #16a34a);
   display: flex; align-items: center; justify-content: center;
+  overflow: hidden;
 }
+.avatar-img { width: 100%; height: 100%; }
 .avatar-text { font-size: 28rpx; font-weight: 700; color: #fff; }
 .header-greeting { font-size: 22rpx; color: #94a3b8; }
 .header-name { font-size: 32rpx; font-weight: 700; color: #1e293b; }

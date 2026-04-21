@@ -173,6 +173,10 @@
                 <text class="hall-detail-label">进入原因</text>
                 <text class="hall-detail-value multiline">{{ hallEntryReason(entry) }}</text>
               </view>
+              <view class="hall-detail-line">
+                <text class="hall-detail-label">异常情况</text>
+                <text class="hall-detail-value multiline">{{ hallEntryIssue(entry) }}</text>
+              </view>
               <view v-if="hallVisibilitySummary(entry)" class="hall-detail-line">
                 <text class="hall-detail-label">可见范围</text>
                 <text class="hall-detail-value multiline">{{ hallVisibilitySummary(entry) }}</text>
@@ -1080,6 +1084,10 @@ function hallEntryReason(entry: DispatchHallEntry) {
     return sanitizeOperatorDisplayText(entry.reason || entry.work_order?.dispatch_blocked_reason) || '当前派工已超时，等待接管确认'
   }
   return sanitizeOperatorDisplayText(entry.support_reason || entry.reason) || '主责任人申请协同支援'
+}
+
+function hallEntryIssue(entry: DispatchHallEntry) {
+  return sanitizeOperatorDisplayText(entry.work_order?.issue_description) || '现场异常情况待确认'
 }
 
 function hallVisibilitySummary(entry: DispatchHallEntry) {

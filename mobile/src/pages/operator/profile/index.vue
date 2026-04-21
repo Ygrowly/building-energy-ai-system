@@ -149,6 +149,7 @@ import { OPERATOR_TABS } from '../../../constants/tabs'
 import { OPERATOR_ROLES } from '../../../constants/roles'
 import { buildOperatorWorkorderMessageItems } from '../../../utils/operator-message'
 import { getCache, setCache } from '../../../utils/cache'
+import { getStoredAvatarUrl, setStoredAvatarUrl } from '../../../utils/avatar'
 
 useRouteGuard(OPERATOR_ROLES)
 
@@ -266,8 +267,7 @@ function restoreDashboardCache() {
 }
 
 function loadAvatar() {
-  const uid = user.value?.id ?? 'guest'
-  avatarUrl.value = uni.getStorageSync(`avatar_${uid}`) || ''
+  avatarUrl.value = getStoredAvatarUrl(user.value?.id)
 }
 
 async function loadDashboard(showFeedback = false) {
@@ -354,8 +354,7 @@ function changeAvatar() {
 }
 
 function saveAvatar(url: string) {
-  const uid = user.value?.id ?? 'guest'
-  uni.setStorageSync(`avatar_${uid}`, url)
+  setStoredAvatarUrl(user.value?.id, url)
   avatarUrl.value = url
 }
 

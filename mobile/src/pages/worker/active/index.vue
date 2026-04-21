@@ -118,7 +118,7 @@ import { WORKER_ROLES } from '../../../constants/roles'
 import { WORKER_TABS } from '../../../constants/tabs'
 import { DISPATCH_EXECUTION_STATUS_LABEL } from '../../../constants/status'
 import { formatDateTime } from '../../../utils/format'
-import { formatBuildingLabel, formatDeviceLabel, formatRuleLabel, formatSystemLabel, sanitizeDisplayText } from '../../../utils/display'
+import { formatBuildingLabel, formatDeviceLabel, formatRuleLabel, formatSystemLabel, formatWorkOrderTitle, sanitizeDisplayText } from '../../../utils/display'
 import { getCache, setCache } from '../../../utils/cache'
 import { subscribeWorkerOrdersUpdated } from '../../../utils/worker-sync'
 import {
@@ -221,7 +221,12 @@ const taskCards = computed<WorkerTaskCard[]>(() => {
     kind: 'incident',
     bucket: getWorkerOrderBucket(incident),
     ticketId: incident.current_work_order?.ticket_id || incident.incident_id,
-    title: incident.summary_text,
+    title: formatWorkOrderTitle({
+      ruleTriggered: incident.rule_triggered,
+      summaryText: incident.summary_text,
+      issueDescription: incident.current_work_order?.issue_description,
+      buildingId: incident.building_id,
+    }) || incident.current_work_order?.ticket_id || incident.incident_id,
     building: formatBuildingLabel(incident.building_id),
     location: formatDeviceLabel(incident.device_id, incident.building_id) || formatSystemLabel(incident.rule_triggered),
     incident,
@@ -231,7 +236,10 @@ const taskCards = computed<WorkerTaskCard[]>(() => {
     kind: 'work_order',
     bucket: getDirectWorkOrderBucket(workOrder),
     ticketId: workOrder.ticket_id,
-    title: sanitizeDisplayText(workOrder.issue_description) || workOrder.ticket_id,
+    title: formatWorkOrderTitle({
+      issueDescription: workOrder.issue_description,
+      buildingId: workOrder.building_id,
+    }) || workOrder.ticket_id,
     building: formatBuildingLabel(workOrder.building_id),
     location: formatDeviceLabel(workOrder.device_id, workOrder.building_id) || formatSystemLabel(workOrder.dispatch_profile?.preferred_team_name),
     workOrder,
@@ -243,7 +251,11 @@ const taskCards = computed<WorkerTaskCard[]>(() => {
       kind: 'support',
       bucket: entry.status === 'assigned' ? 'pending_start' : 'in_progress',
       ticketId: workOrder?.ticket_id || entry.id,
-      title: sanitizeDisplayText(entry.support_reason || entry.reason || workOrder?.issue_description) || '协同任务待处理',
+      title: formatWorkOrderTitle({
+        summaryText: entry.support_reason || entry.reason,
+        issueDescription: workOrder?.issue_description,
+        buildingId: workOrder?.building_id,
+      }) || '协同任务待处理',
       building: formatBuildingLabel(workOrder?.building_id),
       location: formatDeviceLabel(workOrder?.device_id, workOrder?.building_id) || '协同现场待确认',
       hallEntry: entry,

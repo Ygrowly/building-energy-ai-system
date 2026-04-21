@@ -5,7 +5,8 @@
         <view class="top-hero" :style="{ paddingTop: `${statusBarHeight + 28}px` }">
           <view class="hero-head hero-head-top">
             <view class="hero-avatar">
-              <text>{{ avatarChar }}</text>
+              <image v-if="avatarUrl" class="hero-avatar-img" :src="avatarUrl" mode="aspectFill" />
+              <text v-else>{{ avatarChar }}</text>
             </view>
             <view class="hero-user">
               <text class="hero-label">当前值班</text>
@@ -97,16 +98,36 @@
             </view>
 
             <view v-if="featuredOrder" class="feature-card" @click="openFeatureOrder">
-              <view class="feature-tag-row">
-                <text class="feature-tag warn">{{ featuredOrder.priorityLabel }}</text>
-                <text class="feature-tag plain">{{ featuredOrder.timeTag }}</text>
+              <view class="feature-top-row">
+                <view class="feature-badges">
+                  <text class="feature-tag warn">{{ featureStatusLabel }}</text>
+                  <text class="feature-tag plain">{{ featureDateLabel }}</text>
+                </view>
                 <text class="feature-action">{{ featuredOrder.actionLabel }}</text>
               </view>
-              <text class="feature-title">{{ featuredOrder.title }}</text>
-              <text class="feature-location">{{ featuredOrder.building }} · {{ featuredOrder.location }}</text>
+              <view v-if="featureAnomalyType" class="feature-type-row">
+                <text class="feature-type-value">{{ featureAnomalyType }}</text>
+              </view>
+              <text
+                v-if="featureTitleText"
+                class="feature-title"
+                :class="{ 'with-type': featureAnomalyType }"
+              >{{ featureTitleText }}</text>
+              <view class="feature-location-row">
+                <view class="feature-location-pin">
+                  <view class="feature-location-pin-core"></view>
+                </view>
+                <text class="feature-location">{{ featureLocationText }}</text>
+              </view>
               <view class="feature-meta">
-                <text>工单编号 {{ shortTicket(featuredOrder.ticketId) }}</text>
-                <text>派单时间 {{ featuredOrder.time }}</text>
+                <view class="feature-meta-row">
+                  <text class="feature-meta-label">工单编号</text>
+                  <text class="feature-meta-value">{{ featuredOrder.ticketId || '--' }}</text>
+                </view>
+                <view class="feature-meta-row">
+                  <text class="feature-meta-label">工单时间</text>
+                  <text class="feature-meta-value">{{ featuredOrder.time || '--' }}</text>
+                </view>
               </view>
             </view>
 
@@ -158,8 +179,9 @@ import { useAuthStore } from '../../../stores/auth'
 import { useNotificationStore } from '../../../stores/notification'
 import { getWorkerDashboardStats, getWorkerFeatureOrder, isWorkerAiReadyIncident } from '../../../utils/worker-ui'
 import { subscribeWorkerOrdersUpdated } from '../../../utils/worker-sync'
-import { sanitizeDisplayText, formatBuildingLabel, formatDeviceLabel } from '../../../utils/display'
+import { formatBuildingLabel, formatDeviceLabel, formatSystemLabel, formatWorkOrderTitle } from '../../../utils/display'
 import { formatDateTime } from '../../../utils/format'
+import { getStoredAvatarUrl } from '../../../utils/avatar'
 
 useRouteGuard(WORKER_ROLES)
 
@@ -171,6 +193,7 @@ const hallEntries = ref<DispatchHallEntry[]>([])
 const loading = ref(false)
 const statusBarHeight = ref(20)
 const hasLoadedOnce = ref(false)
+const avatarUrl = ref('')
 let unsubscribeWorkerSync: (() => void) | null = null
 const isInitialLoading = computed(() => (
   loading.value
@@ -202,13 +225,19 @@ const todoSummaryText = computed(() => (
 const featuredOrder = computed(() => {
   const supportTarget = supportEntries.value[0]
   if (supportTarget) {
+    const relatedIncident = incidents.value.find(item => item.incident_id === supportTarget.incident_id)
     const workerAiReady = supportTarget.status === 'accepted'
     return {
       ticketId: supportTarget.work_order?.ticket_id || supportTarget.id,
       hallEntryId: supportTarget.id,
       incidentId: supportTarget.incident_id || undefined,
       dispatchId: supportTarget.source_dispatch_id || supportTarget.source_dispatch?.id || undefined,
-      title: sanitizeDisplayText(supportTarget.support_reason || supportTarget.reason || supportTarget.work_order?.issue_description) || '协同任务待处理',
+      anomalyType: relatedIncident ? formatSystemLabel(relatedIncident.rule_triggered) : '',
+      title: formatWorkOrderTitle({
+        summaryText: supportTarget.support_reason || supportTarget.reason,
+        issueDescription: supportTarget.work_order?.issue_description,
+        buildingId: supportTarget.work_order?.building_id,
+      }) || '协同任务待处理',
       building: formatBuildingLabel(supportTarget.work_order?.building_id),
       location: formatDeviceLabel(supportTarget.work_order?.device_id, supportTarget.work_order?.building_id) || '协同现场待确认',
       time: formatDateTime(supportTarget.assigned_at || supportTarget.created_at),
@@ -223,6 +252,28 @@ const featuredOrder = computed(() => {
   return incidentTarget ? { ...incidentTarget, kind: 'incident' as const } : null
 })
 const unreadCount = computed(() => notificationStore.unreadCount)
+const featureStatusLabel = computed(() => {
+  const order = featuredOrder.value
+  if (!order) return ''
+  if (order.timeTag === '已超时') return '逾期'
+  if (order.kind === 'support') return '协同'
+  return order.priorityLabel === '普通工单' ? '待处理' : order.priorityLabel
+})
+const featureDateLabel = computed(() => formatFeatureDateTag(featuredOrder.value?.time))
+const featureAnomalyType = computed(() => featuredOrder.value?.anomalyType || '')
+const featureTitleText = computed(() => {
+  const order = featuredOrder.value
+  if (!order) return ''
+  const title = (order.title || '').trim()
+  const anomalyType = featureAnomalyType.value.trim()
+  if (!title) return ''
+  return title === anomalyType ? '' : title
+})
+const featureLocationText = computed(() => {
+  const order = featuredOrder.value
+  if (!order) return ''
+  return buildFeatureLocationText(order.building, order.location)
+})
 
 const tips = [
   { title: '到场前确认现场信息', desc: '优先核对建筑、设备与建议措施，减少二次往返。' },
@@ -232,6 +283,26 @@ const tips = [
 
 function displayStat(value: number) {
   return isInitialLoading.value ? '...' : String(value)
+}
+
+function buildFeatureLocationText(building?: string | null, location?: string | null) {
+  const buildingText = (building || '').trim()
+  const locationText = (location || '').trim()
+  if (buildingText && locationText) {
+    if (locationText.includes(buildingText)) return locationText
+    return `${buildingText} ${locationText}`
+  }
+  return locationText || buildingText || '现场位置待确认'
+}
+
+function formatFeatureDateTag(value?: string | null) {
+  if (!value || value === '--') return '时间待定'
+  const dateText = value.slice(0, 10)
+  return /^\d{4}-\d{2}-\d{2}$/.test(dateText) ? dateText.replace(/-/g, '/') : value
+}
+
+function loadAvatar() {
+  avatarUrl.value = getStoredAvatarUrl(authStore.user?.id)
 }
 
 async function loadData() {
@@ -290,10 +361,6 @@ async function loadData() {
   } finally {
     loading.value = false
   }
-}
-
-function shortTicket(ticketId: string) {
-  return ticketId.slice(-8)
 }
 
 function buildWorkerAiUrl(params: {
@@ -375,6 +442,7 @@ onMounted(() => {
   } catch {
     statusBarHeight.value = 20
   }
+  loadAvatar()
   unsubscribeWorkerSync = subscribeWorkerOrdersUpdated(async () => {
     await loadData()
   })
@@ -382,6 +450,7 @@ onMounted(() => {
 })
 
 onShow(() => {
+  loadAvatar()
   if (!hasLoadedOnce.value) return
   void loadData()
 })
@@ -475,6 +544,7 @@ onUnmounted(() => {
   width: 78rpx;
   height: 78rpx;
   border-radius: 50%;
+  overflow: hidden;
   background: linear-gradient(135deg, #d4e29f, #b3c86d);
   display: flex;
   align-items: center;
@@ -485,6 +555,11 @@ onUnmounted(() => {
     font-size: 34rpx;
     font-weight: 700;
   }
+}
+
+.hero-avatar-img {
+  width: 100%;
+  height: 100%;
 }
 
 .hero-user {
@@ -761,9 +836,9 @@ onUnmounted(() => {
 
 .feature-card {
   position: relative;
-  padding: 24rpx 24rpx 24rpx 30rpx;
-  border-radius: 24rpx;
-  background: linear-gradient(180deg, #fff8f4 0%, #fffdfb 100%);
+  padding: 28rpx 26rpx 28rpx 32rpx;
+  border-radius: 26rpx;
+  background: linear-gradient(180deg, #fff8f4 0%, #fffdfc 100%);
   box-shadow: none;
   border: 2rpx solid rgba(255, 154, 122, 0.18);
 }
@@ -772,71 +847,158 @@ onUnmounted(() => {
   content: '';
   position: absolute;
   left: 0;
-  top: 24rpx;
-  bottom: 24rpx;
-  width: 8rpx;
+  top: 22rpx;
+  bottom: 22rpx;
+  width: 10rpx;
   border-radius: 999rpx;
   background: linear-gradient(180deg, #ffae8f 0%, #ff7f5f 100%);
 }
 
-.feature-tag-row {
+.feature-top-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18rpx;
+}
+
+.feature-badges {
   display: flex;
   align-items: center;
-  gap: 16rpx;
+  gap: 12rpx;
+  flex-wrap: wrap;
+  min-width: 0;
 }
 
 .feature-tag {
-  padding: 8rpx 16rpx;
-  border-radius: 16rpx;
+  padding: 8rpx 14rpx;
+  border-radius: 14rpx;
   font-size: 22rpx;
 }
 
 .feature-tag.warn {
-  color: #ff845e;
+  color: #ff7c52;
   background: #fff0ea;
 }
 
 .feature-tag.plain {
-  color: #e08f6d;
-  background: #fff7f2;
+  color: #c68767;
+  background: #fff;
+  border: 2rpx solid rgba(255, 166, 134, 0.24);
 }
 
 .feature-action {
-  margin-left: auto;
-  padding: 10rpx 18rpx;
-  border-radius: 18rpx;
+  flex-shrink: 0;
+  padding: 12rpx 22rpx;
+  border-radius: 20rpx;
   background: linear-gradient(135deg, #ffa27f, #ff8e67);
   color: #fff;
   font-size: 24rpx;
+  line-height: 1;
+}
+
+.feature-type-row {
+  display: flex;
+  align-items: center;
+  gap: 12rpx;
+  flex-wrap: wrap;
+  margin-top: 20rpx;
+}
+
+.feature-type-value {
+  font-size: 22rpx;
+  color: #ff8a64;
+  font-weight: 600;
+  line-height: 1.35;
 }
 
 .feature-title {
-  display: block;
-  margin-top: 18rpx;
-  font-size: 36rpx;
+  display: -webkit-box;
+  margin-top: 20rpx;
+  font-size: 34rpx;
   color: #2d2522;
   font-weight: 700;
+  line-height: 1.35;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.feature-title.with-type {
+  margin-top: 10rpx;
+}
+
+.feature-location-row {
+  display: flex;
+  align-items: center;
+  gap: 14rpx;
+  margin-top: 16rpx;
+  padding: 14rpx 16rpx;
+  border-radius: 18rpx;
+  background: linear-gradient(90deg, rgba(255, 145, 108, 0.1) 0%, rgba(255, 145, 108, 0.03) 100%);
+}
+
+.feature-location-pin {
+  position: relative;
+  width: 24rpx;
+  height: 24rpx;
+  margin-left: 4rpx;
+  flex-shrink: 0;
+  border: 4rpx solid #ef9f84;
+  border-radius: 50% 50% 50% 0;
+  box-sizing: border-box;
+  transform: rotate(-45deg);
+}
+
+.feature-location-pin-core {
+  position: absolute;
+  top: 5rpx;
+  left: 5rpx;
+  width: 6rpx;
+  height: 6rpx;
+  border-radius: 50%;
+  background: #ef9f84;
 }
 
 .feature-location {
-  display: block;
-  margin-top: 14rpx;
+  flex: 1;
+  min-width: 0;
   font-size: 24rpx;
   color: #8a7d75;
+  line-height: 1.5;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .feature-meta {
-  margin-top: 18rpx;
-  padding: 18rpx 20rpx;
-  border-radius: 20rpx;
-  background: linear-gradient(180deg, rgba(255, 145, 108, 0.08) 0%, rgba(255, 145, 108, 0.02) 100%);
+  margin-top: 20rpx;
+}
 
-  text {
-    display: block;
-    font-size: 24rpx;
-    color: #5f5652;
-    line-height: 1.7;
-  }
+.feature-meta-row {
+  display: flex;
+  align-items: baseline;
+  gap: 18rpx;
+}
+
+.feature-meta-row + .feature-meta-row {
+  margin-top: 12rpx;
+}
+
+.feature-meta-label {
+  width: 108rpx;
+  flex-shrink: 0;
+  font-size: 24rpx;
+  color: #8d8177;
+}
+
+.feature-meta-value {
+  flex: 1;
+  min-width: 0;
+  font-size: 26rpx;
+  color: #3d312c;
+  font-weight: 600;
+  line-height: 1.5;
+  word-break: break-all;
 }
 
 .feature-empty {

@@ -19,7 +19,7 @@
     </view>
 
     <!-- 描述（对齐后端字段 issue_description） -->
-    <text class="wo-desc">{{ order.issue_description }}</text>
+    <text class="wo-desc">{{ sanitizeDisplayText(order.issue_description) }}</text>
 
     <!-- 底部：时间 + AI决策 -->
     <view class="wo-footer">
@@ -32,10 +32,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
 import type { WorkOrder } from '../api/workorder'
 import { STATUS_LABEL, PRIORITY_LABEL } from '../constants/status'
 import { formatRelativeTime } from '../utils/format'
+import { sanitizeDisplayText } from '../utils/display'
 
 const props = defineProps<{ order: WorkOrder }>()
 defineEmits<{ (e: 'click', order: WorkOrder): void }>()

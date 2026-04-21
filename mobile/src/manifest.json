@@ -28,7 +28,7 @@
   },
   "h5": {
     "devServer": {
-      "port": 5173,
+      "port": 5174,
       "proxy": {
         "/api": {
           "target": "http://localhost:8000",

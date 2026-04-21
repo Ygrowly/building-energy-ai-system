@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "dev:h5": "uni",
+    "dev:h5": "uni --host",
     "build:h5": "uni build",
     "dev:app": "uni -p app",
     "build:app": "uni build -p app"

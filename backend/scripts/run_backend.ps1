@@ -1,7 +1,7 @@
 param(
     [string]$PythonExe = "",
     [string]$EnvDir = "",
-    [string]$Host = "0.0.0.0",
+    [string]$BindHost = "0.0.0.0",
     [int]$Port = 8000,
     [switch]$NoReload
 )
@@ -66,7 +66,7 @@ $args = @(
     "uvicorn",
     "main:app",
     "--host",
-    $Host,
+    $BindHost,
     "--port",
     "$Port"
 )

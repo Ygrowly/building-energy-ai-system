@@ -1,0 +1,21 @@
+[
+  {
+    "id": "6194b443-41fc-4bfd-912e-9252ed0dd4a5",
+    "detected_at": "2026-04-21 14:51:56.534396+00:00",
+    "data_timestamp": "2026-04-21 14:30:00+00:00",
+    "building_id": "Fox_office_Alice",
+    "meter_device_id": "EM_ELE_Fox_office_Alice",
+    "rule_triggered": "flag_electricity",
+    "actual_value": 78.37999725341797,
+    "threshold_value": 62.63999938964844,
+    "expected_value": 52.2,
+    "deviation_pct": 26.18,
+    "hvac_root_cause": null,
+    "message": "办公楼夜间电耗偏高，实际 78.38 kWh，期望 52.20 kWh（偏差 +26.18%）",
+    "is_resolved": false,
+    "anomaly_phase": "full",
+    "symptom_flags_json": null,
+    "event_source": "script_inject",
+    "severity": "warning"
+  }
+]

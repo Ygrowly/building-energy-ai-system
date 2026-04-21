@@ -21,6 +21,7 @@ from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
+from app.core.person_name import format_person_display_name
 from app.core.security import (
     create_access_token,
     create_refresh_token,
@@ -104,6 +105,13 @@ def _build_worker_profile_response(profile: WorkerProfile | None) -> WorkerProfi
     )
 
 
+def _display_username_for_response(user: User) -> str:
+    username = getattr(user, "username", "") or ""
+    if getattr(user, "role", None) == "ops":
+        return format_person_display_name(username) or username
+    return username
+
+
 async def _serialize_user_response(db: AsyncSession, user: User) -> UserResponse:
     try:
         sa_inspect(user)
@@ -111,7 +119,7 @@ async def _serialize_user_response(db: AsyncSession, user: User) -> UserResponse
         profile = _build_worker_profile_response(getattr(user, "worker_profile", None))
         return UserResponse(
             id=user.id,
-            username=user.username,
+            username=_display_username_for_response(user),
             email=getattr(user, "email", None),
             phone=getattr(user, "phone", None),
             role=getattr(user, "role", "resident"),
@@ -135,7 +143,7 @@ async def _serialize_user_response(db: AsyncSession, user: User) -> UserResponse
         loaded_user = user
     return UserResponse(
         id=loaded_user.id,
-        username=loaded_user.username,
+        username=_display_username_for_response(loaded_user),
         email=getattr(loaded_user, "email", None),
         phone=getattr(loaded_user, "phone", None),
         role=getattr(loaded_user, "role", None) or "resident",

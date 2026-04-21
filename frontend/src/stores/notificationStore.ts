@@ -12,6 +12,8 @@ import {
   type WorkorderNotificationIncident,
 } from '@/utils/workorderNotification'
 
+const RECENT_ANOMALY_WINDOW_HOURS = 240
+
 export const useNotificationStore = defineStore('notification', () => {
   const unreadCount = ref(0)
   const sidebarAvatarUrl = ref('')
@@ -41,7 +43,7 @@ export const useNotificationStore = defineStore('notification', () => {
           { skipAuthRefresh: true, suppressUnauthorizedRedirect: true },
         ),
         apiFetch<{ total?: number; anomalies?: unknown[] }>(
-          '/api/anomalies/recent?hours=168',
+          `/api/anomalies/recent?hours=${RECENT_ANOMALY_WINDOW_HOURS}`,
           { skipAuthRefresh: true, suppressUnauthorizedRedirect: true },
         ),
         apiFetch<{ predictions?: Array<{ risk_level?: string | null; as_of_timestamp?: string | null; created_at?: string | null }> }>(

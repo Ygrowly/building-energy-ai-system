@@ -15,6 +15,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.person_name import sanitize_person_display_payload
 from app.db.models import DispatchEvent, DispatchTask
 
 logger = logging.getLogger(__name__)
@@ -27,7 +28,7 @@ def _dt_to_iso(value: datetime | None) -> str | None:
 def _json_dumps(payload: dict[str, Any] | None) -> str | None:
     if not payload:
         return None
-    return json.dumps(payload, ensure_ascii=False, default=str)
+    return json.dumps(sanitize_person_display_payload(payload), ensure_ascii=False, default=str)
 
 
 def _json_loads(payload: str | None) -> dict[str, Any] | None:
@@ -119,6 +120,6 @@ def serialize_dispatch_event(event: DispatchEvent) -> dict[str, Any]:
         "event_type": event.event_type,
         "actor_type": event.actor_type,
         "actor_id": event.actor_id,
-        "payload": _json_loads(event.payload_json),
+        "payload": sanitize_person_display_payload(_json_loads(event.payload_json)),
         "created_at": _dt_to_iso(event.created_at),
     }

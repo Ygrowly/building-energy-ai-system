@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.config import get_settings
+from app.core.person_name import format_person_display_name, sanitize_person_display_payload
 from app.db.models import (
     DispatchOperationRun,
     DispatchHallApplication,
@@ -95,7 +96,7 @@ def _safe_json_object(raw: str | None) -> dict[str, Any]:
         data = json.loads(raw)
     except (TypeError, ValueError):
         return {}
-    return data if isinstance(data, dict) else {}
+    return sanitize_person_display_payload(data) if isinstance(data, dict) else {}
 
 
 def _safe_json_list(raw: str | None) -> list[Any]:
@@ -433,7 +434,7 @@ async def _load_worker_loads(db: AsyncSession) -> dict[str, Any]:
         rows.append(
             {
                 "user_id": user_id,
-                "username": getattr(user, "username", None) or user_id,
+                "username": format_person_display_name(getattr(user, "username", None)) or user_id,
                 "team_name": getattr(getattr(profile, "team", None), "name", None),
                 "active_orders": active_orders,
                 "max_active_orders": max_active,
@@ -664,7 +665,11 @@ async def build_auto_dispatch_operation_insights(
             for skill in skills or ["未识别技能"]:
                 skill_counts[skill] += 1
             _increment_dimension(team_counts, team_name or task.assigned_team_id, "未分组")
-            _increment_dimension(assignee_counts, username or task.assigned_to, "未指定")
+            _increment_dimension(
+                assignee_counts,
+                format_person_display_name(username) or task.assigned_to,
+                "未指定",
+            )
             records.append(
                 {
                     "type": "dispatch_task",
@@ -683,7 +688,7 @@ async def build_auto_dispatch_operation_insights(
                     "created_at": _dt(task.created_at),
                     "status": task.dispatch_status,
                     "assignee_id": task.assigned_to,
-                    "assignee_name": username,
+                    "assignee_name": format_person_display_name(username),
                     "team_id": task.assigned_team_id,
                     "team_name": team_name,
                     "score": candidate.get("score"),
@@ -982,7 +987,9 @@ async def build_work_order_operation_insights(
         team_key = str(getattr(task, "assigned_team_id", None) or "unassigned")
         team_label = str(team_name or getattr(task, "assigned_team_id", None) or "未分组")
         assignee_key = str(getattr(task, "assigned_to", None) or "unassigned")
-        assignee_label = str(username or getattr(task, "assigned_to", None) or "未指定")
+        assignee_label = str(
+            format_person_display_name(username) or getattr(task, "assigned_to", None) or "未指定"
+        )
         building_key = str(work_order.building_id or "unknown")
         created_day = work_order.created_at.date().isoformat() if work_order.created_at else "unknown"
         is_active_work_order = work_order_status in ACTIVE_WORK_ORDER_STATUSES
@@ -1086,7 +1093,7 @@ async def build_work_order_operation_insights(
                 "current_dispatch_status": dispatch_status_value,
                 "timeout_level": timeout_value,
                 "assignee_id": getattr(task, "assigned_to", None),
-                "assignee_name": username,
+                "assignee_name": format_person_display_name(username),
                 "team_id": getattr(task, "assigned_team_id", None),
                 "team_name": team_name,
                 "is_active_work_order": is_active_work_order,

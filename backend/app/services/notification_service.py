@@ -13,6 +13,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session as SyncSession
 from sqlalchemy.orm import joinedload, selectinload
 
+from app.core.person_name import (
+    format_person_display_name,
+    replace_person_names_in_text,
+    sanitize_person_display_payload,
+)
 from app.db.models import (
     DispatchEvent,
     DispatchHallEntry,
@@ -52,6 +57,7 @@ _DISPATCH_EVENT_TYPES = {
     "support_worker_rejected",
 }
 _AUDIT_ACTIONS = {
+    "create",
     "worker_feedback",
     "close",
     "admin_override",
@@ -65,7 +71,7 @@ def _dt_to_iso(value: datetime | None) -> str | None:
 def _json_dumps(payload: dict[str, Any] | None) -> str | None:
     if not payload:
         return None
-    return json.dumps(payload, ensure_ascii=False, default=str)
+    return json.dumps(sanitize_person_display_payload(payload), ensure_ascii=False, default=str)
 
 
 def _json_loads(payload: str | None) -> dict[str, Any]:
@@ -75,7 +81,7 @@ def _json_loads(payload: str | None) -> dict[str, Any]:
         data = json.loads(payload)
     except (TypeError, ValueError):
         return {}
-    return data if isinstance(data, dict) else {}
+    return sanitize_person_display_payload(data) if isinstance(data, dict) else {}
 
 
 def _session_info(db: AsyncSession) -> dict[str, Any]:
@@ -294,7 +300,7 @@ def _build_dispatch_payload(
             "dispatch_id": getattr(dispatch_task, "id", None),
         },
     }
-    payload.update(extra_payload)
+    payload.update(sanitize_person_display_payload(extra_payload))
     return payload
 
 
@@ -313,6 +319,7 @@ def _dispatch_event_content(
         or getattr(dispatch_task, "assigned_to_name", None)
         or "责任人"
     )
+    assignee_name = format_person_display_name(assignee_name) or "责任人"
     note = (
         event_payload.get("notes")
         or event_payload.get("reason")
@@ -321,6 +328,7 @@ def _dispatch_event_content(
         or event_payload.get("selection_reason")
         or getattr(dispatch_task, "latest_note", None)
     )
+    note = replace_person_names_in_text(note)
     severity = "info"
 
     if event_type in {"assigned", "auto_assigned"}:
@@ -408,6 +416,14 @@ def _audit_content(
         },
         **detail,
     }
+
+    if audit_log.action == "create":
+        return (
+            f"{ticket_id} 待审核",
+            detail.get("notes") or "检测到新的异常事件，系统已生成工单并进入待审核队列。",
+            "warning",
+            payload,
+        )
 
     if audit_log.action == "worker_feedback":
         result = detail.get("result")
@@ -771,8 +787,8 @@ def serialize_notification_recipient(recipient: NotificationRecipient) -> dict[s
         "notification_id": record.id,
         "category": record.category,
         "event_type": record.event_type,
-        "title": record.title,
-        "body": record.body,
+        "title": replace_person_names_in_text(record.title) or record.title,
+        "body": replace_person_names_in_text(record.body) or record.body,
         "severity": record.severity,
         "aggregate_type": record.aggregate_type,
         "aggregate_id": record.aggregate_id,
@@ -782,7 +798,7 @@ def serialize_notification_recipient(recipient: NotificationRecipient) -> dict[s
         "cta_params": payload.get("cta_params") or {},
         "created_at": _dt_to_iso(record.created_at),
         "read_at": _dt_to_iso(recipient.read_at),
-        "payload": payload,
+        "payload": sanitize_person_display_payload(payload),
     }
 
 

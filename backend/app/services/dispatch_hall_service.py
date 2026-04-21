@@ -8,6 +8,7 @@ from typing import Any
 from sqlalchemy import func as sa_func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.person_name import format_person_display_name, sanitize_person_display_payload
 from app.db.models import DispatchHallApplication, DispatchHallEntry, User, WorkOrder
 
 _OPEN_ENTRY_STATUSES = {"open", "assigned"}
@@ -299,13 +300,13 @@ def serialize_dispatch_hall_application(
         "id": application.id,
         "hall_entry_id": application.hall_entry_id,
         "applicant_user_id": application.applicant_user_id,
-        "applicant_username": getattr(applicant_user, "username", None),
+        "applicant_username": format_person_display_name(getattr(applicant_user, "username", None)),
         "application_type": application.application_type,
         "status": application.status,
         "note": application.note,
         "handle_note": application.handle_note,
         "handled_by": application.handled_by,
-        "handled_by_username": getattr(handled_user, "username", None),
+        "handled_by_username": format_person_display_name(getattr(handled_user, "username", None)),
         "handled_at": _dt_to_iso(application.handled_at),
         "created_at": _dt_to_iso(application.created_at),
         "updated_at": _dt_to_iso(application.updated_at),
@@ -360,20 +361,20 @@ def serialize_dispatch_hall_entry(
         "overdue_level": entry.overdue_level,
         "allow_direct_claim": bool(entry.allow_direct_claim),
         "assigned_to": entry.assigned_to,
-        "assigned_to_name": getattr(assigned_user, "username", None),
+        "assigned_to_name": format_person_display_name(getattr(assigned_user, "username", None)),
         "assigned_team_id": entry.assigned_team_id,
         "assigned_by": entry.assigned_by,
-        "assigned_by_name": getattr(assigned_by_user, "username", None),
+        "assigned_by_name": format_person_display_name(getattr(assigned_by_user, "username", None)),
         "created_by": entry.created_by,
-        "created_by_name": getattr(created_by_user, "username", None),
+        "created_by_name": format_person_display_name(getattr(created_by_user, "username", None)),
         "expired_at": _dt_to_iso(entry.expired_at),
         "assigned_at": _dt_to_iso(entry.assigned_at),
         "closed_at": _dt_to_iso(entry.closed_at),
         "created_at": _dt_to_iso(entry.created_at),
         "updated_at": _dt_to_iso(entry.updated_at),
-        "work_order": work_order_summary,
-        "source_dispatch": source_dispatch_summary,
-        "applications": application_payloads,
+        "work_order": sanitize_person_display_payload(work_order_summary),
+        "source_dispatch": sanitize_person_display_payload(source_dispatch_summary),
+        "applications": sanitize_person_display_payload(application_payloads),
         "application_stats": application_stats,
         "latest_application": latest_application,
         "risk_score": risk_score,

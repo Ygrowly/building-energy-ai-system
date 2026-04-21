@@ -14,6 +14,7 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import WorkOrderAuditLog
+from app.core.person_name import sanitize_person_display_payload
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +37,10 @@ async def write_work_order_audit_log(
         new_status=new_status,
         actor_type=actor_type,
         actor_id=actor_id,
-        detail_json=json.dumps(detail, ensure_ascii=False, default=str) if detail else None,
+        detail_json=(
+            json.dumps(sanitize_person_display_payload(detail), ensure_ascii=False, default=str)
+            if detail else None
+        ),
     )
     db.add(log_entry)
     flush = getattr(db, "flush", None)

@@ -14,6 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.person_name import sanitize_person_display_payload
 from app.db.models import (
     DispatchHallEntry,
     DispatchTask,
@@ -43,7 +44,7 @@ def _safe_load_json(raw: str | None) -> Any:
     if not raw:
         return None
     try:
-        return json.loads(raw)
+        return sanitize_person_display_payload(json.loads(raw))
     except (TypeError, ValueError):
         return None
 

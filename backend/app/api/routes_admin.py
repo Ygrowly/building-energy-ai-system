@@ -44,6 +44,8 @@ async def _invalidate_operational_data_cache(
     await delete_cache_by_prefix("overview:")
     await delete_cache_by_prefix("anomalies:")
     await delete_cache_by_prefix("home:bundle:")
+    await delete_cache_by_prefix("home:overview-bundle:")
+    await delete_cache_by_prefix("home:section-bundle:")
 
     if include_predictions:
         await delete_cache_by_prefix("predictions:")

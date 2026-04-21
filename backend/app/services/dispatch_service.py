@@ -11,6 +11,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.config import get_settings
+from app.core.person_name import (
+    format_person_display_name,
+    replace_person_names_in_text,
+    sanitize_person_display_payload,
+)
 from app.db.models import (
     DispatchTask,
     User,
@@ -84,7 +89,7 @@ def _dt_to_iso(value: datetime | None) -> str | None:
 def _json_dumps(payload: dict[str, Any] | None) -> str | None:
     if not payload:
         return None
-    return json.dumps(payload, ensure_ascii=False, default=str)
+    return json.dumps(sanitize_person_display_payload(payload), ensure_ascii=False, default=str)
 
 
 def _json_loads(payload: str | None) -> dict[str, Any] | None:
@@ -94,7 +99,7 @@ def _json_loads(payload: str | None) -> dict[str, Any] | None:
         data = json.loads(payload)
     except (TypeError, ValueError):
         return None
-    return data if isinstance(data, dict) else None
+    return sanitize_person_display_payload(data) if isinstance(data, dict) else None
 
 
 async def _load_current_assignees_by_id(
@@ -238,7 +243,7 @@ async def _record_phase_one_auto_reassign_shadow(
             "current_dispatch_status": dispatch_task.dispatch_status,
             "current_timeout_level": evaluation.get("timeout_level"),
             "current_assigned_to": dispatch_task.assigned_to,
-            "current_assignee_name": getattr(current_assignee, "username", None),
+            "current_assignee_name": format_person_display_name(getattr(current_assignee, "username", None)),
             "current_assignee_team_id": team_id,
             "current_assignee_team_name": team_name,
             "due_at": evaluation.get("due_at"),
@@ -386,7 +391,7 @@ def _auto_dispatch_candidate_review(candidate: dict[str, Any] | None) -> dict[st
 
     return {
         "user_id": candidate.get("user_id"),
-        "username": candidate.get("username"),
+        "username": format_person_display_name(candidate.get("username")) or candidate.get("username"),
         "team_name": candidate.get("team_name"),
         "score": candidate.get("score"),
         "shift_status": shift_status,
@@ -433,7 +438,7 @@ def _build_auto_dispatch_review(dispatch_task: DispatchTask) -> dict[str, Any] |
             if review_level == "required"
             else "高置信自动派工，可抽查候选排序、分数与负载"
         ),
-        "selection_reason": getattr(dispatch_task, "selection_reason", None),
+        "selection_reason": replace_person_names_in_text(getattr(dispatch_task, "selection_reason", None)),
         "rules": snapshot.get("rules") if isinstance(snapshot.get("rules"), dict) else {},
         "score_gap": snapshot.get("score_gap"),
         "selected_candidate": selected_candidate,
@@ -909,7 +914,7 @@ async def create_dispatch_task(
         actor_id=assigned_by,
         payload={
             "assigned_to": assigned_user.id,
-            "assigned_to_name": assigned_user.username,
+            "assigned_to_name": format_person_display_name(assigned_user.username) or assigned_user.username,
             "assigned_team_id": team_id,
             "selection_reason": selection_reason,
             "dispatch_mode": dispatch_mode,
@@ -1266,7 +1271,7 @@ async def reassign_dispatch_task(
         payload={
             "reason": reason,
             "new_assigned_to": assigned_user.id,
-            "new_assigned_to_name": assigned_user.username,
+            "new_assigned_to_name": format_person_display_name(assigned_user.username) or assigned_user.username,
         },
     )
     if close_related_hall_entries:
@@ -1319,7 +1324,9 @@ def derive_dispatch_ui_meta_from_task(
 
     now = datetime.now(timezone.utc)
     _, team_name = _team_from_user(assigned_user)
-    assigned_to_name = assigned_user.username if assigned_user else None
+    assigned_to_name = (
+        format_person_display_name(assigned_user.username) if assigned_user else None
+    )
     assigned_phone = assigned_user.phone if assigned_user else None
     execution_status = dispatch_task.dispatch_status
     if execution_status == "assigned":
@@ -1339,7 +1346,7 @@ def derive_dispatch_ui_meta_from_task(
         or dispatch_task.accepted_at
         or dispatch_task.assigned_at
     )
-    latest_progress_note = dispatch_task.latest_note
+    latest_progress_note = replace_person_names_in_text(dispatch_task.latest_note)
     if not latest_progress_note:
         mapping = {
             "assigned": "已完成派工，等待维修人员接单",
@@ -1394,10 +1401,12 @@ def serialize_dispatch_task(
         "assigned_team_id": dispatch_task.assigned_team_id,
         "assigned_team_name": team_name,
         "assigned_to": dispatch_task.assigned_to,
-        "assigned_to_name": assigned_user.username if assigned_user else None,
+        "assigned_to_name": (
+            format_person_display_name(assigned_user.username) if assigned_user else None
+        ),
         "assigned_phone": assigned_user.phone if assigned_user else None,
         "assigned_by": dispatch_task.assigned_by,
-        "selection_reason": dispatch_task.selection_reason,
+        "selection_reason": replace_person_names_in_text(dispatch_task.selection_reason),
         "candidate_snapshot": _json_loads(dispatch_task.candidate_snapshot_json),
         "auto_dispatch_review": _build_auto_dispatch_review(dispatch_task),
         "dispatch_profile_snapshot": _json_loads(dispatch_task.dispatch_profile_snapshot_json),

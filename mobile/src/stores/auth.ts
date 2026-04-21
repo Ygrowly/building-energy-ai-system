@@ -63,6 +63,11 @@ export const useAuthStore = defineStore('auth', () => {
 
       accessToken.value = newToken
       refreshToken.value = uni.getStorageSync('refresh_token') || refreshToken.value
+      const latestUser = await authApi.me().catch(() => null)
+      if (latestUser) {
+        user.value = latestUser
+        uni.setStorageSync('user_info', JSON.stringify(latestUser))
+      }
       sessionReady.value = true
       return true
     })()

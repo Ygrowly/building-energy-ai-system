@@ -18,6 +18,7 @@ from sqlalchemy import select, func as sa_func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.person_name import format_person_display_name
 from app.db.models import (
     DispatchTask,
     User,
@@ -442,7 +443,7 @@ def _build_dispatch_candidate(
 
     return {
         "user_id": worker.id,
-        "username": worker.username,
+        "username": format_person_display_name(worker.username) or worker.username,
         "phone": worker.phone,
         "team_id": _candidate_team_id(worker),
         "team_name": team_name,
@@ -467,7 +468,9 @@ def derive_dispatch_ui_meta(
     assigned_user: User | None = None,
 ) -> dict[str, Any]:
     now = datetime.now(timezone.utc)
-    assigned_to_name = assigned_user.username if assigned_user else None
+    assigned_to_name = (
+        format_person_display_name(assigned_user.username) if assigned_user else None
+    )
     assigned_phone = assigned_user.phone if assigned_user else None
     assigned_team_name = _candidate_team_name(assigned_user) if assigned_user else None
     dispatch_at = work_order.assigned_at
@@ -869,7 +872,7 @@ def _summarize_batch_preview_candidate(candidate: dict[str, Any] | None) -> dict
         return None
     return {
         "user_id": candidate.get("user_id"),
-        "username": candidate.get("username"),
+        "username": format_person_display_name(candidate.get("username")) or candidate.get("username"),
         "team_name": candidate.get("team_name"),
         "score": candidate.get("score"),
         "current_active_orders": candidate.get("current_active_orders"),
@@ -893,7 +896,7 @@ def _build_batch_worker_load_summary(
         rows.append(
             {
                 "user_id": worker.id,
-                "username": worker.username,
+                "username": format_person_display_name(worker.username) or worker.username,
                 "team_name": getattr(getattr(profile, "team", None), "name", None),
                 "shift_status": getattr(profile, "shift_status", None),
                 "current_active_orders": current_active_orders,
@@ -1234,7 +1237,7 @@ async def assign_work_order(
             actor_id=actor_id,
             detail={
                 "assigned_to": assigned_user.id,
-                "assigned_to_name": assigned_user.username,
+                "assigned_to_name": format_person_display_name(assigned_user.username) or assigned_user.username,
                 "assigned_team_name": _candidate_team_name(assigned_user),
                 "dispatch_mode": dispatch_mode,
                 "notes": notes,

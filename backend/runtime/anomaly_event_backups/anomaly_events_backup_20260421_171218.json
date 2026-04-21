@@ -1,0 +1,40 @@
+[
+  {
+    "id": "f5516feb-6924-4eb3-ba13-9774453d27d0",
+    "detected_at": "2026-04-21 17:00:58.384959+00:00",
+    "data_timestamp": "2026-04-21 16:58:55+00:00",
+    "building_id": "Fox_office_Alice",
+    "meter_device_id": "MOCK_ELEC_HIGH_20260421170055",
+    "rule_triggered": "flag_electricity",
+    "actual_value": 85.0,
+    "threshold_value": 67.86000061035156,
+    "expected_value": 52.2,
+    "deviation_pct": 62.84,
+    "hvac_root_cause": null,
+    "message": "办公楼夜间电耗偏高，实际 85.00 kWh，期望 52.20 kWh（偏差 +62.84%）",
+    "is_resolved": false,
+    "anomaly_phase": "full",
+    "symptom_flags_json": null,
+    "event_source": "script_mock_ai_dispatch",
+    "severity": "critical"
+  },
+  {
+    "id": "e64bb03c-8d28-49d7-804c-8b4dcae99c68",
+    "detected_at": "2026-04-21 17:00:58.384959+00:00",
+    "data_timestamp": "2026-04-21 16:59:55+00:00",
+    "building_id": "Fox_office_Alice",
+    "meter_device_id": "MOCK_ELEC_MEDIUM_20260421170055",
+    "rule_triggered": "flag_electricity",
+    "actual_value": 70.0,
+    "threshold_value": 67.86000061035156,
+    "expected_value": 52.2,
+    "deviation_pct": 34.1,
+    "hvac_root_cause": null,
+    "message": "办公楼夜间电耗偏高，实际 70.00 kWh，期望 52.20 kWh（偏差 +34.10%）",
+    "is_resolved": false,
+    "anomaly_phase": "full",
+    "symptom_flags_json": null,
+    "event_source": "script_mock_ai_dispatch",
+    "severity": "warning"
+  }
+]

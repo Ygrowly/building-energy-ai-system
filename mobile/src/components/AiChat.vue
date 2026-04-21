@@ -325,7 +325,7 @@
               </view>
             </view>
           </view>
-          <view v-if="msg.experienceItems?.length" class="experience-card-list">
+          <view v-if="false && msg.experienceItems?.length" class="experience-card-list">
             <view
               v-for="item in msg.experienceItems"
               :key="item.id"
@@ -335,14 +335,14 @@
                 <text class="experience-card-title">{{ formatAiDisplayText(item.organized_text || item.source_text || '经验记录') }}</text>
                 <text v-if="item.score != null" class="experience-card-score">匹配 {{ formatExperienceScore(item.score) }}</text>
               </view>
-              <text v-if="item.source_work_order_id" class="experience-card-meta">来源工单：{{ item.source_work_order_id }}</text>
+              <text v-if="formatExperienceSourceMeta(item)" class="experience-card-meta">{{ formatExperienceSourceMeta(item) }}</text>
               <text v-if="item.suggested_steps?.length" class="experience-card-copy">建议：{{ formatDisplayList(item.suggested_steps) }}</text>
               <text v-if="item.safety_notes?.length" class="experience-card-copy warn">注意：{{ formatDisplayList(item.safety_notes) }}</text>
               <text v-if="item.conflict_flags?.length" class="experience-card-copy risk">
                 风险：{{ formatDisplayList(item.conflict_flags.map(flag => flag.message).filter(Boolean)) }}
               </text>
               <view class="experience-card-footer">
-                <text class="experience-card-stats">有用 {{ item.helpful_count || 0 }} · 引用 {{ item.usage_count || 0 }}</text>
+                <text class="experience-card-stats">有用 {{ item.helpful_count || 0 }} · 复用 {{ item.usage_count || 0 }}</text>
                 <view class="experience-feedback-row">
                   <text
                     class="experience-feedback-btn"
@@ -494,55 +494,13 @@
       </view>
     </view>
 
-    <!-- 经验参考 -->
-    <view v-if="isWorkerMode && experienceRecommendations.length" class="recommend-panel">
-      <view class="recommend-panel-head">
-        <text class="recommend-panel-title">经验参考</text>
-        <text class="recommend-panel-subtitle">基于当前工单召回的历史相似处理经验，仅供现场参考</text>
-      </view>
-      <view
-        v-for="item in experienceRecommendations"
-        :key="item.experience_id"
-        class="recommend-card"
-      >
-        <view class="recommend-card-head">
-          <text class="recommend-card-title">{{ formatAiDisplayText(item.organized_text || '经验记录') }}</text>
-          <text v-if="item.confidence != null" class="recommend-card-score">匹配 {{ formatExperienceScore(item.confidence) }}</text>
-        </view>
-        <text v-if="item.source_work_order_id" class="recommend-card-meta">来源工单：{{ item.source_work_order_id }}</text>
-        <text v-if="item.safety_notes?.length" class="recommend-card-copy warn">注意：{{ formatDisplayList(item.safety_notes) }}</text>
-        <text v-if="item.conflict_flags?.length" class="recommend-card-copy risk">
-          风险：{{ formatDisplayList(item.conflict_flags.map(flag => flag.message).filter(Boolean)) }}
-        </text>
-        <view class="recommend-card-footer">
-          <text class="recommend-card-stats">已有 {{ item.helpful_count || 0 }} 次正向反馈</text>
-          <view class="experience-feedback-row">
-            <text
-              class="experience-feedback-btn"
-              :class="{ active: experienceFeedbackState[item.experience_id] === 'helpful', disabled: !!experienceFeedbackLoading[item.experience_id] }"
-              @click="submitExperienceFeedback(item.experience_id, 'helpful')"
-            >有帮助</text>
-            <text
-              class="experience-feedback-btn"
-              :class="{ active: experienceFeedbackState[item.experience_id] === 'unhelpful', disabled: !!experienceFeedbackLoading[item.experience_id] }"
-              @click="submitExperienceFeedback(item.experience_id, 'unhelpful')"
-            >一般</text>
-            <text
-              class="experience-feedback-btn danger"
-              :class="{ active: experienceFeedbackState[item.experience_id] === 'incorrect', disabled: !!experienceFeedbackLoading[item.experience_id] }"
-              @click="submitExperienceFeedback(item.experience_id, 'incorrect')"
-            >不准确</text>
-          </view>
-        </view>
-      </view>
-    </view>
     <view class="chat-input-area">
       <template v-if="isWorkerMode && dockInput">
         <view
           v-if="showFloatingWorkflowEntry"
-          class="floating-step-wrap"
+          class="floating-entry-zone"
         >
-          <view v-if="stepPanelExpanded" class="floating-step-popover">
+          <view v-if="stepPanelExpanded && showFloatingWorkflowEntry" class="floating-step-popover">
             <view class="floating-step-popover-head">
               <view class="floating-step-popover-copy">
                 <text class="floating-step-popover-tag">维修流程</text>
@@ -636,17 +594,37 @@
           </view>
 
           <view
-            class="floating-step-chip"
-            :class="{ active: stepPanelExpanded }"
-            @click="toggleStepPanel"
+            class="floating-entry-row"
           >
-            <view class="floating-step-icon" aria-hidden="true">
-              <view class="floating-step-icon-line short" />
-              <view class="floating-step-icon-line" />
-              <view class="floating-step-icon-line" />
+            <view
+              v-if="showFloatingWorkflowEntry"
+              class="floating-step-chip"
+              :class="{ active: stepPanelExpanded }"
+              @click="toggleStepPanel"
+            >
+              <view class="floating-step-icon" aria-hidden="true">
+                <view class="floating-step-icon-line short" />
+                <view class="floating-step-icon-line" />
+                <view class="floating-step-icon-line" />
+              </view>
+              <text class="floating-step-chip-label">维修流程</text>
+              <text class="floating-step-chip-badge">第 {{ activeStepIndex + 1 }} 步</text>
             </view>
-            <text class="floating-step-chip-label">维修流程</text>
-            <text class="floating-step-chip-badge">第 {{ activeStepIndex + 1 }} 步</text>
+
+            <view
+              v-if="showFloatingExperienceEntry"
+              class="floating-step-chip floating-experience-chip"
+              :class="{ disabled: sending }"
+              @click="askExperienceReference"
+            >
+              <view class="floating-step-icon" aria-hidden="true">
+                <view class="floating-step-icon-line short" />
+                <view class="floating-step-icon-line" />
+                <view class="floating-step-icon-line" />
+              </view>
+              <text class="floating-step-chip-label">经验参考</text>
+              <text class="floating-step-chip-badge">{{ experienceRecommendations.length }} 条</text>
+            </view>
           </view>
         </view>
 
@@ -959,6 +937,18 @@ const showFloatingWorkflowEntry = computed(() => Boolean(
 const experienceRecommendations = computed<MaintenanceExperienceRecommendation[]>(() => (
   stepPlan.value?.experience_recommendations || []
 ))
+const showFloatingExperienceEntry = computed(() => Boolean(
+  false,
+))
+const floatingDockEntryCount = computed(() => (
+  (showFloatingWorkflowEntry.value ? 1 : 0)
+    + (showFloatingExperienceEntry.value ? 1 : 0)
+))
+const floatingDockReserveRpx = computed(() => {
+  if (stepPanelExpanded.value) return 860
+  if (floatingDockEntryCount.value >= 1) return 340
+  return 220
+})
 const operatorDateOptions = computed<OperatorFilterOption[]>(() => ([
   { value: 'today', label: '今天' },
   { value: 'week', label: '本周' },
@@ -1030,9 +1020,7 @@ function buildMessageMenuStyle(rect: { top: number; left: number; width: number;
   const menuWidth = Math.min(rpxToPx(580), Math.max(220, (info.windowWidth || 375) - sideGap * 2))
   const menuHeight = rpxToPx(276)
   const anchorGap = rpxToPx(14)
-  const dockedReserve = dockInput.value
-    ? rpxToPx(showFloatingWorkflowEntry.value && stepPanelExpanded.value ? 860 : showFloatingWorkflowEntry.value ? 340 : 220)
-    : rpxToPx(48)
+  const dockedReserve = dockInput.value ? rpxToPx(floatingDockReserveRpx.value) : rpxToPx(48)
   const maxTop = Math.max(sideGap, (info.windowHeight || 667) - dockedReserve - menuHeight)
   let top = rect.top + rect.height + anchorGap
   if (top > maxTop) {
@@ -1089,6 +1077,18 @@ function formatExperienceScore(score: number | null | undefined) {
   return `${Math.round(normalized * 100)}%`
 }
 
+function formatExperienceSourceMeta(item: {
+  source_contributor_name?: string | null
+  source_work_order_id?: string | null
+}) {
+  const parts: string[] = []
+  const contributor = formatAiDisplayText(item.source_contributor_name || '')
+  const sourceWorkOrderId = formatAiDisplayText(item.source_work_order_id || '')
+  if (contributor) parts.push(`${contributor}的经验`)
+  if (sourceWorkOrderId) parts.push(`来源工单：${sourceWorkOrderId}`)
+  return parts.join(' · ')
+}
+
 function normalizeExperienceItems(facts: unknown): MaintenanceExperienceItem[] {
   if (!facts || typeof facts !== 'object') return []
   const rawItems = Array.isArray((facts as any).items) ? (facts as any).items : []
@@ -1135,7 +1135,6 @@ function shouldRenderMessageExtensions(msg: ChatMsg) {
       || msg.chart
       || msg.evidenceClaims?.length
       || msg.blockedActions?.length
-      || msg.experienceItems?.length
       || msg.suggestedFollowups?.length,
   )
 }
@@ -1917,6 +1916,12 @@ function toggleStepPanel() {
   if (nextExpanded) {
     stepSwiperCurrent.value = activeStepIndex.value
   }
+}
+
+async function askExperienceReference() {
+  if (sending.value) return
+  stepPanelExpanded.value = false
+  await sendPresetMessage('有没有经验可以参考的')
 }
 
 function handleStepSwiperChange(event: any) {
@@ -3591,13 +3596,39 @@ onBeforeUnmount(() => {
   display: block;
 }
 
-.floating-step-wrap {
+.floating-entry-zone {
   width: 100%;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: 16rpx;
   pointer-events: auto;
+}
+
+.floating-entry-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 14rpx;
+  width: 100%;
+  min-width: 0;
+}
+
+.floating-entry-row.multi .floating-step-chip {
+  min-width: 0;
+  max-width: calc(50% - 7rpx);
+  padding-left: 18rpx;
+  padding-right: 18rpx;
+}
+
+.floating-entry-row.multi .floating-step-chip-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.floating-entry-row.multi .floating-step-chip-badge {
+  max-width: 104rpx;
 }
 
 .floating-step-chip {
@@ -3617,6 +3648,11 @@ onBeforeUnmount(() => {
 .floating-step-chip.active {
   background: #f7fbeb;
   box-shadow: 0 16rpx 34rpx rgba(91, 108, 43, 0.14);
+}
+
+.floating-step-chip.disabled {
+  opacity: 0.58;
+  pointer-events: none;
 }
 
 .floating-step-icon {
@@ -3665,6 +3701,19 @@ onBeforeUnmount(() => {
   justify-content: center;
   white-space: nowrap;
   flex-shrink: 0;
+}
+
+.floating-experience-chip .floating-step-icon {
+  background: #f8eed7;
+}
+
+.floating-experience-chip .floating-step-icon-line {
+  background: #8a6a2a;
+}
+
+.floating-experience-chip .floating-step-chip-badge {
+  background: #f6efe0;
+  color: #7a6440;
 }
 
 .floating-step-popover {
@@ -4061,36 +4110,22 @@ onBeforeUnmount(() => {
   gap: 12rpx;
 }
 
-.experience-card,
-.recommend-card {
+.experience-card {
   padding: 16rpx 18rpx;
   border-radius: 18rpx;
   background: #fffaf0;
   border: 1rpx solid #efe1b4;
 }
 
-.recommend-panel {
-  margin: 0 20rpx 16rpx;
-  padding: 20rpx;
-  border-radius: 18rpx;
-  background: linear-gradient(180deg, #fffaf0 0%, #fff6e8 100%);
-  border: 1rpx solid #f0ddb3;
-}
-
-.recommend-panel-head,
 .experience-card-head,
-.recommend-card-head,
-.experience-card-footer,
-.recommend-card-footer {
+.experience-card-footer {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 16rpx;
 }
 
-.recommend-panel-title,
-.experience-card-title,
-.recommend-card-title {
+.experience-card-title {
   flex: 1;
   font-size: 25rpx;
   line-height: 1.55;
@@ -4098,11 +4133,8 @@ onBeforeUnmount(() => {
   font-weight: 800;
 }
 
-.recommend-panel-subtitle,
 .experience-card-meta,
-.recommend-card-meta,
-.experience-card-stats,
-.recommend-card-stats {
+.experience-card-stats {
   display: block;
   margin-top: 8rpx;
   font-size: 21rpx;
@@ -4110,8 +4142,7 @@ onBeforeUnmount(() => {
   color: #8a7650;
 }
 
-.experience-card-copy,
-.recommend-card-copy {
+.experience-card-copy {
   display: block;
   margin-top: 10rpx;
   font-size: 22rpx;
@@ -4119,26 +4150,22 @@ onBeforeUnmount(() => {
   color: #5d4d30;
 }
 
-.experience-card-copy.warn,
-.recommend-card-copy.warn {
+.experience-card-copy.warn {
   color: #9b6b2c;
 }
 
-.experience-card-copy.risk,
-.recommend-card-copy.risk {
+.experience-card-copy.risk {
   color: #b45042;
 }
 
-.experience-card-score,
-.recommend-card-score {
+.experience-card-score {
   flex-shrink: 0;
   font-size: 20rpx;
   color: #8a6a2a;
   font-weight: 700;
 }
 
-.experience-card-footer,
-.recommend-card-footer {
+.experience-card-footer {
   margin-top: 12rpx;
   align-items: center;
 }

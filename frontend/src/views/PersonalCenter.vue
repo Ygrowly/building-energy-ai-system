@@ -578,6 +578,8 @@ interface AnomalyItem {
   building_id?: string | number
 }
 
+const RECENT_ANOMALY_WINDOW_HOURS = 240
+
 const anomalies = ref<AnomalyItem[]>([])
 const anomalyLoading = ref(false)
 const anomalyError = ref('')
@@ -586,7 +588,9 @@ async function loadAnomalies() {
   anomalyLoading.value = true
   anomalyError.value = ''
   try {
-    const data = await apiFetch<AnomalyItem[]>('/api/anomalies/recent?hours=168&limit=20')
+    const data = await apiFetch<AnomalyItem[]>(
+      `/api/anomalies/recent?hours=${RECENT_ANOMALY_WINDOW_HOURS}&limit=20`,
+    )
     anomalies.value = data
   } catch (e: unknown) {
     anomalyError.value = (e as Error).message ?? '加载失败'

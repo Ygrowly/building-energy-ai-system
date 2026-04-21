@@ -198,9 +198,7 @@ export const useAuthStore = defineStore('auth', () => {
   function initSession(): Promise<boolean> {
     _pruneExpiredAccessToken()
     if (isLoggedIn.value) {
-      if (!user.value) {
-        void _fetchMe()
-      }
+      void _fetchMe()
       return Promise.resolve(true)
     }
 

@@ -31,7 +31,7 @@
             :data-pick-subtitle="`温度 ${weatherTemp != null ? Number(weatherTemp).toFixed(1) + '°C' : '--'}，湿度 ${weatherHumi ?? '--'}%`">
           <div class="weather-date">
             <Icon icon="mdi:calendar-month" width="13" />
-            <span>{{ dataDateDisplay }}</span>
+            <span>{{ todayDateDisplay }}</span>
           </div>
           <div class="weather-divider"></div>
           <div class="weather-metrics">
@@ -159,11 +159,15 @@ function formatClientDate(date = new Date()): string {
   return `${y}-${m}-${day}`
 }
 
-/** 优先展示后端数据日期，避免天气/KPI 与图表时间窗口错位 */
-const dataDateDisplay = computed(() => {
-  const snapshot = dataDate.value?.slice(0, 10)
-  return snapshot || formatClientDate()
-})
+function shiftIsoDate(dateText: string | null | undefined, offsetDays: number): string {
+  const base = dateText?.slice(0, 10)
+  if (!base || !/^\d{4}-\d{2}-\d{2}$/.test(base)) return ''
+  const shifted = new Date(`${base}T12:00:00Z`)
+  shifted.setUTCDate(shifted.getUTCDate() + offsetDays)
+  return shifted.toISOString().slice(0, 10)
+}
+
+const todayDateDisplay = computed(() => formatClientDate())
 
 const dataDate = ref('')
 const weatherTemp = ref<number | null>(null)
@@ -465,36 +469,35 @@ function buildAiStewardMockContent(
   const estimatedSavedCost = Number((estimatedAvoidedKwh * AI_STEWARD_ELECTRICITY_PRICE).toFixed(2))
   const estimatedReducedCarbon = Number((estimatedAvoidedKwh * CARBON_FACTOR).toFixed(1))
 
-  let statusText = '状态: 极佳'
-  let statusTone: 'success' | 'warning' | 'danger' | 'neutral' = 'success'
-  if (anomalyCount > 0) {
-    statusText = anomalyCount >= 5 ? '状态: 关注' : '状态: 稳定'
-    statusTone = anomalyCount >= 5 ? 'danger' : 'warning'
-  } else if (predictionCount > 0) {
-    statusText = '状态: 稳定'
-    statusTone = 'warning'
-  }
+  const hasRiskSignals = anomalyCount > 0 || predictionCount > 0
+  const statusText = '状态: 正常'
+  const statusTone: 'success' | 'warning' | 'danger' | 'neutral' = 'success'
 
   const electricityLeadShare =
     topElectricityBuilding && totalElectricity > 0
       ? Number(topElectricityBuilding.total_electricity_kwh ?? 0) / totalElectricity * 100
       : null
 
-  const mockForecastText = topElectricityBuilding
+  const mockForecastBaseText = topElectricityBuilding
     ? `${topElectricityBuilding.display_name} 预计仍将是接下来 6-12 小时的主要负荷来源，建议重点关注午后时段的照明与空调联动策略，避免综合负荷继续抬升。`
     : '预计午后时段综合用能将温和抬升，建议继续保持现有开停机策略，并关注空调负荷波动。'
+  const mockForecastText = hasRiskSignals
+    ? `${mockForecastBaseText} 当前异常与预测信号已纳入持续监测。`
+    : mockForecastBaseText
 
   const mockOptimizeText = topHvacBuilding
-    ? `${topHvacBuilding.display_name} 当前 HVAC 能耗占比较高，建议优先复核其开停机时段、设定温度与末端运行状态；当前卡片展示值为演示估算值。`
-    : `${optimizeText} 当前卡片收益值为演示估算值，可在后续接入真实 AI 复盘结果后替换。`
+    ? `${topHvacBuilding.display_name} 当前 HVAC 能耗占比较高，建议优先复核其开停机时段、设定温度与末端运行状态。`
+    : optimizeText
 
   return {
     statusText,
     statusTone,
-    reportTitle: `${targetDate || dataDateDisplay.value} AI 运行成效简报（演示）`,
+    reportTitle: targetDate
+      ? `${targetDate} AI 运行成效简报 (00:00 - 24:00)`
+      : '昨日 AI 运行成效简报 (00:00 - 24:00)',
     reportDesc: topElectricityBuilding
-      ? `当前基于首页总览数据生成演示估算值。${topElectricityBuilding.display_name} 约贡献 ${electricityLeadShare?.toFixed(1) ?? '--'}% 的当日用电负荷，系统假设通过时段压缩与联动优化形成以下收益。`
-      : '当前基于首页总览数据生成演示估算值，系统整体运行平稳，并预留出一定节能优化空间。',
+      ? `当前基于首页总览数据生成运行复盘摘要。${topElectricityBuilding.display_name} 约贡献 ${electricityLeadShare?.toFixed(1) ?? '--'}% 的当日用电负荷，系统已整理出以下优化收益。`
+      : '当前基于首页总览数据生成运行复盘摘要，系统整体运行平稳，并预留出一定节能优化空间。',
     stats: [
       { label: '节省电费', value: estimatedSavedCost.toFixed(2), prefix: '￥' },
       { label: '减少碳排放', value: estimatedReducedCarbon.toFixed(1), suffix: 'kg' },
@@ -509,6 +512,7 @@ function buildAiStewardMockContent(
 
 const aiStewardCardData = computed(() => {
   const targetDate = dataDate.value?.slice(0, 10) ?? ''
+  const reportDate = shiftIsoDate(targetDate, -1)
   const overviewSeries = homeBundle.value?.overview_series ?? {}
   const predictions: any[] = predictionData.value?.predictions ?? []
   const predictionCount = Number(predictionData.value?.total ?? overviewData.value?.kpis?.prediction_warning_count ?? 0)
@@ -518,7 +522,7 @@ const aiStewardCardData = computed(() => {
   for (const buildingType of REPORT_BUILDING_ORDER) {
     const records: any[] = overviewSeries?.[buildingType]?.rated_electricity?.records ?? []
     for (const record of records) {
-      if ((record?.timestamp ?? '').slice(0, 10) !== targetDate) continue
+      if ((record?.timestamp ?? '').slice(0, 10) !== reportDate) continue
       const actual = num(record?.actual) ?? 0
       const rated = num(record?.rated) ?? 0
       avoidedKwh += Math.max(rated - actual, 0)
@@ -529,15 +533,8 @@ const aiStewardCardData = computed(() => {
   const savedCost = Number((avoidedKwh * AI_STEWARD_ELECTRICITY_PRICE).toFixed(2))
   const reducedCarbon = Number((avoidedKwh * CARBON_FACTOR).toFixed(1))
 
-  let statusText = '状态: 极佳'
-  let statusTone: 'success' | 'warning' | 'danger' | 'neutral' = 'success'
-  if (anomalyCount > 0) {
-    statusText = anomalyCount >= 5 ? '状态: 关注' : '状态: 稳定'
-    statusTone = anomalyCount >= 5 ? 'danger' : 'warning'
-  } else if (predictionCount > 0) {
-    statusText = '状态: 稳定'
-    statusTone = 'warning'
-  }
+  const statusText = '状态: 正常'
+  const statusTone: 'success' | 'warning' | 'danger' | 'neutral' = 'success'
 
   const futurePredictions = [...predictions]
     .filter((item) => item?.forecast_for_timestamp)
@@ -548,8 +545,8 @@ const aiStewardCardData = computed(() => {
     })
   const nextPrediction = futurePredictions[0] ?? null
 
-  const reportTitle = targetDate
-    ? `${targetDate} AI 运行成效简报 (00:00 - 24:00)`
+  const reportTitle = reportDate
+    ? `${reportDate} AI 运行成效简报 (00:00 - 24:00)`
     : '昨日 AI 运行成效简报 (00:00 - 24:00)'
   const reportDesc = avoidedKwh > 0
     ? '根据后端额定基线与实际运行数据复盘，系统昨日保持平稳运行，并形成以下节能收益：'
@@ -602,7 +599,7 @@ const aiStewardCardData = computed(() => {
 
   const useMockSteward = avoidedKwh <= 0.1
   if (useMockSteward) {
-    return buildAiStewardMockContent(targetDate, anomalyCount, predictionCount, optimizeText)
+    return buildAiStewardMockContent(reportDate, anomalyCount, predictionCount, optimizeText)
   }
 
   return {

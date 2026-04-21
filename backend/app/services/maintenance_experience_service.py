@@ -13,11 +13,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.cache import delete_cache_by_prefix, get_or_compute_json
+from app.core.person_name import format_person_display_name
 from app.db.models import (
     Device,
     MaintenanceExperience,
     MaintenanceExperienceFeedback,
     MaintenanceExperienceUsageLog,
+    User,
     WorkOrder,
     WorkOrderAnomalyLink,
 )
@@ -34,6 +36,14 @@ DEACTIVATE_ROLES = {"admin", "manager"}
 EXPERIENCE_CACHE_PREFIX = "maintenance_experiences:"
 SEARCH_CACHE_TTL_SECONDS = 60
 MAX_TEXT_LENGTH = 4000
+DEMO_SOURCE_CONTRIBUTOR_BY_WORK_ORDER = {
+    "WO-20260403-001": "王工",
+    "WO-20260403-002": "刘工",
+}
+UUIDISH_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
 
 
 def _now() -> datetime:
@@ -638,11 +648,60 @@ def _serialize_experience(
         "created_at": experience.created_at.isoformat() if experience.created_at else None,
         "updated_at": experience.updated_at.isoformat() if experience.updated_at else None,
     }
+    source_contributor_name = resolve_experience_source_contributor_name(payload)
+    if source_contributor_name:
+        payload["source_contributor_name"] = source_contributor_name
     if include_source_text:
         payload["source_text"] = experience.source_text
     if score is not None:
         payload["score"] = score
     return payload
+
+
+def resolve_experience_source_contributor_name(item: dict[str, Any]) -> str | None:
+    source_work_order_id = _as_text(item.get("source_work_order_id"), limit=64)
+    override = DEMO_SOURCE_CONTRIBUTOR_BY_WORK_ORDER.get(source_work_order_id)
+    if override:
+        return override
+
+    for key in ("source_contributor_name", "contributor_name", "contributor_username", "contributor_user_name"):
+        name = _as_text(item.get(key), limit=80)
+        if name:
+            return format_person_display_name(name) or name
+
+    contributor_user_id = _as_text(item.get("contributor_user_id"), limit=128)
+    if contributor_user_id and not UUIDISH_RE.fullmatch(contributor_user_id):
+        return format_person_display_name(contributor_user_id) or contributor_user_id
+    return None
+
+
+async def _hydrate_experience_source_contributors(
+    db: AsyncSession,
+    items: list[dict[str, Any]],
+) -> None:
+    contributor_ids = {
+        _as_text(item.get("contributor_user_id"), limit=128)
+        for item in items
+        if _as_text(item.get("contributor_user_id"), limit=128)
+    }
+    if not contributor_ids:
+        return
+
+    try:
+        result = await db.execute(select(User.id, User.username).where(User.id.in_(contributor_ids)))
+        rows = result.all()
+    except Exception as exc:  # pragma: no cover - attribution is best-effort metadata
+        logger.info("maintenance experience contributor hydrate skipped: %s", exc)
+        return
+
+    usernames = {user_id: username for user_id, username in rows}
+    for item in items:
+        if item.get("source_contributor_name"):
+            continue
+        username = usernames.get(item.get("contributor_user_id"))
+        display_name = format_person_display_name(username) if username else None
+        if display_name:
+            item["source_contributor_name"] = display_name
 
 
 async def _search_experiences_uncached(
@@ -708,6 +767,7 @@ async def _search_experiences_uncached(
         )
 
     items = [_serialize_experience(experience, score=score) for experience, score in ranked[:limit]]
+    await _hydrate_experience_source_contributors(db, items)
     return {
         "query": query_text,
         "items": items,
@@ -1011,6 +1071,9 @@ async def retrieve_experience_recommendations_for_work_order(
             {
                 "experience_id": item["id"],
                 "source_work_order_id": item.get("source_work_order_id"),
+                "source_contributor_name": item.get("source_contributor_name"),
+                "contributor_user_id": item.get("contributor_user_id"),
+                "contributor_role": item.get("contributor_role"),
                 "organized_text": item.get("organized_text"),
                 "confidence": float(item.get("score") or 0),
                 "helpful_count": int(item.get("helpful_count") or 0),
@@ -1044,6 +1107,8 @@ def looks_like_experience_query(text: str) -> bool:
         "类似问题怎么处理",
         "最近有哪些",
         "被引用最多",
+        "被采纳最多",
+        "复用最多",
         "使用最多",
         "无效经验",
         "停用经验",
@@ -1059,6 +1124,8 @@ def _extract_query_hint(text: str, fallback: str | None = None) -> str:
         "历史上大家怎么处理",
         "类似问题怎么处理",
         "被引用最多",
+        "被采纳最多",
+        "复用最多",
         "使用最多",
         "无效经验",
         "停用经验",
@@ -1080,7 +1147,7 @@ async def build_operator_experience_answer(
     sort_by = "score"
     if any(token in message for token in ("最近", "最新")):
         sort_by = "recent"
-    if any(token in message for token in ("引用最多", "被引用最多", "使用最多")):
+    if any(token in message for token in ("引用最多", "被引用最多", "采纳最多", "被采纳最多", "复用最多", "使用最多")):
         sort_by = "usage"
     include_inactive = any(token in message for token in ("无效", "停用", "incorrect", "错误经验"))
 
@@ -1125,18 +1192,20 @@ async def build_operator_experience_answer(
     if sort_by == "recent":
         header = "最近的相关经验如下："
     elif sort_by == "usage":
-        header = "被引用较多的经验如下："
+        header = "被复用较多的经验如下："
     elif work_order is not None:
         header = f"围绕 {work_order.ticket_id} 的相似经验如下："
 
     lines = [header]
     for index, item in enumerate(items, start=1):
         source = item.get("source_work_order_id") or item.get("source_type") or "未知来源"
+        contributor = resolve_experience_source_contributor_name(item)
+        experience_label = f"{contributor}的经验" if contributor else "经验"
         state_label = "停用" if not item.get("is_active", True) else "启用"
         lines.append(
-            f"{index}. {item.get('organized_text') or '经验原文缺失'}"
+            f"{index}. {experience_label}：{item.get('organized_text') or '经验原文缺失'}"
             f"（来源 {source}，匹配 {float(item.get('score') or 0):.2f}，"
-            f"引用 {int(item.get('usage_count') or 0)}，有用 {int(item.get('helpful_count') or 0)}，{state_label}）"
+            f"复用 {int(item.get('usage_count') or 0)}，有用 {int(item.get('helpful_count') or 0)}，{state_label}）"
         )
     return {
         "answer": "\n".join(lines),

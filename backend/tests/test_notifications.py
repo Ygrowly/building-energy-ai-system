@@ -359,6 +359,31 @@ async def test_mark_notification_recipients_read_marks_items_and_queues_sync() -
     assert pending["summary_user_ids"] == {"ops-1"}
 
 
+def test_audit_content_for_create_generates_pending_review_notification() -> None:
+    audit_log = SimpleNamespace(
+        action="create",
+        detail_json=None,
+    )
+    work_order = SimpleNamespace(
+        id="wo-1",
+        ticket_id="WO-001",
+        incident_id="incident-1",
+        building_id="Fox_office_Alice",
+    )
+
+    content = notification_service._audit_content(
+        audit_log=audit_log,
+        work_order=work_order,
+    )
+
+    assert content is not None
+    title, body, severity, payload = content
+    assert title == "WO-001 待审核"
+    assert "生成工单" in body
+    assert severity == "warning"
+    assert payload["ticket_id"] == "WO-001"
+
+
 @pytest.mark.asyncio
 async def test_publish_after_commit_publishes_created_read_and_summary_events(
     monkeypatch: pytest.MonkeyPatch,

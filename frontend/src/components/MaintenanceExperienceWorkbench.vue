@@ -94,7 +94,7 @@
 
             <div class="experience-card-footer">
               <span class="experience-stats">
-                有用 {{ item.helpful_count || 0 }} · 无帮助 {{ item.unhelpful_count || 0 }} · 不准确 {{ item.incorrect_count || 0 }} · 引用 {{ item.usage_count || 0 }}
+                有用 {{ item.helpful_count || 0 }} · 无帮助 {{ item.unhelpful_count || 0 }} · 不准确 {{ item.incorrect_count || 0 }} · 复用 {{ item.usage_count || 0 }}
               </span>
               <div class="feedback-actions">
                 <button
@@ -189,7 +189,7 @@ import {
 const quickPrompts = [
   '最近有哪些空调效率异常处理经验',
   '类似传感器读数异常通常怎么排查',
-  '哪些经验被引用最多',
+  '哪些经验被复用最多',
 ]
 
 const query = ref('')

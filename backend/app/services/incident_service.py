@@ -15,6 +15,7 @@ from sqlalchemy import select, func as sa_func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.buildings import get_building_label
+from app.core.person_name import format_person_display_name
 from app.db.models import (
     AnomalyEvent,
     AnomalyIncident,
@@ -224,7 +225,9 @@ def _derive_dispatch_ui_meta(
     if current_dispatch is not None:
         return derive_dispatch_ui_meta_from_task(current_dispatch, assigned_user=assigned_user)
 
-    assigned_to_name = assigned_user.username if assigned_user else None
+    assigned_to_name = (
+        format_person_display_name(assigned_user.username) if assigned_user else None
+    )
     assigned_phone = assigned_user.phone if assigned_user else None
     profile = getattr(assigned_user, "worker_profile", None) if assigned_user else None
     team = getattr(profile, "team", None) if profile else None

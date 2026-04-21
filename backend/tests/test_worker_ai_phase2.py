@@ -1,3 +1,4 @@
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from pathlib import Path
@@ -5,13 +6,17 @@ from pathlib import Path
 import pytest
 
 from app.core.config import get_settings
-from app.services import ai_media_service
+from app.services import ai_media_service, maintenance_guidance_service
 from app.services.ai_media_service import build_tts_response, normalize_transcript
+from app.services.maintenance_experience_service import resolve_experience_source_contributor_name
 from app.services.maintenance_guidance_service import (
+    _build_experience_reference_reply,
     _build_workflow_profile,
     _build_ddc_help_reply,
+    _extract_plan_experience_recommendations,
     _fallback_guidance_reply,
     _fallback_step_plan,
+    _generate_guidance_reply_with_model,
     _is_guidance_ready,
     _looks_like_ddc_help_request,
     _normalize_step_plan,
@@ -114,10 +119,14 @@ def test_worker_ai_phase2_sensor_display_fallback_plan_focuses_on_reading_compar
     )
 
     titles = [step["title"] for step in plan["steps"]]
+    instructions = " ".join(step["instruction"] for step in plan["steps"])
 
-    assert "确认现场真实现象和就地读数" in titles
-    assert "记录现场与系统的差异" in titles
+    assert "用独立参考读数复核偏差" in titles
+    assert "判断读数是否由真实工况造成" in titles
+    assert "按读数关系决定维修或协同" in titles
     assert "传感器/显示/计量偏差" in plan["summary"]
+    assert "供回水温差" in instructions
+    assert "点位映射" in instructions
 
 
 def test_worker_ai_phase2_normalize_drops_invalid_model_steps():
@@ -234,3 +243,117 @@ def test_worker_ai_phase2_detects_ddc_help_request_and_returns_non_login_reply()
     assert "Occupied" not in reply["answer"]
     assert "Holiday" not in reply["answer"]
     assert "BA 中控室" not in reply["answer"]
+
+
+def test_worker_ai_phase2_extracts_plan_experience_recommendations():
+    plan = SimpleNamespace(
+        generated_from_json='{"experience_recommendations":[{"experience_id":"exp-1","organized_text":"先核对现场读数。"}]}'
+    )
+
+    recommendations = _extract_plan_experience_recommendations(plan)
+
+    assert recommendations == [{"experience_id": "exp-1", "organized_text": "先核对现场读数。"}]
+
+
+def test_worker_ai_phase2_experience_reference_reply_uses_retrieved_items():
+    reply = _build_experience_reference_reply(
+        [
+            {
+                "experience_id": "exp-1",
+                "source_work_order_id": "WO-20260403-005",
+                "source_contributor_name": "王工",
+                "organized_text": "类似能耗突增先核对现场是否有人使用，再确认未关闭负载。",
+                "confidence": 0.86,
+                "helpful_count": 2,
+                "safety_notes": ["不要在未确认现场用电边界前直接断电。"],
+                "conflict_flags": [{"message": "未说明电气隔离许可。"}],
+            }
+        ]
+    )
+
+    assert "召回到 1 条经验" in reply["answer"]
+    assert "类似能耗突增" in reply["answer"]
+    assert "王工的经验" in reply["answer"]
+    assert "WO-20260403-005" in reply["answer"]
+    assert "匹配 0.86" in reply["answer"]
+    assert "采纳前要留意" in reply["answer"]
+    assert "引用前" not in reply["answer"]
+
+
+def test_worker_ai_phase2_experience_reference_reply_handles_empty_results():
+    reply = _build_experience_reference_reply([])
+
+    assert "没有召回到" in reply["answer"]
+    assert "编造" not in reply["answer"]
+
+
+def test_worker_ai_phase2_experience_source_contributor_demo_override():
+    assert resolve_experience_source_contributor_name({"source_work_order_id": "WO-20260403-001"}) == "王工"
+    assert resolve_experience_source_contributor_name({"source_work_order_id": "WO-20260403-002"}) == "刘工"
+    assert (
+        resolve_experience_source_contributor_name(
+            {"source_work_order_id": "WO-20260403-002", "source_contributor_name": "王工"}
+        )
+        == "刘工"
+    )
+
+
+def test_worker_ai_phase2_experience_reference_reply_corrects_stale_contributor():
+    reply = _build_experience_reference_reply(
+        [
+            {
+                "experience_id": "exp-1",
+                "source_work_order_id": "WO-20260403-002",
+                "source_contributor_name": "王工",
+                "organized_text": "公共楼供回水温差大时先查阀门开度。",
+                "confidence": 0.43,
+            },
+            {
+                "experience_id": "exp-2",
+                "source_work_order_id": "WO-20260403-001",
+                "source_contributor_name": "王工",
+                "organized_text": "公共楼空调跑通系统能耗异常时先核对水泵频率。",
+                "confidence": 0.35,
+            },
+        ]
+    )
+
+    assert "1. 刘工的经验" in reply["answer"]
+    assert "2. 王工的经验" in reply["answer"]
+
+
+@pytest.mark.asyncio
+async def test_worker_ai_phase2_guidance_model_prompt_includes_experience_recommendations(monkeypatch: pytest.MonkeyPatch):
+    captured: dict[str, object] = {}
+
+    class FakeProvider:
+        async def chat(self, messages, **kwargs):
+            captured["user_prompt"] = json.loads(messages[1]["content"])
+            return '{"answer":"参考经验先核对现场读数。"}'
+
+    monkeypatch.setattr(maintenance_guidance_service, "get_model_provider", lambda: FakeProvider())
+    plan = SimpleNamespace(
+        id="plan-1",
+        summary="先核对现场。",
+        root_cause_candidates_json="[]",
+        safety_notes_json="[]",
+    )
+    recommendations = [
+        {
+            "experience_id": "exp-1",
+            "organized_text": "先核对现场读数。",
+            "confidence": 0.86,
+        }
+    ]
+
+    await _generate_guidance_reply_with_model(
+        message="有没有经验可以参考的",
+        context={"work_order": {"ticket_id": "WO-1"}},
+        plan=plan,
+        steps=[{"id": "step_1", "title": "核对现场", "instruction": "先看现场"}],
+        current_step={"id": "step_1", "title": "核对现场", "instruction": "先看现场"},
+        recent_events=[],
+        experience_recommendations=recommendations,
+    )
+
+    assert captured["user_prompt"]["experience_recommendations"] == recommendations

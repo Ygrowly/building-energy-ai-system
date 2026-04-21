@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.cache import delete_cache_by_prefix
+from app.core.person_name import format_person_display_name
 from app.core.security import get_current_user
 from app.db.models import (
     Building,
@@ -114,10 +115,11 @@ def serialize_worker_profile(user: User, *, active_orders: int = 0) -> dict[str,
         key=lambda item: (not bool(getattr(item, "is_primary", False)), getattr(getattr(item, "skill", None), "name", "")),
     )
     max_active_orders = int(getattr(profile, "max_active_orders", 4) or 4) if profile else 4
+    display_username = format_person_display_name(user.username) or user.username
     return {
         "user": {
             "id": user.id,
-            "username": user.username,
+            "username": display_username,
             "email": user.email,
             "phone": user.phone,
             "role": user.role,

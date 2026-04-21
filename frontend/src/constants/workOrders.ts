@@ -96,6 +96,12 @@ export const EXECUTION_LABELS: Record<string, string> = {
   arrived: '已到场',
   processing: '处理中',
   waiting_support: '待协同',
+  completed: '处理完成',
+  false_alarm: '误报',
+  escalated: '已升级',
+  cancelled: '已取消',
+  rejected: '已拒单',
+  transferred: '已转派',
   overdue: '已超时',
 }
 

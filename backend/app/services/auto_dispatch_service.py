@@ -16,6 +16,7 @@ from sqlalchemy.exc import NoInspectionAvailable
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.person_name import format_person_display_name
 from app.db.models import User, WorkOrder, WorkerProfile, WorkerProfileSkill
 from app.services.audit_log_service import write_work_order_audit_log
 from app.services.dispatch_service import derive_dispatch_timeout_level, reassign_dispatch_task
@@ -73,7 +74,7 @@ def _summarize_candidate(candidate: dict[str, Any] | None) -> dict[str, Any] | N
         return None
     return {
         "user_id": candidate.get("user_id"),
-        "username": candidate.get("username"),
+        "username": format_person_display_name(candidate.get("username")) or candidate.get("username"),
         "phone": candidate.get("phone"),
         "team_id": candidate.get("team_id"),
         "team_name": candidate.get("team_name"),
@@ -691,11 +692,11 @@ async def execute_auto_dispatch(
         "executed": True,
         "action_taken": True,
         "reason": "auto_dispatch_executed",
-        "message": f"工单已自动派给 {assigned_user.username}",
+        "message": f"工单已自动派给 {format_person_display_name(assigned_user.username) or assigned_user.username}",
         "ticket_id": work_order.ticket_id,
         "dispatch_id": work_order.current_dispatch_id,
         "assigned_to": assigned_user.id,
-        "assigned_to_name": assigned_user.username,
+        "assigned_to_name": format_person_display_name(assigned_user.username) or assigned_user.username,
         "status": work_order.status,
         "evaluation": evaluation,
     }
@@ -940,7 +941,7 @@ async def execute_auto_reassign(
             "from_dispatch_id": evaluation["current_dispatch_id"],
             "to_dispatch_id": new_dispatch.id,
             "assigned_to": assigned_user.id,
-            "assigned_to_name": assigned_user.username,
+            "assigned_to_name": format_person_display_name(assigned_user.username) or assigned_user.username,
             "selection_reason": evaluation["selection_reason"],
             "rules": evaluation["rules"],
             "score_gap": evaluation["score_gap"],
@@ -953,12 +954,12 @@ async def execute_auto_reassign(
         "executed": True,
         "action_taken": True,
         "reason": "auto_reassign_executed",
-        "message": f"工单已自动改派给 {assigned_user.username}",
+        "message": f"工单已自动改派给 {format_person_display_name(assigned_user.username) or assigned_user.username}",
         "ticket_id": work_order.ticket_id,
         "from_dispatch_id": evaluation["current_dispatch_id"],
         "dispatch_id": new_dispatch.id,
         "assigned_to": assigned_user.id,
-        "assigned_to_name": assigned_user.username,
+        "assigned_to_name": format_person_display_name(assigned_user.username) or assigned_user.username,
         "status": work_order.status,
         "trigger_reason": trigger_reason,
         "trigger_label": trigger_label,

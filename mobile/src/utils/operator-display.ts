@@ -73,6 +73,7 @@ const OPERATOR_SHIFT_LABELS: Record<string, string> = {
 }
 
 const OPERATOR_NOTIFICATION_EVENT_LABELS: Record<string, string> = {
+  create: '待审核',
   assigned: '已派单',
   auto_assigned: '自动派工',
   accepted: '已接单',

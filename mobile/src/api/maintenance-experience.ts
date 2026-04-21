@@ -21,6 +21,7 @@ export interface MaintenanceExperienceItem {
   source_step_plan_id?: string | null
   contributor_user_id?: string | null
   contributor_role?: string | null
+  source_contributor_name?: string | null
   building_id?: string | null
   device_id?: string | null
   device_type?: string | null
@@ -47,6 +48,9 @@ export interface MaintenanceExperienceItem {
 export interface MaintenanceExperienceRecommendation {
   experience_id: string
   source_work_order_id?: string | null
+  source_contributor_name?: string | null
+  contributor_user_id?: string | null
+  contributor_role?: string | null
   organized_text?: string | null
   confidence?: number | null
   helpful_count?: number

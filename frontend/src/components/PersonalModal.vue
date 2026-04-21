@@ -1043,6 +1043,8 @@ interface AnomalyItem {
   deviation_pct?: number
 }
 
+const RECENT_ANOMALY_WINDOW_HOURS = 240
+
 const RULE_LABELS: Record<string, string> = {
   electricity_overload:  '电耗超标',
   water_leak:            '水耗异常',
@@ -1104,7 +1106,9 @@ async function loadAnomalies() {
   anomalyLoading.value = true
   anomalyError.value = ''
   try {
-    const data = await apiFetch<{ anomalies: AnomalyItem[] }>('/api/anomalies/recent?hours=168')
+    const data = await apiFetch<{ anomalies: AnomalyItem[] }>(
+      `/api/anomalies/recent?hours=${RECENT_ANOMALY_WINDOW_HOURS}`,
+    )
     anomalies.value = data?.anomalies ?? []
     // 刷新后清除角标
     notificationStore.clearBadge()

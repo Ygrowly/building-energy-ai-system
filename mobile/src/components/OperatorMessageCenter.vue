@@ -625,6 +625,7 @@ async function handleWorkorderQuickAction(item: OperatorWorkorderMessageItem, ac
 
 const anomalies = ref<AnomalyItem[]>([])
 const anomalyLoading = ref(false)
+const RECENT_ANOMALY_WINDOW_HOURS = 240
 
 const anomalyCount = computed(() => anomalies.value.length)
 
@@ -652,7 +653,7 @@ async function loadAnomalies() {
   if (cached) anomalies.value = cached
   anomalyLoading.value = !cached
   try {
-    const res = await dataApi.recentAnomalies({ hours: 168 })
+    const res = await dataApi.recentAnomalies({ hours: RECENT_ANOMALY_WINDOW_HOURS })
     anomalies.value = res.anomalies
     setCache('msg_anomalies', res.anomalies)
   } catch {

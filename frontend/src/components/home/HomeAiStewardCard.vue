@@ -35,7 +35,7 @@ const DEFAULT_STATS: StewardStatItem[] = [
 
 const props = withDefaults(defineProps<HomeAiStewardCardProps>(), {
   title: 'AI 智能运行管家',
-  statusText: '状态: 极佳',
+  statusText: '状态: 正常',
   statusTone: 'success',
   reportTitle: '昨日 AI 运行成效简报 (00:00 - 24:00)',
   reportDesc: '根据后端实际运行数据与额定基线复盘，昨日系统形成如下运行收益：',

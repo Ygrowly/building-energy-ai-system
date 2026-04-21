@@ -30,6 +30,7 @@ def test_serialize_worker_profile_uses_defaults_without_profile() -> None:
 
     payload = routes_worker_profiles.serialize_worker_profile(user, active_orders=2)
 
+    assert payload["user"]["username"] == "叶工"
     assert payload["profile_exists"] is False
     assert payload["dispatch_enabled"] is True
     assert payload["shift_status"] == "on_duty"
@@ -86,6 +87,7 @@ def test_serialize_worker_profile_includes_team_and_skills() -> None:
 
     payload = routes_worker_profiles.serialize_worker_profile(user, active_orders=3)
 
+    assert payload["user"]["username"] == "叶工"
     assert payload["profile_exists"] is True
     assert payload["team"]["name"] == "暖通班"
     assert payload["service_buildings"] == ["Office", "Lab"]

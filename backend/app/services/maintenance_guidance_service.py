@@ -23,7 +23,9 @@ from app.db.models import (
 from app.schemas.mcp_schemas import MCPError
 from app.services.ai_model_provider import get_model_provider, parse_json_object
 from app.services.maintenance_experience_service import (
+    looks_like_experience_query,
     retrieve_experience_recommendations_for_work_order,
+    resolve_experience_source_contributor_name,
     schedule_experience_capture,
 )
 from app.services.rag_engine import search_ragflow
@@ -39,6 +41,8 @@ logger = logging.getLogger(__name__)
 
 STEP_STATUSES = {"pending", "completed", "skipped", "needs_support", "uncertain"}
 ACTIVE_PLAN_STATUS = "active"
+SUPERSEDED_PLAN_STATUS = "superseded"
+GUIDANCE_TEMPLATE_VERSION = 2
 
 
 def _json_loads(value: str | None, fallback: Any) -> Any:
@@ -775,77 +779,154 @@ def _fallback_hvac_chiller_step_plan(
     }
 
 
+def _infer_sensor_measurement_focus(work_order: WorkOrder) -> dict[str, str]:
+    text = (
+        f"{work_order.issue_description or ''} "
+        f"{work_order.suggested_action or ''} "
+        f"{work_order.device_id or ''}"
+    ).lower()
+    if any(token in text for token in ("温度", "temp", "temperature", "冷冻水", "冷却水", "供水", "回水")):
+        return {
+            "label": "温度",
+            "local_reference": "就地温度表、机组面板或便携温度计",
+            "process_check": "供回水温差、水泵运行、阀门开度、管路是否有真实流量",
+            "installation_check": "探头是否插到底、套管接触是否良好、保温是否破损、安装点是否靠近热源或回风短路",
+            "signal_check": "端子松动、24V 供电、4-20mA/0-10V 信号和 DDC 通信状态",
+        }
+    if any(token in text for token in ("压力", "压差", "pressure", "dp", "压强")):
+        return {
+            "label": "压力/压差",
+            "local_reference": "就地压力表、压差表或便携压力表",
+            "process_check": "水泵/风机运行、阀门开度、过滤器前后状态、管路或风道是否堵塞",
+            "installation_check": "取压口是否堵塞、导压管是否积水/漏气、隔离阀是否开启、传感器是否受振动影响",
+            "signal_check": "端子松动、24V 供电、4-20mA/0-10V 信号和 DDC 通信状态",
+        }
+    if any(token in text for token in ("流量", "flow", "水量", "风量")):
+        return {
+            "label": "流量",
+            "local_reference": "就地流量计、泵/风机面板或可用的便携测量工具",
+            "process_check": "泵/风机频率、阀门开度、旁通状态、过滤器堵塞和管路/风道阻力",
+            "installation_check": "流量计前后直管段、探头方向、积气/污堵、接地和传感器安装固定状态",
+            "signal_check": "脉冲/模拟量信号、24V 供电、屏蔽接地和 DDC 通信状态",
+        }
+    if any(token in text for token in ("湿度", "humidity", "co2", "二氧化碳", "空气品质")):
+        return {
+            "label": "环境",
+            "local_reference": "便携温湿度/CO2 表或就地环境面板",
+            "process_check": "新风机/排风机运行、风阀开度、房间占用和门窗开启情况",
+            "installation_check": "传感器是否被遮挡、靠近风口/热源/门窗、积尘污染或安装高度不合适",
+            "signal_check": "端子松动、24V 供电、模拟量信号和 DDC 通信状态",
+        }
+    if any(token in text for token in ("电表", "电量", "能耗", "功率", "电流", "电压", "meter", "power")):
+        return {
+            "label": "计量",
+            "local_reference": "电表本体读数、配电柜表计或授权人员的钳形表读数",
+            "process_check": "对应回路负载是否开启、设备运行状态、CT/PT 回路和表计对象是否对应",
+            "installation_check": "表计编号、回路标签、互感器方向、端子外观和通信指示是否异常",
+            "signal_check": "表计通信、地址/倍率、采集网关状态和系统点位映射",
+        }
+    return {
+        "label": "读数",
+        "local_reference": "就地仪表、设备面板或可用的独立参考仪表",
+        "process_check": "设备运行/停机状态、阀门/风阀/泵/风机状态和现场负荷是否支撑该读数",
+        "installation_check": "传感器是否松动、污染、遮挡、安装位置异常、保温破损或接线外观异常",
+        "signal_check": "端子松动、供电、模拟量/脉冲信号和 DDC/网关通信状态",
+    }
+
+
 def _fallback_sensor_display_step_plan(
     *,
     work_order: WorkOrder,
     rag_refs: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     issue = _as_text(work_order.issue_description, limit=160) or "传感器/显示偏差异常"
+    device = _as_text(work_order.device_id, limit=120) or "目标测点/设备"
+    building = _as_text(work_order.building_id, limit=120) or "现场区域"
+    focus = _infer_sensor_measurement_focus(work_order)
     return {
         "guide_version": 1,
-        "summary": f"这张工单更像传感器/显示/计量偏差类异常：{issue}。先确认现场真实现象和就地读数，再判断是传感器本体、安装接线、通信链路，还是系统显示/映射问题。",
+        "summary": (
+            f"这张工单更像{focus['label']}传感器/显示/计量偏差：{issue}。"
+            f"建议先在 {building} 锁定 {device}，用独立参考读数复核偏差，再按工况、安装、信号链路和系统映射分流处理。"
+        ),
         "root_cause_candidates": [
             {
-                "name": "现场读数与系统显示不一致",
+                "name": f"{focus['label']}现场工况本身异常",
                 "confidence": "medium",
-                "evidence": ["这类工单的第一步通常是就地核读数，而不是先改参数"],
+                "evidence": [
+                    f"如果独立参考读数也异常，需要先按实际工况处理，而不是直接认定 {device} 失准"
+                ],
             },
             {
-                "name": "传感器外观、安装或接线异常",
+                "name": "传感器安装、接触或取样条件导致偏差",
                 "confidence": "medium",
-                "evidence": ["传感器偏差常见于松动、污染、安装位置不当、保温破损或接线异常"],
+                "evidence": [
+                    f"需现场检查{focus['installation_check']}，这些问题会让读数和真实工况脱节"
+                ],
             },
             {
-                "name": "通信链路或点位映射异常",
+                "name": "信号、量程或点位映射异常",
                 "confidence": "low",
-                "evidence": ["如果现场读数和传感器状态正常，但系统仍不一致，需要转系统侧核验信号链路或映射"],
+                "evidence": [
+                    "如果现场参考读数与传感器一致，但系统显示不同，应转自控侧核验信号、量程、倍率、通信和点位映射"
+                ],
             },
         ],
         "steps": [
             {
                 "id": "step_1",
-                "title": "确认现场真实现象和就地读数",
-                "instruction": "先到现场确认实际温度、压力、流量或状态是否真的异常，优先看就地温度表、设备面板或明显现象，不要先信系统显示。",
-                "reason": "这类工单先要分清是现场真异常，还是系统读数不可信。",
-                "expected_result": "得到现场实测或就地可见读数，并判断异常是否真实存在。",
-                "risk_note": "在还没核清现场读数前，不要先调参数或直接更换部件。",
+                "title": "锁定测点和现场安全边界",
+                "instruction": f"到 {building} 后先核对 {device} 的测点标签、设备编号和工单对象是否一致；查看周边是否有漏水、结露、带电外露、异味或明显机械风险，能拍照时先拍测点全景和标签。",
+                "reason": "先确认没有走错对象，也避免在未确认安全边界时拆盖、碰线或改参数。",
+                "expected_result": f"确认本次要查的是 {device}，并留下测点位置、标签和现场环境的基础记录。",
+                "risk_note": "未确认作业授权前，不要打开电控箱、拆接线或触碰带电端子。",
                 "requires_photo": True,
                 "status": "pending",
             },
             {
                 "id": "step_2",
-                "title": "记录现场与系统的差异",
-                "instruction": "把现场读数、系统显示值、查看时间和位置一起记录下来，方便后续判断差异是持续的还是偶发的。",
-                "reason": "只有把差异记录清楚，后面才能判断是传感器、通信还是显示映射问题。",
-                "expected_result": "形成一组可比对的现场事实和系统信息。",
-                "risk_note": "记录时尽量注明位置、设备和时间，避免后面混淆对象。",
+                "title": "用独立参考读数复核偏差",
+                "instruction": f"用{focus['local_reference']}复核一次，同时记录系统显示值、现场参考读数、单位、查看时间和设备运行状态；偏差明显时重复测一次，避免读表角度或瞬时波动造成误判。",
+                "reason": "先把系统值、传感器值和独立参考值放在同一时间点比较，才能判断偏差来自现场工况、传感器还是采集链路。",
+                "expected_result": "得到一组可比对记录：系统显示、现场参考读数、单位、时间、设备状态和偏差方向。",
+                "risk_note": "在读数未复核前，不要先改量程、改系数、复位报警或更换传感器。",
                 "requires_photo": True,
                 "status": "pending",
             },
             {
                 "id": "step_3",
-                "title": "检查传感器外观、安装和接线迹象",
-                "instruction": "检查传感器是否松动、污染、遮挡、保温破损、安装位置异常或接线明显松脱，查看有没有离线、断线或供电异常的直接迹象。",
-                "reason": "这一步可以快速发现很多不需要深度拆检的基础问题。",
-                "expected_result": "发现直接可见的安装/接线问题，或确认外观未见明显异常。",
-                "risk_note": "涉及开盖、拆线或电气测量时，先按现场授权和规程执行。",
+                "title": "判断读数是否由真实工况造成",
+                "instruction": f"结合{focus['process_check']}判断现场工况是否足以解释该读数。若参考读数也异常，先按设备、水路、风路或负载问题处理；若工况正常但系统/传感器读数异常，再继续查测点链路。",
+                "reason": "很多“读数异常”其实是泵阀、风机、负载或流动条件异常，不能跳过工况直接修传感器。",
+                "expected_result": "形成分流结论：真实工况异常，或工况正常但测点/系统显示不可信。",
+                "risk_note": "不要用单个系统读数直接判定设备故障，先看现场运行条件是否匹配。",
                 "requires_photo": False,
                 "status": "pending",
             },
             {
                 "id": "step_4",
-                "title": "判断是否需要系统侧协同核验",
-                "instruction": "如果现场读数正常、传感器外观也正常，但系统仍显示异常，把差异事实和照片发给维小修，再请自控侧核验通信链路、点位映射或采集配置。",
-                "reason": "这时问题重点很可能已经不在现场传感器本体，而在系统侧。",
-                "expected_result": "形成清晰的继续维修或协同核验结论。",
-                "risk_note": "不要让一线维修人员先自己去查 DDC 点位或改采集参数。",
+                "title": "检查传感器安装和取样条件",
+                "instruction": f"检查{focus['installation_check']}；发现可见松动、污染、遮挡、保温破损或取样条件异常时，按现场规程先恢复外部条件，并保留处理前后的照片。",
+                "reason": "安装位置、接触状态和取样条件会直接影响读数，是最常见、也最适合现场先排除的原因。",
+                "expected_result": "明确是否存在可见安装/取样问题；能现场恢复的，记录恢复动作和恢复后的读数变化。",
+                "risk_note": "涉及开盖、拆线、校准或更换时，先确认授权；不具备条件就转协同。",
                 "requires_photo": True,
+                "status": "pending",
+            },
+            {
+                "id": "step_5",
+                "title": "按读数关系决定维修或协同",
+                "instruction": f"在授权范围内检查{focus['signal_check']}。若现场参考读数与传感器读数差异大，建议校准或更换传感器；若两者接近但系统显示不同，请求自控侧核验点位映射、量程/倍率、采集配置和通信链路。",
+                "reason": "最后一步要把现场维修和系统侧问题分开，避免一线人员盲目改 DDC 参数或反复更换好传感器。",
+                "expected_result": "形成明确结论：继续现场维修、校准/更换传感器，或发起自控协同并附上读数对比证据。",
+                "risk_note": "不要越权修改 DDC 点位、量程、倍率或采集参数；系统侧调整应由自控/管理侧处理。",
+                "requires_photo": False,
                 "status": "pending",
             },
         ],
         "safety_notes": [
-            "先核实现场读数，再决定是不是系统显示问题。",
-            "传感器拆装、校准、电气测量等动作按现场规程和授权执行。",
+            "读数偏差类工单先做独立复核和工况分流，再决定是否动传感器或系统参数。",
+            "传感器拆装、校准、电气测量、DDC 参数调整等动作必须按现场规程和授权执行。",
         ],
         "rag_refs": rag_refs or [],
     }
@@ -1107,6 +1188,7 @@ async def _generate_plan_with_model(
         "必须只输出合法 JSON 对象，不要输出 Markdown，不要输出思考过程。"
         "步骤必须基于工单上下文、异常证据、相似工单和可用知识库内容自主判断，不要套用固定模板。"
         "优先给非侵入式、可观察、可记录的现场检查步骤。"
+        "每一步都要落到现场可做的动作，写清查看对象、记录字段和分流条件；不要只写“确认、记录、判断”这类空泛动作。"
         "第一步优先确认现场是否真的存在异常，再判断是设备问题、传感器问题，还是系统显示/排程问题。"
         "不要让维修人员一上来就去查 BA/DDC 点位、节假日日历、排程表或模式参数；"
         "如果怀疑排程/日历/模式识别异常，先让维修人员确认现场是否真的在使用，再把更深的系统核验表述为请自控/管理侧协助。"
@@ -1149,6 +1231,7 @@ async def _generate_plan_with_model(
             "如果怀疑模式/排程问题，维修人员只需要确认现场是否真的在使用；更深的节假日表、时间同步、排程配置核验，应写成后续协同或自控侧检查。",
             "不要把“今天是不是节假日”写成维修人员自己要判断的任务；可以写成“确认现场是否在正常使用”。",
             "每个步骤都要说明为什么这样查，以及完成后维修人员应该告诉 AI 什么事实。",
+            "不要把“确认现场现象、记录差异、检查外观、判断协同”拆成空步骤；要写出具体看哪个仪表/部位、记录哪些字段、出现哪种结果后走哪条分支。",
             "高风险操作必须表述为升级/协同/由有资质人员执行。",
             "不要使用“唯一可靠依据”“必须拆开检查”这类绝对化表述。",
             *[_as_text(item, limit=240) for item in profile_generation_rules if _as_text(item, limit=240)],
@@ -1242,6 +1325,87 @@ def _fallback_guidance_reply(
     }
 
 
+def _extract_plan_experience_recommendations(plan: WorkerAiStepPlan) -> list[dict[str, Any]]:
+    generated_from = _json_loads(plan.generated_from_json, {})
+    recommendations = generated_from.get("experience_recommendations")
+    if not isinstance(recommendations, list):
+        return []
+    normalized: list[dict[str, Any]] = []
+    for item in recommendations:
+        if not isinstance(item, dict):
+            continue
+        next_item = dict(item)
+        contributor = resolve_experience_source_contributor_name(next_item)
+        if contributor:
+            next_item["source_contributor_name"] = contributor
+        normalized.append(next_item)
+    return normalized
+
+
+def _format_confidence(value: Any) -> str | None:
+    try:
+        confidence = float(value)
+    except (TypeError, ValueError):
+        return None
+    if confidence <= 0:
+        return None
+    return f"{confidence:.2f}"
+
+
+def _build_experience_reference_reply(
+    recommendations: list[dict[str, Any]],
+) -> dict[str, Any]:
+    if not recommendations:
+        return {
+            "answer": "这张单当前没有召回到可直接参考的历史经验。先按眼前步骤把现场事实补齐，后续你的处理记录也会沉淀进经验库。",
+            "suggested_step_status": "pending",
+            "suggested_next_message": "先补充当前读数、现场状态或报警信息。",
+            "suggested_followups": ["当前现场读数是什么？", "有没有报警或状态灯？"],
+            "safety_level": "normal",
+        }
+
+    lines = [f"有，当前按这张工单召回到 {len(recommendations)} 条经验，只能当参考，不要直接当结论："]
+    safety_notes: list[str] = []
+    conflict_notes: list[str] = []
+    for index, item in enumerate(recommendations[:3], start=1):
+        text = _as_text(item.get("organized_text"), limit=220) or "经验内容缺失"
+        source = _as_text(item.get("source_work_order_id"), limit=64)
+        contributor = resolve_experience_source_contributor_name(item)
+        experience_label = f"{contributor}的经验" if contributor else "经验"
+        confidence = _format_confidence(item.get("confidence"))
+        meta_parts = []
+        if source:
+            meta_parts.append(f"来源工单 {source}")
+        if confidence:
+            meta_parts.append(f"匹配 {confidence}")
+        helpful_count = item.get("helpful_count")
+        if helpful_count is not None:
+            try:
+                meta_parts.append(f"有用 {int(helpful_count)}")
+            except (TypeError, ValueError):
+                pass
+        suffix = f"（{'，'.join(meta_parts)}）" if meta_parts else ""
+        lines.append(f"{index}. {experience_label}：{text}{suffix}")
+        safety_notes.extend(_as_text(note, limit=160) for note in (item.get("safety_notes") or []) if _as_text(note, limit=160))
+        for flag in item.get("conflict_flags") or []:
+            if isinstance(flag, dict):
+                message = _as_text(flag.get("message"), limit=160)
+                if message:
+                    conflict_notes.append(message)
+    if safety_notes:
+        lines.append(f"安全注意：{safety_notes[0]}")
+    if conflict_notes:
+        lines.append(f"采纳前要留意：{conflict_notes[0]}")
+    lines.append("现场还是按当前步骤先核实真实状态和关键读数，再决定是否采纳其中的处理思路。")
+    return {
+        "answer": "\n".join(lines),
+        "suggested_step_status": "pending",
+        "suggested_next_message": "先按当前步骤补充现场读数、状态和报警信息。",
+        "suggested_followups": ["先看哪位师傅的经验？", "当前读数和经验里的场景是否一致？"],
+        "safety_level": "normal",
+    }
+
+
 async def _generate_guidance_reply_with_model(
     *,
     message: str,
@@ -1250,6 +1414,7 @@ async def _generate_guidance_reply_with_model(
     steps: list[dict[str, Any]],
     current_step: dict[str, Any] | None,
     recent_events: list[dict[str, Any]],
+    experience_recommendations: list[dict[str, Any]],
 ) -> dict[str, Any] | None:
     provider = get_model_provider()
     if provider is None:
@@ -1267,6 +1432,10 @@ async def _generate_guidance_reply_with_model(
         "可以建议调整步骤顺序，但不能自动替用户完成步骤或改变工单状态。"
         "不要编造未提供的读数、阈值、维保记录、证书、法规编号或设备铭牌参数。"
         "不要编造教室号、房间号、楼层、BA 工作站位置、百分比、时间差、温度值、运行画面细节或具体控制点名称，除非这些信息已在输入里明确给出。"
+        "如果用户问经验、历史参考或类似问题怎么处理，必须只基于输入里的 experience_recommendations 作答；"
+        "组织经验回答时，要优先写成“王工的经验”“刘工的经验”这类来源口径；"
+        "提醒风险时说“采纳前要留意”，不要使用其他来源提示口径。"
+        "没有经验记录时要直接说明没有召回到，不要编造历史经验。"
         "必须只输出合法 JSON 对象，不要输出 Markdown，不要输出思考过程。"
     )
     user_prompt = {
@@ -1280,6 +1449,7 @@ async def _generate_guidance_reply_with_model(
             "steps": _build_steps_for_guidance_model(steps),
         },
         "current_step": _build_current_step_for_guidance_model(current_step),
+        "experience_recommendations": experience_recommendations,
         "recent_progress": _summarize_recent_guidance_progress(recent_events),
         "output_schema": {
             "answer": "string",
@@ -1296,6 +1466,7 @@ async def _generate_guidance_reply_with_model(
             "如果现场描述明显比当前步骤更紧急，可以说明先临时切到更安全/更相关的检查。",
             "需要协同时只建议维修人员说“请求协同，因为...”，不要替他提交。",
             "如果信息不足，问 1 到 3 个关键澄清问题。",
+            "回答经验参考时，按“某工的经验：具体内容（来源工单、匹配度）”组织；不要说系统有经验但不展开。",
         ],
     }
     try:
@@ -1324,7 +1495,7 @@ def _is_guidance_ready(work_order: WorkOrder, dispatch_task: DispatchTask | None
 
 
 def serialize_step_plan(plan: WorkerAiStepPlan, *, guidance_ready: bool = True) -> dict[str, Any]:
-    generated_from = _json_loads(plan.generated_from_json, {})
+    experience_recommendations = _extract_plan_experience_recommendations(plan)
     return {
         "plan_id": plan.id,
         "ticket_id": None,
@@ -1335,12 +1506,50 @@ def serialize_step_plan(plan: WorkerAiStepPlan, *, guidance_ready: bool = True) 
         "root_cause_candidates": _json_loads(plan.root_cause_candidates_json, []),
         "steps": _json_loads(plan.steps_json, []),
         "safety_notes": _json_loads(plan.safety_notes_json, []),
-        "experience_recommendations": generated_from.get("experience_recommendations", []),
+        "experience_recommendations": experience_recommendations,
         "model_provider": plan.model_provider,
         "model_name": plan.model_name,
         "guidance_ready": guidance_ready,
         "updated_at": plan.updated_at.isoformat() if plan.updated_at else None,
     }
+
+
+def _plan_template_version(plan: WorkerAiStepPlan) -> int:
+    generated_from = _json_loads(plan.generated_from_json, {})
+    if not isinstance(generated_from, dict):
+        return 0
+    try:
+        return int(generated_from.get("template_version") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _plan_has_worker_progress(plan: WorkerAiStepPlan) -> bool:
+    steps = _json_loads(plan.steps_json, [])
+    if not isinstance(steps, list):
+        return False
+    for step in steps:
+        if not isinstance(step, dict):
+            continue
+        if step.get("status") not in (None, "pending"):
+            return True
+        if _as_text(step.get("note"), limit=20):
+            return True
+    return False
+
+
+async def _should_refresh_existing_step_plan(db: AsyncSession, plan: WorkerAiStepPlan) -> bool:
+    if _plan_template_version(plan) >= GUIDANCE_TEMPLATE_VERSION:
+        return False
+    if _plan_has_worker_progress(plan):
+        return False
+    event_result = await db.execute(
+        select(WorkerAiStepEvent.id)
+        .where(WorkerAiStepEvent.plan_id == plan.id)
+        .where(WorkerAiStepEvent.event_type != "generate")
+        .limit(1)
+    )
+    return event_result.first() is None
 
 
 async def get_or_create_worker_step_plan(
@@ -1370,24 +1579,30 @@ async def get_or_create_worker_step_plan(
     )
     existing = existing_result.scalar_one_or_none()
     guidance_ready = _is_guidance_ready(work_order, dispatch_task)
-    if existing is not None or not auto_generate:
-        if existing is None:
-            return {
-                "ticket_id": work_order.ticket_id,
-                "dispatch_id": getattr(dispatch_task, "id", dispatch_id),
-                "plan_id": None,
-                "status": "not_generated",
-                "plan_version": 0,
-                "summary": "开始处理后，维小修会接入现场维修指导。",
-                "root_cause_candidates": [],
-                "steps": [],
-                "safety_notes": [],
-                "experience_recommendations": [],
-                "guidance_ready": guidance_ready,
-            }
+    should_refresh_existing = (
+        existing is not None
+        and auto_generate
+        and guidance_ready
+        and await _should_refresh_existing_step_plan(db, existing)
+    )
+    if existing is not None and not should_refresh_existing:
         serialized = serialize_step_plan(existing, guidance_ready=guidance_ready)
         serialized["ticket_id"] = work_order.ticket_id
         return serialized
+    if existing is None and not auto_generate:
+        return {
+            "ticket_id": work_order.ticket_id,
+            "dispatch_id": getattr(dispatch_task, "id", dispatch_id),
+            "plan_id": None,
+            "status": "not_generated",
+            "plan_version": 0,
+            "summary": "开始处理后，维小修会接入现场维修指导。",
+            "root_cause_candidates": [],
+            "steps": [],
+            "safety_notes": [],
+            "experience_recommendations": [],
+            "guidance_ready": guidance_ready,
+        }
 
     if not guidance_ready:
         return {
@@ -1404,7 +1619,13 @@ async def get_or_create_worker_step_plan(
             "guidance_ready": False,
         }
 
+    if existing is not None and should_refresh_existing:
+        existing.status = SUPERSEDED_PLAN_STATUS
+        existing.updated_at = datetime.now(timezone.utc)
+        await db.flush()
+
     context = await _load_context(db, work_order=work_order)
+    context["workflow_profile"] = _build_workflow_profile(work_order, context=context)
     rag_refs, rag_reranked, rag_error = await _retrieve_manual_context(work_order)
     experience_recommendations = await retrieve_experience_recommendations_for_work_order(
         db,
@@ -1429,6 +1650,7 @@ async def get_or_create_worker_step_plan(
         dispatch_id=getattr(dispatch_task, "id", dispatch_id),
         generated_from_json=json.dumps(
             {
+                "template_version": GUIDANCE_TEMPLATE_VERSION,
                 "context": context,
                 "rag_refs": rag_refs,
                 "experience_recommendations": experience_recommendations,
@@ -1552,8 +1774,12 @@ async def handle_worker_guidance_chat(
 
     context = await _load_context(db, work_order=work_order)
     context["workflow_profile"] = _build_workflow_profile(work_order, context=context)
+    experience_recommendations = _extract_plan_experience_recommendations(plan)
     fallback = _fallback_guidance_reply(message=text, work_order=work_order, current_step=current_step)
-    if _looks_like_ddc_help_request(text):
+    if looks_like_experience_query(text):
+        model_reply = None
+        reply = _sanitize_guidance_reply(_build_experience_reference_reply(experience_recommendations))
+    elif _looks_like_ddc_help_request(text):
         model_reply = None
         reply = _sanitize_guidance_reply(_build_ddc_help_reply(current_step))
     else:
@@ -1564,6 +1790,7 @@ async def handle_worker_guidance_chat(
             steps=steps,
             current_step=current_step,
             recent_events=recent_events,
+            experience_recommendations=experience_recommendations,
         )
         reply = _sanitize_guidance_reply(_normalize_guidance_reply(model_reply, fallback=fallback))
     settings = get_settings()

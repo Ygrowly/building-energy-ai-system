@@ -6,7 +6,7 @@ incident/work order, and clear relevant caches so the information center can
 pick up:
 
 - recent anomalies +1 when the injected timestamp falls inside the current
-  `/api/anomalies/recent?hours=168` window
+  `/api/anomalies/recent?hours=240` window
 - pending-review work order dynamics +1
 
 Usage:
@@ -79,6 +79,7 @@ from app.services.incident_service import create_or_merge_alert_incident
 
 DEFAULT_BUILDING_ID = "Fox_office_Alice"
 DEFAULT_DEVICE_KIND = "ac"
+DEFAULT_RECENT_ANOMALY_WINDOW_HOURS = 240
 DEVICE_KIND_CHOICES = ("ac", "electricity", "water")
 DEFAULT_RULE_BY_DEVICE_KIND = {
     "ac": "flag_hvac_energy",
@@ -150,8 +151,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--hours",
         type=int,
-        default=168,
-        help="Recent anomaly window used by the information center. Default: 168 hours",
+        default=DEFAULT_RECENT_ANOMALY_WINDOW_HOURS,
+        help="Recent anomaly window used by the information center. Default: 240 hours",
     )
     parser.add_argument(
         "--severity",

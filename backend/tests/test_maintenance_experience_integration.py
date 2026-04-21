@@ -47,6 +47,39 @@ def test_serialize_step_plan_includes_experience_recommendations():
     assert serialized["experience_recommendations"][0]["confidence"] == 0.86
 
 
+def test_serialize_step_plan_enriches_legacy_experience_source_contributor():
+    plan = SimpleNamespace(
+        id="plan-1",
+        dispatch_id="dispatch-1",
+        status="active",
+        version=2,
+        summary="先核对现场温度表。",
+        root_cause_candidates_json="[]",
+        steps_json="[]",
+        safety_notes_json="[]",
+        generated_from_json=json.dumps(
+            {
+                "experience_recommendations": [
+                    {
+                        "experience_id": "exp-1",
+                        "source_work_order_id": "WO-20260403-001",
+                        "organized_text": "先核对现场温度表。",
+                        "confidence": 0.86,
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        model_provider="local_fallback",
+        model_name="local_template",
+        updated_at=datetime.now(timezone.utc),
+    )
+
+    serialized = serialize_step_plan(plan)
+
+    assert serialized["experience_recommendations"][0]["source_contributor_name"] == "王工"
+
+
 def test_looks_like_experience_query_matches_history_questions():
     assert looks_like_experience_query("最近有哪些供水温度偏离的经验？") is True
     assert looks_like_experience_query("这张工单当前是谁在处理？") is False
@@ -61,7 +94,7 @@ async def test_operator_ai_experience_query_returns_experience_summary(monkeypat
     monkeypatch.setattr(operator_ai_service, "_append_message", AsyncMock())
     mock_answer = AsyncMock(
         return_value={
-            "answer": "最近的相关经验如下：\n1. 先核对现场温度表（来源 WO-20260403-005，匹配 0.86，引用 3，有用 2，启用）",
+            "answer": "最近的相关经验如下：\n1. 王工的经验：先核对现场温度表（来源 WO-20260403-005，匹配 0.86，复用 3，有用 2，启用）",
             "facts": {"items": [{"id": "exp-1"}]},
             "evidence_refs": ["maintenance_experiences"],
             "suggested_followups": ["查看某条经验的来源工单"],

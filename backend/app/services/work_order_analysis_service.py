@@ -8,6 +8,7 @@ from typing import Any
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.person_name import format_person_display_name, replace_person_names_in_text
 from app.core.time_context import get_today
 from app.db.models import (
     DispatchHallEntry,
@@ -568,7 +569,7 @@ async def _load_dispatch_rows(
                 "closed_at": record[14],
                 "finish_deadline_at": record[15],
                 "timeout_level": record[16],
-                "latest_note": record[17],
+                "latest_note": replace_person_names_in_text(record[17]),
                 "ticket_id": record[18],
                 "building_id": record[19],
                 "issue_description": record[20],
@@ -1424,10 +1425,10 @@ def _experience_usage_payload(question: str, scope: dict[str, Any], experience_r
         "question": question,
         "intent": "experience_usage_analysis",
         "readonly": True,
-        "answer": f"{scope['date_label']}内，引用最多的经验记录被使用 {top['usage_count']} 次，来源工单为 {top['source_work_order_id'] or '未记录'}。",
+        "answer": f"{scope['date_label']}内，复用最多的经验记录被使用 {top['usage_count']} 次，来源工单为 {top['source_work_order_id'] or '未记录'}。",
         "facts": {
             "scope": scope,
-            "claims": _claims((f"来源工单 {top['source_work_order_id'] or top['experience_id']} 的经验被引用 {top['usage_count']} 次。", ["metrics.rows[0].usage_count"])),
+            "claims": _claims((f"来源工单 {top['source_work_order_id'] or top['experience_id']} 的经验被复用 {top['usage_count']} 次。", ["metrics.rows[0].usage_count"])),
             "rows": rows[:10],
         },
         "metrics": {
@@ -1439,13 +1440,13 @@ def _experience_usage_payload(question: str, scope: dict[str, Any], experience_r
         },
         "chart": {
             "type": "bar",
-            "title": f"{scope['date_label']}经验引用排行",
+            "title": f"{scope['date_label']}经验复用排行",
             "source": "work_order_insights.experience_usage_analysis",
             "x": [str(item["source_work_order_id"] or item["experience_id"]) for item in rows[:6]],
-            "series": [{"name": "引用次数", "data": [item["usage_count"] for item in rows[:6]]}],
+            "series": [{"name": "复用次数", "data": [item["usage_count"] for item in rows[:6]]}],
         },
         "evidence_refs": ["maintenance_experiences", "maintenance_experience_usage_logs"],
-        "suggested_followups": ["查看最近被引用的经验", "查看哪些工单用了经验推荐", "查看低帮助率经验"],
+        "suggested_followups": ["查看最近被复用的经验", "查看哪些工单用了经验推荐", "查看低帮助率经验"],
     }
 
 

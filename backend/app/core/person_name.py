@@ -55,6 +55,25 @@ _FALLBACK_SURNAMES: tuple[str, ...] = (
     "罗",
     "梁",
 )
+_COMMON_SINGLE_SURNAMES: frozenset[str] = frozenset(
+    (
+        *_FALLBACK_SURNAMES,
+        "钱", "冯", "褚", "卫", "蒋", "沈", "韩", "杨", "朱", "秦",
+        "许", "何", "吕", "施", "孔", "曹", "严", "华", "金", "魏",
+        "陶", "姜", "戚", "谢", "邹", "喻", "苏", "潘", "葛", "范",
+        "彭", "郎", "鲁", "韦", "马", "苗", "方", "俞", "任", "袁",
+        "柳", "鲍", "史", "唐", "费", "薛", "雷", "贺", "倪", "汤",
+        "殷", "罗", "毕", "郝", "邬", "安", "常", "乐", "于", "时",
+        "傅", "皮", "卞", "齐", "康", "伍", "元", "顾", "孟", "平",
+        "穆", "萧", "尹", "姚", "邵", "湛", "汪", "祁", "毛", "狄",
+        "成", "戴", "茅", "庞", "纪", "舒", "屈", "项", "祝", "董",
+        "杜", "阮", "蓝", "闵", "席", "季", "麻", "贾", "路", "童",
+        "颜", "郭", "梅", "盛", "钟", "徐", "邱", "高", "夏", "蔡",
+        "田", "樊", "胡", "凌", "霍", "万", "柯", "卢", "莫", "房",
+        "丁", "宣", "邓", "洪", "包", "左", "石", "崔", "程", "陆",
+        "荣", "翁", "荀", "羊", "欧",
+    )
+)
 
 _PERSON_NAME_KEYS: frozenset[str] = frozenset(
     {
@@ -75,6 +94,7 @@ _PERSON_NAME_KEYS: frozenset[str] = frozenset(
 
 _CJK_RE = re.compile(r"[\u4e00-\u9fff]")
 _ENGINEER_ALIAS_RE = re.compile(r"^[\u4e00-\u9fff]{1,2}工$")
+_ENGINEER_ALIAS_CANDIDATE_RE = re.compile(r"(?=([\u4e00-\u9fff]{1,2}工))")
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
@@ -108,6 +128,34 @@ def format_person_display_name(name: str | None) -> str | None:
     if _IDENTIFIER_RE.fullmatch(normalized):
         return _fallback_alias(normalized)
     return _fallback_alias(normalized)
+
+
+def looks_like_person_display_name(name: str | None) -> bool:
+    normalized = _normalize_text(name)
+    if not normalized:
+        return False
+    if normalized in _DEMO_PERSON_ALIAS_OVERRIDES.values():
+        return True
+    if not _ENGINEER_ALIAS_RE.fullmatch(normalized):
+        return False
+
+    surname = normalized[:-1]
+    if surname in _COMPOUND_SURNAMES:
+        return True
+    return len(surname) == 1 and surname in _COMMON_SINGLE_SURNAMES
+
+
+def extract_person_display_aliases(text: str | None) -> list[str]:
+    normalized = _normalize_text(text)
+    if not normalized:
+        return []
+
+    matches = [
+        match.group(1)
+        for match in _ENGINEER_ALIAS_CANDIDATE_RE.finditer(normalized)
+    ]
+    aliases = [item for item in matches if looks_like_person_display_name(item)]
+    return list(dict.fromkeys(aliases))
 
 
 def replace_person_names_in_text(text: str | None) -> str | None:

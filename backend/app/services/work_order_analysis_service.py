@@ -185,6 +185,13 @@ def _building_label(value: str | None) -> str:
     return str(value or "全部楼宇")
 
 
+def _person_label(value: str | None, fallback: str = "未分配") -> str:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return fallback
+    return format_person_display_name(normalized) or normalized
+
+
 def _status_label(value: str | None) -> str:
     normalized = str(value or "").strip().lower()
     return _STATUS_LABELS.get(normalized, value or "未知状态")
@@ -576,7 +583,7 @@ async def _load_dispatch_rows(
                 "priority": record[21],
                 "work_order_status": record[22],
                 "work_order_created_at": record[23],
-                "worker_name": record[24] or record[6] or "未分配",
+                "worker_name": _person_label(record[24]),
                 "team_name": record[25] or "未分组",
             }
         )
@@ -667,7 +674,7 @@ async def _load_hall_rows(
             "created_at": created_at,
             "ticket_id": ticket_id,
             "building_id": building_id,
-            "worker_name": worker_name or worker_id or "未分配",
+            "worker_name": _person_label(worker_name),
             "team_name": team_name or "未分组",
         }
         for hall_entry_id, work_order_id, entry_type, status, reason, support_reason, sla_stage, overdue_level, worker_id, team_id, created_at, ticket_id, building_id, worker_name, team_name in result.all()
@@ -953,11 +960,12 @@ def _worker_performance_payload(
     grouped: dict[str, dict[str, Any]] = {}
     for row in dispatch_rows:
         key = str(row.get("worker_id") or row.get("worker_name") or "unassigned")
+        worker_name = _person_label(row.get("worker_name"))
         target = grouped.setdefault(
             key,
             {
                 "worker_id": row.get("worker_id"),
-                "worker_name": row.get("worker_name") or "未分配",
+                "worker_name": worker_name,
                 "team_name": row.get("team_name") or "未分组",
                 "assigned_count": 0,
                 "completed_count": 0,

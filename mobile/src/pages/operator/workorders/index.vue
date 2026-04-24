@@ -1856,6 +1856,14 @@ onMounted(loadData)
   overflow-x: auto;
   padding: 0 0 18rpx;
   white-space: nowrap;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.track-filter-row::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
 }
 
 .track-filter-row--secondary {

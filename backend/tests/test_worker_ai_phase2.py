@@ -288,11 +288,11 @@ def test_worker_ai_phase2_experience_reference_reply_handles_empty_results():
 
 
 def test_worker_ai_phase2_experience_source_contributor_demo_override():
-    assert resolve_experience_source_contributor_name({"source_work_order_id": "WO-20260403-001"}) == "王工"
-    assert resolve_experience_source_contributor_name({"source_work_order_id": "WO-20260403-002"}) == "刘工"
+    assert resolve_experience_source_contributor_name({"source_work_order_id": "WO-20260403-001"}) == "刘工"
+    assert resolve_experience_source_contributor_name({"source_work_order_id": "WO-20260403-002"}) == "王工"
     assert (
         resolve_experience_source_contributor_name(
-            {"source_work_order_id": "WO-20260403-002", "source_contributor_name": "王工"}
+            {"source_work_order_id": "WO-20260403-001", "source_contributor_name": "王工"}
         )
         == "刘工"
     )
@@ -304,7 +304,7 @@ def test_worker_ai_phase2_experience_reference_reply_corrects_stale_contributor(
             {
                 "experience_id": "exp-1",
                 "source_work_order_id": "WO-20260403-002",
-                "source_contributor_name": "王工",
+                "source_contributor_name": "刘工",
                 "organized_text": "公共楼供回水温差大时先查阀门开度。",
                 "confidence": 0.43,
             },
@@ -318,8 +318,9 @@ def test_worker_ai_phase2_experience_reference_reply_corrects_stale_contributor(
         ]
     )
 
-    assert "1. 刘工的经验" in reply["answer"]
-    assert "2. 王工的经验" in reply["answer"]
+    assert "1. 王工的经验" in reply["answer"]
+    assert "2. 刘工的经验" in reply["answer"]
+    assert "真实的现场图片" in reply["answer"]
 
 
 @pytest.mark.asyncio

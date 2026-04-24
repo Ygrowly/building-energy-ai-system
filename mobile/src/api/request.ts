@@ -1,4 +1,5 @@
 import { clearAuthRuntimeState } from '../utils/auth-session'
+import { clearCache, clearCacheByPrefix, getStaleCache, setCache } from '../utils/cache'
 
 /**
  * 统一请求封装
@@ -45,6 +46,7 @@ function clearStoredAuth() {
   uni.removeStorageSync('access_token')
   uni.removeStorageSync('refresh_token')
   uni.removeStorageSync('user_info')
+  clearCache()
 }
 
 async function clearRuntimeAuthState() {
@@ -114,12 +116,73 @@ export async function refreshAccessToken(): Promise<string | null> {
 
 // ---- 核心请求函数 ----
 
+const REQUEST_CACHE_PREFIX = 'api:get:'
+const DEFAULT_REQUEST_STALE_TTL = 24 * 60 * 60 * 1000
+
+export interface RequestCacheOptions {
+  key?: string
+  staleTtl?: number
+  fallbackOnError?: boolean
+}
+
 export interface RequestOptions {
   url: string
   method?: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE'
   data?: unknown
   header?: Record<string, string>
   skipAuth?: boolean
+  cache?: false | RequestCacheOptions
+}
+
+interface NormalizedRequestCacheOptions {
+  key: string
+  staleTtl: number
+  fallbackOnError: boolean
+}
+
+function hashString(input: string): string {
+  let hash = 2166136261
+  for (let i = 0; i < input.length; i += 1) {
+    hash ^= input.charCodeAt(i)
+    hash = Math.imul(hash, 16777619)
+  }
+  return (hash >>> 0).toString(36)
+}
+
+function getCurrentUserCacheScope(skipAuth?: boolean): string {
+  if (skipAuth) return 'public'
+
+  const storedUser = uni.getStorageSync('user_info')
+  if (storedUser) {
+    try {
+      const user = typeof storedUser === 'string' ? JSON.parse(storedUser) : storedUser
+      const userKey = user?.id || user?.username || user?.email || user?.phone
+      if (userKey) return `user:${String(userKey)}`
+    } catch {
+      // fall through to token scope
+    }
+  }
+
+  const token = getToken()
+  return token ? `token:${hashString(token)}` : 'anonymous'
+}
+
+function buildRequestCacheKey(options: RequestOptions): string {
+  const scope = hashString(getCurrentUserCacheScope(options.skipAuth))
+  const route = hashString(`${BASE_URL}|${options.url}`)
+  return `${REQUEST_CACHE_PREFIX}${scope}:${route}`
+}
+
+function normalizeRequestCacheOptions(options: RequestOptions): NormalizedRequestCacheOptions | null {
+  const method = options.method || 'GET'
+  if (method !== 'GET' || options.cache === false) return null
+
+  const config = options.cache || {}
+  return {
+    key: config.key || buildRequestCacheKey(options),
+    staleTtl: config.staleTtl ?? DEFAULT_REQUEST_STALE_TTL,
+    fallbackOnError: config.fallbackOnError ?? true,
+  }
 }
 
 async function doRequest<T>(options: RequestOptions, retried = false): Promise<T> {
@@ -128,6 +191,7 @@ async function doRequest<T>(options: RequestOptions, retried = false): Promise<T
     redirectToLogin()
     throw new Error('未登录或登录已过期')
   }
+  const requestCache = normalizeRequestCacheOptions(options)
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     ...(options.header || {}),
@@ -143,6 +207,15 @@ async function doRequest<T>(options: RequestOptions, retried = false): Promise<T
       data: options.data,
       header: headers,
       success: async (res) => {
+        const resolveCachedFallback = (title: string) => {
+          if (!requestCache?.fallbackOnError) return false
+          const cached = getStaleCache<T>(requestCache.key, requestCache.staleTtl)
+          if (cached === null) return false
+          uni.showToast({ title, icon: 'none', duration: 2000 })
+          resolve(cached)
+          return true
+        }
+
         // ---- 401 自动续期 ----
         if (res.statusCode === 401 && !options.skipAuth && !retried) {
           if (!isRefreshing) {
@@ -191,15 +264,32 @@ async function doRequest<T>(options: RequestOptions, retried = false): Promise<T
           reject(new Error('权限不足'))
           return
         }
+        if (res.statusCode >= 500 && resolveCachedFallback('服务异常，已显示本地缓存')) {
+          return
+        }
         if (res.statusCode >= 400) {
           const msg = (res.data as any)?.detail || `请求失败 (${res.statusCode})`
           uni.showToast({ title: msg, icon: 'none', duration: 3000 })
           reject(new Error(msg))
           return
         }
-        resolve(res.data as T)
+        const data = res.data as T
+        if (requestCache) {
+          setCache(requestCache.key, data)
+        } else if ((options.method || 'GET') !== 'GET') {
+          clearCacheByPrefix(REQUEST_CACHE_PREFIX)
+        }
+        resolve(data)
       },
       fail(err) {
+        if (requestCache?.fallbackOnError) {
+          const cached = getStaleCache<T>(requestCache.key, requestCache.staleTtl)
+          if (cached !== null) {
+            uni.showToast({ title: '网络异常，已显示本地缓存', icon: 'none', duration: 2000 })
+            resolve(cached)
+            return
+          }
+        }
         uni.showToast({ title: '网络异常，请检查连接', icon: 'none' })
         reject(err)
       },
@@ -209,7 +299,11 @@ async function doRequest<T>(options: RequestOptions, retried = false): Promise<T
 
 // ---- 便捷方法 ----
 
-export function get<T = unknown>(url: string, params?: Record<string, unknown>): Promise<T> {
+export function get<T = unknown>(
+  url: string,
+  params?: Record<string, unknown>,
+  options: Pick<RequestOptions, 'cache' | 'header' | 'skipAuth'> = {},
+): Promise<T> {
   let fullUrl = url
   if (params) {
     const qs = Object.entries(params)
@@ -218,7 +312,13 @@ export function get<T = unknown>(url: string, params?: Record<string, unknown>):
       .join('&')
     if (qs) fullUrl += `?${qs}`
   }
-  return doRequest<T>({ url: fullUrl, method: 'GET' })
+  return doRequest<T>({
+    url: fullUrl,
+    method: 'GET',
+    header: options.header,
+    skipAuth: options.skipAuth,
+    cache: options.cache,
+  })
 }
 
 export function post<T = unknown>(url: string, data?: unknown): Promise<T> {

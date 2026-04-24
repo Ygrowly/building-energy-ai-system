@@ -37,8 +37,8 @@ EXPERIENCE_CACHE_PREFIX = "maintenance_experiences:"
 SEARCH_CACHE_TTL_SECONDS = 60
 MAX_TEXT_LENGTH = 4000
 DEMO_SOURCE_CONTRIBUTOR_BY_WORK_ORDER = {
-    "WO-20260403-001": "王工",
-    "WO-20260403-002": "刘工",
+    "WO-20260403-001": "刘工",
+    "WO-20260403-002": "王工",
 }
 UUIDISH_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",

@@ -1396,7 +1396,7 @@ def _build_experience_reference_reply(
         lines.append(f"安全注意：{safety_notes[0]}")
     if conflict_notes:
         lines.append(f"采纳前要留意：{conflict_notes[0]}")
-    lines.append("现场还是按当前步骤先核实真实状态和关键读数，再决定是否采纳其中的处理思路。")
+    lines.append("你可以给我拍一些真实的现场图片，比如管路、阀门、水泵或控制面板读数，我来帮你判断现场状态是否和这些经验一致，再决定是否采纳其中的处理思路。")
     return {
         "answer": "\n".join(lines),
         "suggested_step_status": "pending",

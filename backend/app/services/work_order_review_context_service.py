@@ -49,6 +49,47 @@ def _safe_load_json(raw: str | None) -> Any:
         return None
 
 
+_WORK_ORDER_STATUS_LABELS = {
+    "pending_review": "待审核",
+    "pending_dispatch": "待派单",
+    "auto_rejected": "自动驳回",
+    "dispatched": "已派单",
+    "completed": "已完工",
+    "false_alarm": "误报待复核",
+    "escalated": "已升级",
+    "closed": "已关闭",
+    "auto_approved": "自动审批通过",
+    "admin_override_approved": "管理员审批通过",
+    "admin_override_rejected": "管理员驳回",
+}
+
+_DISPATCH_STATUS_LABELS = {
+    "assigned": "待接单",
+    "accepted": "已接单",
+    "arrived": "已到场",
+    "processing": "处理中",
+    "waiting_support": "等待协同",
+    "completed": "已完成",
+    "cancelled": "已取消",
+    "rejected": "已拒单",
+    "transferred": "已转派",
+}
+
+_PRIORITY_LABELS = {
+    "critical": "紧急",
+    "high": "高",
+    "medium": "中",
+    "low": "低",
+}
+
+
+def _label(value: Any, mapping: dict[str, str]) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return "未记录"
+    return mapping.get(text, text)
+
+
 def serialize_review_audit_log(log_item: WorkOrderAuditLog) -> dict[str, Any]:
     return {
         "id": log_item.id,
@@ -174,15 +215,21 @@ def build_ai_context_summary(
     hall_entries: list[dict[str, Any]],
     risk_flags: list[dict[str, str]],
 ) -> str:
+    status_label = _label(work_order_data.get("status"), _WORK_ORDER_STATUS_LABELS)
+    priority_label = _label(work_order_data.get("priority"), _PRIORITY_LABELS)
     lines = [
-        f"工单 {work_order_data.get('ticket_id')} 当前状态为 {work_order_data.get('status')}，优先级为 {work_order_data.get('priority')}。",
+        f"工单 {work_order_data.get('ticket_id')} 当前状态为 {status_label}，优先级为 {priority_label}。",
         f"问题描述：{work_order_data.get('issue_description') or '未记录'}",
     ]
     if current_dispatch_data:
+        dispatch_status_label = _label(
+            current_dispatch_data.get("dispatch_status"),
+            _DISPATCH_STATUS_LABELS,
+        )
         lines.append(
             "当前派工："
             f"第 {current_dispatch_data.get('attempt_no')} 次，"
-            f"状态 {current_dispatch_data.get('dispatch_status')}，"
+            f"状态 {dispatch_status_label}，"
             f"责任人 {current_dispatch_data.get('assigned_to_name') or current_dispatch_data.get('assigned_to') or '未记录'}。"
         )
     else:

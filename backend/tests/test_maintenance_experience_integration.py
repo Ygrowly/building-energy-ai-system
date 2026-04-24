@@ -77,7 +77,7 @@ def test_serialize_step_plan_enriches_legacy_experience_source_contributor():
 
     serialized = serialize_step_plan(plan)
 
-    assert serialized["experience_recommendations"][0]["source_contributor_name"] == "王工"
+    assert serialized["experience_recommendations"][0]["source_contributor_name"] == "刘工"
 
 
 def test_looks_like_experience_query_matches_history_questions():

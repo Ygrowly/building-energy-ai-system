@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import re
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 
 from fastapi import HTTPException
@@ -14,11 +14,14 @@ from app.db.models import (
     AiAssistantMessage,
     AiAssistantSession,
     AiMediaAsset,
+    DispatchTask,
     User,
     WorkOrder,
+    WorkerTeam,
     WorkerAiStepEvent,
     WorkerAiStepPlan,
 )
+from app.core.person_name import extract_person_display_aliases, format_person_display_name
 from app.services.maintenance_experience_service import (
     build_operator_experience_answer,
     looks_like_experience_query,
@@ -32,12 +35,280 @@ from app.services.work_order_review_context_service import build_work_order_revi
 
 
 def _extract_ticket_id(text: str) -> str | None:
-    match = re.search(r"WO-\d{8}-\d{3,}", text or "", re.IGNORECASE)
-    return match.group(0).upper() if match else None
+    match = re.search(
+        r"(?<![A-Z0-9_])((?:WO(?:-[A-Z0-9]+)+)|(?:temp_[A-Z0-9_]+))(?![A-Z0-9_-])",
+        text or "",
+        re.IGNORECASE,
+    )
+    if not match:
+        return None
+    ticket_id = match.group(1)
+    if ticket_id.upper().startswith("WO-"):
+        return ticket_id.upper()
+    return ticket_id
+
+
+def _coerce_scope_date(value: Any) -> date | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value
+    if isinstance(value, datetime):
+        return value.date()
+    try:
+        return date.fromisoformat(str(value))
+    except ValueError:
+        return None
+
+
+def _looks_like_single_work_order_question(text: str) -> bool:
+    normalized = re.sub(r"\s+", "", text or "")
+    if not normalized:
+        return False
+    return any(
+        token in normalized
+        for token in (
+            "流程",
+            "全流程",
+            "过程",
+            "时间线",
+            "流转",
+            "链路",
+            "流转链路",
+            "完整链路",
+            "完整流转链路",
+            "到哪一步",
+            "谁接",
+            "责任人",
+            "谁处理",
+            "当前状态",
+            "状态",
+            "进度",
+            "超时",
+            "协同",
+            "改派",
+            "误报",
+            "为什么",
+            "为何",
+            "原因",
+        )
+    )
+
+
+def _looks_like_relative_work_order_query(text: str) -> bool:
+    normalized = re.sub(r"\s+", "", text or "")
+    if not normalized or not _looks_like_single_work_order_question(normalized):
+        return False
+    if any(token in normalized for token in ("统计", "汇总", "总结", "趋势", "报表", "排行", "排名", "多少单", "运营摘要")):
+        return False
+    relative_patterns = (
+        r"(最近|最新|最后)(生成|创建)?(?:(一张|一条))?的?工单",
+        r"(刚生成|刚创建|刚刚生成|刚刚创建)的?工单",
+    )
+    return any(re.search(pattern, normalized) for pattern in relative_patterns)
+
+
+def _looks_like_previous_work_order_followup(text: str) -> bool:
+    normalized = re.sub(r"\s+", "", text or "")
+    if not normalized or not _looks_like_single_work_order_question(normalized):
+        return False
+    return any(token in normalized for token in ("这张工单", "该工单", "这个工单", "这单", "该单", "这个单"))
+
+
+def _extract_person_aliases(text: str, scope: dict[str, Any] | None) -> list[str]:
+    aliases: list[str] = []
+    scoped_worker_name = str((scope or {}).get("worker_name") or "").strip()
+    if scoped_worker_name:
+        aliases.append(scoped_worker_name)
+        formatted = format_person_display_name(scoped_worker_name)
+        if formatted:
+            aliases.append(formatted)
+    aliases.extend(extract_person_display_aliases(text))
+    return list(dict.fromkeys(item for item in aliases if item))
+
+
+def _build_relative_scope_candidates(scope: dict[str, Any] | None) -> list[dict[str, Any]]:
+    base = dict(scope or {})
+    candidates: list[dict[str, Any]] = [base]
+
+    relaxed_time_scope = dict(base)
+    for key in ("date_from", "date_to", "date_label", "status", "work_order_status", "execution_status", "comparison_previous"):
+        relaxed_time_scope.pop(key, None)
+    if relaxed_time_scope != base:
+        candidates.append(relaxed_time_scope)
+
+    has_explicit_owner_or_location_filter = any(
+        str(base.get(key) or "").strip()
+        for key in ("building_id", "worker_id", "worker_name", "team_id", "team_name")
+    )
+    if not has_explicit_owner_or_location_filter:
+        candidates.append({})
+
+    deduped: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in candidates:
+        key = json.dumps(item, ensure_ascii=False, sort_keys=True, default=str)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    return deduped
+
+
+async def _resolve_relative_ticket_id(
+    db: AsyncSession,
+    *,
+    text: str,
+    scope: dict[str, Any] | None,
+) -> str | None:
+    resolved_scope = dict(scope or {})
+    stmt = (
+        select(WorkOrder.ticket_id, WorkOrder.created_at, User.username)
+        .outerjoin(DispatchTask, WorkOrder.current_dispatch_id == DispatchTask.id)
+        .outerjoin(User, DispatchTask.assigned_to == User.id)
+        .outerjoin(WorkerTeam, DispatchTask.assigned_team_id == WorkerTeam.id)
+    )
+
+    building_id = str(resolved_scope.get("building_id") or "").strip()
+    if building_id:
+        stmt = stmt.where(WorkOrder.building_id == building_id)
+
+    worker_id = str(resolved_scope.get("worker_id") or "").strip()
+    if worker_id:
+        stmt = stmt.where(DispatchTask.assigned_to == worker_id)
+
+    team_id = str(resolved_scope.get("team_id") or "").strip()
+    if team_id:
+        stmt = stmt.where(DispatchTask.assigned_team_id == team_id)
+
+    team_name = str(resolved_scope.get("team_name") or "").strip()
+    if team_name:
+        stmt = stmt.where(WorkerTeam.name == team_name)
+
+    date_from = _coerce_scope_date(resolved_scope.get("date_from"))
+    if date_from:
+        start_at = datetime.combine(date_from, time.min, tzinfo=timezone.utc)
+        stmt = stmt.where(WorkOrder.created_at >= start_at)
+    date_to = _coerce_scope_date(resolved_scope.get("date_to"))
+    if date_to:
+        end_at = datetime.combine(date_to + timedelta(days=1), time.min, tzinfo=timezone.utc)
+        stmt = stmt.where(WorkOrder.created_at < end_at)
+
+    status_filters = resolved_scope.get("status")
+    if isinstance(status_filters, str):
+        status_filters = [status_filters]
+    if isinstance(status_filters, list):
+        normalized_statuses = [str(item).strip() for item in status_filters if str(item).strip()]
+        if normalized_statuses:
+            stmt = stmt.where(WorkOrder.status.in_(normalized_statuses))
+
+    work_order_status = str(resolved_scope.get("work_order_status") or "").strip()
+    if work_order_status:
+        stmt = stmt.where(WorkOrder.status == work_order_status)
+
+    result = await db.execute(
+        stmt.order_by(WorkOrder.created_at.desc(), WorkOrder.updated_at.desc()).limit(200)
+    )
+    rows = list(result.all())
+    if not rows:
+        return None
+
+    alias_filters = _extract_person_aliases(text, resolved_scope)
+    if alias_filters:
+        for ticket_value, _created_at, username in rows:
+            if not username:
+                continue
+            formatted = format_person_display_name(username)
+            if formatted and formatted in alias_filters:
+                return str(ticket_value)
+        return None
+
+    return str(rows[0][0])
+
+
+async def _resolve_contextual_ticket_id(
+    db: AsyncSession,
+    *,
+    text: str,
+    ticket_id: str | None,
+    scope: dict[str, Any] | None,
+    previous_state: dict[str, Any],
+) -> tuple[str | None, str | None]:
+    explicit_ticket_id = ticket_id or _extract_ticket_id(text)
+    if explicit_ticket_id:
+        return explicit_ticket_id, "explicit"
+
+    previous_ticket_id = str(previous_state.get("last_ticket_id") or "").strip()
+    if previous_ticket_id and _looks_like_previous_work_order_followup(text):
+        return previous_ticket_id, "previous"
+
+    if _looks_like_relative_work_order_query(text):
+        for candidate_scope in _build_relative_scope_candidates(scope):
+            relative_ticket_id = await _resolve_relative_ticket_id(
+                db,
+                text=text,
+                scope=candidate_scope,
+            )
+            if relative_ticket_id:
+                return relative_ticket_id, "relative_recent"
+        return None, "relative_recent"
+
+    return None, None
+
+
+def _looks_like_readonly_action_question(text: str) -> bool:
+    normalized = re.sub(r"\s+", "", text or "")
+    if not normalized:
+        return False
+
+    readonly_tokens = (
+        "查一下",
+        "查下",
+        "查看",
+        "查询",
+        "看一下",
+        "看下",
+        "看看",
+        "问一下",
+        "想知道",
+        "为什么",
+        "为何",
+        "原因",
+        "谁",
+        "后来",
+        "当前",
+        "流程",
+        "状态",
+        "进度",
+        "记录",
+        "依据",
+        "风险",
+        "超时",
+        "是否",
+        "是不是",
+        "吗",
+        "么",
+        "?",
+        "？",
+    )
+    if not any(token in normalized for token in readonly_tokens):
+        return False
+
+    write_intent_patterns = (
+        r"(帮我|麻烦|请|直接|立刻|马上|现在)[^。！？]{0,20}(改派|派给|关闭|审批|驳回|取消派工|拒绝)",
+        r"(把|将)[^。！？]{0,20}(改派|派给|关闭|审批|驳回|取消派工|拒绝)",
+        r"(改派|派给)[^。！？]{0,12}(给|到)[^。！？]{1,20}",
+        r"(关闭|确认关闭)[^。！？]{0,12}(工单|这张单|这单|单子)",
+        r"(通过审批|审批通过|驳回)[^。！？]{0,12}(工单|这张单|这单|单子)",
+    )
+    return not any(re.search(pattern, normalized) for pattern in write_intent_patterns)
 
 
 def _detect_blocked_actions(text: str) -> list[str]:
     normalized = text or ""
+    if _looks_like_readonly_action_question(normalized):
+        return []
+
     blocked: list[str] = []
     if any(token in normalized for token in ("改派", "派给")):
         blocked.append("reassign_dispatch")
@@ -472,12 +743,41 @@ async def handle_operator_ai_chat(
             "blocked_actions": [],
         }
 
-    resolved_ticket_id = ticket_id or _extract_ticket_id(text)
+    resolved_ticket_id, ticket_resolution_mode = await _resolve_contextual_ticket_id(
+        db,
+        text=text,
+        ticket_id=ticket_id,
+        scope=scope,
+        previous_state=previous_state,
+    )
+    if ticket_resolution_mode == "relative_recent" and not resolved_ticket_id:
+        relative_scope = dict(scope or {})
+        answer = "当前筛选范围内没有找到可直接查看全流程的最近工单。你可以补充楼宇、人员，或者直接给我工单号。"
+        session_state["last_ticket_id"] = None
+        await _ensure_session(db, session_id=session_id, user=user, state=session_state)
+        await _append_message(db, session_id=session_id, role="assistant", content=answer)
+        await db.commit()
+        return {
+            "assistant": "运小维",
+            "session_id": session_id,
+            "answer_type": "single_work_order_not_found",
+            "answer": answer,
+            "readonly": True,
+            "facts": {"scope": relative_scope},
+            "metrics": {},
+            "chart": None,
+            "evidence_refs": [],
+            "suggested_followups": ["查看最近7天新建工单", "直接输入工单号查看流程"],
+            "blocked_actions": [],
+        }
+
     if resolved_ticket_id:
         context = await build_work_order_review_context(db, ticket_id=resolved_ticket_id)
         if context is None:
             raise HTTPException(status_code=404, detail=f"工单 {resolved_ticket_id} 不存在")
         work_order_data = context.get("work_order") or {}
+        session_state["last_ticket_id"] = resolved_ticket_id
+        await _ensure_session(db, session_id=session_id, user=user, state=session_state)
 
         if looks_like_experience_query(text):
             work_order_result = await db.execute(select(WorkOrder).where(WorkOrder.ticket_id == resolved_ticket_id).limit(1))

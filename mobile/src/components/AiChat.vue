@@ -115,6 +115,13 @@
           :class="msg.role"
           @longpress="msg.role === 'ai' && msg.content ? openAiMessageMenu(formatAiDisplayText(msg.content), idx) : undefined"
         >
+          <image
+            v-if="msg.imageUrl"
+            class="msg-image"
+            :src="resolveDisplayImageUrl(msg.imageUrl)"
+            mode="widthFix"
+            @click="previewImage(msg.imageUrl)"
+          />
           <text
             v-for="(paragraph, paragraphIndex) in splitMessageContent(msg.content, msg.role === 'ai')"
             :key="`${idx}_${paragraphIndex}`"
@@ -495,6 +502,19 @@
     </view>
 
     <view class="chat-input-area">
+      <view v-if="isWorkerMode && pendingImage" class="pending-image-card">
+        <image
+          class="pending-image-thumb"
+          :src="pendingImageDisplayUrl"
+          mode="aspectFill"
+          @click="previewImage(pendingImage.filePath)"
+        />
+        <view class="pending-image-copy">
+          <text class="pending-image-title">待发送现场图片</text>
+          <text class="pending-image-desc">{{ pendingImage.fileName || '已选择 1 张图片，可补一句现场说明后发送' }}</text>
+        </view>
+        <text class="pending-image-remove" @click="clearPendingImage">移除</text>
+      </view>
       <template v-if="isWorkerMode && dockInput">
         <view
           v-if="showFloatingWorkflowEntry"
@@ -653,7 +673,7 @@
             v-else
             class="chat-input"
             v-model="inputText"
-            :placeholder="inputPlaceholder"
+            :placeholder="pendingImage ? '可补一句现场说明，直接发送图片也可以' : inputPlaceholder"
             placeholder-style="color: #9ca19a;"
             :disabled="sending"
             :maxlength="500"
@@ -661,6 +681,15 @@
             @confirm="sendMessage"
           />
           <view
+            v-if="showDockedSendButton"
+            class="worker-pill-send"
+            :class="{ disabled: sending || mediaBusy }"
+            @click="sendMessage"
+          >
+            <text>发送</text>
+          </view>
+          <view
+            v-else
             class="input-icon-btn input-mode-toggle"
             :class="{ active: voiceInputMode, disabled: mediaBusy && !recording }"
             @click="toggleVoiceInputMode"
@@ -688,7 +717,7 @@
         <textarea
           class="chat-input"
           v-model="inputText"
-          :placeholder="inputPlaceholder"
+          :placeholder="pendingImage ? '可补一句现场说明，直接发送图片也可以' : inputPlaceholder"
           placeholder-style="color: #9ca19a;"
           :disabled="sending"
           auto-height
@@ -697,7 +726,7 @@
         />
         <view
           class="send-btn"
-          :class="{ disabled: !inputText.trim() || sending }"
+          :class="{ disabled: (!inputText.trim() && !pendingImage) || sending || mediaBusy }"
           @click="sendMessage"
         >
           <text v-if="!sending">发送</text>
@@ -769,6 +798,7 @@ import { sanitizeDisplayText } from '../utils/display'
 interface ChatMsg {
   role: 'user' | 'ai'
   content: string
+  imageUrl?: string
   thinking?: boolean
   stepId?: string
   answerType?: string
@@ -792,6 +822,11 @@ interface ChatMsg {
 interface OperatorFilterOption {
   value: string
   label: string
+}
+
+interface PendingImageDraft {
+  filePath: string
+  fileName: string
 }
 
 const emit = defineEmits<{
@@ -828,6 +863,7 @@ const stepPlan = ref<WorkerAiStepPlan | null>(null)
 const guidanceLoading = ref(false)
 const updatingStepId = ref<string | null>(null)
 const mediaBusy = ref(false)
+const pendingImage = ref<PendingImageDraft | null>(null)
 const recording = ref(false)
 const voiceInputMode = ref(false)
 const stepNotes = ref<Record<string, string>>({})
@@ -845,7 +881,7 @@ const selectedTextContent = ref('')
 const experienceFeedbackLoading = ref<Record<string, MaintenanceExperienceFeedbackType | ''>>({})
 const experienceFeedbackState = ref<Record<string, MaintenanceExperienceFeedbackType | ''>>({})
 const operatorFilterLoading = ref(false)
-const operatorDatePreset = ref<'today' | 'week' | 'month' | '7d' | '30d'>('month')
+const operatorDatePreset = ref<'today' | 'week' | 'month' | '7d' | '30d'>('7d')
 const operatorBuildingId = ref('')
 const operatorTeamId = ref('')
 const operatorWorkerId = ref('')
@@ -883,6 +919,11 @@ const inputPlaceholder = computed(() => (
     : isWorkerMode.value && dockInput.value
       ? '发消息...'
       : '描述现场情况或提问...'
+))
+const pendingImageDisplayUrl = computed(() => resolveDisplayImageUrl(pendingImage.value?.filePath || ''))
+const showDockedSendButton = computed(() => (
+  !voiceInputMode.value
+    && (Boolean(inputText.value.trim()) || !!pendingImage.value)
 ))
 const chatHint = computed(() => props.hint || (
   isWorkerMode.value
@@ -967,10 +1008,10 @@ const operatorQuickPrompts = computed(() => {
     ]
   }
   return [
-    '生成本月工单运营总结',
-    '对比本周和上周公共楼工单处理效率',
-    '这个月谁处理得最多',
-    '本周哪个班组超时率最高',
+    '生成最近7天工单运营总结',
+    '对比最近7天和前7天公共楼工单处理效率',
+    '最近7天谁处理得最多',
+    '最近7天哪个班组超时率最高',
   ]
 })
 const operatorScopePreview = computed(() => {
@@ -1127,6 +1168,27 @@ function splitMessageContent(text: string, sanitize = false) {
     .map(item => item.trim())
     .filter(Boolean)
   return paragraphs.length ? paragraphs : ['']
+}
+
+function resolveDisplayImageUrl(url?: string | null) {
+  const value = String(url || '').trim()
+  if (!value) return ''
+  if (/^(https?:|data:|blob:|wxfile:|file:|content:)/i.test(value)) return value
+  if (value.startsWith('/')) return buildAbsoluteApiUrl(value)
+  return value
+}
+
+function previewImage(url?: string | null) {
+  const target = resolveDisplayImageUrl(url)
+  if (!target) return
+  uni.previewImage({
+    current: target,
+    urls: [target],
+  })
+}
+
+function clearPendingImage() {
+  pendingImage.value = null
 }
 
 function shouldRenderMessageExtensions(msg: ChatMsg) {
@@ -2003,7 +2065,11 @@ async function saveStepNoteForStep(step: WorkerAiStep) {
 
 async function sendMessage() {
   const text = inputText.value.trim()
-  if (!text || sending.value) return
+  if ((!text && !pendingImage.value) || sending.value || mediaBusy.value) return
+  if (pendingImage.value) {
+    await sendPendingImageMessage(text)
+    return;
+  }
   const preferWorkerGeneralChat = shouldPreferWorkerGeneralChat(text)
 
   if (shouldUseGuidanceChat() && !preferWorkerGeneralChat) {
@@ -2105,6 +2171,57 @@ async function sendMessage() {
     sessionId.value = newSessionId
   } catch {
     sending.value = false
+  }
+}
+
+function buildPendingImagePrompt(text: string) {
+  const parts: string[] = []
+  const stepInstruction = String(currentStep.value?.instruction || '').trim()
+  if (stepInstruction) parts.push(`当前排查步骤：${stepInstruction}`)
+  if (text) parts.push(`现场补充说明：${text}`)
+  return parts.join('\n').trim() || null
+}
+
+async function sendPendingImageMessage(text: string) {
+  if (!isWorkerMode.value || !props.order?.ticket_id || !pendingImage.value) return
+  const imageDraft = pendingImage.value
+  const userContent = text || '已上传现场图片，请帮我判断下一步。'
+  messages.value.push({
+    role: 'user',
+    content: userContent,
+    imageUrl: imageDraft.filePath,
+  })
+  inputText.value = ''
+  clearPendingImage()
+  sending.value = true
+  mediaBusy.value = true
+  streamingText.value = ''
+  isFirstMessage.value = false
+  messages.value.push({ role: 'ai', content: '正在分析现场图片...', thinking: true })
+  scrollToBottom()
+  try {
+    const response = await workerAiApi.analyzeImage({
+      ticket_id: props.order.ticket_id,
+      dispatch_id: currentDispatchId(),
+      step_id: currentStep.value?.id || null,
+      prompt: buildPendingImagePrompt(text),
+      filePath: imageDraft.filePath,
+    })
+    removePendingThinking()
+    const analysis = response.analysis
+    const observations = analysis.observations?.length ? `\n观察：${analysis.observations.join('；')}` : ''
+    const uncertainties = analysis.uncertainties?.length ? `\n不确定：${analysis.uncertainties.join('；')}` : ''
+    messages.value.push({
+      role: 'ai',
+      content: `${analysis.summary}${observations}${uncertainties}\n${response.suggested_next_message || ''}`.trim(),
+    })
+  } catch (err) {
+    removePendingThinking()
+    messages.value.push({ role: 'ai', content: err instanceof Error ? err.message : '图片分析失败' })
+  } finally {
+    sending.value = false
+    mediaBusy.value = false
+    scrollToBottom()
   }
 }
 
@@ -2373,7 +2490,7 @@ async function chooseCameraForAnalysis() {
 }
 
 async function chooseImageForAnalysis(sourceType: Array<'camera' | 'album'> = ['camera', 'album']) {
-  if (!isWorkerMode.value || !props.order?.ticket_id || mediaBusy.value) return
+  if (!isWorkerMode.value || !props.order?.ticket_id || mediaBusy.value || sending.value) return
   mediaBusy.value = true
   try {
     const chooseResult: any = await new Promise((resolve, reject) => {
@@ -2386,6 +2503,14 @@ async function chooseImageForAnalysis(sourceType: Array<'camera' | 'album'> = ['
     })
     const filePath = chooseResult?.tempFilePaths?.[0]
     if (!filePath) return
+    const rawName = chooseResult?.tempFiles?.[0]?.name || filePath.split('/').pop() || filePath.split('\\').pop() || '现场图片'
+    pendingImage.value = {
+      filePath,
+      fileName: String(rawName),
+    }
+    voiceInputMode.value = false
+    uni.showToast({ title: '图片已加入待发送', icon: 'none' })
+    return;
     messages.value.push({ role: 'user', content: '已上传现场图片，请帮我判断下一步。' })
     messages.value.push({ role: 'ai', content: '正在分析现场图片...', thinking: true })
     scrollToBottom()
@@ -2700,6 +2825,7 @@ watch(
 watch(
   () => [props.mode, props.order?.ticket_id, props.dispatchId, props.hallEntryId],
   () => {
+    clearPendingImage()
     if (isWorkerMode.value) {
       void loadWorkerHistory()
       void loadStepPlan(true, { notifyNotReady: false, notifyError: false })
@@ -2891,6 +3017,18 @@ onBeforeUnmount(() => {
 
 .msg-paragraph + .msg-paragraph {
   margin-top: 12rpx;
+}
+
+.msg-image {
+  display: block;
+  width: 100%;
+  max-width: 360rpx;
+  border-radius: 18rpx;
+  overflow: hidden;
+}
+
+.msg-image + .msg-paragraph {
+  margin-top: 14rpx;
 }
 
 .analysis-summary-card {
@@ -3471,6 +3609,7 @@ onBeforeUnmount(() => {
 
 .chat-input-area {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-end;
   gap: 16rpx;
   padding: 16rpx 20rpx;
@@ -3478,6 +3617,61 @@ onBeforeUnmount(() => {
   background: #fff;
   width: 100%;
   box-sizing: border-box;
+}
+
+.pending-image-card {
+  width: 100%;
+  padding: 14rpx 16rpx;
+  border-radius: 22rpx;
+  background: linear-gradient(180deg, #fbfdf4 0%, #f2f7df 100%);
+  border: 1rpx solid #dfe8bc;
+  display: flex;
+  align-items: center;
+  gap: 16rpx;
+  box-sizing: border-box;
+}
+
+.pending-image-thumb {
+  width: 108rpx;
+  height: 108rpx;
+  border-radius: 18rpx;
+  flex-shrink: 0;
+}
+
+.pending-image-copy {
+  flex: 1;
+  min-width: 0;
+}
+
+.pending-image-title {
+  display: block;
+  font-size: 24rpx;
+  line-height: 1.4;
+  color: #32401a;
+  font-weight: 800;
+}
+
+.pending-image-desc {
+  display: block;
+  margin-top: 6rpx;
+  font-size: 22rpx;
+  line-height: 1.5;
+  color: #667149;
+  word-break: break-all;
+}
+
+.pending-image-remove {
+  flex-shrink: 0;
+  padding: 0 18rpx;
+  height: 56rpx;
+  border-radius: 999rpx;
+  background: rgba(255, 255, 255, 0.92);
+  color: #6b7d3f;
+  font-size: 22rpx;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .operator-workbench-empty .chat-input-area {
@@ -3859,6 +4053,33 @@ onBeforeUnmount(() => {
   gap: 18rpx;
   box-sizing: border-box;
   pointer-events: auto;
+}
+
+.worker-pill-send {
+  min-width: 102rpx;
+  height: 68rpx;
+  padding: 0 24rpx;
+  border-radius: 999rpx;
+  background: #b7ca74;
+  color: #ffffff;
+  font-size: 24rpx;
+  font-weight: 800;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  box-shadow: 0 8rpx 20rpx rgba(115, 133, 57, 0.16);
+}
+
+.worker-pill-send text {
+  color: #ffffff;
+  font-size: 24rpx;
+  font-weight: 800;
+}
+
+.worker-pill-send.disabled {
+  opacity: 0.5;
+  pointer-events: none;
 }
 
 .step-panel-body.floating {

@@ -1,0 +1,16 @@
+{
+  "backup_time": "2026-04-22T08:25:47.935405+08:00",
+  "username": "ops_electrical_01",
+  "display_name": "宋工",
+  "note": "??????????????????????????????",
+  "tasks": [
+    {
+      "dispatch_id": "50758000-13cb-487a-ac29-c4677d839991",
+      "dispatch_status": "processing",
+      "assigned_at": "2026-04-21T21:59:58.939268+00:00",
+      "work_order_id": "c9a23b8f-b6d1-4289-bdfa-b15bddf605d4",
+      "ticket_id": "WO-20260422-055942-798497",
+      "work_order_status": "dispatched"
+    }
+  ]
+}

@@ -59,7 +59,7 @@ async def test_build_work_order_facts_response_returns_worker_chart(monkeypatch:
             "priority": "high",
             "work_order_status": "completed",
             "work_order_created_at": now - timedelta(days=3, hours=4),
-            "worker_name": "张工",
+            "worker_name": "ops_hvac_01",
             "team_name": "暖通班",
         },
         {
@@ -132,7 +132,8 @@ async def test_build_work_order_facts_response_returns_worker_chart(monkeypatch:
 
     assert payload["intent"] == "worker_performance"
     assert payload["chart"]["type"] == "bar"
-    assert payload["metrics"]["rows"][0]["worker_name"] == "张工"
+    assert payload["metrics"]["rows"][0]["worker_name"] == "叶工"
+    assert payload["chart"]["x"][0] == "叶工"
     assert payload["facts"]["scope"]["building_id"] == "public services"
 
 
@@ -314,3 +315,222 @@ async def test_handle_operator_ai_chat_returns_greeting_for_small_talk(monkeypat
     assert "只做只读问询和运营分析" in response["answer"]
     assert "未完成工单情况" in response["suggested_followups"]
     mock_build.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_handle_operator_ai_chat_resolves_relative_recent_ticket_query(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db = SimpleNamespace(
+        get=AsyncMock(return_value=None),
+        commit=AsyncMock(),
+    )
+    monkeypatch.setattr(operator_ai_service, "_ensure_session", AsyncMock())
+    monkeypatch.setattr(operator_ai_service, "_append_message", AsyncMock())
+    monkeypatch.setattr(
+        operator_ai_service,
+        "_resolve_contextual_ticket_id",
+        AsyncMock(return_value=("WO-MOCK-20260422-H08", "relative_recent")),
+    )
+    mock_context = AsyncMock(
+        return_value={
+            "ticket_id": "WO-MOCK-20260422-H08",
+            "work_order": {
+                "ticket_id": "WO-MOCK-20260422-H08",
+                "status": "closed",
+                "assigned_to_name": "王工",
+            },
+            "current_dispatch": {
+                "dispatch_status": "escalated",
+                "assigned_to_name": "王工",
+            },
+            "dispatch_tasks": [{"id": "dispatch-1"}, {"id": "dispatch-2"}],
+            "audit_logs": [{"id": "audit-1"}],
+            "risk_flags": [{"message": "该工单发生过改派或接管。"}],
+        }
+    )
+    monkeypatch.setattr(operator_ai_service, "build_work_order_review_context", mock_context)
+
+    response = await handle_operator_ai_chat(
+        db,
+        message="最近生成的工单的全流程",
+        session_id="opai-recent-ticket",
+        ticket_id=None,
+        scope=None,
+        include_evidence=True,
+        include_chart=True,
+        user=SimpleNamespace(id="manager-1", role="manager"),
+    )
+
+    assert response["answer_type"] == "single_work_order_summary"
+    assert "WO-MOCK-20260422-H08 的流程概况" in response["answer"]
+    assert response["chart"] is None
+    assert mock_context.await_args.kwargs["ticket_id"] == "WO-MOCK-20260422-H08"
+
+
+@pytest.mark.asyncio
+async def test_handle_operator_ai_chat_resolves_relative_recent_ticket_query_with_liuzhuan_phrase(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db = SimpleNamespace(
+        get=AsyncMock(return_value=None),
+        commit=AsyncMock(),
+    )
+    monkeypatch.setattr(operator_ai_service, "_ensure_session", AsyncMock())
+    monkeypatch.setattr(operator_ai_service, "_append_message", AsyncMock())
+    monkeypatch.setattr(
+        operator_ai_service,
+        "_resolve_contextual_ticket_id",
+        AsyncMock(return_value=("WO-MOCK-20260422-A17", "relative_recent")),
+    )
+    mock_context = AsyncMock(
+        return_value={
+            "ticket_id": "WO-MOCK-20260422-A17",
+            "work_order": {
+                "ticket_id": "WO-MOCK-20260422-A17",
+                "status": "closed",
+                "assigned_to_name": "叶工",
+            },
+            "current_dispatch": {
+                "dispatch_status": "completed",
+                "assigned_to_name": "叶工",
+            },
+            "dispatch_tasks": [{"id": "dispatch-1"}],
+            "audit_logs": [{"id": "audit-1"}],
+            "risk_flags": [],
+        }
+    )
+    monkeypatch.setattr(operator_ai_service, "build_work_order_review_context", mock_context)
+
+    response = await handle_operator_ai_chat(
+        db,
+        message="最近一条的工单的完整流转链路",
+        session_id="opai-recent-ticket-liuzhuan",
+        ticket_id=None,
+        scope=None,
+        include_evidence=True,
+        include_chart=True,
+        user=SimpleNamespace(id="manager-1", role="manager"),
+    )
+
+    assert response["answer_type"] == "single_work_order_summary"
+    assert mock_context.await_args.kwargs["ticket_id"] == "WO-MOCK-20260422-A17"
+
+
+@pytest.mark.asyncio
+async def test_handle_operator_ai_chat_reuses_previous_ticket_for_followup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db = SimpleNamespace(
+        get=AsyncMock(return_value=SimpleNamespace(session_state_json=json.dumps({"last_ticket_id": "WO-MOCK-20260422-A17"}))),
+        commit=AsyncMock(),
+    )
+    monkeypatch.setattr(operator_ai_service, "_ensure_session", AsyncMock())
+    monkeypatch.setattr(operator_ai_service, "_append_message", AsyncMock())
+    mock_context = AsyncMock(
+        return_value={
+            "ticket_id": "WO-MOCK-20260422-A17",
+            "work_order": {
+                "ticket_id": "WO-MOCK-20260422-A17",
+                "status": "closed",
+                "assigned_to_name": "叶工",
+            },
+            "current_dispatch": {
+                "dispatch_status": "completed",
+                "assigned_to_name": "叶工",
+            },
+            "dispatch_tasks": [{"id": "dispatch-1"}],
+            "audit_logs": [{"id": "audit-1"}],
+            "risk_flags": [],
+        }
+    )
+    monkeypatch.setattr(operator_ai_service, "build_work_order_review_context", mock_context)
+
+    response = await handle_operator_ai_chat(
+        db,
+        message="查看这张工单的流程",
+        session_id="opai-followup-ticket",
+        ticket_id=None,
+        scope=None,
+        include_evidence=True,
+        include_chart=True,
+        user=SimpleNamespace(id="manager-1", role="manager"),
+    )
+
+    assert response["answer_type"] == "single_work_order_summary"
+    assert mock_context.await_args.kwargs["ticket_id"] == "WO-MOCK-20260422-A17"
+
+
+@pytest.mark.asyncio
+async def test_handle_operator_ai_chat_returns_not_found_for_relative_ticket_query(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db = SimpleNamespace(
+        get=AsyncMock(return_value=None),
+        commit=AsyncMock(),
+    )
+    monkeypatch.setattr(operator_ai_service, "_ensure_session", AsyncMock())
+    monkeypatch.setattr(operator_ai_service, "_append_message", AsyncMock())
+    monkeypatch.setattr(
+        operator_ai_service,
+        "_resolve_contextual_ticket_id",
+        AsyncMock(return_value=(None, "relative_recent")),
+    )
+    mock_build = AsyncMock()
+    monkeypatch.setattr(operator_ai_service, "build_work_order_facts_response", mock_build)
+
+    response = await handle_operator_ai_chat(
+        db,
+        message="最近生成的工单的全流程",
+        session_id="opai-recent-ticket-not-found",
+        ticket_id=None,
+        scope=None,
+        include_evidence=True,
+        include_chart=True,
+        user=SimpleNamespace(id="manager-1", role="manager"),
+    )
+
+    assert response["answer_type"] == "single_work_order_not_found"
+    assert response["chart"] is None
+    assert "当前筛选范围内没有找到" in response["answer"]
+    mock_build.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_resolve_contextual_ticket_id_relaxes_scope_for_recent_query(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    async def _fake_resolve_relative_ticket_id(db, *, text, scope):
+        calls.append(dict(scope or {}))
+        if scope and scope.get("date_from"):
+            return None
+        return "WO-MOCK-20260422-X31"
+
+    monkeypatch.setattr(
+        operator_ai_service,
+        "_resolve_relative_ticket_id",
+        _fake_resolve_relative_ticket_id,
+    )
+
+    ticket_id, mode = await operator_ai_service._resolve_contextual_ticket_id(
+        SimpleNamespace(),
+        text="最近生成的工单的全流程",
+        ticket_id=None,
+        scope={"date_from": "2026-05-01", "date_to": "2026-05-01"},
+        previous_state={},
+    )
+
+    assert mode == "relative_recent"
+    assert ticket_id == "WO-MOCK-20260422-X31"
+    assert calls[0]["date_from"] == "2026-05-01"
+    assert calls[1] == {}
+
+
+def test_relative_work_order_query_matches_liuzhuan_phrase() -> None:
+    assert operator_ai_service._looks_like_relative_work_order_query("最近一条的工单的完整流转链路") is True
+
+
+def test_extract_person_aliases_does_not_treat_work_order_phrase_as_worker_name() -> None:
+    assert operator_ai_service._extract_person_aliases("最近一条的工单的完整流转链路", None) == []

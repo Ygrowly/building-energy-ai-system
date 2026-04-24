@@ -114,5 +114,28 @@ def test_operator_ai_blocks_write_actions():
     assert "close_work_order" in blocked
 
 
+def test_operator_ai_does_not_block_readonly_reassign_question():
+    blocked = _detect_blocked_actions("WO-MOCK-OPAI-003 为什么改派，后来是谁接的")
+    assert blocked == []
+
+
+def test_operator_ai_does_not_block_readonly_close_question():
+    blocked = _detect_blocked_actions("查一下这张工单为什么被关闭")
+    assert blocked == []
+
+
+def test_operator_ai_still_blocks_write_request_even_if_question_like():
+    blocked = _detect_blocked_actions("能不能帮我把 WO-MOCK-OPAI-003 改派给张三")
+    assert "reassign_dispatch" in blocked
+
+
 def test_operator_ai_extracts_ticket_id():
     assert _extract_ticket_id("查一下 wo-20260403-005 是谁接的") == "WO-20260403-005"
+
+
+def test_operator_ai_extracts_current_ticket_id_format():
+    assert _extract_ticket_id("查一下 WO-20260421-192840-A1B2C3 的完整流程") == "WO-20260421-192840-A1B2C3"
+
+
+def test_operator_ai_extracts_temp_ticket_id_without_uppercasing():
+    assert _extract_ticket_id("看一下 temp_ab12cd34 的状态") == "temp_ab12cd34"

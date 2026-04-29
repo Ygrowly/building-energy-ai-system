@@ -90,6 +90,11 @@
             </button>
           </form>
 
+          <div class="test-account">
+            <span class="test-account__label">测试账号</span>
+            <span class="test-account__value">test1 / test1234</span>
+          </div>
+
           <p class="switch-hint">
             还没有账号？
             <button class="link" :disabled="loading" @click="switchMode('register')">立即注册</button>
@@ -627,6 +632,29 @@ async function handleSubmit() {
   font-size: 11.5px;
   color: #e53e3e;
   padding-left: 2px;
+}
+
+.test-account {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 14px;
+  padding: 10px 12px;
+  background: #f7fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+}
+.test-account__label {
+  font-size: 12px;
+  color: #718096;
+  flex-shrink: 0;
+}
+.test-account__value {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: #2d3748;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 
 /* 提交按钮 */

@@ -108,6 +108,18 @@
           <text>{{ loading ? '登录中...' : '登 录' }}</text>
         </button>
 
+        <view class="test-accounts">
+          <text class="test-accounts__title">测试账号</text>
+          <view class="test-accounts__row">
+            <text class="test-accounts__user">test1</text>
+            <text class="test-accounts__pwd">test1234</text>
+          </view>
+          <view class="test-accounts__row">
+            <text class="test-accounts__user">test2</text>
+            <text class="test-accounts__pwd">test1234</text>
+          </view>
+        </view>
+
       </view>
 
       <!-- ══ 注册表单 ══ -->
@@ -839,6 +851,38 @@ $font-cn:  'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif;
   color: $red;
   padding-left: 6rpx;
   font-family: $font-cn;
+}
+
+.test-accounts {
+  display: flex;
+  flex-direction: column;
+  gap: 12rpx;
+  padding: 22rpx 24rpx;
+  background: #F8FAFC;
+  border: 2rpx solid $border;
+  border-radius: 18rpx;
+}
+
+.test-accounts__title {
+  font-size: 22rpx;
+  font-weight: 700;
+  color: $muted;
+  font-family: $font-cn;
+}
+
+.test-accounts__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20rpx;
+}
+
+.test-accounts__user,
+.test-accounts__pwd {
+  font-size: 24rpx;
+  font-weight: 700;
+  color: $ink;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 
 // ── 提交按钮 ─────────────────────────────────────────────

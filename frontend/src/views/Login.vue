@@ -91,8 +91,15 @@
           </form>
 
           <div class="test-account">
-            <span class="test-account__label">测试账号</span>
-            <span class="test-account__value">test1 / test1234</span>
+            <div class="test-account__title">测试账号</div>
+            <div class="test-account__row">
+              <span class="test-account__role">运维人员账号</span>
+              <span class="test-account__value">用户名：test1，密码：test1234</span>
+            </div>
+            <div class="test-account__row">
+              <span class="test-account__role">维修人员账号</span>
+              <span class="test-account__value">用户名：test2，密码：test1234</span>
+            </div>
           </div>
 
           <p class="switch-hint">
@@ -636,25 +643,33 @@ async function handleSubmit() {
 
 .test-account {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+  flex-direction: column;
+  gap: 8px;
   margin-top: 14px;
-  padding: 10px 12px;
-  background: #f7fafc;
-  border: 1px solid #e2e8f0;
+  padding: 12px 14px;
+  background: #eef6ff;
+  border: 1px solid #bfdbfe;
   border-radius: 10px;
 }
-.test-account__label {
-  font-size: 12px;
-  color: #718096;
-  flex-shrink: 0;
+.test-account__title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #1d4ed8;
 }
-.test-account__value {
+.test-account__row {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.test-account__role {
   font-size: 12.5px;
   font-weight: 700;
   color: #2d3748;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+.test-account__value {
+  font-size: 12px;
+  font-weight: 700;
+  color: #1e40af;
 }
 
 /* 提交按钮 */

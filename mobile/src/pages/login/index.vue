@@ -111,12 +111,12 @@
         <view class="test-accounts">
           <text class="test-accounts__title">测试账号</text>
           <view class="test-accounts__row">
-            <text class="test-accounts__user">test1</text>
-            <text class="test-accounts__pwd">test1234</text>
+            <text class="test-accounts__role">运维人员账号</text>
+            <text class="test-accounts__value">用户名：test1，密码：test1234</text>
           </view>
           <view class="test-accounts__row">
-            <text class="test-accounts__user">test2</text>
-            <text class="test-accounts__pwd">test1234</text>
+            <text class="test-accounts__role">维修人员账号</text>
+            <text class="test-accounts__value">用户名：test2，密码：test1234</text>
           </view>
         </view>
 
@@ -856,32 +856,37 @@ $font-cn:  'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif;
 .test-accounts {
   display: flex;
   flex-direction: column;
-  gap: 12rpx;
-  padding: 22rpx 24rpx;
-  background: #F8FAFC;
-  border: 2rpx solid $border;
+  gap: 16rpx;
+  padding: 24rpx 26rpx;
+  background: #ECFDF5;
+  border: 2rpx solid #BBF7D0;
   border-radius: 18rpx;
 }
 
 .test-accounts__title {
-  font-size: 22rpx;
+  font-size: 26rpx;
   font-weight: 700;
-  color: $muted;
+  color: $green-d;
   font-family: $font-cn;
 }
 
 .test-accounts__row {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 20rpx;
+  flex-direction: column;
+  gap: 6rpx;
 }
 
-.test-accounts__user,
-.test-accounts__pwd {
+.test-accounts__role {
   font-size: 24rpx;
   font-weight: 700;
   color: $ink;
+  font-family: $font-cn;
+}
+
+.test-accounts__value {
+  font-size: 24rpx;
+  font-weight: 700;
+  color: $green-dk;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 

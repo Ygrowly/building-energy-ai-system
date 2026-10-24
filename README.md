@@ -8,9 +8,9 @@
 
 ## 三句话讲清
 
-1. **数据不是造出来的**——自研物理规则仿真引擎（冷热负荷、设备额定参数、作息场景）生成能耗读数，再灌入 PostgreSQL，而不是往表里塞随机数。
-2. **Agent 不是聊天框**——16 个 MCP 原子工具是它唯一能碰的东西，路由 / 数据 / 诊断三个 Agent 由 LangGraph 状态机编排，工具调用前后有参数校验与结果约束。
-3. **Agent 行为有回归**——`backend/app/eval` 内置评测集，覆盖意图路由、工具选择、MCP Schema 合法性、RAG 回退与元数据过滤，改 prompt 或加工具后能跑一遍看有没有退化。
+1. **Agent 不是聊天框**——16 个 MCP 原子工具是它唯一能碰的东西，路由 / 数据 / 诊断三个 Agent 由 LangGraph 状态机编排，工具调用前后有参数校验与结果约束。
+2. **Agent 行为有回归**——`backend/app/eval` 内置评测集，覆盖意图路由、工具选择、MCP Schema 合法性、RAG 回退与元数据过滤，改 prompt 或加工具后能跑一遍看有没有退化。
+3. **数据可自查**——仓库随附仿真生成的能耗 CSV 样例（`data_2026_04.csv`、`fwwb01_*.csv`），可直接导入 PostgreSQL 跑通全链路，不必先对接真实表计。
 
 ## 核心功能
 
@@ -133,12 +133,18 @@ pnpm install
 pnpm dev:h5     # uni-app H5 模式
 ```
 
-### 4. 造数据（可选）
+### 4. 导入样例数据（可选）
+
+仓库根目录随附仿真生成的能耗 CSV（约 14MB）：
+
+| 文件 | 内容 |
+|---|---|
+| `data_2026_04.csv` | 2026 年 4 月读数 |
+| `data_2026_apr_dec.csv` | 4–12 月读数 |
+| `fwwb01_realistic_with_simulated_kpis(1).csv` | 单栋楼 KPI 时序（含注入异常） |
 
 ```bash
-cd dataset
-python generator.py        # 物理规则仿真生成读数
-python import_script.py     # 导入 PostgreSQL
+python dataset/import_script.py    # 导入 PostgreSQL
 ```
 
 ### 5. 跑 Agent 评测集（可选）
@@ -154,22 +160,22 @@ python -m app.eval.runner
 
 ```
 construction-management/
-├── backend/                  # FastAPI + LangGraph + MCP（167 个 Python 文件）
+├── backend/                  # FastAPI + LangGraph + MCP（约 170 个 Python 文件）
 │   ├── main.py               # 应用入口
-│   ├── app/
-│   │   ├── api/              # REST 路由（auth / chat / data / 工单 / 派工 / 报表……）
-│   │   ├── graph/nodes/      # router_agent · data_agent · diagnose_agent
-│   │   ├── mcp/              # MCP 服务与 16 个原子工具实现
-│   │   ├── services/         # 异常检测 / 预测 / 派工 / AI 审批 / 审计……
-│   │   ├── eval/             # Agent 评测集（cases · models · runner）
-│   │   └── db/ core/ schemas/
-│   └── scripts/              # 造数、初始化库
+│   └── app/
+│       ├── api/              # REST 路由（auth / chat / data / 工单 / 派工 / 报表……）
+│       ├── graph/nodes/      # router_agent · data_agent · diagnose_agent
+│       ├── mcp/              # MCP 服务与 16 个原子工具实现
+│       ├── services/         # 异常检测 / 预测 / 派工 / AI 审批 / 审计……
+│       ├── eval/             # Agent 评测集（cases · models · runner）
+│       └── db/ core/ schemas/
 ├── frontend/                 # Vue 3 + Vite + ECharts 管理端
 ├── mobile/                   # Uni-app 双角色移动端
-├── dataset/                  # 物理规则仿真引擎 + 导入脚本
-├── deploy/                   # docker-compose（本地 Redis）
-├── docs/                     # 需求模块、项目架构、UI 设计
-└── tests/                    # Playwright 冒烟样例
+├── dataset/                  # 数据导入脚本入口
+├── docs/                     # 需求 / 架构 / 数据库 / 用户手册 / RAG / MCP 设计
+├── tests/                    # Playwright 冒烟样例
+├── docker-compose.yml        # 本地基础设施
+└── data_2026_04.csv …        # 仿真生成的能耗样例数据
 ```
 
 ## 技术栈
@@ -190,6 +196,8 @@ construction-management/
 读代码前先看这几条，省得误会：
 
 - **没有 pytest 测试套件**。仓库里只有一份 Playwright 冒烟样例（`tests/example.spec.ts`）。Agent 行为的回归靠 `backend/app/eval` 的评测集，不是单测覆盖——这两件事的强度不一样。
+- **仿真引擎源码不在仓库**。能耗数据由物理规则仿真脚本生成，但 `dataset/` 只保留了 54 行的导入入口，生成逻辑未随仓库提交；仓库提供的是生成好的 CSV，可以据此跑通全链路，但看不到造数过程。
+- **仓库根目录有竞赛期遗留物**：若干临时 CSV、ipynb、docx 和一个 `supabase-old.dump`，未清理。不影响代码阅读，介意的话可以自行忽略。
 - **预测模型 bundle 不在仓库**（约 265MB，joblib/pkl）。要跑预测功能需自行训练，其余功能不受影响。
 - **RAGFlow 需单独部署**，没有它时 `rag_hybrid_search` 走降级路径（评测集里有对应的回退用例）。
 - **竞赛作品，不再迭代**。评级口径、权限模型、多租户隔离这些生产必备件都没做。
@@ -199,10 +207,16 @@ construction-management/
 
 | 文档 | 内容 |
 |---|---|
-| [docs/项目架构.md](docs/项目架构.md) | 系统架构设计 |
-| [docs/需求模块.md](docs/需求模块.md) | 需求与模块划分 |
-| [docs/UI设计.md](docs/UI设计.md) | 界面设计规范 |
-| [docs/README.md](docs/README.md) | 文档索引 |
+| [docs/02_System_Architecture.md](docs/02_System_Architecture.md) | 系统架构设计 |
+| [docs/00_Requirements_Analysis.md](docs/00_Requirements_Analysis.md) | 需求分析 |
+| [docs/03_Database_Design.md](docs/03_Database_Design.md) | 数据库设计 |
+| [docs/04_User_Manual.md](docs/04_User_Manual.md) | 用户使用手册 |
+| [docs/01_Project_Overview.md](docs/01_Project_Overview.md) | 项目总览 |
+| [docs/RAG.md](docs/RAG.md) | 知识库与检索方案 |
+| [docs/MCP设计与多智能体工具箱 (Toolbox for Multi-Agent).md](docs/MCP设计与多智能体工具箱%20(Toolbox%20for%20Multi-Agent).md) | MCP 工具箱设计 |
+| [docs/赛题.md](docs/赛题.md) | 赛题背景与要求 |
+
+> `docs/` 下另有大量过程性设计稿（派单灰度、重派分级、双端 AI 实施方案等），是竞赛期间的设计留档，未整理。
 
 ## 开发规范
 

@@ -1,9 +1,0 @@
-# Forecast model runtime dependencies
-# Isolated from main backend requirements to avoid version conflicts.
-# The pkl was trained with scikit-learn 1.7.2 + numpy 2.x.
-# IMPORTANT: sklearn must be exactly 1.7.x (1.8.0 breaks SimpleImputer deserialization)
-# Install: pip install -r requirements-forecast.txt
-
-scikit-learn>=1.7.2,<1.8.0
-numpy>=2.0.0
-joblib>=1.4.0

@@ -147,7 +147,15 @@ pnpm dev:h5     # uni-app H5 模式
 python dataset/import_script.py    # 导入 PostgreSQL
 ```
 
-### 5. 跑 Agent 评测集（可选）
+### 5. 跑测试（可选）
+
+```bash
+cd backend
+pytest tests/            # 单元与服务层，无需外部依赖
+pytest test_mcp_real.py  # e2e：需真实数据库与 MCP 配置
+```
+
+### 6. 跑 Agent 评测集（可选）
 
 ```bash
 cd backend
@@ -168,7 +176,9 @@ construction-management/
 │       ├── mcp/              # MCP 服务与 16 个原子工具实现
 │       ├── services/         # 异常检测 / 预测 / 派工 / AI 审批 / 审计……
 │       ├── eval/             # Agent 评测集（cases · models · runner）
+│       ├── tests/            # pytest 套件（44 个文件：auth / api / 派工 / 派单生命周期）
 │       └── db/ core/ schemas/
+│   └── test_*.py             # e2e 脚本（真实库 / 真实 MCP / LLM，需外部依赖）
 ├── frontend/                 # Vue 3 + Vite + ECharts 管理端
 ├── mobile/                   # Uni-app 双角色移动端
 ├── dataset/                  # 数据导入脚本入口
@@ -195,7 +205,7 @@ construction-management/
 
 读代码前先看这几条，省得误会：
 
-- **没有 pytest 测试套件**。仓库里只有一份 Playwright 冒烟样例（`tests/example.spec.ts`）。Agent 行为的回归靠 `backend/app/eval` 的评测集，不是单测覆盖——这两件事的强度不一样。
+- **测试有，但分层不均**。`backend/tests/` 是 44 个文件的 pytest 套件（认证、API、派工服务、派单生命周期、配置等），可直接跑；根目录另有 7 个 e2e 脚本（真实数据库 / 真实 MCP / LLM 集成），**需要外部依赖才能跑**，本地默认跑不通。前端只有一份 Playwright 冒烟样例（`tests/example.spec.ts`）。Agent 行为的回归另靠 `backend/app/eval` 的评测集——它和单测不是一回事，测的是路由与工具选择有没有退化。
 - **仿真引擎源码不在仓库**。能耗数据由物理规则仿真脚本生成，但 `dataset/` 只保留了 54 行的导入入口，生成逻辑未随仓库提交；仓库提供的是生成好的 CSV，可以据此跑通全链路，但看不到造数过程。
 - **仓库根目录有竞赛期遗留物**：若干临时 CSV、ipynb、docx 和一个 `supabase-old.dump`，未清理。不影响代码阅读，介意的话可以自行忽略。
 - **预测模型 bundle 不在仓库**（约 265MB，joblib/pkl）。要跑预测功能需自行训练，其余功能不受影响。

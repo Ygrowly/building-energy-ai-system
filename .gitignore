@@ -21,6 +21,15 @@ backend/.conda-packed-env/
 node_modules/
 dist/
 .npm
+pnpm-workspace.yaml
+
+# 大文件与打包产物
+*.zip
+*.zip.tmp
+*.tar.gz
+*.pkl
+*.dump
+*.log
 
 # IDE
 .idea/
